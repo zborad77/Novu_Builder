@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NOVU Builder</title>
+</head>
+
+<body>
+
+<h1>Projekty</h1>
+
+<h2>Vytvořit projekt</h2>
+
+<input id="name" placeholder="název projektu"><br><br>
+<input id="area" placeholder="plocha m2"><br><br>
+<input id="price" placeholder="cena"><br><br>
+
+<button onclick="createProject()">Vytvořit projekt</button>
+
+<ul id="projectList"></ul>
+
+<script>
+
+async function loadProjects() {
+    try {
+        const response = await fetch("http://localhost:3000/projects");
+        if (!response.ok) throw new Error("Chyba serveru");
+
+        const data = await response.json();
+        const list = document.getElementById("projectList");
+        list.innerHTML = "";
+
+        data.forEach(project => {
+            const li = document.createElement("li");
+            li.textContent = project.name + " - " + project.area + " m² - " + project.price + " Kč";
+            list.appendChild(li);
+        });
+
+    } catch (err) {
+        alert("Nepodařilo se načíst projekty: " + err.message);
+    }
+}
+
+async function createProject() {
+    const name = document.getElementById("name").value.trim();
+    const area = parseFloat(document.getElementById("area").value);
+    const price = parseFloat(document.getElementById("price").value);
+
+    if (!name || isNaN(area) || isNaN(price) || area <= 0 || price <= 0) {
+        alert("Vyplňte prosím všechna pole správně.");
+        return;
+    }
+
+    try {
+        const response = await fetch("http://localhost:3000/projects", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, area, price })
+        });
+
+        if (!response.ok) throw new Error("Chyba serveru");
+
+        await loadProjects();
+
+    } catch (err) {
+        alert("Nepodařilo se vytvořit projekt: " + err.message);
+    }
+}
+
+loadProjects();
+
+</script>
+
+<script src="projectManager.js"></script>
+<script src="priceCalculator.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>
