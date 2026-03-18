@@ -46,9 +46,9 @@ Jinymi slovy:
 
 ## 3. Co uz neni cilovy smer
 
-Tyto casti bereme dal jen jako prechodovy prototyp:
+Tyto casti jsme pouzili pro migraci, ale uz nejsou soucasti aktivniho smeru:
 
-- `server/` Node.js backend
+- puvodni `server/` Node.js backend
 - SQLite jako hlavni cesta pro budouci produkci
 - dalsi rozvoj backendu v plain JavaScriptu
 
@@ -86,17 +86,16 @@ Jen uz nejsou cilovy technologicky smer.
 - AI navrh materialu a workflow
 - segmentace a area estimation
 
-## 5. Jak budeme migrovat
+## 5. Jak jsme migrovali
 
-Nebudeme delat velky jednorazovy rewrite.
+Nepouzili jsme velky jednorazovy rewrite.
 
-Budeme postupovat vedle sebe:
+Postup byl:
 
-1. Node backend zustane jako referencni prototyp
-2. zalozime `python-backend/`
-3. prevedeme postupne zakladni moduly
-4. frontend pozdeji prepojime na nove FastAPI endpointy
-5. Node backend pak pujde archivovat
+1. zalozit `python-backend/`
+2. prevest zakladni moduly
+3. prepojit React kancelar na FastAPI
+4. odstranit legacy JS backend a stare prototypy
 
 ## 6. Poradi prevodu modulu
 
@@ -132,7 +131,7 @@ Bezprostredne po tomto resetu:
 Od teto chvile:
 
 - nove backendove moduly patri do `python-backend/`
-- `server/` slouzi uz jen jako docasny referencni prototyp
+- legacy JS backend uz dal nerozsirujeme
 - React frontend zatim muzeme nechat bez velkeho bourani
 
 Toto je novy cilovy kabat projektu.

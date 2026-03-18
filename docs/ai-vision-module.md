@@ -5,7 +5,7 @@ Tento modul pripravuje backend na pozdejsi napojeni skutecne vision AI bez boura
 ## Aktualni stav
 
 - API route pro analyzu uz negeneruje vysledek natvrdo sama.
-- Route vola samostatnou vrstvu `server/ai/analysisService.js`.
+- Route vola samostatnou Python vrstvu v `python-backend/app/ai/analysis_service.py`.
 - Aktivni provider se ridi promennou `AI_ANALYSIS_PROVIDER`.
 - Aktualne je hotovy provider `mock`.
 - Provider `openai` je pripraveny jako integracni bod, ale zatim zamerne vraci chybu `not implemented`.

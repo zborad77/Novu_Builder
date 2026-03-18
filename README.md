@@ -14,33 +14,29 @@ Reset do noveho ciloveho backend smeru je v [docs/final-architecture-reset.md](d
 
 ## Aktualni stav repozitare
 
-Repo dnes obsahuje nekolik prototypu:
+Repo dnes obsahuje uz jen aktivni vetve projektu:
 
 - `novu-react` - aktualni React prototyp pro kancelarsky frontend
-- `server` - puvodni Node.js backend prototyp, uz jen jako referencni most
 - `python-backend` - novy cilovy backend smer (FastAPI)
-- `mobile_app` - zatim jen prazdny nacrt
-- `desktop_app` - starsi staticky prototyp
-- `shared` - prazdne nebo nedokoncene sdilene soubory
-
-Pro dalsi vyvoj budeme stavajici prototypy postupne sjednocovat, ne vse zahazovat najednou.
+- `docs` - architektura, blueprint a provozni poznamky
+- `storage` - lokalni dev storage pro obrazky a exporty
 
 ## Doporucena architektura MVP
 
 - mobil: React Native + Expo + TypeScript
 - kancelar: React + TypeScript
-- backend API: Node.js + TypeScript
-- AI worker: Python + FastAPI
+- backend API: Python + FastAPI
+- AI worker: Python
 - databaze: PostgreSQL
 - fronty: Redis
 - uloziste: S3 kompatibilni storage
 
 ## Lokalni spusteni soucasnych prototypu
 
-Backend:
+Backend `python-backend`:
 
 ```bash
-npm start
+npm run api:dev
 ```
 
 Frontend `novu-react`:
@@ -57,6 +53,6 @@ npm run web:lint
 
 ## Nejblizsi kroky
 
-1. Sjednotit datovy model a API kolem projektu, fotek a AI vysledku.
-2. Vybudovat prvni end-to-end tok: vytvorit projekt -> nahrat fotky -> zobrazit zpracovani v kancelari.
-3. Teprve potom doplnovat mereni plochy, pricing engine a generovani dokumentu.
+1. Dodelat cisteni prezencni vrstvy a UX kancelarskeho rozhrani.
+2. Dovest Python backend ke stabilnimu produkcnimu API tvaru.
+3. Potom doplnovat auth, exporty, realne AI providery a mobilni klient.
