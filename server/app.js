@@ -1,44 +1,95 @@
-
 const express = require("express");
 const cors = require("cors");
+const path = require("node:path");
 const projectRoutes = require("./routes/projectRoutes");
+const photoRoutes = require("./routes/photoRoutes");
+const analysisRoutes = require("./routes/analysisRoutes");
+const quoteVariantRoutes = require("./routes/quoteVariantRoutes");
+const materialCatalogRoutes = require("./routes/materialCatalogRoutes");
+const supplierRoutes = require("./routes/supplierRoutes");
+const { describeAnalysisProvider } = require("./ai/analysisService");
+const { STORAGE_ROOT } = require("./storage/localPhotoStorage");
 
-const app = express();
+function createApp() {
+    const app = express();
+    const allowedOrigins = new Set([
+        "http://localhost:5500",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173"
+    ]);
 
-// Bezpečnější CORS - povolí jen frontend na localhostu
-app.use(cors({
-    origin: "http://localhost:5500", // uprav na port tvého frontendu
-    methods: ["GET", "POST", "PUT", "DELETE"]
-}));
+    app.use(cors({
+        origin(origin, callback) {
+            if (!origin || allowedOrigins.has(origin)) {
+                callback(null, true);
+                return;
+            }
 
-app.use(express.json());
+            callback(new Error("CORS origin not allowed."));
+        },
+        methods: ["GET", "POST", "PATCH", "PUT", "DELETE"]
+    }));
 
-// Ošetření chybného JSON v požadavku
-app.use((err, req, res, next) => {
-    if (err.type === "entity.parse.failed") {
-        return res.status(400).json({ error: "Neplatný formát JSON." });
-    }
-    next(err);
-});
+    app.use(express.json());
+    app.use("/mock-storage", express.static(path.resolve(STORAGE_ROOT)));
 
-app.get("/", (req, res) => {
-    res.send("NOVU Builder server běží");
-});
+    app.get("/", (req, res) => {
+        res.json({
+            name: "NOVU Builder API",
+            status: "ok",
+            version: "mvp-skeleton"
+        });
+    });
 
-app.use("/projects", projectRoutes);
+    app.get("/api", (req, res) => {
+        const analysisProvider = describeAnalysisProvider();
 
-// Ošetření neexistující adresy (404)
-app.use((req, res) => {
-    res.status(404).json({ error: "Stránka nenalezena." });
-});
+        res.json({
+            message: "FotoNabidka MVP API",
+            modules: ["projects", "photos", "analysis", "quote-variants", "material-catalog", "suppliers"],
+            analysisProvider
+        });
+    });
 
-// Globální error handler
-app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).json({ error: "Chyba serveru." });
-});
+    app.use("/api/projects", projectRoutes);
+    app.use("/api/projects/:projectId/photos", photoRoutes);
+    app.use("/api/projects/:projectId/analysis", analysisRoutes);
+    app.use("/api/material-catalog", materialCatalogRoutes);
+    app.use("/api/suppliers", supplierRoutes);
+    app.use("/api", quoteVariantRoutes);
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server běží na http://localhost:${PORT}`);
-});
+    app.use((err, req, res, next) => {
+        if (err instanceof SyntaxError && "body" in err) {
+            return res.status(400).json({ error: "Invalid JSON body." });
+        }
+
+        if (err.message === "CORS origin not allowed.") {
+            return res.status(403).json({ error: "Origin is not allowed." });
+        }
+
+        return next(err);
+    });
+
+    app.use((req, res) => {
+        res.status(404).json({ error: "Route not found." });
+    });
+
+    app.use((err, req, res, next) => {
+        console.error(err.stack);
+        res.status(500).json({ error: "Internal server error." });
+    });
+
+    return app;
+}
+
+if (require.main === module) {
+    const PORT = process.env.PORT || 3000;
+    const app = createApp();
+
+    app.listen(PORT, () => {
+        console.log(`Server running on http://localhost:${PORT}`);
+    });
+}
+
+module.exports = { createApp };

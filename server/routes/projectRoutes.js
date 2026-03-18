@@ -1,79 +1,113 @@
-
-
 const express = require("express");
+const {
+    listProjects,
+    createProjectRecord,
+    getProjectById: getProjectByIdFromDb,
+    getProjectDetail,
+    updateProjectRecord
+} = require("../repositories/projectRepository");
+const {
+    buildProjectDetail,
+    getProjectById
+} = require("../data/mockStore");
+
 const router = express.Router();
 
-let projects = [
-    {
-        id: Date.now(),
-        name: "Zakázka dům Novák",
-        area: 120,
-        price: 35000
-    }
-];
+router.get("/", (req, res, next) => {
+    try {
+        const items = listProjects({
+            status: req.query.status,
+            search: req.query.search
+        });
 
-// Načtení všech projektů
-router.get("/", (req, res) => {
-    res.json(projects);
+        return res.json({
+            items,
+            total: items.length
+        });
+    } catch (error) {
+        return next(error);
+    }
 });
 
-// Vytvoření nového projektu
-router.post("/", (req, res) => {
-    const { name, area, price } = req.body;
+router.post("/", (req, res, next) => {
+    const {
+        title,
+        description,
+        clientId,
+        locationLat,
+        locationLng,
+        addressLabel
+    } = req.body;
 
-    // Validace vstupů
-    if (!name || !area || !price || area <= 0 || price <= 0) {
-        return res.status(400).json({ error: "Neplatná data – vyplňte název, plochu a cenu." });
+    if (!title || !String(title).trim()) {
+        return res.status(400).json({ error: "Project title is required." });
     }
 
-    const newProject = {
-        id: Date.now(),
-        name: name,
-        area: parseFloat(area),
-        price: parseFloat(price)
-    };
+    try {
+        const project = createProjectRecord({
+            title: String(title).trim(),
+            description: description ? String(description).trim() : "",
+            client_id: clientId || null,
+            location_lat: locationLat || null,
+            location_lng: locationLng || null,
+            address_label: addressLabel || null
+        });
 
-    projects.push(newProject);
-    res.status(201).json(newProject);
+        return res.status(201).json({
+            id: project.id,
+            status: project.status
+        });
+    } catch (error) {
+        return next(error);
+    }
 });
 
-// Úprava projektu
-router.put("/:id", (req, res) => {
-    const id = parseInt(req.params.id);
-    const { name, area, price } = req.body;
+router.get("/:projectId", (req, res, next) => {
+    try {
+        const detail = getProjectDetail(req.params.projectId);
 
-    const index = projects.findIndex(p => p.id === id);
+        if (detail) {
+            return res.json(detail);
+        }
 
-    if (index === -1) {
-        return res.status(404).json({ error: "Projekt nenalezen." });
+        const fallbackDetail = buildProjectDetail(req.params.projectId);
+        if (!fallbackDetail) {
+            return res.status(404).json({ error: "Project not found." });
+        }
+
+        return res.json(fallbackDetail);
+    } catch (error) {
+        return next(error);
     }
-
-    if (!name || !area || !price || area <= 0 || price <= 0) {
-        return res.status(400).json({ error: "Neplatná data." });
-    }
-
-    projects[index] = {
-        id: id,
-        name: name,
-        area: parseFloat(area),
-        price: parseFloat(price)
-    };
-
-    res.json(projects[index]);
 });
 
-// Smazání projektu
-router.delete("/:id", (req, res) => {
-    const id = parseInt(req.params.id);
+router.patch("/:projectId", (req, res, next) => {
+    try {
+        const project = getProjectById(req.params.projectId) || getProjectByIdFromDb(req.params.projectId);
+        if (!project) {
+            return res.status(404).json({ error: "Project not found." });
+        }
 
-    const index = projects.findIndex(p => p.id === id);
+        const updated = updateProjectRecord(req.params.projectId, {
+            title: req.body.title,
+            description: req.body.description,
+            status: req.body.status,
+            property_type: req.body.propertyType,
+            repair_scope: req.body.repairScope,
+            location_lat: req.body.locationLat,
+            location_lng: req.body.locationLng,
+            address_label: req.body.addressLabel,
+            client_id: req.body.clientId
+        });
 
-    if (index === -1) {
-        return res.status(404).json({ error: "Projekt nenalezen." });
+        if (!updated) {
+            return res.status(404).json({ error: "Project not found." });
+        }
+
+        return res.json(updated);
+    } catch (error) {
+        return next(error);
     }
-
-    projects.splice(index, 1);
-    res.json({ message: "Projekt smazán." });
 });
 
 module.exports = router;

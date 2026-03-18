@@ -1,0 +1,211 @@
+from datetime import datetime
+from uuid import uuid4
+
+from fastapi import UploadFile
+
+from app.models import Project, ProjectPhoto
+from app.repositories.photo_repository import PhotoRepository
+from app.schemas.photo import ProjectPhotoRead
+from app.storage.local_photo_storage import save_original_photo
+
+MIN_PROJECT_PHOTOS = 3
+
+
+def _get_scaled_dimensions(width: int | None, height: int | None, max_edge: int) -> tuple[int | None, int | None]:
+    if not width or not height or width <= 0 or height <= 0:
+        return None, None
+    current_max_edge = max(width, height)
+    if current_max_edge <= max_edge:
+        return width, height
+    scale = max_edge / current_max_edge
+    return max(1, round(width * scale)), max(1, round(height * scale))
+
+
+def _estimate_derived_file_size(
+    original_size: int,
+    derived_width: int | None,
+    derived_height: int | None,
+    original_width: int | None,
+    original_height: int | None,
+    compression_ratio: float,
+) -> int | None:
+    if not original_size or not derived_width or not derived_height or not original_width or not original_height:
+        return None
+    area_ratio = (derived_width * derived_height) / (original_width * original_height)
+    return max(20_000, round(original_size * area_ratio * compression_ratio))
+
+
+def build_derived_variants(project_id: str, filename: str, *, original_size: int, width: int | None, height: int | None) -> dict:
+    preview_width, preview_height = _get_scaled_dimensions(width, height, 1600)
+    ai_width, ai_height = _get_scaled_dimensions(width, height, 1280)
+    return {
+        "preview_storage_key": f"projects/{project_id}/preview/{filename}",
+        "preview_width": preview_width,
+        "preview_height": preview_height,
+        "preview_file_size": _estimate_derived_file_size(original_size, preview_width, preview_height, width, height, 0.72),
+        "ai_input_storage_key": f"projects/{project_id}/ai/{filename}",
+        "ai_input_width": ai_width,
+        "ai_input_height": ai_height,
+        "ai_input_file_size": _estimate_derived_file_size(original_size, ai_width, ai_height, width, height, 0.56),
+    }
+
+
+def to_read_model(photo: ProjectPhoto) -> ProjectPhotoRead:
+    original_url = f"/mock-storage/{photo.storage_key}"
+    preview_url = f"/mock-storage/{photo.preview_storage_key}" if photo.preview_storage_key else None
+    ai_input_url = f"/mock-storage/{photo.ai_input_storage_key}" if photo.ai_input_storage_key else None
+    return ProjectPhotoRead(
+        id=photo.id,
+        originalFilename=photo.original_filename,
+        storageKey=photo.storage_key,
+        mimeType=photo.mime_type,
+        fileSize=photo.file_size,
+        width=photo.width,
+        height=photo.height,
+        takenAt=photo.taken_at,
+        exifLat=photo.exif_lat,
+        exifLng=photo.exif_lng,
+        processingStatus=photo.processing_status,
+        isPrimary=photo.is_primary,
+        sortOrder=photo.sort_order,
+        url=original_url,
+        variants={
+            "original": {
+                "storageKey": photo.storage_key,
+                "fileSize": photo.file_size,
+                "width": photo.width,
+                "height": photo.height,
+                "url": original_url,
+            },
+            "preview": {
+                "storageKey": photo.preview_storage_key,
+                "fileSize": photo.preview_file_size,
+                "width": photo.preview_width,
+                "height": photo.preview_height,
+                "url": preview_url,
+            },
+            "aiInput": {
+                "storageKey": photo.ai_input_storage_key,
+                "fileSize": photo.ai_input_file_size,
+                "width": photo.ai_input_width,
+                "height": photo.ai_input_height,
+                "url": ai_input_url,
+            },
+        },
+    )
+
+
+class PhotoService:
+    def __init__(self, repository: PhotoRepository):
+        self.repository = repository
+
+    async def list_photos(self, project_id: str) -> tuple[list[ProjectPhotoRead], dict]:
+        photos = await self.repository.list_photos_by_project_id(project_id)
+        items = [to_read_model(photo) for photo in photos]
+        return items, {
+            "minimumRecommendedCount": MIN_PROJECT_PHOTOS,
+            "hasMinimumCount": len(items) >= MIN_PROJECT_PHOTOS,
+            "primaryPhotoId": next((item.id for item in items if item.isPrimary), None),
+            "derivativeStrategy": {
+                "original": "archival-source",
+                "preview": "ui-optimized-max-edge-1600",
+                "aiInput": "analysis-optimized-max-edge-1280",
+            },
+        }
+
+    async def get_photo_by_id(self, photo_id: str) -> ProjectPhotoRead | None:
+        photo = await self.repository.get_photo_by_id(photo_id)
+        if not photo:
+            return None
+        return to_read_model(photo)
+
+    async def create_json_photo(self, project: Project, payload: dict) -> ProjectPhotoRead:
+        filename = payload.get("originalFilename") or f"photo-{uuid4().hex[:8]}.jpg"
+        photo_count = await self.repository.count_photos(project.id)
+        is_primary = bool(payload.get("isPrimary")) or photo_count == 0
+        if is_primary:
+            await self.repository.clear_primary(project.id)
+        variants = build_derived_variants(
+            project.id,
+            filename,
+            original_size=payload.get("fileSize", 0),
+            width=payload.get("width"),
+            height=payload.get("height"),
+        )
+        photo = ProjectPhoto(
+            id=f"pho_{uuid4().hex[:8]}",
+            project_id=project.id,
+            storage_key=f"projects/{project.id}/{filename}",
+            original_filename=filename,
+            mime_type=payload.get("mimeType") or "image/jpeg",
+            file_size=payload.get("fileSize", 0),
+            width=payload.get("width"),
+            height=payload.get("height"),
+            preview_storage_key=variants["preview_storage_key"],
+            preview_file_size=variants["preview_file_size"],
+            preview_width=variants["preview_width"],
+            preview_height=variants["preview_height"],
+            ai_input_storage_key=variants["ai_input_storage_key"],
+            ai_input_file_size=variants["ai_input_file_size"],
+            ai_input_width=variants["ai_input_width"],
+            ai_input_height=variants["ai_input_height"],
+            processing_status="ready",
+            taken_at=payload.get("takenAt"),
+            exif_lat=payload.get("exifLat"),
+            exif_lng=payload.get("exifLng"),
+            is_primary=is_primary,
+            sort_order=payload.get("sortOrder") or await self.repository.get_next_sort_order(project.id),
+        )
+        return to_read_model(await self.repository.add_photo(photo))
+
+    async def create_multipart_photo(self, project: Project, file: UploadFile, *, is_primary: bool) -> ProjectPhotoRead:
+        content = await file.read()
+        storage_key, _ = save_original_photo(project_id=project.id, original_filename=file.filename, content=content)
+        filename = file.filename or f"upload-{uuid4().hex[:8]}.bin"
+        photo_count = await self.repository.count_photos(project.id)
+        should_be_primary = is_primary or photo_count == 0
+        if should_be_primary:
+            await self.repository.clear_primary(project.id)
+        variants = build_derived_variants(
+            project.id,
+            filename,
+            original_size=len(content),
+            width=None,
+            height=None,
+        )
+        photo = ProjectPhoto(
+            id=f"pho_{uuid4().hex[:8]}",
+            project_id=project.id,
+            storage_key=storage_key,
+            original_filename=filename,
+            mime_type=file.content_type or "application/octet-stream",
+            file_size=len(content),
+            preview_storage_key=variants["preview_storage_key"],
+            preview_file_size=variants["preview_file_size"],
+            preview_width=variants["preview_width"],
+            preview_height=variants["preview_height"],
+            ai_input_storage_key=variants["ai_input_storage_key"],
+            ai_input_file_size=variants["ai_input_file_size"],
+            ai_input_width=variants["ai_input_width"],
+            ai_input_height=variants["ai_input_height"],
+            processing_status="original_uploaded",
+            is_primary=should_be_primary,
+            sort_order=await self.repository.get_next_sort_order(project.id),
+        )
+        return to_read_model(await self.repository.add_photo(photo))
+
+    async def set_primary_photo(self, project_id: str, photo_id: str) -> ProjectPhotoRead | None:
+        photo = await self.repository.get_photo(project_id, photo_id)
+        if not photo:
+            return None
+        await self.repository.clear_primary(project_id)
+        photo.is_primary = True
+        updated = await self.repository.update_photo(photo)
+        return to_read_model(updated)
+
+    async def delete_photo(self, project_id: str, photo_id: str) -> bool:
+        photo = await self.repository.get_photo(project_id, photo_id)
+        if not photo:
+            return False
+        await self.repository.remove_photo(photo)
+        return True
