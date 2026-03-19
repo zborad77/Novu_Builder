@@ -8,7 +8,9 @@ my-app/
 prisma/dev.db
 python-backend/.venv/
 python-backend/python-backend.db
+python-backend.db
 python-backend/*.log
+desktop-qt/.qtcreator/
 
 __pycache__/
 *.pyc

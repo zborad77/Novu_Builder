@@ -7,5 +7,6 @@ alembic
 structlog
 redis
 asyncpg
+psycopg[binary]
 aiosqlite
 python-multipart

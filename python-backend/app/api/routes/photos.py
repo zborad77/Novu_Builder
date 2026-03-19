@@ -1,7 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
 
 from app.api.deps import get_photo_service, get_project_service
-from app.schemas.photo import DeletePhotoResponse, PhotoJsonUploadRequest, PhotoListResponse, PhotoUploadResponse, PrimaryPhotoResponse
+from app.schemas.photo import (
+    AnalysisReferencePhotoResponse,
+    DeletePhotoResponse,
+    PhotoJsonUploadRequest,
+    PhotoListResponse,
+    PhotoMoveRequest,
+    PhotoUploadResponse,
+    PrimaryPhotoResponse,
+)
 from app.services.photo_service import PhotoService
 from app.services.project_service import ProjectService
 
@@ -74,6 +82,47 @@ async def set_primary_photo(
         raise HTTPException(status_code=404, detail="Photo not found.")
 
     return PrimaryPhotoResponse(message="Primary photo updated.", photo=photo)
+
+
+@router.patch("/{photo_id}/analysis-reference", response_model=AnalysisReferencePhotoResponse)
+async def set_analysis_reference_photo(
+    project_id: str,
+    photo_id: str,
+    project_service: ProjectService = Depends(get_project_service),
+    photo_service: PhotoService = Depends(get_photo_service),
+) -> AnalysisReferencePhotoResponse:
+    detail = await project_service.get_project_detail(project_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    try:
+        photo = await photo_service.set_analysis_reference_photo(project_id, photo_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found.")
+
+    return AnalysisReferencePhotoResponse(message="Analysis reference photo updated.", photo=photo)
+
+
+@router.patch("/{photo_id}/move", response_model=PhotoListResponse)
+async def move_photo(
+    project_id: str,
+    photo_id: str,
+    payload: PhotoMoveRequest,
+    project_service: ProjectService = Depends(get_project_service),
+    photo_service: PhotoService = Depends(get_photo_service),
+) -> PhotoListResponse:
+    detail = await project_service.get_project_detail(project_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    moved = await photo_service.move_photo(project_id, photo_id, payload.direction)
+    if not moved:
+        raise HTTPException(status_code=404, detail="Photo not found.")
+
+    items, meta = moved
+    return PhotoListResponse(items=items, meta=meta)
 
 
 @router.delete("/{photo_id}", response_model=DeletePhotoResponse)

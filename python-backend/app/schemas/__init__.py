@@ -4,9 +4,14 @@ from app.schemas.project import (
     ProjectListResponse,
     ProjectLocation,
     ProjectPatch,
+    ProjectProposalDraft,
+    ProjectProposalDraftPatch,
     ProjectSummary,
+    ProposalDraftMaterial,
+    ProposalDraftWorkItem,
 )
 from app.schemas.photo import (
+    AnalysisReferencePhotoResponse,
     DeletePhotoResponse,
     PhotoJsonUploadRequest,
     PhotoListMeta,
@@ -21,6 +26,7 @@ from app.schemas.photo import (
 
 __all__ = [
     "DeletePhotoResponse",
+    "AnalysisReferencePhotoResponse",
     "PhotoJsonUploadRequest",
     "PhotoListMeta",
     "PhotoListResponse",
@@ -33,7 +39,11 @@ __all__ = [
     "ProjectListResponse",
     "ProjectLocation",
     "ProjectPatch",
+    "ProjectProposalDraft",
+    "ProjectProposalDraftPatch",
     "ProjectSummary",
     "ProjectPhotoRead",
+    "ProposalDraftMaterial",
+    "ProposalDraftWorkItem",
     "UploadedPhotoPayload",
 ]

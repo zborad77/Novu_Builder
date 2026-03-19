@@ -1,7 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import get_project_service
-from app.schemas.project import ProjectCreate, ProjectCreateResponse, ProjectDetail, ProjectListResponse, ProjectPatch
+from app.schemas.project import (
+    ProjectCreate,
+    ProjectCreateResponse,
+    ProjectDetail,
+    ProjectDuplicateRequest,
+    ProjectListResponse,
+    ProjectPatch,
+    ProjectProposalDraftPatch,
+)
 from app.services.project_service import ProjectService
 
 router = APIRouter(prefix="/cases", tags=["cases"])
@@ -43,6 +51,21 @@ async def get_case(
     return detail
 
 
+@router.post("/{case_id}/duplicate", response_model=ProjectCreateResponse, status_code=status.HTTP_201_CREATED)
+async def duplicate_case(
+    case_id: str,
+    payload: ProjectDuplicateRequest,
+    service: ProjectService = Depends(get_project_service),
+) -> ProjectCreateResponse:
+    try:
+        duplicated = await service.duplicate_project(case_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not duplicated:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    return ProjectCreateResponse(id=duplicated.id, status=duplicated.status)
+
+
 @router.patch("/{case_id}", response_model=ProjectDetail)
 async def patch_case(
     case_id: str,
@@ -55,12 +78,52 @@ async def patch_case(
     return updated
 
 
+@router.patch("/{case_id}/proposal-draft", response_model=ProjectDetail)
+async def patch_case_proposal_draft(
+    case_id: str,
+    payload: ProjectProposalDraftPatch,
+    service: ProjectService = Depends(get_project_service),
+) -> ProjectDetail:
+    updated = await service.update_proposal_draft(case_id, payload.model_dump(exclude_unset=True))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    return updated
+
+
+@router.post("/{case_id}/final-proposal", response_model=ProjectDetail)
+async def create_case_final_proposal(
+    case_id: str,
+    service: ProjectService = Depends(get_project_service),
+) -> ProjectDetail:
+    try:
+        updated = await service.create_final_proposal(case_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not updated:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    return updated
+
+
 @router.post("/{case_id}/archive", response_model=ProjectDetail)
 async def archive_case(
     case_id: str,
     service: ProjectService = Depends(get_project_service),
 ) -> ProjectDetail:
     updated = await service.update_project(case_id, {"status": "archived"})
+    if not updated:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    return updated
+
+
+@router.post("/{case_id}/send", response_model=ProjectDetail)
+async def send_case(
+    case_id: str,
+    service: ProjectService = Depends(get_project_service),
+) -> ProjectDetail:
+    try:
+        updated = await service.mark_project_sent(case_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not updated:
         raise HTTPException(status_code=404, detail="Case not found.")
     return updated

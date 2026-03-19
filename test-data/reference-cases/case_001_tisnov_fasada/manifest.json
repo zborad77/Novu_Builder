@@ -1,0 +1,41 @@
+{
+  "caseId": "case_001_tisnov_fasada",
+  "sourceRepo": "ZBORADWEB_v002",
+  "sourcePage": "references/cisteni-fasad/tisnov-fasada.html",
+  "title": "Cisteni a osetreni fasady - Tisnov",
+  "category": "cisteni-fasad",
+  "expectedScope": "cisteni_fasady",
+  "expectedSummary": "Chemicke cisteni fasady, omyti tlakovou vodou a ochranny impregnacni nater.",
+  "photos": [
+    {
+      "file": "foto_533.jpg",
+      "expectedPrimary": true,
+      "expectedAnalysisReference": true,
+      "note": "nejlepsi celkovy pohled na znecistenou fasadu"
+    },
+    {
+      "file": "foto_534.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "druhy zaber fasady z jineho uhlu"
+    },
+    {
+      "file": "foto_537.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "detail fasady"
+    },
+    {
+      "file": "foto_539.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "lokalni detail povrchu"
+    },
+    {
+      "file": "foto_541.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "detail v blizkosti otvoru a hran"
+    }
+  ]
+}

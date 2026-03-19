@@ -1,0 +1,41 @@
+{
+  "caseId": "case_004_oprava_zdi_praha",
+  "sourceRepo": "ZBORADWEB_v002",
+  "sourcePage": "references/remeslne-prace-bez-lana/oprava-zdi-praha.html",
+  "title": "Oprava zdi Praha",
+  "category": "remeslne-prace-bez-lana",
+  "expectedScope": "oprava_zdi",
+  "expectedSummary": "Lokalni opravy zdi a povrchu na objektu.",
+  "photos": [
+    {
+      "file": "foto_630.jpg",
+      "expectedPrimary": true,
+      "expectedAnalysisReference": true,
+      "note": "nejvetsi vypovidaci hodnota pro rozsah opravy"
+    },
+    {
+      "file": "foto_631.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "druhy pohled na stejnou oblast"
+    },
+    {
+      "file": "foto_632.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "detail problemove casti"
+    },
+    {
+      "file": "foto_633.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "detail materialu a poruseni"
+    },
+    {
+      "file": "foto_634.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "doplnujici fotka pro kontext"
+    }
+  ]
+}

@@ -4,9 +4,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.repositories.analysis_repository import AnalysisRepository
 from app.db.session import get_db_session
+from app.repositories.final_proposal_repository import FinalProposalRepository
 from app.repositories.material_catalog_repository import MaterialCatalogRepository
 from app.repositories.photo_repository import PhotoRepository
 from app.repositories.pricebook_repository import PricebookRepository
+from app.repositories.proposal_draft_repository import ProposalDraftRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.quote_variant_repository import QuoteVariantRepository
 from app.repositories.supplier_repository import SupplierRepository
@@ -22,8 +24,12 @@ from app.services.supplier_service import SupplierService
 
 
 def get_project_service(session: AsyncSession = Depends(get_db_session)) -> ProjectService:
-    repository = ProjectRepository(session)
-    return ProjectService(repository)
+    return ProjectService(
+        ProjectRepository(session),
+        ProposalDraftRepository(session),
+        FinalProposalRepository(session),
+        ExportService(),
+    )
 
 
 def get_photo_service(session: AsyncSession = Depends(get_db_session)) -> PhotoService:

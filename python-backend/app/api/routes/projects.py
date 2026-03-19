@@ -1,7 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import get_project_service
-from app.schemas.project import ProjectCreate, ProjectDetail, ProjectListResponse, ProjectPatch
+from app.schemas.project import (
+    ProjectCreate,
+    ProjectCreateResponse,
+    ProjectDetail,
+    ProjectDuplicateRequest,
+    ProjectListResponse,
+    ProjectPatch,
+    ProjectProposalDraftPatch,
+)
 from app.services.project_service import ProjectService
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -43,6 +51,21 @@ async def get_project_detail(
     return detail
 
 
+@router.post("/{project_id}/duplicate", response_model=ProjectCreateResponse, status_code=status.HTTP_201_CREATED)
+async def duplicate_project(
+    project_id: str,
+    payload: ProjectDuplicateRequest,
+    service: ProjectService = Depends(get_project_service),
+) -> ProjectCreateResponse:
+    try:
+        duplicated = await service.duplicate_project(project_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not duplicated:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return ProjectCreateResponse(id=duplicated.id, status=duplicated.status)
+
+
 @router.patch("/{project_id}", response_model=ProjectDetail)
 async def patch_project(
     project_id: str,
@@ -53,6 +76,49 @@ async def patch_project(
         project_id,
         payload.model_dump(exclude_unset=True),
     )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return updated
+
+
+@router.patch("/{project_id}/proposal-draft", response_model=ProjectDetail)
+async def patch_project_proposal_draft(
+    project_id: str,
+    payload: ProjectProposalDraftPatch,
+    service: ProjectService = Depends(get_project_service),
+) -> ProjectDetail:
+    updated = await service.update_proposal_draft(
+        project_id,
+        payload.model_dump(exclude_unset=True),
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return updated
+
+
+@router.post("/{project_id}/final-proposal", response_model=ProjectDetail)
+async def create_project_final_proposal(
+    project_id: str,
+    service: ProjectService = Depends(get_project_service),
+) -> ProjectDetail:
+    try:
+        updated = await service.create_final_proposal(project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not updated:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return updated
+
+
+@router.post("/{project_id}/send", response_model=ProjectDetail)
+async def send_project(
+    project_id: str,
+    service: ProjectService = Depends(get_project_service),
+) -> ProjectDetail:
+    try:
+        updated = await service.mark_project_sent(project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not updated:
         raise HTTPException(status_code=404, detail="Project not found.")
     return updated

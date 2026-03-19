@@ -16,6 +16,7 @@ Reset do noveho ciloveho backend smeru je v [docs/final-architecture-reset.md](d
 
 Repo dnes obsahuje uz jen aktivni vetve projektu:
 
+- `desktop-qt` - novy cilovy desktop klient v C++/Qt6
 - `novu-react` - aktualni React prototyp pro kancelarsky frontend
 - `python-backend` - novy cilovy backend smer (FastAPI)
 - `docs` - architektura, blueprint a provozni poznamky
@@ -24,7 +25,7 @@ Repo dnes obsahuje uz jen aktivni vetve projektu:
 ## Doporucena architektura MVP
 
 - mobil: React Native + Expo + TypeScript
-- kancelar: React + TypeScript
+- kancelar: C++ + Qt6 Widgets
 - backend API: Python + FastAPI
 - AI worker: Python
 - databaze: PostgreSQL
@@ -45,6 +46,11 @@ Frontend `novu-react`:
 npm run web:dev
 ```
 
+Desktop skeleton `desktop-qt`:
+
+- zatim jen kostra aplikace a architektury
+- Qt6 build a API napojeni doplnime v dalsich krocich
+
 Lint frontend:
 
 ```bash
@@ -53,6 +59,6 @@ npm run web:lint
 
 ## Nejblizsi kroky
 
-1. Dodelat cisteni prezencni vrstvy a UX kancelarskeho rozhrani.
+1. Rozvijet `desktop-qt` jako cilovy kancelarsky klient.
 2. Dovest Python backend ke stabilnimu produkcnimu API tvaru.
-3. Potom doplnovat auth, exporty, realne AI providery a mobilni klient.
+3. React ponechat jen jako referencni prototyp workflow a obrazovek.

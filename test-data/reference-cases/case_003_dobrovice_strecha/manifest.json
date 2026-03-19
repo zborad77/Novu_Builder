@@ -1,0 +1,29 @@
+{
+  "caseId": "case_003_dobrovice_strecha",
+  "sourceRepo": "ZBORADWEB_v002",
+  "sourcePage": "references/natery/dobrovice-strecha.html",
+  "title": "Nater strechy - Dobrovice",
+  "category": "natery",
+  "expectedScope": "nater_strechy",
+  "expectedSummary": "Odstraneni rzi, odmasteni a provedeni dvou nateru na strese.",
+  "photos": [
+    {
+      "file": "foto_304.jpg",
+      "expectedPrimary": true,
+      "expectedAnalysisReference": true,
+      "note": "nejlepsi prehledovy pohled na strechu"
+    },
+    {
+      "file": "foto_306.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "detail strechy a povrchu"
+    },
+    {
+      "file": "foto_307.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "dalsi detail pro doplneni kontextu"
+    }
+  ]
+}

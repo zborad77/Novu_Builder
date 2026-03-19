@@ -21,6 +21,21 @@ async def create_report_pdf(
     return ExportCreateResponse(exportId=export.id, status=export.status)
 
 
+@router.post("/cases/{case_id}/exports/proposal-docx", response_model=ExportCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+async def create_proposal_docx(
+    case_id: str,
+    project_service: ProjectService = Depends(get_project_service),
+    export_service: ExportService = Depends(get_export_service),
+) -> ExportCreateResponse:
+    detail = await project_service.get_project_detail(case_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    if detail.proposalDraft is None:
+        raise HTTPException(status_code=409, detail="Proposal draft must exist before working DOCX export.")
+    export = export_service.create_proposal_docx_export(case_detail=detail)
+    return ExportCreateResponse(exportId=export.id, status=export.status)
+
+
 @router.post("/cases/{case_id}/exports/quote-pdf", response_model=ExportCreateResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_quote_pdf(
     case_id: str,
@@ -30,7 +45,25 @@ async def create_quote_pdf(
     project = await project_service.get_project(case_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
-    export = export_service.create_export(case_id=case_id, export_type="quote-pdf")
+    detail = await project_service.get_project_detail(case_id)
+    if not detail or detail.finalProposal is None:
+        raise HTTPException(status_code=409, detail="Final proposal must be created before PDF export.")
+    export = export_service.create_quote_pdf_export(case_detail=detail)
+    return ExportCreateResponse(exportId=export.id, status=export.status)
+
+
+@router.post("/cases/{case_id}/exports/quote-docx", response_model=ExportCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+async def create_quote_docx(
+    case_id: str,
+    project_service: ProjectService = Depends(get_project_service),
+    export_service: ExportService = Depends(get_export_service),
+) -> ExportCreateResponse:
+    detail = await project_service.get_project_detail(case_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    if detail.finalProposal is None:
+        raise HTTPException(status_code=409, detail="Final proposal must be created before DOCX export.")
+    export = export_service.create_quote_docx_export(case_detail=detail)
     return ExportCreateResponse(exportId=export.id, status=export.status)
 
 

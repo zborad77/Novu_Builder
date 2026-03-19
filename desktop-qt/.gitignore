@@ -1,0 +1,8 @@
+build/
+cmake-build-*/
+*.user
+*.user.*
+*.obj
+*.pdb
+*.ilk
+*.vcxproj.user

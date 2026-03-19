@@ -9,7 +9,8 @@ settings = get_settings()
 engine = create_async_engine(
     settings.database_url,
     echo=settings.app_debug,
-    future=True
+    future=True,
+    pool_pre_ping=True
 )
 
 AsyncSessionFactory = async_sessionmaker(

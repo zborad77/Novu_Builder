@@ -12,7 +12,11 @@ class ProjectRepository:
         self.session = session
 
     async def list_projects(self, *, status: str | None = None, search: str | None = None) -> Sequence[Project]:
-        query: Select[tuple[Project]] = select(Project).order_by(Project.updated_at.desc(), Project.created_at.desc())
+        query: Select[tuple[Project]] = (
+            select(Project)
+            .options(selectinload(Project.photos), selectinload(Project.proposal_draft), selectinload(Project.final_proposals))
+            .order_by(Project.updated_at.desc(), Project.created_at.desc())
+        )
 
         if status:
             query = query.where(Project.status == status)
@@ -29,7 +33,12 @@ class ProjectRepository:
     async def get_project(self, project_id: str) -> Project | None:
         result = await self.session.execute(
             select(Project)
-            .options(selectinload(Project.client))
+            .options(
+                selectinload(Project.client),
+                selectinload(Project.photos),
+                selectinload(Project.proposal_draft),
+                selectinload(Project.final_proposals),
+            )
             .where(Project.id == project_id)
         )
         return result.scalar_one_or_none()

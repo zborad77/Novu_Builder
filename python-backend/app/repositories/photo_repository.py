@@ -50,6 +50,11 @@ class PhotoRepository:
         for photo in photos:
             photo.is_primary = False
 
+    async def clear_analysis_reference(self, project_id: str) -> None:
+        photos = await self.list_photos_by_project_id(project_id)
+        for photo in photos:
+            photo.is_analysis_reference = False
+
     async def add_photo(self, photo: ProjectPhoto) -> ProjectPhoto:
         self.session.add(photo)
         await self.session.commit()
@@ -60,6 +65,9 @@ class PhotoRepository:
         await self.session.commit()
         await self.session.refresh(photo)
         return photo
+
+    async def save_changes(self) -> None:
+        await self.session.commit()
 
     async def remove_photo(self, photo: ProjectPhoto) -> None:
         await self.session.delete(photo)

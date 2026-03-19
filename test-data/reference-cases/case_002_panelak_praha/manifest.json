@@ -1,0 +1,29 @@
+{
+  "caseId": "case_002_panelak_praha",
+  "sourceRepo": "ZBORADWEB_v002",
+  "sourcePage": "references/natery/panelak-praha.html",
+  "title": "Nater panelaku - Praha",
+  "category": "natery",
+  "expectedScope": "nater_fasady",
+  "expectedSummary": "Nater jedne strany paneloveho domu ve vice barevnych odstinech.",
+  "photos": [
+    {
+      "file": "foto_164.jpg",
+      "expectedPrimary": true,
+      "expectedAnalysisReference": true,
+      "note": "nejlepsi celek panelove fasady"
+    },
+    {
+      "file": "foto_166.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "dalsi pohled na rozsah plochy"
+    },
+    {
+      "file": "foto_167.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "detail nebo uzsi kompozice fasady"
+    }
+  ]
+}

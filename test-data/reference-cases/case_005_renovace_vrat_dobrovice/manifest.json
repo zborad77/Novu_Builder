@@ -1,0 +1,41 @@
+{
+  "caseId": "case_005_renovace_vrat_dobrovice",
+  "sourceRepo": "ZBORADWEB_v002",
+  "sourcePage": "references/remeslne-prace-bez-lana/renovace-vrat-dobrovice.html",
+  "title": "Renovace vrat Dobrovice",
+  "category": "remeslne-prace-bez-lana",
+  "expectedScope": "renovace_vrat",
+  "expectedSummary": "Renovace a povrchova uprava vrat.",
+  "photos": [
+    {
+      "file": "foto_349.jpg",
+      "expectedPrimary": true,
+      "expectedAnalysisReference": true,
+      "note": "nejlepsi celkovy pohled na vrata"
+    },
+    {
+      "file": "foto_350.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "druhy zaber celku"
+    },
+    {
+      "file": "foto_351.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "detail povrchu vrat"
+    },
+    {
+      "file": "foto_352.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "dalsi detail problemovych mist"
+    },
+    {
+      "file": "foto_353.jpg",
+      "expectedPrimary": false,
+      "expectedAnalysisReference": false,
+      "note": "doplnujici fotka pro kontext a stav materialu"
+    }
+  ]
+}

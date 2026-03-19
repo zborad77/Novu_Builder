@@ -80,6 +80,7 @@ class Project(TimestampMixin, Base):
     location_lat: Mapped[float | None] = mapped_column(Float)
     location_lng: Mapped[float | None] = mapped_column(Float)
     address_label: Mapped[str | None] = mapped_column(String(255))
+    reference_expectations_json: Mapped[str | None] = mapped_column(Text)
 
     organization: Mapped["Organization"] = relationship(back_populates="projects")
     client: Mapped["Client | None"] = relationship(back_populates="projects")
@@ -88,6 +89,15 @@ class Project(TimestampMixin, Base):
     analysis_jobs: Mapped[list["AnalysisJob"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     analysis_results: Mapped[list["AnalysisResult"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     quote_variants: Mapped[list["QuoteVariant"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    proposal_draft: Mapped["ProjectProposalDraft | None"] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    final_proposals: Mapped[list["ProjectFinalProposal"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
 
 
 class ProjectPhoto(Base):
@@ -114,10 +124,45 @@ class ProjectPhoto(Base):
     exif_lat: Mapped[float | None] = mapped_column(Float)
     exif_lng: Mapped[float | None] = mapped_column(Float)
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_analysis_reference: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="photos")
+
+
+class ProjectProposalDraft(TimestampMixin, Base):
+    __tablename__ = "project_proposal_drafts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, unique=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(255))
+    summary: Mapped[str | None] = mapped_column(Text)
+    material_cost: Mapped[float | None] = mapped_column(Float)
+    labor_cost: Mapped[float | None] = mapped_column(Float)
+    amortization: Mapped[float | None] = mapped_column(Float)
+    margin: Mapped[float | None] = mapped_column(Float)
+    recommended_supplier: Mapped[str | None] = mapped_column(String(255))
+    recommended_company: Mapped[str | None] = mapped_column(String(255))
+
+    project: Mapped["Project"] = relationship(back_populates="proposal_draft")
+
+
+class ProjectFinalProposal(TimestampMixin, Base):
+    __tablename__ = "project_final_proposals"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    draft_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(64), default="ready_for_export", nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(255))
+    summary: Mapped[str | None] = mapped_column(Text)
+    total_price: Mapped[float | None] = mapped_column(Float)
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="final_proposals")
 
 
 class AnalysisJob(Base):

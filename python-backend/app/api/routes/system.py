@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from app.core.config import get_settings
 
@@ -16,10 +16,12 @@ async def root() -> dict:
 
 
 @router.get("/health")
-async def health() -> dict:
+async def health(request: Request) -> dict:
     settings = get_settings()
     return {
         "status": "ok",
         "service": "python-backend",
-        "debug": settings.app_debug
+        "debug": settings.app_debug,
+        "ready": all(value == "ok" for value in request.app.state.startup_checks.values()),
+        "startupChecks": request.app.state.startup_checks,
     }

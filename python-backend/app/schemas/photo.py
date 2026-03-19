@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -30,6 +31,7 @@ class ProjectPhotoRead(BaseModel):
     exifLng: float | None = None
     processingStatus: str
     isPrimary: bool
+    isAnalysisReference: bool
     sortOrder: int
     url: str
     variants: PhotoVariants
@@ -39,6 +41,7 @@ class PhotoListMeta(BaseModel):
     minimumRecommendedCount: int
     hasMinimumCount: bool
     primaryPhotoId: str | None = None
+    analysisReferencePhotoId: str | None = None
     derivativeStrategy: dict[str, str]
 
 
@@ -81,5 +84,14 @@ class PrimaryPhotoResponse(BaseModel):
     photo: ProjectPhotoRead
 
 
+class AnalysisReferencePhotoResponse(BaseModel):
+    message: str
+    photo: ProjectPhotoRead
+
+
 class DeletePhotoResponse(BaseModel):
     message: str
+
+
+class PhotoMoveRequest(BaseModel):
+    direction: Literal["up", "down"]
