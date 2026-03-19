@@ -77,6 +77,48 @@ Typicky prechod na PostgreSQL:
 alembic upgrade head
 ```
 
+## Setup na novem PC
+
+Doporuceny minimalni postup:
+
+```powershell
+cd python-backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+alembic upgrade head
+python tools/import_reference_cases.py
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Poznamky:
+
+- `import_reference_cases.py` je pro dev/test workflow, ne pro produkci
+- pokud nechces testovaci reference, krok s importem muzes preskocit
+- bez lokalni `.env` kopie se projekt na novem PC nespusti predvidatelne
+
+Stejny backend setup jde z korene repozitare pripravit i automaticky:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\bootstrap-dev.ps1
+```
+
+Nebo s testovacimi referencemi:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\bootstrap-dev.ps1 -ImportReferenceCases
+```
+
+Bootstrap pro prvni dev start zamerne preskakuje `asyncpg` a `psycopg[binary]`,
+protoze lokalni vychozi rezim backendu bezi na `SQLite`.
+
+Po bootstrapu muzes backend z korene repozitare spustit i pres:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start-dev.ps1
+```
+
 Import testovacich referenci:
 
 ```bash

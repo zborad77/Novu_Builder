@@ -51,6 +51,32 @@ Status je vzdy jeden z:
 - `failed`
 - `timeout`
 
+## Setup na novem PC
+
+Pred prvnim buildem na novem Windows PC si over:
+
+- nainstalovane `Qt 6.x`
+- `Qt Creator`
+- `Visual Studio 2022` nebo `Build Tools` s `MSVC`
+- dostupny `cmake`
+
+Doporuceny postup:
+
+1. otevri `desktop-qt/CMakeLists.txt` v `Qt Creatoru`
+2. nech Qt Creator vytvorit nebo potvrdit build kit pro `Qt 6 + MSVC2022 64bit`
+3. nech vytvorit build adresar `build/Desktop_Qt_6_10_2_MSVC2022_64bit-Debug`
+4. pak spust:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-debug.ps1
+```
+
+Pokud backend bezi na `http://127.0.0.1:8000`, muzes hned potom pustit:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\smoke-check.ps1
+```
+
 ## Smoke Check
 
 Pro rychle overeni desktop + backend workflow pouzij:
