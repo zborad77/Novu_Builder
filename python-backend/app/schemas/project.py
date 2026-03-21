@@ -38,6 +38,7 @@ class ProjectSummary(BaseModel):
     estimatedAreaSqm: float | None = None
     latestQuoteTotal: float | None = None
     updatedAt: datetime | None = None
+    createdByName: str | None = None
 
 
 class ProposalDraftWorkItem(BaseModel):
@@ -97,6 +98,7 @@ class ProjectProposalDraft(BaseModel):
     materials: list[ProposalDraftMaterial] = Field(default_factory=list)
     materialCost: float | None = None
     laborCost: float | None = None
+    transportCost: float | None = None
     amortization: float | None = None
     margin: float | None = None
     recommendedSupplier: str | None = None
@@ -122,10 +124,30 @@ class ProjectProposalDraftPatch(BaseModel):
     summary: str | None = None
     materialCost: float | None = None
     laborCost: float | None = None
+    transportCost: float | None = None
     amortization: float | None = None
     margin: float | None = None
     recommendedSupplier: str | None = None
     recommendedCompany: str | None = None
+
+
+class ProjectWorkflowPhotoReadiness(BaseModel):
+    totalPhotoCount: int = 0
+    readyPhotoCount: int = 0
+    minimumRecommendedCount: int = 3
+    hasMinimumRecommendedCount: bool = False
+    hasPrimaryReadyPhoto: bool = False
+    hasAnalysisReferenceReadyPhoto: bool = False
+
+
+class ProjectWorkflowStatusSummary(BaseModel):
+    photoReadiness: ProjectWorkflowPhotoReadiness
+    analysisStatus: str
+    draftStatus: str
+    finalProposalStatus: str | None = None
+    canCreateFinalProposal: bool = False
+    canSend: bool = False
+    blockingReasons: list[str] = Field(default_factory=list)
 
 
 class ProjectDetail(BaseModel):
@@ -134,6 +156,7 @@ class ProjectDetail(BaseModel):
     description: str | None = None
     status: str
     isReferenceDataset: bool = False
+    source: str = "mobile"
     propertyType: str | None = None
     repairScope: str | None = None
     location: ProjectLocation
@@ -142,6 +165,7 @@ class ProjectDetail(BaseModel):
     latestAnalysis: dict | None = None
     proposalDraft: ProjectProposalDraft | None = None
     finalProposal: ProjectFinalProposal | None = None
+    workflowStatus: ProjectWorkflowStatusSummary | None = None
     quoteVariants: list = Field(default_factory=list)
     referenceExpectations: ProjectReferenceExpectations | None = None
     createdAt: datetime | None = None
@@ -156,6 +180,7 @@ class ProjectListResponse(BaseModel):
 class ProjectCreate(BaseModel):
     title: str
     description: str | None = None
+    source: str = "mobile"
     clientId: str | None = None
     locationLat: float | None = None
     locationLng: float | None = None

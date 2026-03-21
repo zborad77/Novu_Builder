@@ -20,8 +20,8 @@ Ale dalsi vyvoj uz chceme vest jinou backendovou cestou.
 Novy cil:
 
 - `mobilni aplikace` jako primarni vstup v terenu
-- `web / desktop kancelar` pro kalkulaci, editaci a administraci
-- `Python + FastAPI` jako backend
+- `desktop kancelar` jako review, edit a schvalovaci pracoviste
+- `Python + FastAPI` jako centralni backend a orchestrator
 - `PostgreSQL` jako hlavni databaze
 - `Redis` pro fronty a async ulohy
 - `Python` i pro AI a vision vrstvu
@@ -62,12 +62,15 @@ Jen uz nejsou cilovy technologicky smer.
 - samostatna mobilni aplikace
 - hlavni vstup od technika
 - foto, GPS, kratky popis, odeslani
+- bez business logiky, ceniku a rozhodovacich pravidel
 
-### 4.2 Kancelarsky web
+### 4.2 Desktop kancelar
 
-- React
 - hlavni pracovni plocha pro kalkulanta a managera
-- editace, kontrola, prepocet, dokumenty, admin
+- kontrola serveroveho vystupu
+- editace textu a cisel
+- schvaleni finalni nabidky
+- bez vlastni business logiky a bez autoritativnich vypoctu
 
 ### 4.3 Backend
 
@@ -78,6 +81,8 @@ Jen uz nejsou cilovy technologicky smer.
 - structlog
 - PostgreSQL
 - Redis
+- jediny zdroj business pravdy
+- jedine misto pro workflow pravidla, ceniky, dodavatele a firmy
 
 ### 4.4 AI vrstva
 
@@ -85,6 +90,7 @@ Jen uz nejsou cilovy technologicky smer.
 - CV / vision analyza
 - AI navrh materialu a workflow
 - segmentace a area estimation
+- backend ji orchestruje a uklada jeji vystupy
 
 ## 5. Jak jsme migrovali
 
@@ -132,6 +138,7 @@ Od teto chvile:
 
 - nove backendove moduly patri do `python-backend/`
 - legacy JS backend uz dal nerozsirujeme
-- React frontend zatim muzeme nechat bez velkeho bourani
+- klienti jen zobrazuji, odesilaji a potvrzuji
+- business logika, workflow rozhodovani a AI orchestrace patri jen na backend
 
 Toto je novy cilovy kabat projektu.

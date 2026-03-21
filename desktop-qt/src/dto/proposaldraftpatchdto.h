@@ -8,6 +8,7 @@ struct ProposalDraftPatchDto
     QString summary;
     double materialCost = 0.0;
     double laborCost = 0.0;
+    double transportCost = 0.0;
     double amortization = 0.0;
     double margin = 0.0;
     QString recommendedSupplier;

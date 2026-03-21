@@ -25,7 +25,9 @@ class AnalysisResultRead(BaseModel):
     finalAreaSource: str
     maskPolygon: list[dict[str, float]] | None = None
     materials: list[dict[str, Any]] | None = None
-    workflow: list[str] | None = None
+    workflowSteps: list[dict[str, Any]] | None = None
+    estimatedDurationDays: float | None = None
+    laborHoursTotal: float | None = None
     modelName: str | None = None
     modelVersion: str | None = None
     createdAt: datetime | None = None

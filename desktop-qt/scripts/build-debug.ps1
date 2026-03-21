@@ -173,42 +173,31 @@ $process.StartInfo = $psi
 $stdoutWriter = [System.IO.StreamWriter]::new($stdoutLog, $false, [System.Text.Encoding]::UTF8)
 $stderrWriter = [System.IO.StreamWriter]::new($stderrLog, $false, [System.Text.Encoding]::UTF8)
 
-$outputHandler = [System.Diagnostics.DataReceivedEventHandler]{
-    param($sender, $args)
-    if ($null -ne $args.Data) {
-        $stdoutWriter.WriteLine($args.Data)
-        $stdoutWriter.Flush()
-    }
-}
-$errorHandler = [System.Diagnostics.DataReceivedEventHandler]{
-    param($sender, $args)
-    if ($null -ne $args.Data) {
-        $stderrWriter.WriteLine($args.Data)
-        $stderrWriter.Flush()
-    }
-}
-
 try {
     if (-not $process.Start()) {
         Write-BuildStatus -Status "failed" -ExitCode 1 -Message "Build process could not be started."
         throw "Build process could not be started."
     }
 
-    $process.add_OutputDataReceived($outputHandler)
-    $process.add_ErrorDataReceived($errorHandler)
-    $process.BeginOutputReadLine()
-    $process.BeginErrorReadLine()
-
     if (-not $process.WaitForExit($timeoutSeconds * 1000)) {
         try {
             $process.Kill($true)
         } catch {
         }
+        $process.WaitForExit()
+        $stdoutWriter.Write($process.StandardOutput.ReadToEnd())
+        $stdoutWriter.Flush()
+        $stderrWriter.Write($process.StandardError.ReadToEnd())
+        $stderrWriter.Flush()
         Write-BuildStatus -Status "timeout" -ExitCode 124 -Message "Build timed out after $timeoutSeconds seconds."
         throw "Build timed out after $timeoutSeconds seconds."
     }
 
     $process.WaitForExit()
+    $stdoutWriter.Write($process.StandardOutput.ReadToEnd())
+    $stdoutWriter.Flush()
+    $stderrWriter.Write($process.StandardError.ReadToEnd())
+    $stderrWriter.Flush()
     $exitCode = $process.ExitCode
     if ($exitCode -eq 0) {
         Write-BuildStatus -Status "success" -ExitCode 0 -Message "Build completed successfully."
@@ -220,8 +209,6 @@ try {
 }
 finally {
     if ($null -ne $process) {
-        $process.remove_OutputDataReceived($outputHandler)
-        $process.remove_ErrorDataReceived($errorHandler)
         $process.Dispose()
     }
     if ($null -ne $stdoutWriter) {

@@ -2,11 +2,18 @@
 
 #include <QMainWindow>
 
+#include "services/sessionservice.h"
+
+class QFrame;
 class QStackedWidget;
 class QLabel;
+class QPushButton;
 class QWidget;
+class CaseBrowserView;
 class CaseDetailView;
 class CaseListView;
+class LoginView;
+class NewCaseView;
 
 class MainWindow : public QMainWindow
 {
@@ -16,15 +23,34 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
 
 private:
+    void handleLoginRequested(const QString &email, const QString &password);
+    void handleSessionExpired();
     QWidget *createWorkspaceShell();
     void syncActiveCaseWorkspace();
     void updateWorkspaceHeader();
     void switchToLoginMode();
     void switchToWorkspaceMode();
+    void showWelcomeView();
+    void showNewCaseView();
+    void showCaseDetailView();
+    void setSidebarActiveSection(QPushButton *activeButton);
+    bool confirmNavigateAway();
 
+    SessionService m_session;
     QStackedWidget *m_stack = nullptr;
+    LoginView *m_loginView = nullptr;
     CaseListView *m_caseListView = nullptr;
     CaseDetailView *m_caseDetailView = nullptr;
+    NewCaseView *m_newCaseView = nullptr;
+    CaseBrowserView *m_caseBrowserView = nullptr;
+    QStackedWidget *m_detailStack = nullptr;
+    QWidget *m_welcomeView = nullptr;
+    QFrame *m_caseColumn = nullptr;
     QLabel *m_workspaceTitleLabel = nullptr;
     QLabel *m_workspaceSubtitleLabel = nullptr;
+    QPushButton *m_sidebarProjectButton = nullptr;
+    QPushButton *m_sidebarServerCasesButton = nullptr;
+    QPushButton *m_sidebarWorkCasesButton = nullptr;
+    QPushButton *m_sidebarHistoryButton = nullptr;
+    QPushButton *m_sidebarNewCaseButton = nullptr;
 };

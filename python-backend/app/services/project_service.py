@@ -5,7 +5,14 @@ from app.models import Project, ProjectPhoto
 from app.repositories.final_proposal_repository import FinalProposalRepository
 from app.repositories.proposal_draft_repository import ProposalDraftRepository
 from app.repositories.project_repository import ProjectRepository
-from app.schemas.project import ProjectCreate, ProjectDetail, ProjectDuplicateRequest, ProjectSummary
+from app.schemas.project import (
+    ProjectCreate,
+    ProjectDetail,
+    ProjectDuplicateRequest,
+    ProjectSummary,
+    ProjectWorkflowPhotoReadiness,
+    ProjectWorkflowStatusSummary,
+)
 from app.services.export_service import ExportService
 from app.services.proposal_draft_service import (
     build_final_proposal_from_record,
@@ -26,6 +33,7 @@ def is_reference_dataset_project(project: Project) -> bool:
 
 
 def build_project_summary(project: Project) -> ProjectSummary:
+    creator = getattr(project, "created_by_user", None)
     return ProjectSummary(
         id=project.id,
         title=project.title,
@@ -38,7 +46,130 @@ def build_project_summary(project: Project) -> ProjectSummary:
         estimatedAreaSqm=None,
         latestQuoteTotal=None,
         updatedAt=project.updated_at,
+        createdByName=creator.full_name if creator else None,
     )
+
+
+def build_project_workflow_status_summary(
+    project: Project,
+    *,
+    proposal_draft,
+    latest_final,
+) -> ProjectWorkflowStatusSummary:
+    photos = project.photos or []
+    ready_photos = [photo for photo in photos if photo.processing_status == "ready"]
+    total_photo_count = len(photos)
+    ready_photo_count = len(ready_photos)
+    has_primary_ready_photo = any(photo.is_primary for photo in ready_photos)
+    has_analysis_reference_ready_photo = any(photo.is_analysis_reference for photo in ready_photos)
+    has_pending_processing = any(photo.processing_status in {"uploaded", "processing"} for photo in photos)
+    has_minimum_recommended_count = ready_photo_count >= MIN_READY_PHOTOS_FOR_FINAL_PROPOSAL
+
+    photo_readiness = ProjectWorkflowPhotoReadiness(
+        totalPhotoCount=total_photo_count,
+        readyPhotoCount=ready_photo_count,
+        minimumRecommendedCount=MIN_READY_PHOTOS_FOR_FINAL_PROPOSAL,
+        hasMinimumRecommendedCount=has_minimum_recommended_count,
+        hasPrimaryReadyPhoto=has_primary_ready_photo,
+        hasAnalysisReferenceReadyPhoto=has_analysis_reference_ready_photo,
+    )
+
+    blocking_reasons: list[str] = []
+    if total_photo_count == 0:
+        analysis_status = "waiting_for_photos"
+        blocking_reasons.append("No photos have been uploaded yet.")
+    elif has_pending_processing:
+        analysis_status = "processing_photos"
+        blocking_reasons.append("Server is still processing uploaded photos.")
+    elif not has_minimum_recommended_count:
+        analysis_status = "awaiting_more_photos"
+        blocking_reasons.append(
+            f"At least {MIN_READY_PHOTOS_FOR_FINAL_PROPOSAL} ready photos are recommended before finalizing."
+        )
+    else:
+        analysis_status = "ready_for_server_analysis"
+
+    if not has_primary_ready_photo:
+        blocking_reasons.append("A primary photo in ready state is required.")
+    if not has_analysis_reference_ready_photo:
+        blocking_reasons.append("An analysis reference photo in ready state is required.")
+
+    draft_status = proposal_draft.status if proposal_draft is not None else "missing"
+    if proposal_draft is None:
+        blocking_reasons.append("Proposal draft is not available.")
+    elif proposal_draft.status != "ready":
+        blocking_reasons.append(f"Proposal draft must be ready. Current status: {proposal_draft.status}.")
+
+    can_create_final_proposal = (
+        proposal_draft is not None
+        and proposal_draft.status == "ready"
+        and has_minimum_recommended_count
+        and has_primary_ready_photo
+        and has_analysis_reference_ready_photo
+    )
+
+    final_proposal_status = latest_final.status if latest_final is not None else None
+    can_send = latest_final is not None
+    if latest_final is None:
+        blocking_reasons.append("Final proposal has not been created yet.")
+
+    deduplicated_blocking_reasons = list(dict.fromkeys(blocking_reasons))
+
+    return ProjectWorkflowStatusSummary(
+        photoReadiness=photo_readiness,
+        analysisStatus=analysis_status,
+        draftStatus=draft_status,
+        finalProposalStatus=final_proposal_status,
+        canCreateFinalProposal=can_create_final_proposal,
+        canSend=can_send,
+        blockingReasons=deduplicated_blocking_reasons,
+    )
+
+
+def _build_latest_analysis_dict(project: Project) -> dict | None:
+    results = getattr(project, "analysis_results", None) or []
+    if not results:
+        return None
+    latest = max(results, key=lambda r: (r.created_at or project.created_at, r.id))
+    workflow_raw = _parse_json(latest.workflow_suggestion_json)
+    materials_raw = _parse_json(latest.materials_suggestion_json)
+    mask_polygon_raw = _parse_json(latest.mask_polygon_json)
+    return {
+        "id": latest.id,
+        "objectType": latest.object_type,
+        "surfaceCondition": latest.surface_condition,
+        "recommendedScope": latest.recommended_scope,
+        "estimatedAreaSqm": latest.estimated_area_sqm,
+        "areaConfidence": latest.area_confidence,
+        "manualAreaSqm": latest.manual_area_sqm,
+        "finalAreaSource": latest.final_area_source,
+        "maskPolygon": mask_polygon_raw if isinstance(mask_polygon_raw, list) else [],
+        "workflowSteps": workflow_raw if isinstance(workflow_raw, list) else [],
+        "materials": materials_raw if isinstance(materials_raw, list) else [],
+        "estimatedDurationDays": latest.estimated_duration_days,
+        "laborHoursTotal": latest.labor_hours_total,
+        "modelName": latest.model_name,
+        "modelVersion": latest.model_version,
+        "createdAt": latest.created_at.isoformat() if latest.created_at else None,
+    }
+
+
+def _build_quote_variants_list(project: Project) -> list:
+    from app.services.quote_variant_service import to_variant_read
+    variants = getattr(project, "quote_variants", None) or []
+    if not variants:
+        return []
+    sorted_variants = sorted(variants, key=lambda v: (v.created_at or project.created_at, v.id))
+    return [to_variant_read(v).model_dump() for v in sorted_variants]
+
+
+def _parse_json(value: str | None):
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 def build_project_detail(project: Project) -> ProjectDetail:
@@ -62,6 +193,7 @@ def build_project_detail(project: Project) -> ProjectDetail:
         description=project.description,
         status=project.status,
         isReferenceDataset=is_reference_dataset_project(project),
+        source=getattr(project, "source", "mobile") or "mobile",
         propertyType=project.property_type,
         repairScope=project.repair_scope,
         location={
@@ -81,10 +213,15 @@ def build_project_detail(project: Project) -> ProjectDetail:
             else None
         ),
         photos=[],
-        latestAnalysis=None,
+        latestAnalysis=_build_latest_analysis_dict(project),
         proposalDraft=proposal_draft,
         finalProposal=build_final_proposal_from_record(latest_final),
-        quoteVariants=[],
+        workflowStatus=build_project_workflow_status_summary(
+            project,
+            proposal_draft=proposal_draft,
+            latest_final=latest_final,
+        ),
+        quoteVariants=_build_quote_variants_list(project),
         referenceExpectations=reference_expectations,
         createdAt=project.created_at,
         updatedAt=project.updated_at,
@@ -203,6 +340,7 @@ class ProjectService:
             location_lat=payload.locationLat,
             location_lng=payload.locationLng,
             address_label=payload.addressLabel,
+            source=payload.source or "mobile",
         )
 
     async def duplicate_project(self, project_id: str, payload: ProjectDuplicateRequest) -> Project | None:

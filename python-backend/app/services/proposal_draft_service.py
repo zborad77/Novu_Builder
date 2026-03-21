@@ -75,6 +75,7 @@ def proposal_draft_changes_from_record(record: ProjectProposalDraft | None) -> d
         "summary": record.summary,
         "materialCost": record.material_cost,
         "laborCost": record.labor_cost,
+        "transportCost": record.transport_cost,
         "amortization": record.amortization,
         "margin": record.margin,
         "recommendedSupplier": record.recommended_supplier,
@@ -95,6 +96,8 @@ def proposal_draft_manual_fields_from_record(record: ProjectProposalDraft | None
         manual_fields.add("materialCost")
     if record.labor_cost is not None:
         manual_fields.add("laborCost")
+    if record.transport_cost is not None:
+        manual_fields.add("transportCost")
     if record.amortization is not None:
         manual_fields.add("amortization")
     if record.margin is not None:
@@ -123,6 +126,7 @@ def normalize_proposal_patch_payload(payload: dict) -> dict:
     numeric_fields = {
         "materialCost": "material_cost",
         "laborCost": "labor_cost",
+        "transportCost": "transport_cost",
         "amortization": "amortization",
         "margin": "margin",
     }
@@ -147,7 +151,7 @@ def _apply_proposal_overrides(
 
     merged = draft.model_copy(deep=True)
     string_fields = ("subject", "summary", "recommendedSupplier", "recommendedCompany")
-    numeric_fields = ("materialCost", "laborCost", "amortization", "margin")
+    numeric_fields = ("materialCost", "laborCost", "transportCost", "amortization", "margin")
 
     for field_name in string_fields:
         if field_name in overrides and isinstance(overrides[field_name], str):
@@ -165,6 +169,7 @@ def _apply_proposal_overrides(
             for value in (
                 merged.materialCost,
                 merged.laborCost,
+                merged.transportCost,
                 merged.amortization,
                 merged.margin,
             )

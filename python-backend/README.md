@@ -77,6 +77,32 @@ Typicky prechod na PostgreSQL:
 alembic upgrade head
 ```
 
+Na Windows muzes stejny krok udelat i jednim skriptem z korene repozitare:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\switch-backend-db.ps1 -Target postgres -RunMigrations
+```
+
+S vlastnimi prihlasovacimi udaji:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\switch-backend-db.ps1 `
+  -Target postgres `
+  -PostgresHost localhost `
+  -PostgresPort 5432 `
+  -PostgresDatabase novu_builder `
+  -PostgresUser novu `
+  -PostgresPassword novu `
+  -RunMigrations
+```
+
+Skript automaticky:
+
+- prepise `python-backend/.env` na PostgreSQL URL
+- vypne `DB_AUTO_CREATE_SCHEMA` a `DB_SEED_ON_STARTUP`
+- doinstaluje chybejici `asyncpg` a `psycopg[binary]`
+- volitelne spusti `alembic upgrade head`
+
 ## Setup na novem PC
 
 Doporuceny minimalni postup:

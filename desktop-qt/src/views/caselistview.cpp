@@ -38,13 +38,39 @@ CaseListView::CaseListView(QWidget *parent)
     optionsLayout->setContentsMargins(14, 14, 14, 14);
     optionsLayout->setSpacing(10);
 
-    optionsLayout->addWidget(createOptionButton("Predmet zakazky", "subject", optionsCard));
-    optionsLayout->addWidget(createOptionButton("Cena materialu", "material_cost", optionsCard));
-    optionsLayout->addWidget(createOptionButton("Cena prace", "labor_cost", optionsCard));
-    optionsLayout->addWidget(createOptionButton("Materialy", "materials", optionsCard));
-    optionsLayout->addWidget(createOptionButton("Amortizace", "amortization", optionsCard));
-    optionsLayout->addWidget(createOptionButton("Marze", "margin", optionsCard));
-    optionsLayout->addWidget(createOptionButton("Dodavatele materialu", "material_suppliers", optionsCard));
+    // Mobile cases: single "Editovat zakázku" entry point — toggles field buttons
+    m_editCaseButton = new QPushButton(QString::fromUtf8("Editovat zak\u00e1zku \u25bc"), optionsCard);
+    m_editCaseButton->setObjectName("optionNavButton");
+    optionsLayout->addWidget(m_editCaseButton);
+    m_editCaseButton->hide();
+
+    // Desktop (PC) cases: individual field shortcuts
+    const auto addField = [&](const QString &label, const QString &key) {
+        auto *btn = createOptionButton(label, key, optionsCard);
+        m_fieldButtons.append(btn);
+        optionsLayout->addWidget(btn);
+    };
+    addField("Predmet zakazky", "subject");
+    addField("Cena materialu", "material_cost");
+    addField("Cena prace", "labor_cost");
+    addField("Materialy", "materials");
+    addField("Amortizace", "amortization");
+    addField("Marze", "margin");
+    addField("Dodavatele materialu", "material_suppliers");
+
+    // Toggle field buttons on click (mobile accordion)
+    connect(m_editCaseButton, &QPushButton::clicked, this, [this]() {
+        m_fieldButtonsExpanded = !m_fieldButtonsExpanded;
+        for (auto *btn : m_fieldButtons) {
+            if (btn) btn->setVisible(m_fieldButtonsExpanded);
+        }
+        m_editCaseButton->setText(m_fieldButtonsExpanded
+            ? QString::fromUtf8("Editovat zak\u00e1zku \u25b2")
+            : QString::fromUtf8("Editovat zak\u00e1zku \u25bc"));
+    });
+
+    // Always visible
+    optionsLayout->addWidget(createOptionButton(QString::fromUtf8("P\u0159id\u00e1n\u00ed fotek"), "upload_photos", optionsCard));
     optionsLayout->addStretch();
 
     layout->addWidget(title);
@@ -118,6 +144,11 @@ void CaseListView::reloadCases(const QString &preferredCurrentCaseId, bool emitS
     ApiService apiService;
     const auto loadedCases = viewModel.loadCases(apiService);
 
+    if (ApiService::sessionExpired()) {
+        emit sessionExpired();
+        return;
+    }
+
     if (loadedCases.empty() && !viewModel.errorMessage().isEmpty()) {
         m_errorLabel->setText(viewModel.errorMessage());
         m_errorLabel->show();
@@ -156,6 +187,22 @@ void CaseListView::setCurrentCaseId(const QString &caseId, bool emitSignal)
     m_currentCaseId = caseId;
     if (emitSignal) {
         emit caseSelected(m_currentCaseId);
+    }
+}
+
+void CaseListView::updateForCaseSource(const QString &source)
+{
+    const bool isDesktop = (source == QStringLiteral("desktop"));
+    if (m_editCaseButton) {
+        m_editCaseButton->setVisible(!isDesktop);
+        if (!isDesktop) {
+            // Reset accordion to collapsed state when switching cases
+            m_fieldButtonsExpanded = false;
+            m_editCaseButton->setText(QString::fromUtf8("Editovat zak\u00e1zku \u25bc"));
+        }
+    }
+    for (auto *btn : m_fieldButtons) {
+        if (btn) btn->setVisible(isDesktop || m_fieldButtonsExpanded);
     }
 }
 

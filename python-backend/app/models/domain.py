@@ -80,6 +80,7 @@ class Project(TimestampMixin, Base):
     location_lat: Mapped[float | None] = mapped_column(Float)
     location_lng: Mapped[float | None] = mapped_column(Float)
     address_label: Mapped[str | None] = mapped_column(String(255))
+    source: Mapped[str] = mapped_column(String(32), default="mobile", nullable=False, server_default="mobile")
     reference_expectations_json: Mapped[str | None] = mapped_column(Text)
 
     organization: Mapped["Organization"] = relationship(back_populates="projects")
@@ -141,6 +142,7 @@ class ProjectProposalDraft(TimestampMixin, Base):
     summary: Mapped[str | None] = mapped_column(Text)
     material_cost: Mapped[float | None] = mapped_column(Float)
     labor_cost: Mapped[float | None] = mapped_column(Float)
+    transport_cost: Mapped[float | None] = mapped_column(Float)
     amortization: Mapped[float | None] = mapped_column(Float)
     margin: Mapped[float | None] = mapped_column(Float)
     recommended_supplier: Mapped[str | None] = mapped_column(String(255))
@@ -201,6 +203,8 @@ class AnalysisResult(Base):
     mask_polygon_json: Mapped[str | None] = mapped_column(Text)
     materials_suggestion_json: Mapped[str | None] = mapped_column(Text)
     workflow_suggestion_json: Mapped[str | None] = mapped_column(Text)
+    estimated_duration_days: Mapped[float | None] = mapped_column(Float)
+    labor_hours_total: Mapped[float | None] = mapped_column(Float)
     model_name: Mapped[str | None] = mapped_column(String(128))
     model_version: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -337,3 +341,12 @@ class QuoteItem(TimestampMixin, Base):
     quote_variant: Mapped["QuoteVariant"] = relationship(back_populates="items")
     material_catalog: Mapped["MaterialCatalog | None"] = relationship(back_populates="quote_items")
     supplier: Mapped["Supplier | None"] = relationship(back_populates="quote_items")
+
+
+class RevokedToken(Base):
+    """Blocklist for revoked JWT tokens. Checked on every authenticated request."""
+    __tablename__ = "revoked_tokens"
+
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

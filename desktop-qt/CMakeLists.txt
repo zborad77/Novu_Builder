@@ -24,6 +24,10 @@ qt_add_executable(FotoNabidkaDesktop
     src/views/caselistview.h
     src/views/casedetailview.cpp
     src/views/casedetailview.h
+    src/views/newcaseview.cpp
+    src/views/newcaseview.h
+    src/views/casebrowserview.cpp
+    src/views/casebrowserview.h
     src/viewmodels/loginviewmodel.cpp
     src/viewmodels/loginviewmodel.h
     src/viewmodels/dashboardviewmodel.cpp
@@ -40,6 +44,8 @@ qt_add_executable(FotoNabidkaDesktop
     src/dto/imagedto.h
     src/dto/logindto.h
     src/dto/uploadimagedto.h
+    src/widgets/imageoverlaywidget.cpp
+    src/widgets/imageoverlaywidget.h
 )
 
 target_include_directories(FotoNabidkaDesktop PRIVATE src)

@@ -10,7 +10,7 @@ Cil:
 
 Prvni funkcni tok:
 
-`zalozit projekt -> nahrat fotky -> spustit analyzu -> zobrazit vysledek -> upravit a nacenit`
+`mobil zalozi nebo otevre case -> mobil nahraje fotky -> backend zpracuje analyzu a draft -> desktop zkontroluje a upravi -> backend vytvori final proposal -> desktop odesle`
 
 ## 1. Co patri do MVP
 
@@ -20,6 +20,8 @@ Do prvni verze budeme resit jen tyto oblasti:
 - projekt
 - fotografie projektu
 - AI analyza
+- proposal draft
+- final proposal
 - cenove varianty
 - firemni cenik materialu a reference dodavatelu
 
@@ -120,16 +122,18 @@ Hlavni pole:
 Navrh stavu projektu:
 
 - `draft`
-- `uploaded`
+- `photos_uploaded`
 - `processing`
-- `analysed`
-- `quoted`
+- `analysis_ready`
+- `draft_ready`
+- `final_ready`
 - `sent`
 
 Poznamka:
 
 - `property_type` bude zatim predvyplneny AI nebo uzivatelem
 - `repair_scope` znamena napriklad `cleaning`, `local_repair`, `full_reconstruction`
+- workflow pravidla a povolene prechody mezi stavy ridi jen server
 
 ## 2.5 ProjectPhoto
 
@@ -386,6 +390,54 @@ Tohle je dulezity zaklad pro budouci workflow:
 - firma ma vlastni katalogovou cenu
 - kalkulant muze polozku rucne prepsat
 
+## 2.14 ProjectProposalDraft
+
+Pracovni serverovy navrh nabidky pred finalnim potvrzenim.
+
+Hlavni pole:
+
+- `project_id`
+- `version`
+- `status`
+- `subject`
+- `summary`
+- `material_cost`
+- `labor_cost`
+- `amortization`
+- `margin`
+- `recommended_supplier`
+- `recommended_company`
+- `created_at`
+- `updated_at`
+
+Poznamka:
+
+- draft pripravuje server
+- desktop ho jen kontroluje a pripadne upravi
+
+## 2.15 ProjectFinalProposal
+
+Schvalena finalni verze nabidky pripravena pro export a odeslani.
+
+Hlavni pole:
+
+- `id`
+- `project_id`
+- `draft_version`
+- `status`
+- `currency`
+- `subject`
+- `summary`
+- `total_price`
+- `snapshot_json`
+- `created_at`
+- `updated_at`
+
+Poznamka:
+
+- final proposal vznika jen na serveru
+- desktop ho neprepocitava, jen potvrzuje a odesila
+
 ## 3. Vazby mezi entitami
 
 Jednoduse receno:
@@ -405,6 +457,8 @@ Jednoduse receno:
 Prakticky pro MVP budeme vetsi cast logiky brat takto:
 
 - projekt ma jednu aktualni AI analyzu
+- projekt ma jeden aktualni proposal draft
+- projekt muze mit jednu aktualni finalni verzi
 - projekt ma tri aktualni cenove varianty
 
 ## 4. Minimalni databazove tabulky pro prvni implementaci
@@ -485,7 +539,7 @@ Priklady query parametru:
 
 Pouziti:
 
-- zalozeni noveho projektu z mobilu nebo z kancelare
+- zalozeni noveho projektu primarne z mobilu
 
 Request:
 
@@ -592,6 +646,10 @@ Pouziti:
 
 - rucni spusteni AI analyzy
 
+Poznamka:
+
+- cilovy smer je, aby analyzu po uploadu fotek spoustel server automaticky
+
 Response:
 
 ```json
@@ -663,6 +721,34 @@ Pouziti:
 
 - rucni uprava varianty v kancelarskem rozhrani
 
+## 5.6 Proposal draft a final proposal
+
+### `GET /projects/:projectId`
+
+Detail projektu ma vratit i:
+
+- `workflowStatus`
+- `proposalDraft`
+- `finalProposal`
+
+### `PATCH /projects/:projectId/proposal-draft`
+
+Pouziti:
+
+- uprava serveroveho draftu z desktop review klienta
+
+### `POST /projects/:projectId/final-proposal`
+
+Pouziti:
+
+- vytvoreni finalni verze ze serveroveho draftu
+
+### `POST /projects/:projectId/send`
+
+Pouziti:
+
+- odeslani schvalene finalni nabidky
+
 ## 6. Doporuceny detail projektu pro frontend
 
 Pro kancelarsky frontend je nejprijemnejsi, kdyz detail projektu vrati vse pohromade.
@@ -673,7 +759,7 @@ Priklad odpovedi:
 {
   "id": "prj_123",
   "title": "Fasada domu Novak",
-  "status": "analysed",
+  "status": "analysis_ready",
   "description": "Znecistena severni stena a lokalni praskliny",
   "client": {
     "id": "cli_123",
@@ -691,6 +777,22 @@ Priklad odpovedi:
       "url": "signed-url"
     }
   ],
+  "workflowStatus": {
+    "analysisStatus": "ready_for_server_analysis",
+    "draftStatus": "ready",
+    "finalProposalStatus": "ready_for_export",
+    "canCreateFinalProposal": true,
+    "canSend": true,
+    "blockingReasons": []
+  },
+  "proposalDraft": {
+    "status": "ready",
+    "version": 2
+  },
+  "finalProposal": {
+    "id": "fnp_1",
+    "status": "ready_for_export"
+  },
   "latestAnalysis": {
     "objectType": "facade",
     "surfaceCondition": "damaged",
@@ -715,7 +817,9 @@ Pri implementaci doporucuji drzet tyto zasady:
 - backend ma byt jednoduchy a citelny
 - AI analyza je asynchronni
 - cenove varianty se pocitaji serverove
+- proposal draft a final proposal se pocitaji a drzi serverove
 - frontend nikdy nema pocitat finalni cenu sam
+- mobil ani desktop nemaji nest business logiku
 - soubory jdou do object storage, ne primo do databaze
 - polygon a AI doporuceni mohou byt v MVP ulozene jako JSON
 

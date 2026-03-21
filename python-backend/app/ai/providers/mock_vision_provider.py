@@ -24,7 +24,7 @@ class MockVisionProvider:
             for photo in photos
         )
         has_wide_coverage = landscape_count >= 2 or photo_count >= 3
-        is_roof = "strecha" in description or "strecha" in address
+        is_roof = "strecha" in normalized_text
         is_cleaning = any(term in normalized_text for term in ("cisteni", "ocisteni", "myti"))
 
         object_type = "roof" if is_roof else "facade"
@@ -43,25 +43,104 @@ class MockVisionProvider:
         orientation_boost = landscape_count * 1.4 + portrait_count * 0.9
         gps_boost = gps_photo_count * 0.6
         estimated_area = round(base_area + photo_area_boost + orientation_boost + gps_boost, 1)
-        area_confidence = round(min(0.52 + photo_count * 0.05 + gps_photo_count * 0.03 + landscape_count * 0.02, 0.93), 2)
-
-        materials = (
-            [
-                {"name": "Penetrace", "unit": "l", "quantity": round(estimated_area * 0.22)},
-                {"name": "Fasadni nater", "unit": "kg", "quantity": round(estimated_area * 0.28)},
-            ]
-            if is_cleaning
-            else [
-                {"name": "Penetrace", "unit": "l", "quantity": round(estimated_area * 0.35)},
-                {"name": "Opravna smes", "unit": "kg", "quantity": round(estimated_area * 2.8)},
-            ]
+        area_confidence = round(
+            min(0.52 + photo_count * 0.05 + gps_photo_count * 0.03 + landscape_count * 0.02, 0.93), 2
         )
 
-        workflow = [
-            "Vizualni kontrola povrchu",
-            "Ocisteni a priprava podkladu",
-            "Aplikace cistici a ochranne vrstvy" if is_cleaning else "Lokalni oprava a finalni vrstva",
-        ]
+        if is_cleaning:
+            materials = [
+                {
+                    "name": "Penetrace",
+                    "unit": "l",
+                    "quantity": round(estimated_area * 0.22, 1),
+                    "unitPrice": 95.0,
+                    "totalPrice": round(estimated_area * 0.22 * 95.0, 2),
+                },
+                {
+                    "name": "Fasadni nater",
+                    "unit": "kg",
+                    "quantity": round(estimated_area * 0.28, 1),
+                    "unitPrice": 185.0,
+                    "totalPrice": round(estimated_area * 0.28 * 185.0, 2),
+                },
+            ]
+            workflow_steps = [
+                {
+                    "step": 1,
+                    "name": "Vizualni kontrola povrchu",
+                    "description": "Posouzeni stavu povrchu, zdokumentovani poskozeni a znecisteni.",
+                    "estimatedHours": 1,
+                },
+                {
+                    "step": 2,
+                    "name": "Ocisteni podkladu",
+                    "description": "Tlakove cisteni fasady, odstraneni mechu, riz a prachu.",
+                    "estimatedHours": round(estimated_area * 0.08, 1),
+                },
+                {
+                    "step": 3,
+                    "name": "Aplikace cistici a ochranne vrstvy",
+                    "description": "Penetrace a finalni fasadni nater v jedne vrstve.",
+                    "estimatedHours": round(estimated_area * 0.06, 1),
+                },
+            ]
+        else:
+            materials = [
+                {
+                    "name": "Penetrace",
+                    "unit": "l",
+                    "quantity": round(estimated_area * 0.35, 1),
+                    "unitPrice": 95.0,
+                    "totalPrice": round(estimated_area * 0.35 * 95.0, 2),
+                },
+                {
+                    "name": "Opravna smes",
+                    "unit": "kg",
+                    "quantity": round(estimated_area * 2.8, 1),
+                    "unitPrice": 42.0,
+                    "totalPrice": round(estimated_area * 2.8 * 42.0, 2),
+                },
+            ]
+            if not is_roof:
+                materials.append({
+                    "name": "Fasadni nater",
+                    "unit": "kg",
+                    "quantity": round(estimated_area * 0.45, 1),
+                    "unitPrice": 185.0,
+                    "totalPrice": round(estimated_area * 0.45 * 185.0, 2),
+                })
+            prep_hours = round(estimated_area * 0.05, 1)
+            repair_hours = round(estimated_area * 0.18, 1)
+            coat_hours = round(estimated_area * 0.08, 1)
+            workflow_steps = [
+                {
+                    "step": 1,
+                    "name": "Vizualni kontrola a dokumentace",
+                    "description": "Posouzeni rozsahu poskozeni, zakresleni opravnych zon.",
+                    "estimatedHours": 1,
+                },
+                {
+                    "step": 2,
+                    "name": "Priprava podkladu",
+                    "description": "Ocisteni, odmasteni, broušeni a penetrace povrchu.",
+                    "estimatedHours": prep_hours,
+                },
+                {
+                    "step": 3,
+                    "name": "Lokalni oprava poskozeni",
+                    "description": "Vyplneni trhlin a dutin opravnou smesi, vyrovnani plochy.",
+                    "estimatedHours": repair_hours,
+                },
+                {
+                    "step": 4,
+                    "name": "Aplikace finalni vrstvy",
+                    "description": "Finalni nater nebo omitka dle specifikace.",
+                    "estimatedHours": coat_hours,
+                },
+            ]
+
+        total_hours = sum(step["estimatedHours"] for step in workflow_steps)
+        estimated_total_days = round(total_hours / 8, 1)
 
         return {
             "providerKey": "mock",
@@ -73,7 +152,9 @@ class MockVisionProvider:
             "areaConfidence": area_confidence,
             "maskPolygon": self.build_mock_mask(),
             "materials": materials,
-            "workflow": workflow,
+            "workflowSteps": workflow_steps,
+            "estimatedTotalDays": estimated_total_days,
+            "laborHoursTotal": total_hours,
             "modelName": "mock-vision",
-            "modelVersion": "0.2",
+            "modelVersion": "0.3",
         }

@@ -13,6 +13,7 @@ from app.db.base import Base
 from app.db.bootstrap import ensure_dev_seed
 from app.db.session import AsyncSessionFactory, engine
 from app.models import Project
+from app.repositories.token_repository import TokenRepository
 from app.storage.local_photo_storage import STORAGE_ROOT
 
 logger = structlog.get_logger(__name__)
@@ -66,6 +67,11 @@ async def lifespan(app: FastAPI):
     startup_checks["storage"] = "ok"
     app.state.startup_checks = startup_checks
     logger.info("startup.checks", **startup_checks)
+
+    async with AsyncSessionFactory() as session:
+        deleted = await TokenRepository(session).delete_expired()
+        if deleted:
+            logger.info("startup.revoked_tokens_cleanup", deleted=deleted)
 
     yield
 

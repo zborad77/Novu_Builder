@@ -6,6 +6,9 @@
 
 #include <QApplication>
 #include <QBuffer>
+#include <QDesktopServices>
+#include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -23,9 +26,11 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QStandardPaths>
 #include <QStringList>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -55,8 +60,28 @@ QString serverProcessingStatusLabel(const QString &status)
     return status.isEmpty() ? "neznamy stav" : status;
 }
 
-QString proposalStatusLabel(const QString &status)
+QString analysisWorkflowStatusLabel(const QString &status)
 {
+    if (status == "waiting_for_photos") {
+        return "ceka na fotky";
+    }
+    if (status == "processing_photos") {
+        return "zpracovava fotky";
+    }
+    if (status == "awaiting_more_photos") {
+        return "ceka na dalsi fotky";
+    }
+    if (status == "ready") {
+        return "navrh pripraven";
+    }
+    return status.isEmpty() ? "-" : status;
+}
+
+QString draftWorkflowStatusLabel(const QString &status)
+{
+    if (status == "missing") {
+        return "navrh chybi";
+    }
     if (status == "waiting_for_photos") {
         return "ceka na fotky";
     }
@@ -78,6 +103,38 @@ QString finalProposalStatusLabel(const QString &status)
         return "pripraveno pro export";
     }
     return status.isEmpty() ? "zatim nevytvoreno" : status;
+}
+
+QString workflowSummaryLabel(const CaseDto &caseDto)
+{
+    QStringList parts;
+    if (!caseDto.workflowAnalysisStatus.isEmpty()) {
+        parts << QString("fotky: %1").arg(analysisWorkflowStatusLabel(caseDto.workflowAnalysisStatus));
+    }
+    if (!caseDto.workflowDraftStatus.isEmpty()) {
+        parts << QString("navrh: %1").arg(draftWorkflowStatusLabel(caseDto.workflowDraftStatus));
+    }
+    if (!caseDto.workflowFinalProposalStatus.isEmpty()) {
+        parts << QString("final: %1").arg(finalProposalStatusLabel(caseDto.workflowFinalProposalStatus));
+    }
+    return parts.isEmpty() ? "-" : parts.join(" | ");
+}
+
+QString workflowBlockingReasonsLabel(const QStringList &blockingReasons)
+{
+    if (blockingReasons.isEmpty()) {
+        return "bez aktivnich blokaci";
+    }
+
+    QStringList renderedReasons;
+    renderedReasons.reserve(blockingReasons.size());
+    for (const auto &reason : blockingReasons) {
+        if (!reason.trimmed().isEmpty()) {
+            renderedReasons << QString::fromLatin1("\xE2\x80\xA2 ") + reason.trimmed();
+        }
+    }
+
+    return renderedReasons.isEmpty() ? "bez aktivnich blokaci" : renderedReasons.join("\n");
 }
 
 QString summarizeServerImageStatuses(const std::vector<ImageDto> &images)
@@ -362,44 +419,439 @@ QString overallReferenceTestStatus(
 CaseDetailView::CaseDetailView(QWidget *parent)
     : QWidget(parent)
 {
-    auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
+    auto *rootLayout = new QVBoxLayout(this);
+    rootLayout->setContentsMargins(0, 0, 0, 0);
 
     auto *card = new QFrame(this);
     card->setObjectName("detailCard");
     auto *cardLayout = new QVBoxLayout(card);
-    cardLayout->setContentsMargins(20, 20, 20, 20);
-    cardLayout->setSpacing(16);
+    cardLayout->setContentsMargins(20, 16, 20, 20);
+    cardLayout->setSpacing(10);
 
-    m_titleLabel = new QLabel("Vyber aktualni zakazku", card);
-    m_titleLabel->setObjectName("sectionTitle");
-    m_subtitleLabel = new QLabel("Po vyberu v seznamu se sem nacte skutecny detail z backendu.", card);
-    m_subtitleLabel->setObjectName("hintLabel");
-    m_subtitleLabel->setWordWrap(true);
+    // ── Always-visible header ────────────────────────────────────────────────
     m_errorLabel = new QLabel(card);
     m_errorLabel->setObjectName("errorLabel");
     m_errorLabel->setWordWrap(true);
     m_errorLabel->hide();
 
-    auto *summary = new QFrame(card);
-    summary->setObjectName("summaryCard");
-    auto *summaryLayout = new QFormLayout(summary);
-    summaryLayout->setContentsMargins(16, 16, 16, 16);
-    m_statusValueLabel = new QLabel("-", summary);
-    m_addressValueLabel = new QLabel("-", summary);
-    m_scopeValueLabel = new QLabel("-", summary);
-    m_areaValueLabel = new QLabel("-", summary);
-    summaryLayout->addRow("Status", m_statusValueLabel);
-    summaryLayout->addRow("Adresa", m_addressValueLabel);
-    summaryLayout->addRow("Scope", m_scopeValueLabel);
-    summaryLayout->addRow("Area", m_areaValueLabel);
-    m_titleLabel->hide();
-    m_subtitleLabel->hide();
-    summary->hide();
+    m_titleLabel = new QLabel("Vyber zakazku ze seznamu", card);
+    m_titleLabel->setObjectName("sectionTitle");
 
-    auto *proposalTitle = new QLabel("Pracovni navrh nabidky", card);
-    proposalTitle->setObjectName("subSectionTitle");
-    auto *proposalCard = new QFrame(card);
+    m_subtitleLabel = new QLabel("Po vyberu zakazky v levem panelu se zde nacte jeji detail.", card);
+    m_subtitleLabel->setObjectName("hintLabel");
+    m_subtitleLabel->setWordWrap(true);
+
+    cardLayout->addWidget(m_errorLabel);
+    cardLayout->addWidget(m_titleLabel);
+    cardLayout->addWidget(m_subtitleLabel);
+
+    // ── Read-only banner ──────────────────────────────────────────────────────
+    m_readOnlyBanner = new QLabel(
+        QString::fromUtf8("Tato zak\u00e1zka je dokon\u010dena. Pro \u00fapravy klikn\u011bte na Editovat."),
+        card);
+    m_readOnlyBanner->setObjectName("readOnlyBanner");
+    m_readOnlyBanner->setWordWrap(true);
+    m_editUnlockButton = new QPushButton(QString::fromUtf8("Editovat"), card);
+    m_editUnlockButton->setObjectName("editUnlockButton");
+    m_readOnlyBanner->hide();
+    m_editUnlockButton->hide();
+    cardLayout->addWidget(m_readOnlyBanner);
+    cardLayout->addWidget(m_editUnlockButton);
+
+    connect(m_editUnlockButton, &QPushButton::clicked, this, [this]() {
+        setReadOnly(false);
+    });
+
+    // ── Tab widget ────────────────────────────────────────────────────────────
+    m_tabWidget = new QTabWidget(card);
+    m_tabWidget->setObjectName("detailTabs");
+    cardLayout->addWidget(m_tabWidget, 1);
+
+    // Helper: creates a scrollable page and registers it as a tab
+    auto makeScrollPage = [](QTabWidget *tabs, const QString &label) -> QVBoxLayout * {
+        auto *scroll = new QScrollArea(tabs);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        auto *page = new QWidget();
+        page->setObjectName("tabPage");
+        auto *pageLayout = new QVBoxLayout(page);
+        pageLayout->setContentsMargins(4, 12, 4, 20);
+        pageLayout->setSpacing(16);
+        scroll->setWidget(page);
+        tabs->addTab(scroll, label);
+        return pageLayout;
+    };
+
+    // ════════════════════════════════════════════════════════════════════════
+    // TAB 1 — Přehled (Dashboard)
+    // ════════════════════════════════════════════════════════════════════════
+    auto *overviewLayout = makeScrollPage(m_tabWidget, "Prehled");
+
+    // ── Info strip ────────────────────────────────────────────────────────
+    auto *overviewCard = new QFrame();
+    overviewCard->setObjectName("summaryCard");
+    auto *overviewForm = new QFormLayout(overviewCard);
+    overviewForm->setContentsMargins(16, 12, 16, 12);
+    overviewForm->setVerticalSpacing(8);
+    overviewForm->setHorizontalSpacing(16);
+    m_statusValueLabel = new QLabel("-", overviewCard);
+    m_addressValueLabel = new QLabel("-", overviewCard);
+    m_addressValueLabel->setWordWrap(true);
+    m_scopeValueLabel = new QLabel("-", overviewCard);
+    m_areaValueLabel = new QLabel("-", overviewCard);
+    m_workflowStatusValueLabel = new QLabel("-", overviewCard);
+    m_workflowStatusValueLabel->setWordWrap(true);
+    m_workflowBlockingReasonsValueLabel = new QLabel("bez aktivnich blokaci", overviewCard);
+    m_workflowBlockingReasonsValueLabel->setWordWrap(true);
+    m_referenceTestContextLabel = new QLabel(overviewCard);
+    m_referenceTestContextLabel->setWordWrap(true);
+    m_referenceTestContextLabel->hide();
+    overviewForm->addRow("Stav", m_statusValueLabel);
+    overviewForm->addRow("Adresa", m_addressValueLabel);
+    overviewForm->addRow(QString::fromUtf8("Typ opravy"), m_scopeValueLabel);
+    overviewForm->addRow("Plocha", m_areaValueLabel);
+    overviewForm->addRow("Workflow", m_workflowStatusValueLabel);
+    overviewForm->addRow("Blokace", m_workflowBlockingReasonsValueLabel);
+    overviewForm->addRow("Test", m_referenceTestContextLabel);
+
+    // ── Primary photo ─────────────────────────────────────────────────────
+    m_dashPhotoLabel = new QLabel();
+    m_dashPhotoLabel->setObjectName("dashPhoto");
+    m_dashPhotoLabel->setFixedHeight(280);
+    m_dashPhotoLabel->setAlignment(Qt::AlignCenter);
+    m_dashPhotoLabel->setText(QString::fromUtf8("Vyberte zak\u00e1zku pro zobrazen\u00ed hlavn\u00ed fotografie."));
+    m_dashPhotoLabel->setCursor(Qt::PointingHandCursor);
+    m_dashPhotoLabel->installEventFilter(this);
+
+    // ── 2-column row: Analysis + Pricing ─────────────────────────────────
+    auto *columnsWidget = new QWidget();
+    auto *columnsLayout = new QHBoxLayout(columnsWidget);
+    columnsLayout->setContentsMargins(0, 0, 0, 0);
+    columnsLayout->setSpacing(12);
+
+    auto *analysisCard = new QFrame();
+    analysisCard->setObjectName("detailCard");
+    auto *analysisCardLayout = new QVBoxLayout(analysisCard);
+    analysisCardLayout->setContentsMargins(16, 16, 16, 16);
+    analysisCardLayout->setSpacing(8);
+    auto *analysisTitle = new QLabel(QString::fromUtf8("AI Anal\u00fdza"));
+    analysisTitle->setObjectName("subSectionTitle");
+    auto *analysisForm = new QFormLayout();
+    analysisForm->setVerticalSpacing(8);
+    analysisForm->setHorizontalSpacing(12);
+    m_dashObjTypeLabel = new QLabel("-");
+    m_dashAreaLabel = new QLabel("-");
+    m_dashSurfaceLabel = new QLabel("-");
+    m_dashScopeLabel = new QLabel("-");
+    m_dashDurationLabel = new QLabel("-");
+    analysisForm->addRow(QString::fromUtf8("Typ objektu:"), m_dashObjTypeLabel);
+    analysisForm->addRow(QString::fromUtf8("Plocha (odhad):"), m_dashAreaLabel);
+    analysisForm->addRow(QString::fromUtf8("Stav povrchu:"), m_dashSurfaceLabel);
+    analysisForm->addRow(QString::fromUtf8("Doporu\u010den\u00fd rozsah:"), m_dashScopeLabel);
+    analysisForm->addRow(QString::fromUtf8("Odhad trv\u00e1n\u00ed:"), m_dashDurationLabel);
+    analysisCardLayout->addWidget(analysisTitle);
+    analysisCardLayout->addLayout(analysisForm);
+    analysisCardLayout->addStretch();
+
+    auto *pricingCard = new QFrame();
+    pricingCard->setObjectName("detailCard");
+    auto *pricingCardLayout = new QVBoxLayout(pricingCard);
+    pricingCardLayout->setContentsMargins(16, 16, 16, 16);
+    pricingCardLayout->setSpacing(8);
+    auto *pricingTitle = new QLabel(QString::fromUtf8("Cenov\u00fd souhrn"));
+    pricingTitle->setObjectName("subSectionTitle");
+    auto *pricingForm = new QFormLayout();
+    pricingForm->setVerticalSpacing(8);
+    pricingForm->setHorizontalSpacing(12);
+    m_dashLaborLabel = new QLabel("-");
+    m_dashMaterialLabel = new QLabel("-");
+    m_dashTransportLabel = new QLabel("-");
+    m_dashMarginLabel = new QLabel("-");
+    m_dashTotalLabel = new QLabel("-");
+    m_dashTotalLabel->setObjectName("dashTotal");
+    pricingForm->addRow(QString::fromUtf8("Cena pr\u00e1ce:"), m_dashLaborLabel);
+    pricingForm->addRow(QString::fromUtf8("Cena materi\u00e1lu:"), m_dashMaterialLabel);
+    pricingForm->addRow("Doprava:", m_dashTransportLabel);
+    pricingForm->addRow(QString::fromUtf8("Mar\u017ee:"), m_dashMarginLabel);
+    auto *totalSep = new QFrame();
+    totalSep->setFrameShape(QFrame::HLine);
+    auto *totalRow = new QHBoxLayout();
+    auto *totalKey = new QLabel(QString::fromUtf8("CELKEM v\u010d. DPH:"));
+    totalKey->setObjectName("dashTotalKey");
+    totalRow->addWidget(totalKey);
+    totalRow->addWidget(m_dashTotalLabel);
+    totalRow->addStretch();
+    pricingCardLayout->addWidget(pricingTitle);
+    pricingCardLayout->addLayout(pricingForm);
+    pricingCardLayout->addWidget(totalSep);
+    pricingCardLayout->addLayout(totalRow);
+    pricingCardLayout->addStretch();
+
+    columnsLayout->addWidget(analysisCard, 1);
+    columnsLayout->addWidget(pricingCard, 1);
+
+    // ── Technologický postup ──────────────────────────────────────────────
+    auto *workflowDashCard = new QFrame();
+    workflowDashCard->setObjectName("detailCard");
+    auto *workflowDashLayout = new QVBoxLayout(workflowDashCard);
+    workflowDashLayout->setContentsMargins(16, 16, 16, 16);
+    workflowDashLayout->setSpacing(10);
+    auto *workflowDashTitle = new QLabel(QString::fromUtf8("Technologick\u00fd postup pr\u00e1ce"));
+    workflowDashTitle->setObjectName("subSectionTitle");
+    m_dashWorkflowList = new QListWidget();
+    m_dashWorkflowList->setObjectName("workflowList");
+    m_dashWorkflowList->setMaximumHeight(170);
+    m_dashWorkflowList->setFocusPolicy(Qt::NoFocus);
+    m_dashWorkflowList->addItem(QString::fromUtf8("Postup pr\u00e1ce bude k dispozici po dokon\u010den\u00ed anal\u00fdzy."));
+    workflowDashLayout->addWidget(workflowDashTitle);
+    workflowDashLayout->addWidget(m_dashWorkflowList);
+
+    // ── Akce ─────────────────────────────────────────────────────────────
+    auto *actionsCard = new QFrame();
+    actionsCard->setObjectName("detailCard");
+    auto *actionsRowLayout = new QHBoxLayout(actionsCard);
+    actionsRowLayout->setContentsMargins(16, 12, 16, 12);
+    actionsRowLayout->setSpacing(10);
+    m_dashRunAnalysisButton = new QPushButton(QString::fromUtf8("Spustit AI anal\u00fdzu"));
+    m_dashRunAnalysisButton->setEnabled(false);
+    actionsRowLayout->addWidget(m_dashRunAnalysisButton);
+    actionsRowLayout->addStretch();
+
+    overviewLayout->addWidget(overviewCard);
+    overviewLayout->addWidget(m_dashPhotoLabel);
+    overviewLayout->addWidget(columnsWidget);
+    overviewLayout->addWidget(workflowDashCard);
+    overviewLayout->addWidget(actionsCard);
+    overviewLayout->addStretch();
+
+    // ════════════════════════════════════════════════════════════════════════
+    // TAB 2 — Fotky
+    // ════════════════════════════════════════════════════════════════════════
+    auto *photosLayout = makeScrollPage(m_tabWidget, "Fotky");
+
+    m_primaryImageLabel = new QLabel("Hlavni fotka pro analyzu: -");
+    m_primaryImageLabel->setObjectName("primaryImageLabel");
+    m_overlayWidget = new ImageOverlayWidget();
+    m_overlayWidget->setMinimumHeight(400);
+    m_overlayWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    m_imageHintLabel = new QLabel("Nactete zakazku pro zobrazeni fotek.");
+    m_imageHintLabel->setObjectName("hintLabel");
+    m_imageHintLabel->setWordWrap(true);
+
+    // Overlay selection mode controls
+    auto *overlayModeLabel = new QLabel("Oblast opravy:");
+    overlayModeLabel->setObjectName("hintLabel");
+    m_overlayModeViewButton = new QPushButton("Prohlizet");
+    m_overlayModeViewButton->setCheckable(true);
+    m_overlayModeViewButton->setChecked(true);
+    m_overlayModeViewButton->setObjectName("overlayModeBtn");
+    m_overlayModeRectButton = new QPushButton("Obdelnik");
+    m_overlayModeRectButton->setCheckable(true);
+    m_overlayModeRectButton->setObjectName("overlayModeBtn");
+    m_overlayModePolyButton = new QPushButton("Polygon");
+    m_overlayModePolyButton->setCheckable(true);
+    m_overlayModePolyButton->setObjectName("overlayModeBtn");
+    m_overlayConfirmButton = new QPushButton("Ulozit vyber oblasti");
+    m_overlayConfirmButton->setEnabled(false);
+    m_overlayAreaEdit = new QLineEdit();
+    m_overlayAreaEdit->setPlaceholderText("Upresnena plocha (m\u00B2) \u2014 volitelne");
+    m_overlayAreaEdit->setMaximumWidth(220);
+    auto *overlayControlsRow = new QHBoxLayout();
+    overlayControlsRow->setSpacing(8);
+    overlayControlsRow->addWidget(overlayModeLabel);
+    overlayControlsRow->addWidget(m_overlayModeViewButton);
+    overlayControlsRow->addWidget(m_overlayModeRectButton);
+    overlayControlsRow->addWidget(m_overlayModePolyButton);
+    overlayControlsRow->addStretch();
+    overlayControlsRow->addWidget(m_overlayAreaEdit);
+    overlayControlsRow->addWidget(m_overlayConfirmButton);
+
+    auto *imageActionsLayout = new QHBoxLayout();
+    imageActionsLayout->setSpacing(10);
+    m_moveUpButton = new QPushButton(QStringLiteral("\u25C0"));
+    m_moveUpButton->setEnabled(false);
+    m_moveDownButton = new QPushButton(QStringLiteral("\u25B6"));
+    m_moveDownButton->setEnabled(false);
+    m_moveUpButton->setObjectName("imageNavButton");
+    m_moveDownButton->setObjectName("imageNavButton");
+    m_moveUpButton->setMinimumSize(40, 40);
+    m_moveDownButton->setMinimumSize(40, 40);
+    m_moveUpButton->setMaximumSize(40, 40);
+    m_moveDownButton->setMaximumSize(40, 40);
+    m_setPrimaryButton = new QPushButton("Nastavit jako hlavni");
+    m_setPrimaryButton->setEnabled(false);
+    m_setPrimaryButton->setVisible(false);
+    m_setAnalysisReferenceButton = new QPushButton("Pouzit pro analyzu");
+    m_setAnalysisReferenceButton->setEnabled(false);
+    m_setAnalysisReferenceButton->setVisible(false);
+    imageActionsLayout->addWidget(m_moveUpButton);
+    imageActionsLayout->addWidget(m_moveDownButton);
+    imageActionsLayout->addStretch();
+    imageActionsLayout->addWidget(m_setPrimaryButton);
+    imageActionsLayout->addWidget(m_setAnalysisReferenceButton);
+
+    m_thumbnailScrollArea = new QScrollArea();
+    m_thumbnailScrollArea->setObjectName("thumbnailScrollArea");
+    m_thumbnailScrollArea->setWidgetResizable(false);
+    m_thumbnailScrollArea->setFrameShape(QFrame::NoFrame);
+    m_thumbnailScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_thumbnailScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_thumbnailScrollArea->setMinimumHeight(164);
+    m_thumbnailScrollArea->setMaximumHeight(164);
+    m_thumbnailStripWidget = new QWidget(m_thumbnailScrollArea);
+    m_thumbnailStripWidget->setObjectName("thumbnailStripWidget");
+    m_thumbnailStripLayout = new QHBoxLayout(m_thumbnailStripWidget);
+    m_thumbnailStripLayout->setContentsMargins(12, 12, 12, 12);
+    m_thumbnailStripLayout->setSpacing(12);
+    m_thumbnailScrollArea->setWidget(m_thumbnailStripWidget);
+
+    auto *pcUploadTitle = new QLabel("Nahrat fotografie z pocitace");
+    pcUploadTitle->setObjectName("subSectionTitle");
+    auto *pcUploadHintLabel = new QLabel(
+        "Alternativni vstup \xe2\x80\x94 pouzijte pokud neni k dispozici mobilni aplikace nebo pro zpracovani archivnich zakazek.");
+    pcUploadHintLabel->setObjectName("hintLabel");
+    pcUploadHintLabel->setWordWrap(true);
+    m_pendingLocalImagesLabel = new QLabel("Vybrane fotky z PC: zatim zadne.");
+    m_pendingLocalImagesLabel->setObjectName("hintLabel");
+    m_pendingLocalImagesLabel->setWordWrap(true);
+    m_pendingLocalImagesList = new QListWidget();
+    m_pendingLocalImagesList->setObjectName("detailList");
+    m_pendingLocalImagesList->setMaximumHeight(120);
+    m_pendingLocalImagesList->setVisible(false);
+    auto *pcUploadActionsLayout = new QHBoxLayout();
+    pcUploadActionsLayout->setSpacing(10);
+    m_addImagesButton = new QPushButton("Vybrat fotografie z disku");
+    m_convertImagesButton = new QPushButton("Pripravit ke konverzi");
+    m_convertImagesButton->setEnabled(false);
+    m_uploadImagesButton = new QPushButton("Odeslat na server");
+    m_uploadImagesButton->setEnabled(false);
+    pcUploadActionsLayout->addWidget(m_addImagesButton);
+    pcUploadActionsLayout->addWidget(m_convertImagesButton);
+    pcUploadActionsLayout->addWidget(m_uploadImagesButton);
+    pcUploadActionsLayout->addStretch();
+
+    photosLayout->addWidget(m_primaryImageLabel);
+    photosLayout->addWidget(m_overlayWidget);
+    photosLayout->addLayout(overlayControlsRow);
+    photosLayout->addWidget(m_imageHintLabel);
+    photosLayout->addLayout(imageActionsLayout);
+    photosLayout->addWidget(m_thumbnailScrollArea);
+    photosLayout->addWidget(pcUploadTitle);
+    photosLayout->addWidget(pcUploadHintLabel);
+    photosLayout->addWidget(m_pendingLocalImagesLabel);
+    photosLayout->addWidget(m_pendingLocalImagesList);
+    photosLayout->addLayout(pcUploadActionsLayout);
+    photosLayout->addStretch();
+
+    // ════════════════════════════════════════════════════════════════════════
+    // TAB 3 — Analýza
+    // ════════════════════════════════════════════════════════════════════════
+    auto *analysisLayout = makeScrollPage(m_tabWidget, "Analyza");
+
+    auto *runAnalysisCard = new QFrame();
+    runAnalysisCard->setObjectName("proposalInnerCard");
+    auto *runAnalysisCardLayout = new QVBoxLayout(runAnalysisCard);
+    runAnalysisCardLayout->setContentsMargins(16, 16, 16, 16);
+    runAnalysisCardLayout->setSpacing(10);
+    auto *runAnalysisHint = new QLabel(
+        "Po nahrani fotek spustte AI analyzu. Server vyhodnosti typ objektu, stav povrchu, plochu a navrhne materialy i postup prace.");
+    runAnalysisHint->setObjectName("hintLabel");
+    runAnalysisHint->setWordWrap(true);
+    m_runAnalysisButton = new QPushButton("Spustit AI analyzu");
+    m_runAnalysisButton->setEnabled(false);
+    m_analysisJobStatusLabel = new QLabel(QString());
+    m_analysisJobStatusLabel->setObjectName("hintLabel");
+    m_analysisJobStatusLabel->setWordWrap(true);
+    m_analysisJobStatusLabel->hide();
+    auto *runAnalysisActionsRow = new QHBoxLayout();
+    runAnalysisActionsRow->addWidget(m_runAnalysisButton);
+    runAnalysisActionsRow->addStretch();
+    runAnalysisCardLayout->addWidget(runAnalysisHint);
+    runAnalysisCardLayout->addLayout(runAnalysisActionsRow);
+    runAnalysisCardLayout->addWidget(m_analysisJobStatusLabel);
+
+    auto *findingsCard = new QFrame();
+    findingsCard->setObjectName("summaryCard");
+    auto *findingsOuterLayout = new QVBoxLayout(findingsCard);
+    findingsOuterLayout->setContentsMargins(16, 16, 16, 16);
+    findingsOuterLayout->setSpacing(12);
+
+    auto *findingsSummaryCard = new QFrame(findingsCard);
+    findingsSummaryCard->setObjectName("proposalInnerCard");
+    auto *findingsFormLayout = new QFormLayout(findingsSummaryCard);
+    findingsFormLayout->setContentsMargins(12, 12, 12, 12);
+    findingsFormLayout->setVerticalSpacing(8);
+    m_analysisObjectTypeLabel = new QLabel("-", findingsSummaryCard);
+    m_analysisAreaLabel = new QLabel("-", findingsSummaryCard);
+    m_analysisSurfaceConditionLabel = new QLabel("-", findingsSummaryCard);
+    m_analysisRecommendedScopeLabel = new QLabel("-", findingsSummaryCard);
+    m_analysisRecommendedScopeLabel->setWordWrap(true);
+    m_analysisDurationLabel = new QLabel("-", findingsSummaryCard);
+    findingsFormLayout->addRow("Typ objektu", m_analysisObjectTypeLabel);
+    findingsFormLayout->addRow("Plocha (odhad)", m_analysisAreaLabel);
+    findingsFormLayout->addRow("Stav povrchu", m_analysisSurfaceConditionLabel);
+    findingsFormLayout->addRow("Doporuceny rozsah", m_analysisRecommendedScopeLabel);
+    findingsFormLayout->addRow("Odhad trvani", m_analysisDurationLabel);
+
+    auto *findingsWorkflowTitle = new QLabel("Technologicky postup prace", findingsCard);
+    findingsWorkflowTitle->setObjectName("subSectionTitle");
+    m_analysisWorkflowList = new QListWidget(findingsCard);
+    m_analysisWorkflowList->setObjectName("detailList");
+    m_analysisWorkflowList->setMaximumHeight(200);
+
+    auto *findingsMaterialsTitle = new QLabel("Potrebne materialy", findingsCard);
+    findingsMaterialsTitle->setObjectName("subSectionTitle");
+    m_analysisMaterialsList = new QListWidget(findingsCard);
+    m_analysisMaterialsList->setObjectName("detailList");
+    m_analysisMaterialsList->setMaximumHeight(200);
+
+    auto *findingsQuoteTitle = new QLabel("Cenove varianty", findingsCard);
+    findingsQuoteTitle->setObjectName("subSectionTitle");
+    auto *findingsQuoteRow = new QHBoxLayout();
+    findingsQuoteRow->setSpacing(12);
+
+    auto makeVariantCard = [&](const QString &title, QLabel *&totalLabel) -> QFrame * {
+        auto *vc = new QFrame(findingsCard);
+        vc->setObjectName("variantCard");
+        auto *vl = new QVBoxLayout(vc);
+        vl->setContentsMargins(14, 14, 14, 14);
+        vl->setSpacing(8);
+        auto *vTitle = new QLabel(title, vc);
+        vTitle->setObjectName("variantTitle");
+        vTitle->setAlignment(Qt::AlignCenter);
+        totalLabel = new QLabel("-", vc);
+        totalLabel->setObjectName("variantTotal");
+        totalLabel->setAlignment(Qt::AlignCenter);
+        totalLabel->setWordWrap(true);
+        vl->addWidget(vTitle);
+        vl->addWidget(totalLabel);
+        vl->addStretch();
+        return vc;
+    };
+
+    findingsQuoteRow->addWidget(makeVariantCard("Ekonomicka", m_quoteEconomyValueLabel));
+    findingsQuoteRow->addWidget(makeVariantCard("Standardni", m_quoteStandardValueLabel));
+    findingsQuoteRow->addWidget(makeVariantCard("Premium", m_quotePremiumValueLabel));
+
+    findingsOuterLayout->addWidget(findingsSummaryCard);
+    findingsOuterLayout->addWidget(findingsWorkflowTitle);
+    findingsOuterLayout->addWidget(m_analysisWorkflowList);
+    findingsOuterLayout->addWidget(findingsMaterialsTitle);
+    findingsOuterLayout->addWidget(m_analysisMaterialsList);
+    findingsOuterLayout->addWidget(findingsQuoteTitle);
+    findingsOuterLayout->addLayout(findingsQuoteRow);
+
+    analysisLayout->addWidget(runAnalysisCard);
+    analysisLayout->addWidget(findingsCard);
+    analysisLayout->addStretch();
+
+    // ════════════════════════════════════════════════════════════════════════
+    // TAB 4 — Nabídka
+    // ════════════════════════════════════════════════════════════════════════
+    auto *offerLayout = makeScrollPage(m_tabWidget, "Nabidka");
+
+    auto *proposalCard = new QFrame();
     proposalCard->setObjectName("summaryCard");
     auto *proposalLayout = new QVBoxLayout(proposalCard);
     proposalLayout->setContentsMargins(16, 16, 16, 16);
@@ -409,35 +861,35 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     proposalSummaryCard->setObjectName("proposalInnerCard");
     auto *proposalSummaryLayout = new QFormLayout(proposalSummaryCard);
     proposalSummaryLayout->setContentsMargins(12, 12, 12, 12);
+    proposalSummaryLayout->setVerticalSpacing(8);
     m_proposalStatusValueLabel = new QLabel("-", proposalSummaryCard);
-    m_referenceTestContextLabel = new QLabel(proposalSummaryCard);
-    m_referenceTestContextLabel->setWordWrap(true);
-    m_referenceTestContextLabel->hide();
     m_proposalSubjectEdit = new QLineEdit(proposalSummaryCard);
     m_proposalSummaryEdit = new QPlainTextEdit(proposalSummaryCard);
     m_proposalSummaryEdit->setMaximumHeight(80);
     m_proposalMaterialCostEdit = new QLineEdit(proposalSummaryCard);
     m_proposalLaborCostEdit = new QLineEdit(proposalSummaryCard);
+    m_proposalTransportCostEdit = new QLineEdit(proposalSummaryCard);
+    m_proposalTransportCostEdit->setPlaceholderText("0.00");
     m_proposalAmortizationEdit = new QLineEdit(proposalSummaryCard);
     m_proposalMarginEdit = new QLineEdit(proposalSummaryCard);
     m_proposalTotalValueLabel = new QLabel("-", proposalSummaryCard);
     m_proposalSupplierEdit = new QLineEdit(proposalSummaryCard);
     m_proposalCompanyEdit = new QLineEdit(proposalSummaryCard);
     proposalSummaryLayout->addRow("Stav navrhu", m_proposalStatusValueLabel);
-    proposalSummaryLayout->addRow("Test kontext", m_referenceTestContextLabel);
-    proposalSummaryLayout->addRow("Predmet", m_proposalSubjectEdit);
+    proposalSummaryLayout->addRow("Predmet nabidky", m_proposalSubjectEdit);
     proposalSummaryLayout->addRow("Shrnuti", m_proposalSummaryEdit);
-    proposalSummaryLayout->addRow("Cena materialu", m_proposalMaterialCostEdit);
-    proposalSummaryLayout->addRow("Cena prace", m_proposalLaborCostEdit);
-    proposalSummaryLayout->addRow("Amortizace", m_proposalAmortizationEdit);
-    proposalSummaryLayout->addRow("Marze", m_proposalMarginEdit);
-    proposalSummaryLayout->addRow("Celkem", m_proposalTotalValueLabel);
-    proposalSummaryLayout->addRow("Dodavatel", m_proposalSupplierEdit);
+    proposalSummaryLayout->addRow("Cena prace (CZK)", m_proposalLaborCostEdit);
+    proposalSummaryLayout->addRow("Cena materialu (CZK)", m_proposalMaterialCostEdit);
+    proposalSummaryLayout->addRow("Doprava (CZK)", m_proposalTransportCostEdit);
+    proposalSummaryLayout->addRow("Amortizace (CZK)", m_proposalAmortizationEdit);
+    proposalSummaryLayout->addRow("Marze (%)", m_proposalMarginEdit);
+    proposalSummaryLayout->addRow("Celkem vcetne DPH", m_proposalTotalValueLabel);
+    proposalSummaryLayout->addRow("Navrzeny dodavatel", m_proposalSupplierEdit);
     proposalSummaryLayout->addRow("Realizacni firma", m_proposalCompanyEdit);
 
     auto *proposalActionsLayout = new QHBoxLayout();
     proposalActionsLayout->setSpacing(10);
-    m_saveProposalButton = new QPushButton("Save", proposalCard);
+    m_saveProposalButton = new QPushButton("Ulozit navrh", proposalCard);
     m_saveProposalButton->setEnabled(false);
     m_createFinalProposalButton = new QPushButton("Vytvorit finalni verzi", proposalCard);
     m_createFinalProposalButton->setEnabled(false);
@@ -445,11 +897,11 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     proposalActionsLayout->addWidget(m_createFinalProposalButton);
     proposalActionsLayout->addStretch();
 
-    auto *proposalWorkItemsTitle = new QLabel("Navrzene kroky", proposalCard);
+    auto *proposalWorkItemsTitle = new QLabel("Navrzene kroky prace", proposalCard);
     proposalWorkItemsTitle->setObjectName("subSectionTitle");
     m_proposalWorkItemsList = new QListWidget(proposalCard);
     m_proposalWorkItemsList->setObjectName("detailList");
-    m_proposalWorkItemsList->setMaximumHeight(140);
+    m_proposalWorkItemsList->setMaximumHeight(150);
 
     auto *proposalMaterialsTitle = new QLabel("Navrzene materialy", proposalCard);
     proposalMaterialsTitle->setObjectName("subSectionTitle");
@@ -457,11 +909,11 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     m_proposalMaterialsList->setObjectName("detailList");
     m_proposalMaterialsList->setMaximumHeight(150);
 
-    auto *finalProposalTitle = new QLabel("Finalni verze", proposalCard);
+    auto *finalProposalTitle = new QLabel("Finalni verze nabidky", proposalCard);
     finalProposalTitle->setObjectName("subSectionTitle");
     auto *finalProposalCard = new QFrame(proposalCard);
     finalProposalCard->setObjectName("proposalInnerCard");
-    finalProposalCard->setMinimumHeight(150);
+    finalProposalCard->setMinimumHeight(120);
     auto *finalProposalLayout = new QFormLayout(finalProposalCard);
     finalProposalLayout->setContentsMargins(12, 12, 12, 12);
     finalProposalLayout->setVerticalSpacing(10);
@@ -469,7 +921,8 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     m_finalProposalVersionValueLabel = new QLabel("-", finalProposalCard);
     m_finalProposalSubjectValueLabel = new QLabel("-", finalProposalCard);
     m_finalProposalSubjectValueLabel->setWordWrap(true);
-    m_finalProposalSummaryValueLabel = new QLabel("Po potvrzeni server vytvori finalni verzi a automaticky pripravi DOCX i PDF.", finalProposalCard);
+    m_finalProposalSummaryValueLabel = new QLabel(
+        "Po potvrzeni server pripravi DOCX i PDF automaticky.", finalProposalCard);
     m_finalProposalSummaryValueLabel->setWordWrap(true);
     m_finalProposalSummaryValueLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     m_finalProposalSummaryValueLabel->setMinimumHeight(42);
@@ -489,102 +942,121 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     proposalLayout->addWidget(finalProposalTitle);
     proposalLayout->addWidget(finalProposalCard);
 
-    auto *caseActionsTitle = new QLabel("Zakladni akce", card);
-    caseActionsTitle->setObjectName("subSectionTitle");
-    auto *caseActionsLayout = new QHBoxLayout();
-    caseActionsLayout->setSpacing(10);
-    m_saveAsButton = new QPushButton("Save As", card);
-    m_saveAsButton->setEnabled(false);
-    m_newVariantButton = new QPushButton("Nova varianta", card);
-    m_newVariantButton->setEnabled(false);
-    m_sendCaseButton = new QPushButton("Odeslat zakazku", card);
+    offerLayout->addWidget(proposalCard);
+    offerLayout->addStretch();
+
+    // ════════════════════════════════════════════════════════════════════════
+    // TAB 5 — Výstup zakázky
+    // ════════════════════════════════════════════════════════════════════════
+    auto *sendLayout = makeScrollPage(m_tabWidget, QString::fromUtf8("V\u00fdstup zak\u00e1zky"));
+
+    auto *sendCard = new QFrame();
+    sendCard->setObjectName("summaryCard");
+    auto *sendCardLayout = new QVBoxLayout(sendCard);
+    sendCardLayout->setContentsMargins(16, 16, 16, 16);
+    sendCardLayout->setSpacing(12);
+
+    // Export section
+    auto *exportTitle = new QLabel("Exporty", sendCard);
+    exportTitle->setObjectName("subSectionTitle");
+    auto *exportActionsLayout = new QHBoxLayout();
+    exportActionsLayout->setSpacing(10);
+    m_downloadDraftDocxButton = new QPushButton(QString::fromUtf8("N\u00e1vrh (DOCX)"), sendCard);
+    m_downloadDraftDocxButton->setEnabled(false);
+    m_downloadQuoteDocxButton = new QPushButton(QString::fromUtf8("Nab\u00eddka (DOCX)"), sendCard);
+    m_downloadQuoteDocxButton->setEnabled(false);
+    m_downloadQuotePdfButton = new QPushButton(QString::fromUtf8("Nab\u00eddka (PDF)"), sendCard);
+    m_downloadQuotePdfButton->setEnabled(false);
+    exportActionsLayout->addWidget(m_downloadDraftDocxButton);
+    exportActionsLayout->addWidget(m_downloadQuoteDocxButton);
+    exportActionsLayout->addWidget(m_downloadQuotePdfButton);
+    exportActionsLayout->addStretch();
+
+    connect(m_downloadDraftDocxButton, &QPushButton::clicked, this, [this]() {
+        downloadExport("proposal-docx");
+    });
+    connect(m_downloadQuoteDocxButton, &QPushButton::clicked, this, [this]() {
+        downloadExport("quote-docx");
+    });
+    connect(m_downloadQuotePdfButton, &QPushButton::clicked, this, [this]() {
+        downloadExport("quote-pdf");
+    });
+
+    // Separator line
+    auto *separator = new QFrame(sendCard);
+    separator->setFrameShape(QFrame::HLine);
+    separator->setObjectName("hintLabel");
+
+    // Send section
+    auto *sendHint = new QLabel(
+        QString::fromUtf8("Po vytvo\u0159en\u00ed fin\u00e1ln\u00ed verze ode\u0161lete nab\u00eddku z\u00e1kazn\u00edkovi. Z\u00e1kazn\u00edk obdr\u017e\u00ed PDF na sv\u016fj email."),
+        sendCard);
+    sendHint->setObjectName("hintLabel");
+    sendHint->setWordWrap(true);
+    m_sendCaseButton = new QPushButton(QString::fromUtf8("Odeslat z\u00e1kazn\u00edkovi"), sendCard);
     m_sendCaseButton->setEnabled(false);
-    caseActionsLayout->addWidget(m_saveAsButton);
-    caseActionsLayout->addWidget(m_newVariantButton);
-    caseActionsLayout->addWidget(m_sendCaseButton);
-    caseActionsLayout->addStretch();
-    m_newVariantButton->setVisible(false);
-    m_sendCaseButton->setVisible(false);
+    auto *sendActionsRow = new QHBoxLayout();
+    sendActionsRow->addWidget(m_sendCaseButton);
+    sendActionsRow->addStretch();
 
-    auto *activityTitle = new QLabel("Next milestones", card);
-    activityTitle->setObjectName("subSectionTitle");
-    auto *activityList = new QListWidget(card);
-    activityList->addItem("Photos tab s preview a overlay vrstvou");
-    activityList->addItem("Findings tab s potvrzenim a opravou");
-    activityList->addItem("Recommendations a jednoduchy report");
-    activityList->setObjectName("detailList");
+    sendCardLayout->addWidget(exportTitle);
+    sendCardLayout->addLayout(exportActionsLayout);
+    sendCardLayout->addWidget(separator);
+    sendCardLayout->addWidget(sendHint);
+    sendCardLayout->addLayout(sendActionsRow);
 
-    auto *imagesTitle = new QLabel("Images panel", card);
-    imagesTitle->setObjectName("subSectionTitle");
-    m_primaryImageLabel = new QLabel("Vychozi fotka pro analyzu: -", card);
-    m_primaryImageLabel->setObjectName("primaryImageLabel");
-    m_primaryImagePreviewLabel = new QLabel("Preview hlavni fotky se zobrazi po nacteni case.", card);
-    m_primaryImagePreviewLabel->setObjectName("primaryImagePreview");
-    m_primaryImagePreviewLabel->setAlignment(Qt::AlignCenter);
-    m_primaryImagePreviewLabel->setWordWrap(true);
-    m_primaryImagePreviewLabel->setMinimumHeight(420);
-    m_primaryImagePreviewLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    m_imageHintLabel = new QLabel("Po vyberu case se sem nactou obrazky a jejich metadata.", card);
-    m_imageHintLabel->setObjectName("hintLabel");
-    m_imageHintLabel->setWordWrap(true);
-    auto *imageActionsLayout = new QHBoxLayout();
-    imageActionsLayout->setSpacing(10);
-    m_setPrimaryButton = new QPushButton("Nastavit jako hlavni", card);
-    m_setPrimaryButton->setEnabled(false);
-    m_setAnalysisReferenceButton = new QPushButton("Pouzit pro analyzu", card);
-    m_setAnalysisReferenceButton->setEnabled(false);
-    m_setPrimaryButton->setVisible(false);
-    m_setAnalysisReferenceButton->setVisible(false);
-    m_moveUpButton = new QPushButton(QStringLiteral("\u25C0"), card);
-    m_moveUpButton->setEnabled(false);
-    m_moveDownButton = new QPushButton(QStringLiteral("\u25B6"), card);
-    m_moveDownButton->setEnabled(false);
-    m_moveUpButton->setObjectName("imageNavButton");
-    m_moveDownButton->setObjectName("imageNavButton");
-    m_moveUpButton->setMinimumSize(40, 40);
-    m_moveDownButton->setMinimumSize(40, 40);
-    m_moveUpButton->setMaximumSize(40, 40);
-    m_moveDownButton->setMaximumSize(40, 40);
-    imageActionsLayout->addWidget(m_moveUpButton);
-    imageActionsLayout->addWidget(m_moveDownButton);
-    imageActionsLayout->addStretch();
-    m_thumbnailScrollArea = new QScrollArea(card);
-    m_thumbnailScrollArea->setObjectName("thumbnailScrollArea");
-    m_thumbnailScrollArea->setWidgetResizable(false);
-    m_thumbnailScrollArea->setFrameShape(QFrame::NoFrame);
-    m_thumbnailScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_thumbnailScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_thumbnailScrollArea->setMinimumHeight(164);
-    m_thumbnailScrollArea->setMaximumHeight(164);
+    sendLayout->addWidget(sendCard);
+    sendLayout->addStretch();
 
-    m_thumbnailStripWidget = new QWidget(m_thumbnailScrollArea);
-    m_thumbnailStripWidget->setObjectName("thumbnailStripWidget");
-    m_thumbnailStripLayout = new QHBoxLayout(m_thumbnailStripWidget);
-    m_thumbnailStripLayout->setContentsMargins(12, 12, 12, 12);
-    m_thumbnailStripLayout->setSpacing(12);
-    m_thumbnailScrollArea->setWidget(m_thumbnailStripWidget);
-
-    cardLayout->addWidget(m_errorLabel);
-    cardLayout->addWidget(imagesTitle);
-    cardLayout->addWidget(m_primaryImageLabel);
-    cardLayout->addWidget(m_primaryImagePreviewLabel);
-    cardLayout->addWidget(m_imageHintLabel);
-    cardLayout->addLayout(imageActionsLayout);
-    cardLayout->addWidget(m_thumbnailScrollArea);
-    cardLayout->addWidget(proposalTitle);
-    cardLayout->addWidget(proposalCard);
-    cardLayout->addWidget(caseActionsTitle);
-    cardLayout->addLayout(caseActionsLayout);
-    cardLayout->addWidget(activityTitle);
-    cardLayout->addWidget(activityList, 1);
-
-    layout->addWidget(card);
+    rootLayout->addWidget(card);
 
     setStyleSheet(R"(
         QFrame#detailCard {
             background: #fffaf2;
             border: 1px solid #eadcc8;
             border-radius: 18px;
+        }
+        QTabWidget#detailTabs::pane {
+            border: 1px solid #eadcc8;
+            border-radius: 12px;
+            background: #fffaf2;
+        }
+        QTabWidget#detailTabs > QTabBar::tab {
+            background: #f0e4d0;
+            border: 1px solid #e0cdb8;
+            border-bottom: none;
+            border-radius: 8px 8px 0 0;
+            padding: 8px 18px;
+            font-weight: 600;
+            color: #5a4a38;
+            min-width: 80px;
+        }
+        QTabWidget#detailTabs > QTabBar::tab:selected {
+            background: #fffaf2;
+            color: #b46d35;
+            border-bottom: 1px solid #fffaf2;
+        }
+        QTabWidget#detailTabs > QTabBar::tab:hover:!selected {
+            background: #ede0cc;
+        }
+        QWidget#tabPage {
+            background: #fffaf2;
+        }
+        QFrame#variantCard {
+            background: #f7efe4;
+            border: 1px solid #eadcc8;
+            border-radius: 12px;
+            min-height: 80px;
+        }
+        QLabel#variantTitle {
+            font-weight: 700;
+            font-size: 14px;
+            color: #5a4a38;
+        }
+        QLabel#variantTotal {
+            font-weight: 700;
+            font-size: 18px;
+            color: #b46d35;
         }
         QLabel#eyebrowLabel {
             color: #b46d35;
@@ -614,12 +1086,21 @@ CaseDetailView::CaseDetailView(QWidget *parent)
             font-weight: 600;
             font-size: 16px;
         }
-        QLabel#primaryImagePreview {
-            background: #f7efe4;
-            border: 1px solid #eadcc8;
-            border-radius: 14px;
-            color: #607080;
-            padding: 16px;
+        QPushButton#overlayModeBtn {
+            border: 1px solid #d4b896;
+            border-radius: 6px;
+            padding: 5px 14px;
+            background: #f0e4d0;
+            color: #5a4a38;
+            font-weight: 600;
+        }
+        QPushButton#overlayModeBtn:checked {
+            background: #d18841;
+            color: white;
+            border-color: #b46d35;
+        }
+        QPushButton#overlayModeBtn:hover:!checked {
+            background: #e8d8c0;
         }
         QPushButton#imageNavButton {
             min-width: 40px;
@@ -697,6 +1178,55 @@ CaseDetailView::CaseDetailView(QWidget *parent)
             border: none;
             background: transparent;
         }
+        QLabel#readOnlyBanner {
+            background: #fef3cd;
+            color: #856404;
+            border: 1px solid #ffc107;
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-weight: 600;
+        }
+        QPushButton#editUnlockButton {
+            background: #d18841;
+            border: 1px solid #b46d35;
+            border-radius: 8px;
+            color: #fff9f2;
+            font-weight: 700;
+            padding: 8px 20px;
+        }
+        QPushButton#editUnlockButton:hover {
+            background: #c97b3d;
+        }
+        QLabel#dashPhoto {
+            background: #f0e4d0;
+            border: 1px solid #eadcc8;
+            border-radius: 14px;
+            color: #9a8878;
+            font-size: 14px;
+        }
+        QLabel#dashTotalKey {
+            font-weight: 700;
+            font-size: 14px;
+            color: #1f2933;
+        }
+        QLabel#dashTotal {
+            font-weight: 700;
+            font-size: 18px;
+            color: #b46d35;
+        }
+        QListWidget#workflowList {
+            background: #f7efe4;
+            border: 1px solid #eadcc8;
+            border-radius: 10px;
+            padding: 6px;
+        }
+        QListWidget#workflowList::item {
+            padding: 8px 10px;
+            margin: 2px 0;
+            border-radius: 8px;
+            background: #fffaf2;
+            color: #1f2933;
+        }
     )");
 
     connect(m_moveUpButton, &QPushButton::clicked, this, [this]() {
@@ -711,10 +1241,10 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     connect(m_setAnalysisReferenceButton, &QPushButton::clicked, this, [this]() {
         setSelectedImageAsAnalysisReference();
     });
-    connect(m_saveAsButton, &QPushButton::clicked, this, [this]() {
+    if (m_saveAsButton) connect(m_saveAsButton, &QPushButton::clicked, this, [this]() {
         duplicateCase("copy");
     });
-    connect(m_newVariantButton, &QPushButton::clicked, this, [this]() {
+    if (m_newVariantButton) connect(m_newVariantButton, &QPushButton::clicked, this, [this]() {
         if (!m_caseId.isEmpty()) {
             emit newVariantRequested(m_caseId);
         }
@@ -722,17 +1252,73 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     connect(m_sendCaseButton, &QPushButton::clicked, this, [this]() {
         sendCurrentCase();
     });
+    // Overlay mode toggles
+    auto setOverlayMode = [this](ImageOverlayWidget::Mode mode) {
+        m_overlayWidget->setMode(mode);
+        m_overlayModeViewButton->setChecked(mode == ImageOverlayWidget::Mode::View);
+        m_overlayModeRectButton->setChecked(mode == ImageOverlayWidget::Mode::Rectangle);
+        m_overlayModePolyButton->setChecked(mode == ImageOverlayWidget::Mode::Polygon);
+    };
+    connect(m_overlayModeViewButton, &QPushButton::clicked, this, [setOverlayMode]() {
+        setOverlayMode(ImageOverlayWidget::Mode::View);
+    });
+    connect(m_overlayModeRectButton, &QPushButton::clicked, this, [setOverlayMode]() {
+        setOverlayMode(ImageOverlayWidget::Mode::Rectangle);
+    });
+    connect(m_overlayModePolyButton, &QPushButton::clicked, this, [setOverlayMode]() {
+        setOverlayMode(ImageOverlayWidget::Mode::Polygon);
+    });
+    connect(m_overlayWidget, &ImageOverlayWidget::selectionChanged, this, [this]() {
+        if (m_overlayConfirmButton) {
+            m_overlayConfirmButton->setEnabled(m_overlayWidget->hasSelection());
+        }
+    });
+    connect(m_overlayConfirmButton, &QPushButton::clicked, this, [this]() {
+        confirmSelectionArea();
+    });
+    connect(m_runAnalysisButton, &QPushButton::clicked, this, [this]() {
+        triggerAnalysis();
+    });
+    m_analysisPollingTimer = new QTimer(this);
+    m_analysisPollingTimer->setInterval(2000);
+    connect(m_analysisPollingTimer, &QTimer::timeout, this, [this]() {
+        pollAnalysisStatus();
+    });
     connect(m_saveProposalButton, &QPushButton::clicked, this, [this]() {
         saveProposalDraft();
     });
     connect(m_createFinalProposalButton, &QPushButton::clicked, this, [this]() {
         createFinalProposal();
     });
+    connect(m_dashRunAnalysisButton, &QPushButton::clicked, this, [this]() {
+        triggerAnalysis();
+    });
+    connect(m_addImagesButton, &QPushButton::clicked, this, [this]() {
+        selectLocalImages();
+    });
+    connect(m_convertImagesButton, &QPushButton::clicked, this, [this]() {
+        convertPendingLocalImages();
+    });
+    connect(m_uploadImagesButton, &QPushButton::clicked, this, [this]() {
+        uploadPreparedLocalImages();
+    });
     m_imagePollingTimer = new QTimer(this);
     m_imagePollingTimer->setInterval(kImagePollingIntervalMs);
     connect(m_imagePollingTimer, &QTimer::timeout, this, [this]() {
         pollImageStatuses();
     });
+
+    // ── Dirty tracking (set up once; applyCaseData resets m_isDirty after) ──
+    const auto markDirty = [this]() { m_isDirty = true; };
+    connect(m_proposalSubjectEdit, &QLineEdit::textEdited, this, markDirty);
+    connect(m_proposalSummaryEdit, &QPlainTextEdit::textChanged, this, markDirty);
+    connect(m_proposalMaterialCostEdit, &QLineEdit::textEdited, this, markDirty);
+    connect(m_proposalLaborCostEdit, &QLineEdit::textEdited, this, markDirty);
+    connect(m_proposalTransportCostEdit, &QLineEdit::textEdited, this, markDirty);
+    connect(m_proposalAmortizationEdit, &QLineEdit::textEdited, this, markDirty);
+    connect(m_proposalMarginEdit, &QLineEdit::textEdited, this, markDirty);
+    connect(m_proposalSupplierEdit, &QLineEdit::textEdited, this, markDirty);
+    connect(m_proposalCompanyEdit, &QLineEdit::textEdited, this, markDirty);
 
     updatePendingLocalImagesPanel();
 }
@@ -756,6 +1342,11 @@ void CaseDetailView::setCase(const QString &caseId)
     ApiService apiService;
     CaseDetailViewModel viewModel;
     const auto caseDto = viewModel.loadCase(caseId, apiService);
+
+    if (ApiService::sessionExpired()) {
+        emit sessionExpired();
+        return;
+    }
 
     if (caseDto.id.isEmpty() && !viewModel.errorMessage().isEmpty()) {
         m_errorLabel->setText(viewModel.errorMessage());
@@ -787,6 +1378,14 @@ void CaseDetailView::setCase(const QString &caseId)
 void CaseDetailView::applyCaseData(const CaseDto &caseDto)
 {
     m_isReferenceDataset = caseDto.isReferenceDataset;
+    m_source = caseDto.source.isEmpty() ? QStringLiteral("mobile") : caseDto.source;
+    const bool isDesktopCase = (m_source == QStringLiteral("desktop"));
+    if (m_tabWidget) {
+        m_tabWidget->setTabVisible(2, isDesktopCase); // Analýza tab only for PC cases
+    }
+    if (m_dashRunAnalysisButton) {
+        m_dashRunAnalysisButton->setVisible(isDesktopCase);
+    }
     m_expectedScope = caseDto.expectedScope;
     m_currentRepairScope = caseDto.repairScope;
     m_currentProposalWorkItems = caseDto.proposalWorkItems;
@@ -804,18 +1403,73 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
     m_addressValueLabel->setText(caseDto.addressLabel.isEmpty() ? "-" : caseDto.addressLabel);
     m_scopeValueLabel->setText(caseDto.repairScope.isEmpty() ? "-" : caseDto.repairScope);
     m_areaValueLabel->setText(caseDto.areaLabel.isEmpty() ? "-" : caseDto.areaLabel);
-    m_proposalStatusValueLabel->setText(proposalStatusLabel(caseDto.proposalStatus));
+
+    // ── Dashboard widgets ─────────────────────────────────────────────────
+    if (m_dashObjTypeLabel) m_dashObjTypeLabel->setText(
+        caseDto.analysisObjectType.isEmpty() ? "-" : caseDto.analysisObjectType);
+    if (m_dashAreaLabel) {
+        if (caseDto.hasAnalysis && caseDto.analysisEstimatedAreaSqm > 0.0) {
+            const int pct = static_cast<int>(caseDto.analysisAreaConfidence * 100.0 + 0.5);
+            m_dashAreaLabel->setText(
+                QString("%1 m\u00B2  (spolehlivost %2 %)")
+                    .arg(caseDto.analysisEstimatedAreaSqm, 0, 'f', 1).arg(pct));
+        } else { m_dashAreaLabel->setText("-"); }
+    }
+    if (m_dashSurfaceLabel) m_dashSurfaceLabel->setText(
+        caseDto.analysisSurfaceCondition.isEmpty() ? "-" : caseDto.analysisSurfaceCondition);
+    if (m_dashScopeLabel) m_dashScopeLabel->setText(
+        caseDto.analysisRecommendedScope.isEmpty() ? "-" : caseDto.analysisRecommendedScope);
+    if (m_dashDurationLabel) {
+        if (caseDto.hasAnalysis && (caseDto.analysisDurationDays > 0.0 || caseDto.analysisLaborHours > 0.0)) {
+            m_dashDurationLabel->setText(
+                QString("%1 dn\u00ED  |  %2 h pr\u00E1ce")
+                    .arg(caseDto.analysisDurationDays, 0, 'f', 1)
+                    .arg(caseDto.analysisLaborHours, 0, 'f', 1));
+        } else { m_dashDurationLabel->setText("-"); }
+    }
+    if (m_dashLaborLabel) m_dashLaborLabel->setText(
+        caseDto.proposalLaborCostLabel.isEmpty() ? "-" : caseDto.proposalLaborCostLabel);
+    if (m_dashMaterialLabel) m_dashMaterialLabel->setText(
+        caseDto.proposalMaterialCostLabel.isEmpty() ? "-" : caseDto.proposalMaterialCostLabel);
+    if (m_dashTransportLabel) m_dashTransportLabel->setText(
+        caseDto.proposalTransportCostLabel.isEmpty() ? "-" : caseDto.proposalTransportCostLabel);
+    if (m_dashMarginLabel) m_dashMarginLabel->setText(
+        caseDto.proposalMarginLabel.isEmpty() ? "-" : caseDto.proposalMarginLabel);
+    if (m_dashTotalLabel) m_dashTotalLabel->setText(
+        caseDto.proposalTotalPriceLabel.isEmpty() ? "-" : caseDto.proposalTotalPriceLabel);
+    if (m_dashWorkflowList) {
+        m_dashWorkflowList->clear();
+        if (caseDto.analysisWorkflowSteps.isEmpty()) {
+            m_dashWorkflowList->addItem(
+                QString::fromUtf8("Postup pr\u00e1ce bude k dispozici po dokon\u010den\u00ed anal\u00fdzy."));
+        } else {
+            m_dashWorkflowList->addItems(caseDto.analysisWorkflowSteps);
+        }
+    }
+    const auto draftStatus = caseDto.workflowDraftStatus.isEmpty()
+        ? caseDto.proposalStatus
+        : caseDto.workflowDraftStatus;
+    const auto finalProposalStatus = caseDto.workflowFinalProposalStatus.isEmpty()
+        ? caseDto.finalProposalStatus
+        : caseDto.workflowFinalProposalStatus;
+
+    m_proposalStatusValueLabel->setText(draftWorkflowStatusLabel(draftStatus));
+    m_workflowStatusValueLabel->setText(workflowSummaryLabel(caseDto));
+    m_workflowBlockingReasonsValueLabel->setText(workflowBlockingReasonsLabel(caseDto.workflowBlockingReasons));
     updateReferenceTestContextLabel();
     m_proposalSubjectEdit->setText(caseDto.proposalSubject);
     m_proposalSummaryEdit->setPlainText(caseDto.proposalSummary);
-    m_proposalMaterialCostEdit->setText(formatDecimalForEdit(caseDto.proposalMaterialCostLabel));
     m_proposalLaborCostEdit->setText(formatDecimalForEdit(caseDto.proposalLaborCostLabel));
+    m_proposalMaterialCostEdit->setText(formatDecimalForEdit(caseDto.proposalMaterialCostLabel));
+    if (m_proposalTransportCostEdit) {
+        m_proposalTransportCostEdit->setText(formatDecimalForEdit(caseDto.proposalTransportCostLabel));
+    }
     m_proposalAmortizationEdit->setText(formatDecimalForEdit(caseDto.proposalAmortizationLabel));
     m_proposalMarginEdit->setText(formatDecimalForEdit(caseDto.proposalMarginLabel));
     m_proposalTotalValueLabel->setText(caseDto.proposalTotalPriceLabel.isEmpty() ? "-" : caseDto.proposalTotalPriceLabel);
     m_proposalSupplierEdit->setText(caseDto.proposalRecommendedSupplier);
     m_proposalCompanyEdit->setText(caseDto.proposalRecommendedCompany);
-    m_finalProposalStatusValueLabel->setText(finalProposalStatusLabel(caseDto.finalProposalStatus));
+    m_finalProposalStatusValueLabel->setText(finalProposalStatusLabel(finalProposalStatus));
     m_finalProposalVersionValueLabel->setText(caseDto.finalProposalDraftVersionLabel.isEmpty() ? "-" : caseDto.finalProposalDraftVersionLabel);
     m_finalProposalSubjectValueLabel->setText(caseDto.finalProposalSubject.isEmpty() ? "-" : caseDto.finalProposalSubject);
     m_finalProposalSummaryValueLabel->setText(
@@ -836,11 +1490,96 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
     } else {
         m_proposalMaterialsList->addItems(caseDto.proposalMaterials);
     }
+
+    m_analysisId = caseDto.analysisId;
+    if (m_overlayWidget) {
+        m_overlayWidget->setAiPolygon(caseDto.analysisMaskPolygon);
+    }
+
+    // Analysis / Findings
+    if (m_analysisObjectTypeLabel) {
+        m_analysisObjectTypeLabel->setText(caseDto.analysisObjectType.isEmpty() ? "-" : caseDto.analysisObjectType);
+    }
+    if (m_analysisAreaLabel) {
+        if (caseDto.hasAnalysis && caseDto.analysisEstimatedAreaSqm > 0.0) {
+            const int pct = static_cast<int>(caseDto.analysisAreaConfidence * 100.0 + 0.5);
+            m_analysisAreaLabel->setText(
+                QString("%1 m\u00B2  (spolehlivost %2 %)").arg(caseDto.analysisEstimatedAreaSqm, 0, 'f', 1).arg(pct));
+        } else {
+            m_analysisAreaLabel->setText("-");
+        }
+    }
+    if (m_analysisSurfaceConditionLabel) {
+        m_analysisSurfaceConditionLabel->setText(caseDto.analysisSurfaceCondition.isEmpty() ? "-" : caseDto.analysisSurfaceCondition);
+    }
+    if (m_analysisRecommendedScopeLabel) {
+        m_analysisRecommendedScopeLabel->setText(caseDto.analysisRecommendedScope.isEmpty() ? "-" : caseDto.analysisRecommendedScope);
+    }
+    if (m_analysisDurationLabel) {
+        if (caseDto.hasAnalysis && (caseDto.analysisDurationDays > 0.0 || caseDto.analysisLaborHours > 0.0)) {
+            m_analysisDurationLabel->setText(
+                QString("%1 dn\xED  |  %2 h prace")
+                    .arg(caseDto.analysisDurationDays, 0, 'f', 1)
+                    .arg(caseDto.analysisLaborHours, 0, 'f', 1));
+        } else {
+            m_analysisDurationLabel->setText("-");
+        }
+    }
+    if (m_analysisWorkflowList) {
+        m_analysisWorkflowList->clear();
+        if (caseDto.analysisWorkflowSteps.isEmpty()) {
+            m_analysisWorkflowList->addItem("Postup prace bude k dispozici po dokonceni analyzy.");
+        } else {
+            m_analysisWorkflowList->addItems(caseDto.analysisWorkflowSteps);
+        }
+    }
+    if (m_analysisMaterialsList) {
+        m_analysisMaterialsList->clear();
+        if (caseDto.analysisMaterialItems.isEmpty()) {
+            m_analysisMaterialsList->addItem("Materialy budou k dispozici po dokonceni analyzy.");
+        } else {
+            m_analysisMaterialsList->addItems(caseDto.analysisMaterialItems);
+        }
+    }
+    if (m_quoteEconomyValueLabel) {
+        m_quoteEconomyValueLabel->setText(caseDto.hasQuoteVariants
+            ? (caseDto.quoteEconomyLabel.isEmpty() ? "-" : caseDto.quoteEconomyLabel)
+            : "Varianta bude vypoctena po analyze.");
+    }
+    if (m_quoteStandardValueLabel) {
+        m_quoteStandardValueLabel->setText(caseDto.hasQuoteVariants
+            ? (caseDto.quoteStandardLabel.isEmpty() ? "-" : caseDto.quoteStandardLabel)
+            : "Varianta bude vypoctena po analyze.");
+    }
+    if (m_quotePremiumValueLabel) {
+        m_quotePremiumValueLabel->setText(caseDto.hasQuoteVariants
+            ? (caseDto.quotePremiumLabel.isEmpty() ? "-" : caseDto.quotePremiumLabel)
+            : "Varianta bude vypoctena po analyze.");
+    }
+
+    if (m_runAnalysisButton) {
+        m_runAnalysisButton->setEnabled(!caseDto.id.isEmpty());
+    }
     if (m_saveProposalButton) {
         m_saveProposalButton->setEnabled(!caseDto.id.isEmpty());
     }
     if (m_createFinalProposalButton) {
-        m_createFinalProposalButton->setEnabled(!caseDto.id.isEmpty());
+        m_createFinalProposalButton->setEnabled(!caseDto.id.isEmpty() && caseDto.workflowCanCreateFinalProposal);
+        m_createFinalProposalButton->setToolTip(caseDto.workflowCanCreateFinalProposal
+            ? "Workflow je pripraveny pro vytvoreni finalni verze."
+            : workflowBlockingReasonsLabel(caseDto.workflowBlockingReasons));
+    }
+    if (m_downloadDraftDocxButton) {
+        m_downloadDraftDocxButton->setEnabled(
+            !caseDto.id.isEmpty() && !caseDto.proposalStatus.isEmpty());
+    }
+    if (m_downloadQuoteDocxButton) {
+        m_downloadQuoteDocxButton->setEnabled(
+            !caseDto.id.isEmpty() && !caseDto.finalProposalStatus.isEmpty());
+    }
+    if (m_downloadQuotePdfButton) {
+        m_downloadQuotePdfButton->setEnabled(
+            !caseDto.id.isEmpty() && !caseDto.finalProposalStatus.isEmpty());
     }
     if (m_saveAsButton) {
         m_saveAsButton->setEnabled(true);
@@ -849,15 +1588,70 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
         m_newVariantButton->setEnabled(true);
     }
     if (m_sendCaseButton) {
-        m_sendCaseButton->setEnabled(caseDto.status.compare("sent", Qt::CaseInsensitive) != 0
-            && caseDto.status.compare("completed", Qt::CaseInsensitive) != 0);
+        const bool caseClosed = caseDto.status.compare("sent", Qt::CaseInsensitive) == 0
+            || caseDto.status.compare("completed", Qt::CaseInsensitive) == 0;
+        m_sendCaseButton->setEnabled(!caseDto.id.isEmpty() && !caseClosed && caseDto.workflowCanSend);
+        m_sendCaseButton->setToolTip(caseDto.workflowCanSend
+            ? "Finalni verze existuje, zakazku lze odeslat."
+            : workflowBlockingReasonsLabel(caseDto.workflowBlockingReasons));
+        const bool dashCaseClosed = caseClosed;
+        if (m_dashRunAnalysisButton) m_dashRunAnalysisButton->setEnabled(!caseDto.id.isEmpty());
+    }
+
+    m_isDirty = false;
+}
+
+bool CaseDetailView::hasUnsavedChanges() const
+{
+    return m_isDirty;
+}
+
+QString CaseDetailView::caseSource() const
+{
+    return m_source;
+}
+
+void CaseDetailView::setReadOnly(bool readOnly)
+{
+    m_isReadOnly = readOnly;
+    if (m_readOnlyBanner) m_readOnlyBanner->setVisible(readOnly);
+    if (m_editUnlockButton) m_editUnlockButton->setVisible(readOnly);
+
+    const auto edits = findChildren<QLineEdit *>();
+    for (auto *e : edits) e->setReadOnly(readOnly);
+    const auto textEdits = findChildren<QPlainTextEdit *>();
+    for (auto *t : textEdits) t->setReadOnly(readOnly);
+
+    const QList<QPushButton *> actionButtons = {
+        m_runAnalysisButton, m_overlayModeRectButton, m_overlayModePolyButton,
+        m_overlayConfirmButton, m_setPrimaryButton, m_setAnalysisReferenceButton,
+        m_moveUpButton, m_moveDownButton, m_addImagesButton, m_convertImagesButton,
+        m_uploadImagesButton, m_saveProposalButton, m_createFinalProposalButton,
+        m_sendCaseButton,
+    };
+    for (auto *btn : actionButtons) {
+        if (btn) btn->setEnabled(!readOnly);
+    }
+}
+
+void CaseDetailView::switchToPhotosTab()
+{
+    if (m_tabWidget) {
+        m_tabWidget->setCurrentIndex(1);
     }
 }
 
 void CaseDetailView::clearCase()
 {
     stopImageStatusPolling();
+    stopAnalysisPolling();
+    setReadOnly(false);
+    m_isDirty = false;
+    m_source.clear();
     m_caseId.clear();
+    if (m_tabWidget) m_tabWidget->setTabVisible(2, true);
+    if (m_dashRunAnalysisButton) m_dashRunAnalysisButton->setVisible(true);
+    m_analysisId.clear();
     m_selectedImageId.clear();
     m_images.clear();
     m_isReferenceDataset = false;
@@ -883,12 +1677,15 @@ void CaseDetailView::clearCase()
     m_scopeValueLabel->setText("-");
     m_areaValueLabel->setText("-");
     m_proposalStatusValueLabel->setText("-");
+    m_workflowStatusValueLabel->setText("-");
+    m_workflowBlockingReasonsValueLabel->setText("bez aktivnich blokaci");
     m_referenceTestContextLabel->clear();
     m_referenceTestContextLabel->hide();
     m_proposalSubjectEdit->clear();
     m_proposalSummaryEdit->setPlainText("Po nahrani fotek se tady ukaze prvni serverovy navrh k editaci.");
-    m_proposalMaterialCostEdit->clear();
     m_proposalLaborCostEdit->clear();
+    m_proposalMaterialCostEdit->clear();
+    if (m_proposalTransportCostEdit) m_proposalTransportCostEdit->clear();
     m_proposalAmortizationEdit->clear();
     m_proposalMarginEdit->clear();
     m_proposalTotalValueLabel->setText("-");
@@ -907,6 +1704,37 @@ void CaseDetailView::clearCase()
         m_proposalMaterialsList->clear();
         m_proposalMaterialsList->addItem("Navrzene materialy se objevi po serverovem zpracovani fotek.");
     }
+    if (m_analysisObjectTypeLabel) { m_analysisObjectTypeLabel->setText("-"); }
+    if (m_analysisAreaLabel) { m_analysisAreaLabel->setText("-"); }
+    if (m_analysisSurfaceConditionLabel) { m_analysisSurfaceConditionLabel->setText("-"); }
+    if (m_analysisRecommendedScopeLabel) { m_analysisRecommendedScopeLabel->setText("-"); }
+    if (m_analysisDurationLabel) { m_analysisDurationLabel->setText("-"); }
+    if (m_analysisWorkflowList) { m_analysisWorkflowList->clear(); }
+    if (m_analysisMaterialsList) { m_analysisMaterialsList->clear(); }
+    if (m_quoteEconomyValueLabel) { m_quoteEconomyValueLabel->setText("-"); }
+    if (m_quoteStandardValueLabel) { m_quoteStandardValueLabel->setText("-"); }
+    if (m_quotePremiumValueLabel) { m_quotePremiumValueLabel->setText("-"); }
+
+    // ── Dashboard widget resets ───────────────────────────────────────────
+    if (m_dashPhotoLabel) {
+        m_dashPhotoLabel->clear();
+        m_dashPhotoLabel->setText(QString::fromUtf8("Vyberte zak\u00e1zku pro zobrazen\u00ed hlavn\u00ed fotografie."));
+    }
+    if (m_dashObjTypeLabel) m_dashObjTypeLabel->setText("-");
+    if (m_dashAreaLabel) m_dashAreaLabel->setText("-");
+    if (m_dashSurfaceLabel) m_dashSurfaceLabel->setText("-");
+    if (m_dashScopeLabel) m_dashScopeLabel->setText("-");
+    if (m_dashDurationLabel) m_dashDurationLabel->setText("-");
+    if (m_dashLaborLabel) m_dashLaborLabel->setText("-");
+    if (m_dashMaterialLabel) m_dashMaterialLabel->setText("-");
+    if (m_dashTransportLabel) m_dashTransportLabel->setText("-");
+    if (m_dashMarginLabel) m_dashMarginLabel->setText("-");
+    if (m_dashTotalLabel) m_dashTotalLabel->setText("-");
+    if (m_dashWorkflowList) {
+        m_dashWorkflowList->clear();
+        m_dashWorkflowList->addItem(QString::fromUtf8("Postup pr\u00e1ce bude k dispozici po dokon\u010den\u00ed anal\u00fdzy."));
+    }
+    if (m_dashRunAnalysisButton) m_dashRunAnalysisButton->setEnabled(false);
 
     if (m_saveAsButton) {
         m_saveAsButton->setEnabled(false);
@@ -916,12 +1744,17 @@ void CaseDetailView::clearCase()
     }
     if (m_sendCaseButton) {
         m_sendCaseButton->setEnabled(false);
+        m_sendCaseButton->setToolTip(QString());
+    }
+    if (m_runAnalysisButton) {
+        m_runAnalysisButton->setEnabled(false);
     }
     if (m_saveProposalButton) {
         m_saveProposalButton->setEnabled(false);
     }
     if (m_createFinalProposalButton) {
         m_createFinalProposalButton->setEnabled(false);
+        m_createFinalProposalButton->setToolTip(QString());
     }
 
     setImageHintMessage("Po vyberu aktivni zakazky se sem nactou fotky a jejich metadata.");
@@ -941,6 +1774,7 @@ void CaseDetailView::saveProposalDraft()
         .summary = m_proposalSummaryEdit ? m_proposalSummaryEdit->toPlainText().trimmed() : QString(),
         .materialCost = readDoubleFromEdit(m_proposalMaterialCostEdit),
         .laborCost = readDoubleFromEdit(m_proposalLaborCostEdit),
+        .transportCost = readDoubleFromEdit(m_proposalTransportCostEdit),
         .amortization = readDoubleFromEdit(m_proposalAmortizationEdit),
         .margin = readDoubleFromEdit(m_proposalMarginEdit),
         .recommendedSupplier = m_proposalSupplierEdit ? m_proposalSupplierEdit->text().trimmed() : QString(),
@@ -949,6 +1783,7 @@ void CaseDetailView::saveProposalDraft()
 
     QString errorMessage;
     const auto updatedCase = apiService.updateCaseProposalDraft(m_caseId, payload, &errorMessage);
+    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
     if (updatedCase.id.isEmpty()) {
         m_errorLabel->setText(errorMessage.isEmpty() ? "Nepodarilo se ulozit navrh nabidky." : errorMessage);
         m_errorLabel->show();
@@ -968,8 +1803,8 @@ void CaseDetailView::createFinalProposal()
 
     const auto confirmation = QMessageBox::question(
         this,
-        "Vytvorit finalni verzi",
-        "Ze soucasneho navrhu vznikne finalni verze a server k ni automaticky pripravi DOCX i PDF. Pokracovat?",
+        "Vytvo\u0159it fin\u00E1ln\u00ED verzi",
+        "Ze sou\u010Dasn\u00E9ho n\u00E1vrhu vznikne fin\u00E1ln\u00ED verze a server k n\u00ED automaticky p\u0159iprav\u00ED DOCX i PDF. Pokra\u010Dovat?",
         QMessageBox::Yes | QMessageBox::No,
         QMessageBox::No);
     if (confirmation != QMessageBox::Yes) {
@@ -979,6 +1814,7 @@ void CaseDetailView::createFinalProposal()
     ApiService apiService;
     QString errorMessage;
     const auto updatedCase = apiService.createCaseFinalProposal(m_caseId, &errorMessage);
+    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
     if (updatedCase.id.isEmpty()) {
         m_errorLabel->setText(errorMessage.isEmpty() ? "Nepodarilo se vytvorit finalni verzi." : errorMessage);
         m_errorLabel->show();
@@ -1409,6 +2245,10 @@ void CaseDetailView::updatePendingLocalImagesPanel()
                 .arg(m_pendingLocalImagePaths.size()));
     }
 
+    const bool hasAnyPending = !m_pendingLocalImagePaths.isEmpty() || !m_preparedLocalImages.empty();
+    if (m_pendingLocalImagesList) {
+        m_pendingLocalImagesList->setVisible(hasAnyPending);
+    }
     if (m_convertImagesButton) {
         m_convertImagesButton->setEnabled(!m_pendingLocalImagePaths.isEmpty());
     }
@@ -1460,6 +2300,7 @@ void CaseDetailView::uploadPreparedLocalImages()
     ApiService apiService;
     QString errorMessage;
     if (!apiService.uploadCaseImages(m_caseId, uploadImages, &errorMessage)) {
+        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
         for (const size_t index : uploadIndexes) {
             m_preparedLocalImages[index].state = LocalImageState::ReadyToUpload;
             m_preparedLocalImages[index].errorMessage = errorMessage;
@@ -1501,6 +2342,56 @@ void CaseDetailView::uploadPreparedLocalImages()
             .arg(summarizeServerImageStatuses(m_images)));
 }
 
+void CaseDetailView::downloadExport(const QString &exportType)
+{
+    if (m_caseId.isEmpty()) {
+        return;
+    }
+
+    setImageHintMessage(QString("Pripravuji export: %1...").arg(exportType));
+    QApplication::processEvents();
+
+    ApiService apiService;
+    QString errorMessage;
+    const auto exportResult = apiService.triggerExport(m_caseId, exportType, &errorMessage);
+    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    if (exportResult.downloadUrl.isEmpty()) {
+        setImageHintMessage(
+            errorMessage.isEmpty() ? "Export se nezdaril — backend nevratil download URL." : errorMessage,
+            true);
+        return;
+    }
+
+    const auto fileBytes = apiService.downloadExportFile(exportResult.downloadUrl, &errorMessage);
+    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    if (fileBytes.isEmpty()) {
+        setImageHintMessage(
+            errorMessage.isEmpty() ? "Stazeni souboru se nezdarilo." : errorMessage,
+            true);
+        return;
+    }
+
+    const QString tempDir =
+        QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/FotoNabidka";
+    QDir().mkpath(tempDir);
+
+    const QString fileName = exportResult.fileName.isEmpty()
+        ? QString("%1-%2.bin").arg(m_caseId, exportType)
+        : exportResult.fileName;
+    const QString filePath = tempDir + "/" + fileName;
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        setImageHintMessage("Nepodarilo se ulozit soubor do temp adresare.", true);
+        return;
+    }
+    file.write(fileBytes);
+    file.close();
+
+    QDesktopServices::openUrl(QUrl::fromLocalFile(filePath));
+    setImageHintMessage(QString("Export byl ulozen a otevren: %1").arg(fileName));
+}
+
 void CaseDetailView::setSelectedImageAsPrimary()
 {
     const auto *image = selectedImage();
@@ -1511,11 +2402,13 @@ void CaseDetailView::setSelectedImageAsPrimary()
     ApiService apiService;
     CaseDetailViewModel viewModel;
     if (!viewModel.setPrimaryImage(m_caseId, image->id, apiService)) {
+        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
         setImageHintMessage(viewModel.imageErrorMessage(), true);
         return;
     }
 
     const auto images = viewModel.loadCaseImages(m_caseId, apiService);
+    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
     if (!viewModel.imageErrorMessage().isEmpty()) {
         setImageHintMessage(viewModel.imageErrorMessage(), true);
         return;
@@ -1535,11 +2428,13 @@ void CaseDetailView::setSelectedImageAsAnalysisReference()
     ApiService apiService;
     CaseDetailViewModel viewModel;
     if (!viewModel.setAnalysisReferenceImage(m_caseId, image->id, apiService)) {
+        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
         setImageHintMessage(viewModel.imageErrorMessage(), true);
         return;
     }
 
     const auto images = viewModel.loadCaseImages(m_caseId, apiService);
+    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
     if (!viewModel.imageErrorMessage().isEmpty()) {
         setImageHintMessage(viewModel.imageErrorMessage(), true);
         return;
@@ -1571,6 +2466,7 @@ void CaseDetailView::duplicateCase(const QString &mode)
     ApiService apiService;
     QString errorMessage;
     const auto duplicatedCaseId = apiService.duplicateCase(m_caseId, mode, &errorMessage);
+    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
     if (duplicatedCaseId.isEmpty()) {
         m_errorLabel->setText(errorMessage.isEmpty() ? "Nepodarilo se vytvorit kopii zakazky." : errorMessage);
         m_errorLabel->show();
@@ -1603,6 +2499,7 @@ void CaseDetailView::sendCurrentCase()
     ApiService apiService;
     QString errorMessage;
     if (!apiService.sendCase(m_caseId, &errorMessage)) {
+        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
         m_errorLabel->setText(errorMessage.isEmpty() ? "Nepodarilo se odeslat zakazku." : errorMessage);
         m_errorLabel->show();
         return;
@@ -1672,6 +2569,132 @@ void CaseDetailView::pollImageStatuses()
             .arg(summarizeServerImageStatuses(m_images)));
 }
 
+void CaseDetailView::triggerAnalysis()
+{
+    if (m_caseId.isEmpty()) return;
+
+    m_runAnalysisButton->setEnabled(false);
+    m_analysisJobStatusLabel->setText("Spoustim analyzu...");
+    m_analysisJobStatusLabel->show();
+
+    ApiService apiService;
+    QString errorMessage;
+    const auto jobId = apiService.triggerAnalysisJob(m_caseId, &errorMessage);
+
+    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+
+    if (jobId.isEmpty()) {
+        m_analysisJobStatusLabel->setText(
+            QString("Chyba: %1").arg(errorMessage.isEmpty() ? "Nepodarilo se spustit analyzu." : errorMessage));
+        m_runAnalysisButton->setEnabled(true);
+        return;
+    }
+
+    startAnalysisPolling(jobId);
+}
+
+void CaseDetailView::confirmSelectionArea()
+{
+    if (m_caseId.isEmpty() || m_analysisId.isEmpty()) return;
+    if (!m_overlayWidget || !m_overlayWidget->hasSelection()) return;
+
+    const auto polygon = m_overlayWidget->selectionPolygon();
+    bool areaOk = false;
+    const double manualArea = m_overlayAreaEdit ? m_overlayAreaEdit->text().replace(',', '.').toDouble(&areaOk) : 0.0;
+
+    if (m_overlayConfirmButton) m_overlayConfirmButton->setEnabled(false);
+
+    ApiService apiService;
+    QString errorMessage;
+    const bool ok = apiService.patchAnalysisSelection(
+        m_caseId,
+        m_analysisId,
+        polygon,
+        areaOk && manualArea > 0.0 ? manualArea : 0.0,
+        &errorMessage);
+
+    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+
+    if (!ok) {
+        setImageHintMessage(
+            QString("Chyba pri ukladani oblasti: %1")
+                .arg(errorMessage.isEmpty() ? "Neznama chyba." : errorMessage),
+            true);
+        if (m_overlayConfirmButton) m_overlayConfirmButton->setEnabled(true);
+        return;
+    }
+
+    setImageHintMessage("Oblast opravy byla ulozena.");
+    m_overlayWidget->clearSelection();
+    setCase(m_caseId); // znovu nacte data i s aktualizovanou plochou
+}
+
+void CaseDetailView::startAnalysisPolling(const QString &jobId)
+{
+    constexpr int kAnalysisPollAttemptLimit = 90; // 90 × 2s = 3 minuty
+    m_analysisJobId = jobId;
+    m_remainingAnalysisPollAttempts = kAnalysisPollAttemptLimit;
+    m_analysisJobStatusLabel->setText("Analyza probiha... (cekam na vysledek)");
+    m_analysisJobStatusLabel->show();
+    if (!m_analysisPollingTimer->isActive()) {
+        m_analysisPollingTimer->start();
+    }
+}
+
+void CaseDetailView::stopAnalysisPolling()
+{
+    if (m_analysisPollingTimer && m_analysisPollingTimer->isActive()) {
+        m_analysisPollingTimer->stop();
+    }
+    m_remainingAnalysisPollAttempts = 0;
+    m_analysisJobId.clear();
+}
+
+void CaseDetailView::pollAnalysisStatus()
+{
+    if (m_analysisJobId.isEmpty() || m_caseId.isEmpty()) {
+        stopAnalysisPolling();
+        return;
+    }
+
+    if (m_remainingAnalysisPollAttempts <= 0) {
+        stopAnalysisPolling();
+        m_analysisJobStatusLabel->setText("Analyza trvala prilis dlouho — zkuste ji spustit znovu.");
+        m_runAnalysisButton->setEnabled(true);
+        return;
+    }
+
+    --m_remainingAnalysisPollAttempts;
+
+    ApiService apiService;
+    QString errorMessage;
+    const auto status = apiService.getAnalysisJobStatus(m_analysisJobId, &errorMessage);
+
+    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+
+    if (status == "completed") {
+        stopAnalysisPolling();
+        m_analysisJobStatusLabel->setText("Analyza dokoncena. Nacitam vysledky...");
+        setCase(m_caseId); // reload all — fills findings tab
+        m_analysisJobStatusLabel->setText("Analyza dokoncena. Vysledky jsou k dispozici.");
+        m_runAnalysisButton->setEnabled(true);
+    } else if (status == "failed") {
+        stopAnalysisPolling();
+        m_analysisJobStatusLabel->setText("Analyza selhala. Zkontrolujte fotky a zkuste znovu.");
+        m_runAnalysisButton->setEnabled(true);
+    } else if (status == "running") {
+        m_analysisJobStatusLabel->setText(
+            QString("Analyza probiha... (%1 s)")
+                .arg((90 - m_remainingAnalysisPollAttempts) * 2));
+    } else if (!status.isEmpty()) {
+        m_analysisJobStatusLabel->setText(QString("Stav: %1").arg(status));
+    } else if (!errorMessage.isEmpty()) {
+        // network hiccup — just keep trying
+        m_analysisJobStatusLabel->setText(
+            QString("Cekam na server (%1)").arg(errorMessage));
+    }
+}
+
 bool CaseDetailView::refreshImagesFromBackend(QString *errorMessage)
 {
     CaseDetailViewModel viewModel;
@@ -1695,30 +2718,40 @@ bool CaseDetailView::refreshImagesFromBackend(QString *errorMessage)
 void CaseDetailView::setPrimaryImagePreview(const QPixmap &pixmap)
 {
     m_primaryImagePixmap = pixmap;
-    updatePrimaryImagePreview();
+    if (m_overlayWidget) {
+        m_overlayWidget->setPhoto(pixmap);
+    }
+    if (m_dashPhotoLabel) {
+        const auto scaled = pixmap.scaledToHeight(270, Qt::SmoothTransformation);
+        m_dashPhotoLabel->setPixmap(scaled);
+    }
 }
 
 void CaseDetailView::setPrimaryImagePlaceholder(const QString &message)
 {
     m_primaryImagePixmap = QPixmap();
-    m_primaryImagePreviewLabel->setPixmap(QPixmap());
-    m_primaryImagePreviewLabel->setText(message);
+    if (m_overlayWidget) {
+        m_overlayWidget->setPlaceholder(message);
+    }
+    if (m_dashPhotoLabel) {
+        m_dashPhotoLabel->clear();
+        m_dashPhotoLabel->setText(
+            QString::fromUtf8("Fotografie zak\u00e1zky se zobraz\u00ed po nahr\u00e1n\u00ed."));
+    }
 }
 
 void CaseDetailView::updatePrimaryImagePreview()
 {
-    if (!m_primaryImagePreviewLabel || m_primaryImagePixmap.isNull()) {
-        return;
-    }
+    // ImageOverlayWidget handles its own scaling in paintEvent — nothing to do
+}
 
-    QSize targetSize = m_primaryImagePreviewLabel->size() - QSize(32, 32);
-    if (targetSize.width() <= 0 || targetSize.height() <= 0) {
-        targetSize = QSize(320, 240);
+bool CaseDetailView::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_dashPhotoLabel && event->type() == QEvent::MouseButtonPress) {
+        switchToPhotosTab();
+        return true;
     }
-
-    m_primaryImagePreviewLabel->setText(QString());
-    m_primaryImagePreviewLabel->setPixmap(
-        m_primaryImagePixmap.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    return QWidget::eventFilter(watched, event);
 }
 
 void CaseDetailView::showImagePreview(const ImageDto *image)

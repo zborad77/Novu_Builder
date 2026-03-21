@@ -35,6 +35,65 @@ class AnalysisRepository:
         )
         return list(result.scalars().all())
 
+    async def create_queued_job(self, project: Project, *, user_id: str | None = None) -> AnalysisJob:
+        timestamp = datetime.now(UTC)
+        job = AnalysisJob(
+            id=f"job_{uuid4().hex[:8]}",
+            project_id=project.id,
+            status="queued",
+            job_type="manual_trigger",
+            requested_by_user_id=user_id or project.created_by_user_id or "usr_1",
+            started_at=None,
+            finished_at=None,
+            error_message=None,
+            created_at=timestamp,
+        )
+        self.session.add(job)
+        await self.session.commit()
+        await self.session.refresh(job)
+        return job
+
+    async def complete_job_with_result(self, job: AnalysisJob, project: Project, analysis: dict) -> tuple[AnalysisJob, AnalysisResult]:
+        timestamp = datetime.now(UTC)
+        job.status = analysis.get("jobStatus", "completed")
+        job.started_at = job.started_at or timestamp
+        job.finished_at = timestamp
+        job.error_message = analysis.get("errorMessage")
+
+        result = AnalysisResult(
+            id=f"ana_{uuid4().hex[:8]}",
+            project_id=project.id,
+            analysis_job_id=job.id,
+            reference_photo_id=analysis.get("referencePhotoId"),
+            object_type=analysis.get("objectType", "facade"),
+            surface_condition=analysis.get("surfaceCondition", "requires_attention"),
+            recommended_scope=analysis.get("recommendedScope", "local_repair"),
+            estimated_area_sqm=float(analysis.get("estimatedAreaSqm") or 0),
+            area_confidence=float(analysis.get("areaConfidence") or 0),
+            selected_repair_polygon_json=json.dumps(analysis["selectedRepairPolygon"]) if analysis.get("selectedRepairPolygon") else None,
+            manual_area_sqm=analysis.get("manualAreaSqm"),
+            final_area_source=analysis.get("finalAreaSource", "ai"),
+            mask_polygon_json=json.dumps(analysis.get("maskPolygon") or []),
+            materials_suggestion_json=json.dumps(analysis.get("materials") or []),
+            workflow_suggestion_json=json.dumps(analysis.get("workflowSteps") or []),
+            estimated_duration_days=float(analysis["estimatedTotalDays"]) if analysis.get("estimatedTotalDays") is not None else None,
+            labor_hours_total=float(analysis["laborHoursTotal"]) if analysis.get("laborHoursTotal") is not None else None,
+            model_name=analysis.get("modelName", "mock-vision"),
+            model_version=analysis.get("modelVersion", "0.1"),
+            created_at=timestamp,
+        )
+        self.session.add(result)
+
+        project.status = "analysed"
+        project.property_type = analysis.get("objectType", project.property_type)
+        project.repair_scope = analysis.get("recommendedScope", project.repair_scope)
+        project.updated_at = timestamp
+
+        await self.session.commit()
+        await self.session.refresh(job)
+        await self.session.refresh(result)
+        return job, result
+
     async def create_analysis_record(self, project: Project, analysis: dict) -> tuple[AnalysisJob, AnalysisResult]:
         timestamp = datetime.now(UTC)
         job = AnalysisJob(
@@ -66,7 +125,9 @@ class AnalysisRepository:
             final_area_source=analysis.get("finalAreaSource", "ai"),
             mask_polygon_json=json.dumps(analysis.get("maskPolygon") or []),
             materials_suggestion_json=json.dumps(analysis.get("materials") or []),
-            workflow_suggestion_json=json.dumps(analysis.get("workflow") or []),
+            workflow_suggestion_json=json.dumps(analysis.get("workflowSteps") or []),
+            estimated_duration_days=float(analysis["estimatedTotalDays"]) if analysis.get("estimatedTotalDays") is not None else None,
+            labor_hours_total=float(analysis["laborHoursTotal"]) if analysis.get("laborHoursTotal") is not None else None,
             model_name=analysis.get("modelName", "mock-vision"),
             model_version=analysis.get("modelVersion", "0.1"),
             created_at=timestamp,

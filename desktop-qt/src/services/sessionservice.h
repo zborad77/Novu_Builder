@@ -5,10 +5,16 @@
 class SessionService
 {
 public:
-    void setToken(const QString &token);
+    void setTokens(const QString &accessToken, const QString &refreshToken);
     [[nodiscard]] QString token() const;
+    [[nodiscard]] QString refreshToken() const;
+    [[nodiscard]] bool isLoggedIn() const;
     void clear();
 
+    void saveToSettings() const;
+    void loadFromSettings();
+
 private:
-    QString m_token;
+    QString m_accessToken;
+    QString m_refreshToken;
 };

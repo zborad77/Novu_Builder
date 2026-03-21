@@ -127,6 +127,39 @@ Bootstrap pripravi:
 Pro prvni dev start bootstrap zamerne preskakuje PostgreSQL drivery `asyncpg` a `psycopg[binary]`,
 protoze vychozi lokalni rezim bezi na `SQLite`.
 
+### Prepnuti backendu na PostgreSQL
+
+Pokud chces lokalni backend prepnout ze `SQLite` na `PostgreSQL`, muzes pouzit:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\switch-backend-db.ps1 -Target postgres
+```
+
+S vlastnimi prihlasovacimi udaji a rovnou s migracemi:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\switch-backend-db.ps1 `
+  -Target postgres `
+  -PostgresHost localhost `
+  -PostgresPort 5432 `
+  -PostgresDatabase novu_builder `
+  -PostgresUser novu `
+  -PostgresPassword novu `
+  -RunMigrations
+```
+
+Skript:
+
+- upravi `python-backend/.env`
+- pri PostgreSQL doinstaluje chybejici `asyncpg` a `psycopg[binary]`
+- umi rovnou spustit `alembic upgrade head`
+
+Navrat zpet na `SQLite`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\switch-backend-db.ps1 -Target sqlite
+```
+
 ### Rychly start backendu
 
 Po bootstrapu muzes backend spustit jednim prikazem:

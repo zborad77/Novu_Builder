@@ -46,6 +46,18 @@ $result = [ordered]@{
 }
 
 if (-not $DryRun) {
+    # Kill any existing processes on port 8000 before starting a new one.
+    try {
+        $pids = (Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue).OwningProcess | Sort-Object -Unique
+        if ($pids) {
+            Write-Host "Uklidam stare procesy na portu 8000: $pids"
+            foreach ($pid in $pids) {
+                try { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue } catch {}
+            }
+            Start-Sleep -Milliseconds 800
+        }
+    } catch {}
+
     Start-Process powershell -ArgumentList @(
         "-NoExit",
         "-ExecutionPolicy", "Bypass",

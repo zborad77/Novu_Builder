@@ -1,9 +1,10 @@
-from fastapi import Depends
+from fastapi import Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.repositories.analysis_repository import AnalysisRepository
 from app.db.session import get_db_session
+from app.schemas.auth import AuthUserRead
 from app.repositories.final_proposal_repository import FinalProposalRepository
 from app.repositories.material_catalog_repository import MaterialCatalogRepository
 from app.repositories.photo_repository import PhotoRepository
@@ -62,8 +63,21 @@ def get_supplier_service(session: AsyncSession = Depends(get_db_session)) -> Sup
     return SupplierService(SupplierRepository(session))
 
 
-def get_auth_service() -> AuthService:
-    return AuthService()
+def get_auth_service(session: AsyncSession = Depends(get_db_session)) -> AuthService:
+    return AuthService(session)
+
+
+async def get_current_user(
+    authorization: str = Header(None),
+    auth_service: AuthService = Depends(get_auth_service),
+) -> AuthUserRead:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header.")
+    token = authorization[7:]
+    user = await auth_service.get_user_by_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired token.")
+    return user
 
 
 def get_export_service() -> ExportService:

@@ -14,3 +14,4 @@ desktop-qt/.qtcreator/
 
 __pycache__/
 *.pyc
+.claude/

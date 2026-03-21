@@ -2,6 +2,7 @@
 
 Tento dokument rika jednoduse a prakticky:
 
+- co ma delat mobilni klient
 - co ma delat desktop klient
 - co ma delat server API
 - co ma delat AI vrstva
@@ -17,15 +18,39 @@ Cil:
 
 Rozdeleni odpovednosti produktu:
 
+- `mobilni klient` = sber dat v terenu
 - `desktop klient` = pracovni rozhrani pro cloveka
 - `server API` = zdroj pravdy, business logika a orchestrator
 - `AI worker` = analyza obrazu a navrh strukturovanych vystupu
 
 Jednoducha veta:
 
-`Klient zobrazuje a upravuje. Server rozhoduje a uklada. AI navrhuje.`
+`Mobil sbera. Desktop kontroluje. Server rozhoduje a uklada. AI navrhuje.`
 
-## 2. Co ma delat desktop klient
+## 2. Co ma delat mobilni klient
+
+Mobilni aplikace ma byt vychozi vstup v terenu.
+
+Mobil ma resit:
+
+- zalozeni nebo otevreni zakazky
+- porizeni fotek
+- odeslani fotek a zakladnich metadat na server
+- zobrazeni stavu uploadu a zakladniho workflow
+
+Mobil nema delat:
+
+- vypocet ceny
+- rozhodovani o finalni plose
+- navrh finalni nabidky
+- praci s ceniky, dodavateli a firmami
+
+Pravidlo:
+
+- mobil jen odesila vstup
+- backend zpracuje zbytek workflow
+
+## 3. Co ma delat desktop klient
 
 Desktop aplikace nema byt mozek systemu.
 Je to ovladaci a kontrolni vrstva pro kalkulanta nebo managera.
@@ -36,21 +61,17 @@ Desktop ma resit:
 - seznam projektu
 - detail projektu
 - zobrazeni fotek
-- vyber vychozi fotky
-- rucni korekci plochy
-- polygon editor
-- upravu firemnich cen
-- upravu dodavatelskych zdroju
-- zobrazeni cenovych variant
-- spusteni akci jako:
-  - analyza
-  - prepocet variant
-  - pozdeji generovani dokumentu
+- zobrazeni workflow stavu a blokaci
+- kontrolu serveroveho navrhu
+- rucni korekci plochy nebo textu
+- upravu cisel a textu pred schvalenim
+- schvaleni finalni nabidky a odeslani
 
 Desktop nema delat:
 
 - finalni vypocet ceny
 - finalni AI analyzu
+- vyber dodavatelu a firem mimo serverova pravidla
 - rozhodovani o tom, ktera data jsou autoritativni
 - praci s primarnim ulozistem souboru
 
@@ -59,7 +80,7 @@ Pravidlo:
 - klient muze odeslat zmenu
 - server ji overi, ulozi a vrati vysledek
 
-## 3. Co ma delat server API
+## 4. Co ma delat server API
 
 Server je centralni vrstva produktu.
 Je to misto, kde musi byt:
@@ -75,11 +96,15 @@ Server ma resit:
 - autentizaci a role
 - CRUD projektu
 - spravu fotek a jejich metadat
+- workflow stav zakazky od uploadu po schvaleni
 - validaci vstupu
 - spravu analyz
 - spravu firemniho ceniku
 - spravu dodavatelu
 - vypocet cenovych variant
+- navrh praci a materialu
+- vyber firem a dodavatelu podle pravidel
+- navrh finalni nabidky
 - rozhodovani, jestli se ma pouzit AI plocha nebo manualni plocha
 - generovani dokumentu
 - emailing
@@ -90,6 +115,8 @@ Server je autorita pro:
 - projekty
 - fotografie a jejich metadata
 - analysis results
+- proposal draft
+- final proposal
 - quote variants
 - quote items
 - firemni ceny
@@ -104,7 +131,7 @@ Pravidlo:
 
 - tezka nebo pomala prace ma jit do jobu nebo AI workeru
 
-## 4. Co ma delat AI worker
+## 5. Co ma delat AI worker
 
 AI worker neni backend cele aplikace.
 Je to specializovana vrstva na analyzu fotek a pripravu navrhu.
@@ -134,40 +161,41 @@ Pravidlo:
 - clovek potvrdi
 - server prepocita
 
-## 5. Co bude zpracovavat server v beta verzi
+## 6. Co bude zpracovavat server v beta verzi
 
 Pro beta verzi by mel server umet tyto bloky:
 
-### 5.1 Projekty
+### 6.1 Projekty
 
 - zalozit projekt
 - upravit projekt
 - vratit seznam projektu
 - vratit detail projektu
 
-### 5.2 Fotky
+### 6.2 Fotky
 
 - prijmout metadata fotek
 - pozdeji prijmout i fyzicke soubory
 - ulozit vychozi fotku
 - vratit seznam fotek k projektu
 
-### 5.3 AI orchestraci
+### 6.3 AI orchestraci
 
-- spustit analyze job
+- po uploadu fotek spustit analyze job
 - predat vstup do AI provideru
 - ulozit analysis result
 - vratit posledni analyze
 
-### 5.4 Pricing engine
+### 6.4 Pricing engine
 
 - nacist posledni analyze
 - rozhodnout, jaka plocha je finalni
 - vzit firemni ceny a normy
 - prepocitat economy / standard / premium variantu
 - ulozit quote items
+- pripravit proposal draft a final proposal
 
-### 5.5 Dodavatele a materialy
+### 6.5 Dodavatele a materialy
 
 - vratit firemni katalog
 - vratit dodavatele
@@ -175,7 +203,7 @@ Pro beta verzi by mel server umet tyto bloky:
 - ulozit firemni cenu
 - ulozit zdroj dodavatele
 
-### 5.6 Dokumenty
+### 6.6 Dokumenty
 
 Tohle jeste neni hotove, ale do beta verze patri:
 
@@ -183,33 +211,37 @@ Tohle jeste neni hotove, ale do beta verze patri:
 - pozdeji DOCX
 - ulozeni dokumentu k projektu
 
-### 5.7 Komunikace
+### 6.7 Komunikace
 
 Tohle jeste neni hotove, ale do beta verze patri:
 
 - odeslani nabidky emailem
 - log o odeslani
 
-## 6. Co bude klient delat v beta verzi
+## 7. Co bude klient delat v beta verzi
 
 Desktop klient ma byt pripravny na tento realny tok:
 
-1. otevrit projekt
-2. zkontrolovat fotky
-3. vybrat nebo zmenit vychozi fotku
-4. spustit analyzu
-5. zkontrolovat AI plochu
-6. pripadne zakreslit oblast nebo zadat manualni m2
-7. prepocitat cenove varianty
-8. upravit firemni cenu nebo dodavatele
-9. zobrazit polozkovy rozpad
-10. pozdeji vygenerovat a odeslat nabidku
+1. otevrit projekt, ktery prisel z mobilu
+2. zkontrolovat fotky a workflow stav
+3. zkontrolovat AI plochu
+4. pripadne zakreslit oblast nebo zadat manualni m2
+5. zkontrolovat serverovy navrh praci, materialu a ceny
+6. upravit text nebo cisla
+7. potvrdit finalni verzi
+8. odeslat nabidku
 
-## 7. Kde ma byt jaka logika
+## 8. Kde ma byt jaka logika
 
 Prakticky tahak:
 
-### V klientovi
+### V mobilu
+
+- upload fotek
+- zakladni metadata
+- zobrazeni stavu odeslani
+
+### V desktop klientovi
 
 - formularove stavy
 - vyber aktivniho projektu
@@ -221,7 +253,11 @@ Prakticky tahak:
 
 - validace payloadu
 - finalni update databaze
+- workflow blokace a povolene akce
 - rozhodovani o area source
+- navrh praci
+- navrh materialu
+- vyber firem a dodavatelu
 - vypocet variant
 - mapovani materialu
 - sprava jobu
@@ -235,17 +271,18 @@ Prakticky tahak:
 - model prompt / inference
 - normalizovany AI vystup
 
-## 8. Co nedelat spatne
+## 9. Co nedelat spatne
 
 Tady jsou nejcastejsi architektonicke chyby, kterym se chceme vyhnout:
 
 - nepocitat finalni cenu jen na klientovi
 - nedavat AI posledni slovo nad cenou
 - nenechat klient rozhodovat o autoritativnich datech bez serverove validace
+- nedavat business logiku do mobilu
 - nemichat dokumenty, AI a pricing do jednoho obriho route handleru
 - nenechavat tezke AI volani blokovat bezny request, pokud to nebude nutne
 
-## 9. Dalsi doporucene serverove moduly
+## 10. Dalsi doporucene serverove moduly
 
 Jakmile dokoncime desktop polish, dalsi logicke serverove bloky jsou:
 
@@ -272,16 +309,17 @@ Jakmile dokoncime desktop polish, dalsi logicke serverove bloky jsou:
 5. `async jobs`
 - priprava na fronty pro AI a dokumenty
 
-## 10. Doporucene poradi dalsi prace
+## 11. Doporucene poradi dalsi prace
 
 Prakticky doporuceny sled:
 
-1. doladit desktop UX
-2. zaviest realny photo upload
+1. dokoncit backend workflow stav a blokace
+2. zaviest realny mobile-first photo upload
 3. pripravit serverove uloziste souboru
 4. napojit prvni realny AI provider
-5. pridat PDF generator
-6. pridat email odeslani
-7. doresit auth a role
+5. pripravit proposal draft a final proposal pipeline
+6. pridat PDF a DOCX generator
+7. pridat email odeslani
+8. doresit auth a role
 
 Toto poradi dava nejvetsi smysl pro soukromou beta verzi.

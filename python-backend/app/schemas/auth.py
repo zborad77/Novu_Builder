@@ -24,6 +24,10 @@ class LoginResponse(BaseModel):
     user: AuthUserRead
 
 
+class LogoutRequest(BaseModel):
+    refreshToken: str
+
+
 class LogoutResponse(BaseModel):
     message: str
 

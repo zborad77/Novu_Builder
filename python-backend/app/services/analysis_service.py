@@ -1,4 +1,7 @@
+from datetime import UTC, datetime
+
 from app.ai import describe_analysis_provider, run_project_analysis
+from app.db.session import AsyncSessionFactory
 from app.models import AnalysisJob, AnalysisResult, Project
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.photo_repository import PhotoRepository
@@ -21,7 +24,9 @@ def to_read_model(result: AnalysisResult) -> AnalysisResultRead:
         finalAreaSource=result.final_area_source,
         maskPolygon=parse_json_field(result.mask_polygon_json),
         materials=parse_json_field(result.materials_suggestion_json),
-        workflow=parse_json_field(result.workflow_suggestion_json),
+        workflowSteps=parse_json_field(result.workflow_suggestion_json),
+        estimatedDurationDays=result.estimated_duration_days,
+        laborHoursTotal=result.labor_hours_total,
         modelName=result.model_name,
         modelVersion=result.model_version,
         createdAt=result.created_at,
@@ -73,6 +78,59 @@ class AnalysisService:
     async def get_job(self, job_id: str) -> dict | None:
         job = await self.repository.get_analysis_job(job_id)
         return to_job_read(job) if job else None
+
+    async def create_job(self, project: Project, *, user_id: str | None = None) -> AnalysisJob:
+        """Creates a queued job record and returns immediately."""
+        return await self.repository.create_queued_job(project, user_id=user_id)
+
+    async def execute_job(self, job_id: str, project_id: str) -> None:
+        """Runs the analysis in the background. Uses its own DB session."""
+        async with AsyncSessionFactory() as session:
+            repo = AnalysisRepository(session)
+            photo_repo = PhotoRepository(session)
+
+            job = await repo.get_analysis_job(job_id)
+            if not job:
+                return
+
+            project = await session.get(Project, project_id)
+            if not project:
+                job.status = "failed"
+                job.error_message = "Project not found."
+                job.finished_at = datetime.now(UTC)
+                await session.commit()
+                return
+
+            job.status = "running"
+            job.started_at = datetime.now(UTC)
+            await session.commit()
+
+            try:
+                photos = await photo_repo.list_photos_by_project_id(project_id)
+                analysis = await run_project_analysis(
+                    provider_key=self.provider_key,
+                    project={
+                        "id": project.id,
+                        "description": project.description,
+                        "address_label": project.address_label,
+                    },
+                    photos=photos,
+                )
+                await repo.complete_job_with_result(job, project, analysis)
+
+                try:
+                    from app.repositories.quote_variant_repository import QuoteVariantRepository
+                    from app.services.quote_variant_service import QuoteVariantService
+                    qv_repo = QuoteVariantRepository(session)
+                    await QuoteVariantService(qv_repo).recalculate_quote_variants(project_id)
+                except Exception:
+                    pass  # Non-critical — nevadi kdyz varianta nevznikne
+
+            except Exception as exc:
+                job.status = "failed"
+                job.error_message = str(exc)
+                job.finished_at = datetime.now(UTC)
+                await session.commit()
 
     async def trigger_analysis(self, project: Project) -> dict:
         photos = await self.photo_repository.list_photos_by_project_id(project.id)

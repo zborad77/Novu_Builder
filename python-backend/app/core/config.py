@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     ai_analysis_provider: str = Field(default="mock", alias="AI_ANALYSIS_PROVIDER")
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    jwt_secret: str = Field(default="change-me-in-production", alias="JWT_SECRET")
+    jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
+    jwt_access_token_expire_minutes: int = Field(default=60, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
+    jwt_refresh_token_expire_days: int = Field(default=30, alias="JWT_REFRESH_TOKEN_EXPIRE_DAYS")
 
     @property
     def database_url_sync(self) -> str:

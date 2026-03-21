@@ -23,11 +23,14 @@ LoginView::LoginView(QWidget *parent)
     eyebrow->setObjectName("eyebrowLabel");
     auto *title = new QLabel("Prihlaseni do desktop klienta", card);
     title->setObjectName("titleLabel");
-    auto *subtitle = new QLabel(
-        "Zatim jde o lokalni prototyp bez backend auth. Tlacitko jen prepne aplikaci do pracovniho shellu.",
-        card);
+    auto *subtitle = new QLabel("Zadej sve prihlasovaci udaje. Pripojuje se k lokalni instanci backendu.", card);
     subtitle->setWordWrap(true);
     subtitle->setObjectName("subtitleLabel");
+
+    m_errorLabel = new QLabel(card);
+    m_errorLabel->setObjectName("errorLabel");
+    m_errorLabel->setWordWrap(true);
+    m_errorLabel->hide();
 
     auto *formLayout = new QFormLayout();
     formLayout->setLabelAlignment(Qt::AlignLeft);
@@ -48,6 +51,7 @@ LoginView::LoginView(QWidget *parent)
     cardLayout->addWidget(eyebrow);
     cardLayout->addWidget(title);
     cardLayout->addWidget(subtitle);
+    cardLayout->addWidget(m_errorLabel);
     cardLayout->addLayout(formLayout);
     cardLayout->addWidget(m_loginButton, 0, Qt::AlignLeft);
 
@@ -100,5 +104,46 @@ LoginView::LoginView(QWidget *parent)
             padding: 12px 24px;
             font-weight: 700;
         }
+        QPushButton:disabled {
+            background: #d4a57a;
+        }
+        QLabel#errorLabel {
+            background: #fdecea;
+            color: #c0392b;
+            border: 1px solid #f5c6c2;
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 13px;
+        }
     )");
+}
+
+void LoginView::showError(const QString &message)
+{
+    if (m_errorLabel) {
+        m_errorLabel->setText(message);
+        m_errorLabel->show();
+    }
+}
+
+void LoginView::clearError()
+{
+    if (m_errorLabel) {
+        m_errorLabel->hide();
+        m_errorLabel->clear();
+    }
+}
+
+void LoginView::setLoading(bool loading)
+{
+    if (m_loginButton) {
+        m_loginButton->setEnabled(!loading);
+        m_loginButton->setText(loading ? "Prihlasuji..." : "Prihlasit");
+    }
+    if (m_emailEdit) {
+        m_emailEdit->setEnabled(!loading);
+    }
+    if (m_passwordEdit) {
+        m_passwordEdit->setEnabled(!loading);
+    }
 }

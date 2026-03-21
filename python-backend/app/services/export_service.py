@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -15,6 +16,143 @@ from app.storage.local_photo_storage import sanitize_filename, write_storage_fil
 _EXPORT_STORE: dict[str, ExportRead] = {}
 
 
+def _analysis_lines(case_detail: ProjectDetail) -> list[str]:
+    a = case_detail.latestAnalysis
+    if not a:
+        return []
+    lines = [
+        "",
+        "--- Vysledky AI analyzy ---",
+        f"Typ objektu: {a.get('objectType') or '-'}",
+        f"Stav povrchu: {a.get('surfaceCondition') or '-'}",
+        f"Doporuceny rozsah: {a.get('recommendedScope') or '-'}",
+    ]
+    area = a.get("estimatedAreaSqm")
+    confidence = a.get("areaConfidence")
+    if area is not None:
+        conf_str = f"  (spolehlivost: {confidence:.0%})" if confidence is not None else ""
+        lines.append(f"Odhadovana plocha: {area:.1f} m2{conf_str}")
+    duration = a.get("estimatedDurationDays")
+    labor = a.get("laborHoursTotal")
+    if duration is not None:
+        lines.append(f"Odhadovana doba: {duration} dni")
+    if labor is not None:
+        lines.append(f"Celkem clovekohod: {labor:.1f} h")
+
+    workflow_steps = a.get("workflowSteps") or []
+    if workflow_steps:
+        lines.append("")
+        lines.append("Technologicky postup:")
+        for idx, step in enumerate(workflow_steps, start=1):
+            if isinstance(step, str):
+                lines.append(f"  {idx}. {step}")
+            else:
+                step_num = step.get("step", idx)
+                name = step.get("name", "")
+                hours = step.get("estimatedHours")
+                desc = step.get("description", "")
+                hours_str = f" ({hours} h)" if hours is not None else ""
+                lines.append(f"  {step_num}. {name}{hours_str}")
+                if desc:
+                    lines.append(f"     {desc}")
+
+    materials = a.get("materials") or []
+    if materials:
+        lines.append("")
+        lines.append("Potrebne materialy:")
+        for mat in materials:
+            name = mat.get("name", "")
+            qty = mat.get("quantity")
+            unit = mat.get("unit", "")
+            total = mat.get("totalPrice")
+            qty_str = f" {qty:.1f} {unit}" if qty is not None else ""
+            price_str = f" = {total:.2f} CZK" if total is not None else ""
+            lines.append(f"  - {name}{qty_str}{price_str}")
+
+    return lines
+
+
+def _quote_variant_lines(case_detail: ProjectDetail) -> list[str]:
+    variants = case_detail.quoteVariants
+    if not variants:
+        return []
+    lines = ["", "--- Cenove varianty ---"]
+    for v in variants:
+        vtype = v.get("variantType", "")
+        total = v.get("totalIncVat") or v.get("totalExVat")
+        labor = v.get("laborCost")
+        material = v.get("materialCost")
+        total_str = f"{total:.2f} CZK" if total is not None else "-"
+        lines.append(f"  {vtype.upper()}: celkem {total_str}")
+        if labor is not None:
+            lines.append(f"    Prace: {labor:.2f} CZK")
+        if material is not None:
+            lines.append(f"    Material: {material:.2f} CZK")
+    return lines
+
+
+def _itemized_price_lines(case_detail: ProjectDetail) -> list[str]:
+    """Polozkovany soupis praci, materialu a dopravy."""
+    draft = case_detail.proposalDraft
+    if draft is None:
+        return []
+
+    lines = ["", "=" * 60, "POLOZKOVANY SOUPIS", "=" * 60]
+
+    # Práce
+    lines.append("")
+    lines.append("PRACE:")
+    work_items = draft.suggestedWorkItems or []
+    if work_items:
+        for idx, item in enumerate(work_items, start=1):
+            note = f" - {item.note}" if item.note else ""
+            lines.append(f"  {idx}. {item.name}{note}")
+    else:
+        lines.append("  (viz popis zakazky)")
+    labor_total = draft.laborCost or 0.0
+    lines.append(f"  Prace celkem: {labor_total:,.2f} CZK")
+
+    # Materiály
+    lines.append("")
+    lines.append("MATERIALY:")
+    materials = draft.materials or []
+    if materials:
+        for mat in materials:
+            qty_str = f"{mat.quantity:.1f} {mat.unit}" if mat.quantity is not None else ""
+            price_str = f"x {mat.unitPrice:.2f}" if mat.unitPrice is not None else ""
+            total_str = f"= {mat.totalPrice:.2f} CZK" if mat.totalPrice is not None else ""
+            lines.append(f"  {mat.name:<30} {qty_str:<12} {price_str:<14} {total_str}")
+    material_total = draft.materialCost or 0.0
+    lines.append(f"  Material celkem: {material_total:,.2f} CZK")
+
+    # Doprava
+    transport_total = draft.transportCost or 0.0
+    lines.append("")
+    lines.append("DOPRAVA A OSTATNI:")
+    lines.append(f"  Doprava celkem: {transport_total:,.2f} CZK")
+
+    # Amortizace + marže
+    amortization = draft.amortization or 0.0
+    margin_pct = draft.margin or 0.0
+    base = labor_total + material_total + transport_total + amortization
+    margin_amount = round(base * margin_pct / 100.0, 2)
+    subtotal = round(base + margin_amount, 2)
+    lines.append("")
+    lines.append(f"Amortizace:        {amortization:,.2f} CZK")
+    lines.append(f"Marze ({margin_pct:.0f} %):      {margin_amount:,.2f} CZK")
+
+    # Souhrn
+    vat = round(subtotal * 0.21, 2)
+    total_inc_vat = round(subtotal + vat, 2)
+    lines.append("")
+    lines.append("-" * 50)
+    lines.append(f"Celkem bez DPH:    {subtotal:,.2f} CZK")
+    lines.append(f"DPH 21 %:          {vat:,.2f} CZK")
+    lines.append(f"CELKEM S DPH:      {total_inc_vat:,.2f} CZK")
+    lines.append("=" * 60)
+    return lines
+
+
 def _proposal_lines(case_detail: ProjectDetail) -> list[str]:
     final_proposal = case_detail.finalProposal
     assert final_proposal is not None
@@ -24,25 +162,10 @@ def _proposal_lines(case_detail: ProjectDetail) -> list[str]:
         case_detail.title or "Zakazka",
         final_proposal.subject or "Bez predmetu",
         final_proposal.summary or "Bez shrnuti.",
-        f"Celkem: {final_proposal.totalPrice:.2f} {final_proposal.currency}" if final_proposal.totalPrice is not None else "Celkem: -",
-        f"Stav finalni verze: {final_proposal.status}",
-        f"Zdrojovy draft: verze {final_proposal.draftVersion}",
     ]
 
-    for section in final_proposal.sections:
-        lines.append("")
-        lines.append(section.title)
-        if section.kind == "fields":
-            if not section.fields:
-                lines.append("Bez polozek.")
-            for field in section.fields:
-                lines.append(_field_line(field))
-        else:
-            if not section.items:
-                lines.append("Bez polozek.")
-            for item in section.items:
-                lines.append("- " + _item_line(item))
-
+    lines.extend(_itemized_price_lines(case_detail))
+    lines.extend(_analysis_lines(case_detail))
     return lines
 
 
@@ -74,6 +197,8 @@ def _proposal_draft_lines(case_detail: ProjectDetail) -> list[str]:
             for item in section.items:
                 lines.append("- " + _item_line(item))
 
+    lines.extend(_analysis_lines(case_detail))
+    lines.extend(_quote_variant_lines(case_detail))
     return lines
 
 
@@ -126,6 +251,130 @@ def _section_paragraphs(section: ProposalDraftSection) -> list[str]:
     return paragraphs
 
 
+def _analysis_paragraphs(case_detail: ProjectDetail) -> list[str]:
+    a = case_detail.latestAnalysis
+    if not a:
+        return []
+    paragraphs = [_paragraph_xml("Vysledky AI analyzy", style="Heading2")]
+    paragraphs.append(_paragraph_xml(f"Typ objektu: {a.get('objectType') or '-'}"))
+    paragraphs.append(_paragraph_xml(f"Stav povrchu: {a.get('surfaceCondition') or '-'}"))
+    paragraphs.append(_paragraph_xml(f"Doporuceny rozsah: {a.get('recommendedScope') or '-'}"))
+    area = a.get("estimatedAreaSqm")
+    confidence = a.get("areaConfidence")
+    if area is not None:
+        conf_str = f"  (spolehlivost: {confidence:.0%})" if confidence is not None else ""
+        paragraphs.append(_paragraph_xml(f"Odhadovana plocha: {area:.1f} m2{conf_str}"))
+    duration = a.get("estimatedDurationDays")
+    labor = a.get("laborHoursTotal")
+    if duration is not None:
+        paragraphs.append(_paragraph_xml(f"Odhadovana doba: {duration} dni"))
+    if labor is not None:
+        paragraphs.append(_paragraph_xml(f"Celkem clovekohod: {labor:.1f} h"))
+
+    workflow_steps = a.get("workflowSteps") or []
+    if workflow_steps:
+        paragraphs.append(_paragraph_xml("Technologicky postup", style="Heading2"))
+        for idx, step in enumerate(workflow_steps, start=1):
+            if isinstance(step, str):
+                paragraphs.append(_paragraph_xml(f"{idx}. {step}", bold=True))
+            else:
+                step_num = step.get("step", idx)
+                name = step.get("name", "")
+                hours = step.get("estimatedHours")
+                desc = step.get("description", "")
+                hours_str = f" ({hours} h)" if hours is not None else ""
+                paragraphs.append(_paragraph_xml(f"{step_num}. {name}{hours_str}", bold=True))
+                if desc:
+                    paragraphs.append(_paragraph_xml(desc))
+
+    materials = a.get("materials") or []
+    if materials:
+        paragraphs.append(_paragraph_xml("Potrebne materialy", style="Heading2"))
+        for mat in materials:
+            name = mat.get("name", "")
+            qty = mat.get("quantity")
+            unit = mat.get("unit", "")
+            total = mat.get("totalPrice")
+            qty_str = f" {qty:.1f} {unit}" if qty is not None else ""
+            price_str = f" = {total:.2f} CZK" if total is not None else ""
+            paragraphs.append(_paragraph_xml(f"- {name}{qty_str}{price_str}"))
+
+    return paragraphs
+
+
+def _quote_variant_paragraphs(case_detail: ProjectDetail) -> list[str]:
+    variants = case_detail.quoteVariants
+    if not variants:
+        return []
+    paragraphs = [_paragraph_xml("Cenove varianty", style="Heading2")]
+    for v in variants:
+        vtype = v.get("variantType", "")
+        total = v.get("totalIncVat") or v.get("totalExVat")
+        labor = v.get("laborCost")
+        material = v.get("materialCost")
+        total_str = f"{total:.2f} CZK" if total is not None else "-"
+        paragraphs.append(_paragraph_xml(f"{vtype.upper()}: celkem {total_str}", bold=True))
+        if labor is not None:
+            paragraphs.append(_paragraph_xml(f"  Prace: {labor:.2f} CZK"))
+        if material is not None:
+            paragraphs.append(_paragraph_xml(f"  Material: {material:.2f} CZK"))
+    return paragraphs
+
+
+def _itemized_price_paragraphs(case_detail: ProjectDetail) -> list[str]:
+    """Polozkovany soupis praci, materialu a dopravy pro DOCX."""
+    draft = case_detail.proposalDraft
+    if draft is None:
+        return []
+
+    paragraphs = [_paragraph_xml("Polozkovany soupis", style="Heading1")]
+
+    # Práce
+    paragraphs.append(_paragraph_xml("Prace", style="Heading2"))
+    work_items = draft.suggestedWorkItems or []
+    for idx, item in enumerate(work_items, start=1):
+        note = f" - {item.note}" if item.note else ""
+        paragraphs.append(_paragraph_xml(f"{idx}. {item.name}{note}"))
+    if not work_items:
+        paragraphs.append(_paragraph_xml("(viz popis zakazky)"))
+    labor_total = draft.laborCost or 0.0
+    paragraphs.append(_paragraph_xml(f"Prace celkem: {labor_total:,.2f} CZK", bold=True))
+
+    # Materiály
+    paragraphs.append(_paragraph_xml("Materialy", style="Heading2"))
+    materials = draft.materials or []
+    for mat in materials:
+        qty_str = f"{mat.quantity:.1f} {mat.unit}" if mat.quantity is not None else ""
+        price_str = f"x {mat.unitPrice:.2f}" if mat.unitPrice is not None else ""
+        total_str = f"= {mat.totalPrice:.2f} CZK" if mat.totalPrice is not None else ""
+        paragraphs.append(_paragraph_xml(f"{mat.name}  {qty_str}  {price_str}  {total_str}"))
+    if not materials:
+        paragraphs.append(_paragraph_xml("(materialy budou doplneny)"))
+    material_total = draft.materialCost or 0.0
+    paragraphs.append(_paragraph_xml(f"Material celkem: {material_total:,.2f} CZK", bold=True))
+
+    # Doprava
+    transport_total = draft.transportCost or 0.0
+    paragraphs.append(_paragraph_xml("Doprava a ostatni", style="Heading2"))
+    paragraphs.append(_paragraph_xml(f"Doprava: {transport_total:,.2f} CZK"))
+
+    # Souhrn
+    amortization = draft.amortization or 0.0
+    margin_pct = draft.margin or 0.0
+    base = labor_total + material_total + transport_total + amortization
+    margin_amount = round(base * margin_pct / 100.0, 2)
+    subtotal = round(base + margin_amount, 2)
+    vat = round(subtotal * 0.21, 2)
+    total_inc_vat = round(subtotal + vat, 2)
+    paragraphs.append(_paragraph_xml("Souhrn cen", style="Heading2"))
+    paragraphs.append(_paragraph_xml(f"Amortizace: {amortization:,.2f} CZK"))
+    paragraphs.append(_paragraph_xml(f"Marze ({margin_pct:.0f} %): {margin_amount:,.2f} CZK"))
+    paragraphs.append(_paragraph_xml(f"Celkem bez DPH: {subtotal:,.2f} CZK", bold=True))
+    paragraphs.append(_paragraph_xml(f"DPH 21 %: {vat:,.2f} CZK"))
+    paragraphs.append(_paragraph_xml(f"CELKEM S DPH: {total_inc_vat:,.2f} CZK", bold=True))
+    return paragraphs
+
+
 def _build_document_xml(case_detail: ProjectDetail) -> str:
     final_proposal = case_detail.finalProposal
     assert final_proposal is not None
@@ -135,13 +384,10 @@ def _build_document_xml(case_detail: ProjectDetail) -> str:
         _paragraph_xml(case_detail.title or "Zakazka", style="Heading1"),
         _paragraph_xml(final_proposal.subject or "Bez predmetu", bold=True),
         _paragraph_xml(final_proposal.summary or "Bez shrnuti."),
-        _paragraph_xml(f"Celkem: {final_proposal.totalPrice:.2f} {final_proposal.currency}" if final_proposal.totalPrice is not None else "Celkem: -"),
-        _paragraph_xml(f"Stav finalni verze: {final_proposal.status}"),
-        _paragraph_xml(f"Zdrojovy draft: verze {final_proposal.draftVersion}"),
     ]
 
-    for section in final_proposal.sections:
-        paragraphs.extend(_section_paragraphs(section))
+    paragraphs.extend(_itemized_price_paragraphs(case_detail))
+    paragraphs.extend(_analysis_paragraphs(case_detail))
 
     body = "".join(paragraphs) + (
         "<w:sectPr>"
@@ -183,13 +429,10 @@ def _build_proposal_document_xml(case_detail: ProjectDetail) -> str:
         _paragraph_xml(case_detail.title or "Zakazka", style="Heading1"),
         _paragraph_xml(proposal_draft.subject or "Bez predmetu", bold=True),
         _paragraph_xml(proposal_draft.summary or "Bez shrnuti."),
-        _paragraph_xml(f"Celkem: {proposal_draft.totalPrice:.2f} CZK" if proposal_draft.totalPrice is not None else "Celkem: -"),
-        _paragraph_xml(f"Stav navrhu: {proposal_draft.status}"),
-        _paragraph_xml(f"Zdrojovy draft: verze {proposal_draft.version}"),
     ]
 
-    for section in proposal_draft.sections:
-        paragraphs.extend(_section_paragraphs(section))
+    paragraphs.extend(_itemized_price_paragraphs(case_detail))
+    paragraphs.extend(_analysis_paragraphs(case_detail))
 
     body = "".join(paragraphs) + (
         "<w:sectPr>"
@@ -378,8 +621,28 @@ def _build_proposal_docx_bytes(case_detail: ProjectDetail) -> bytes:
     return buffer.getvalue()
 
 
+def _to_winansi(text: str) -> str:
+    """Convert text to cp1252 (WinAnsiEncoding), replacing chars outside the range."""
+    result = []
+    for char in text:
+        try:
+            char.encode("cp1252")
+            result.append(char)
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            # Try to strip diacritics via NFD decomposition
+            decomposed = unicodedata.normalize("NFD", char)
+            base = decomposed[0]
+            try:
+                base.encode("cp1252")
+                result.append(base)
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                result.append("?")
+    return "".join(result)
+
+
 def _escape_pdf_text(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    safe = _to_winansi(text)
+    return safe.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
 def _build_pdf_bytes(case_detail: ProjectDetail) -> bytes:
@@ -399,7 +662,7 @@ def _build_pdf_bytes(case_detail: ProjectDetail) -> bytes:
             commands.append(f"1 0 0 1 {left_margin} {y} Tm ({safe_line}) Tj")
             y -= line_height
         commands.append("ET")
-        return "\n".join(commands).encode("latin-1", errors="replace")
+        return "\n".join(commands).encode("cp1252", errors="replace")
 
     pages = [lines[index:index + lines_per_page] for index in range(0, max(1, len(lines)), lines_per_page)]
     pdf = BytesIO()
@@ -429,7 +692,7 @@ def _build_pdf_bytes(case_detail: ProjectDetail) -> bytes:
     write_line(f"2 0 obj\n<< /Type /Pages /Kids [ {kids} ] /Count {len(page_object_ids)} >>\nendobj\n")
 
     offsets.append(pdf.tell())
-    write_line("3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n")
+    write_line("3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n")
 
     for page_lines, content_id, page_id in zip(pages, content_object_ids, page_object_ids, strict=True):
         content_bytes = build_content_stream(page_lines)

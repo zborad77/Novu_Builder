@@ -3,8 +3,8 @@
 LoginDto LoginViewModel::initialState() const
 {
     return {
-        .email = "radek@novu.local",
-        .password = "demo"
+        .email = "demo@novu.local",
+        .password = "demo1234"
     };
 }
 

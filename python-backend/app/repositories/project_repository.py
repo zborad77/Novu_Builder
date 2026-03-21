@@ -14,7 +14,7 @@ class ProjectRepository:
     async def list_projects(self, *, status: str | None = None, search: str | None = None) -> Sequence[Project]:
         query: Select[tuple[Project]] = (
             select(Project)
-            .options(selectinload(Project.photos), selectinload(Project.proposal_draft), selectinload(Project.final_proposals))
+            .options(selectinload(Project.photos), selectinload(Project.proposal_draft), selectinload(Project.final_proposals), selectinload(Project.created_by_user))
             .order_by(Project.updated_at.desc(), Project.created_at.desc())
         )
 
@@ -31,6 +31,8 @@ class ProjectRepository:
         return result.scalars().all()
 
     async def get_project(self, project_id: str) -> Project | None:
+        from app.models import AnalysisResult, QuoteVariant, QuoteItem
+        from sqlalchemy.orm import selectinload as sil
         result = await self.session.execute(
             select(Project)
             .options(
@@ -38,6 +40,8 @@ class ProjectRepository:
                 selectinload(Project.photos),
                 selectinload(Project.proposal_draft),
                 selectinload(Project.final_proposals),
+                selectinload(Project.analysis_results),
+                selectinload(Project.quote_variants).selectinload(QuoteVariant.items),
             )
             .where(Project.id == project_id)
         )
@@ -57,6 +61,7 @@ class ProjectRepository:
         location_lat: float | None,
         location_lng: float | None,
         address_label: str | None,
+        source: str = "mobile",
     ) -> Project:
         project = Project(
             id=project_id,
@@ -66,6 +71,7 @@ class ProjectRepository:
             title=title,
             description=description,
             status="draft",
+            source=source,
             property_type=property_type,
             repair_scope=repair_scope,
             location_lat=location_lat,

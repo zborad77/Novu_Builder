@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
-from app.api.deps import get_analysis_service, get_project_service
+from app.api.deps import get_analysis_service, get_current_user, get_project_service
 from app.schemas.analysis import AnalysisTriggerResponse
+from app.schemas.auth import AuthUserRead
 from app.services.analysis_service import AnalysisService
 from app.services.project_service import ProjectService
 
@@ -11,14 +12,21 @@ router = APIRouter(tags=["analysis-jobs"])
 @router.post("/cases/{case_id}/analysis-jobs", response_model=AnalysisTriggerResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_analysis_job(
     case_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
 ) -> AnalysisTriggerResponse:
     project = await project_service.get_project(case_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
-    payload = await analysis_service.trigger_analysis(project)
-    return AnalysisTriggerResponse(**payload)
+    job = await analysis_service.create_job(project, user_id=current_user.id)
+    background_tasks.add_task(analysis_service.execute_job, job.id, case_id)
+    return AnalysisTriggerResponse(
+        jobId=job.id,
+        status=job.status,
+        provider=analysis_service.provider_key,
+    )
 
 
 @router.get("/cases/{case_id}/analysis-jobs", response_model=list[dict])
@@ -53,6 +61,32 @@ async def cancel_analysis_job(
     if not job:
         raise HTTPException(status_code=404, detail="Analysis job not found.")
     return job
+
+
+@router.patch("/cases/{case_id}/analysis-results/{result_id}/selection", response_model=dict)
+async def patch_analysis_selection(
+    case_id: str,
+    result_id: str,
+    body: dict,
+    current_user: AuthUserRead = Depends(get_current_user),
+    project_service: ProjectService = Depends(get_project_service),
+    analysis_service: AnalysisService = Depends(get_analysis_service),
+) -> dict:
+    project = await project_service.get_project(case_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    changes: dict = {}
+    if "polygon" in body:
+        changes["selectedRepairPolygon"] = body["polygon"]
+    if "manualAreaSqm" in body:
+        area = body["manualAreaSqm"]
+        changes["manualAreaSqm"] = float(area) if area is not None else None
+        if changes["manualAreaSqm"] is not None:
+            changes["finalAreaSource"] = "manual"
+    updated = await analysis_service.update_manual_selection_by_result_id(result_id, changes)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Analysis result not found.")
+    return {"id": updated.id, "status": "ok"}
 
 
 @router.post("/analysis-jobs/{job_id}/retry", response_model=AnalysisTriggerResponse)

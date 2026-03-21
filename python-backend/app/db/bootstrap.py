@@ -3,6 +3,7 @@ import base64
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.auth_service import hash_password
 from app.models import (
     AnalysisJob,
     AnalysisResult,
@@ -78,7 +79,7 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
                 id="usr_1",
                 organization_id="org_1",
                 email="demo@novu.local",
-                password_hash="demo-hash",
+                password_hash=hash_password("demo1234"),
                 full_name="Demo Manager",
                 role="manager",
                 is_active=True,

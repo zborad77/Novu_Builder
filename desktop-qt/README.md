@@ -4,10 +4,23 @@ Tato slozka je novy cilovy desktop klient pro kancelarskou cast FotoNabidky.
 
 Aktualni stav:
 
-- C++ skeleton
+- funkcni Qt6 desktop prototyp
 - Qt6 Widgets smer
 - architektura `views + viewmodels + services + dto`
-- zatim bez realneho API napojeni
+- realne API napojeni na Python backend pro hlavni desktop workflow
+
+Desktop dnes umi:
+
+- nacist seznam `cases`
+- nacist detail `case`
+- nacist `images` pro zakazku
+- vytvorit kopii zakazky (`duplicate`)
+- ulozit `proposal draft`
+- vytvorit `final proposal`
+- odeslat zakazku (`send`)
+- nastavit hlavni fotku
+- nastavit referencni fotku pro analyzu
+- nahrat fotky na backend
 
 Prvni obrazovky, ktere budeme postupne dodelavat:
 
@@ -18,6 +31,12 @@ Prvni obrazovky, ktere budeme postupne dodelavat:
 - Photos tab
 - Findings tab
 - Overlay viewer
+
+Poznamka k aktualnimu stavu:
+
+- login view zatim slouzi hlavne jako vstup do desktop workflow
+- hlavni pracovni cast uz bezi nad backend API na `http://127.0.0.1:8000/api/v1`
+- cast navigace a nektere sekce jsou zatim jen pripraveny stub pro dalsi kroky
 
 React v `novu-react/` zustava jen jako referencni prototyp workflow a UI logiky.
 
