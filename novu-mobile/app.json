@@ -1,0 +1,71 @@
+{
+  "expo": {
+    "name": "NOVU Builder",
+    "slug": "novu-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "novu-mobile",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Aplikace potřebuje přístup ke kameře pro focení zakázek.",
+        "NSPhotoLibraryUsageDescription": "Aplikace potřebuje přístup k fotkám pro nahrání fotek zakázky.",
+        "NSLocationWhenInUseUsageDescription": "Aplikace potřebuje polohu pro automatické vyplnění adresy zakázky."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#1565C0",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "apiUrl": "http://192.168.19.29:8000/api/v1"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Aplikace potřebuje přístup ke kameře pro focení zakázek."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Aplikace potřebuje přístup k fotkám pro nahrání fotek zakázky."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Aplikace potřebuje polohu pro automatické vyplnění adresy zakázky."
+        }
+      ],
+      "expo-asset",
+      "expo-font"
+    ]
+  }
+}
