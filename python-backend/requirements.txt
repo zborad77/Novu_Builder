@@ -12,3 +12,4 @@ aiosqlite
 python-multipart
 bcrypt
 PyJWT
+anthropic

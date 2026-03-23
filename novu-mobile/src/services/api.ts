@@ -111,7 +111,7 @@ export const PhotosApi = {
   async upload(projectId: string, uri: string, filename: string): Promise<PhotoUploadResponse> {
     const token = await TokenStorage.getAccessToken();
     const formData = new FormData();
-    formData.append('file', {
+    formData.append('files', {
       uri,
       name: filename,
       type: 'image/jpeg',

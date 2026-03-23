@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 
+from app.ai.providers.claude_vision_provider import ClaudeVisionProvider
 from app.ai.providers.mock_vision_provider import MockVisionProvider
 from app.ai.providers.openai_vision_provider import OpenAIVisionProvider
 from app.models import ProjectPhoto
@@ -8,6 +9,7 @@ from app.models import ProjectPhoto
 PROVIDERS = {
     "mock": MockVisionProvider(),
     "openai": OpenAIVisionProvider(),
+    "claude": ClaudeVisionProvider(),
 }
 
 
