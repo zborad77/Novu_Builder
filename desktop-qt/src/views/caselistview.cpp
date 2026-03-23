@@ -41,22 +41,33 @@ CaseListView::CaseListView(QWidget *parent)
     // Mobile cases: single "Editovat zakázku" entry point — toggles field buttons
     m_editCaseButton = new QPushButton(QString::fromUtf8("Editovat zak\u00e1zku \u25bc"), optionsCard);
     m_editCaseButton->setObjectName("optionNavButton");
+    m_editCaseButton->setWhatsThis(QString::fromUtf8(
+        "Rozbal\u00ed nebo sbal\u00ed jednotliv\u00e1 editovateln\u00e1 pole zak\u00e1zky "
+        "(p\u0159edm\u011bt, ceny, materi\u00e1ly...). Tla\u010d\u00edtko se zobrazuje u mobiln\u00edch zak\u00e1zek."));
     optionsLayout->addWidget(m_editCaseButton);
     m_editCaseButton->hide();
 
     // Desktop (PC) cases: individual field shortcuts
-    const auto addField = [&](const QString &label, const QString &key) {
+    const auto addField = [&](const QString &label, const QString &key, const QString &whatsThis = {}) {
         auto *btn = createOptionButton(label, key, optionsCard);
+        if (!whatsThis.isEmpty()) btn->setWhatsThis(whatsThis);
         m_fieldButtons.append(btn);
         optionsLayout->addWidget(btn);
     };
-    addField("Predmet zakazky", "subject");
-    addField("Cena materialu", "material_cost");
-    addField("Cena prace", "labor_cost");
-    addField("Materialy", "materials");
-    addField("Amortizace", "amortization");
-    addField("Marze", "margin");
-    addField("Dodavatele materialu", "material_suppliers");
+    addField("Predmet zakazky", "subject",
+        QString::fromUtf8("Otev\u0159e editaci p\u0159edm\u011btu zak\u00e1zky \u2014 co p\u0159esn\u011b se bude opravovat nebo \u010distit."));
+    addField("Cena materialu", "material_cost",
+        QString::fromUtf8("Otev\u0159e editaci ceny materi\u00e1lu v CZK. Zad\u00e1v\u00e1 se bez DPH."));
+    addField("Cena prace", "labor_cost",
+        QString::fromUtf8("Otev\u0159e editaci ceny pr\u00e1ce v CZK. Zad\u00e1v\u00e1 se bez DPH."));
+    addField("Materialy", "materials",
+        QString::fromUtf8("Otev\u0159e seznam navr\u017een\u00fdch materi\u00e1l\u016f pro tuto zak\u00e1zku."));
+    addField("Amortizace", "amortization",
+        QString::fromUtf8("Otev\u0159e editaci amortizace (opot\u0159eben\u00ed n\u00e1\u0159ad\u00ed a vybaven\u00ed) v CZK."));
+    addField("Marze", "margin",
+        QString::fromUtf8("Otev\u0159e editaci mar\u017ee v procentech. Bude p\u0159i\u010dtena k celkov\u00e9 cen\u011b."));
+    addField("Dodavatele materialu", "material_suppliers",
+        QString::fromUtf8("Otev\u0159e editaci navr\u017een\u00fdch dodavatel\u016f materi\u00e1lu."));
 
     // Toggle field buttons on click (mobile accordion)
     connect(m_editCaseButton, &QPushButton::clicked, this, [this]() {
@@ -70,7 +81,14 @@ CaseListView::CaseListView(QWidget *parent)
     });
 
     // Always visible
-    optionsLayout->addWidget(createOptionButton(QString::fromUtf8("P\u0159id\u00e1n\u00ed fotek"), "upload_photos", optionsCard));
+    auto *uploadPhotosBtn = createOptionButton(QString::fromUtf8("P\u0159id\u00e1n\u00ed fotek"), "upload_photos", optionsCard);
+    uploadPhotosBtn->setWhatsThis(QString::fromUtf8("Otev\u0159e z\u00e1lo\u017eku Fotky, kde m\u016f\u017eete nahr\u00e1t nebo spravovat fotografie zak\u00e1zky."));
+    optionsLayout->addWidget(uploadPhotosBtn);
+
+    auto *saveBtn = createOptionButton(QString::fromUtf8("Ulo\u017eit"), "save", optionsCard);
+    saveBtn->setObjectName("optionSaveButton");
+    saveBtn->setWhatsThis(QString::fromUtf8("Ulo\u017e\u00ed aktu\u00e1ln\u00ed rozepsan\u00fd n\u00e1vrh zak\u00e1zky na server."));
+    optionsLayout->addWidget(saveBtn);
     optionsLayout->addStretch();
 
     layout->addWidget(title);
@@ -107,6 +125,18 @@ CaseListView::CaseListView(QWidget *parent)
         }
         QPushButton#optionNavButton:hover {
             background: #f4e3cf;
+        }
+        QPushButton#optionSaveButton {
+            background: #c97b3d;
+            border: none;
+            border-radius: 12px;
+            padding: 12px;
+            text-align: left;
+            font-weight: 700;
+            color: white;
+        }
+        QPushButton#optionSaveButton:hover {
+            background: #b56a30;
         }
     )");
 

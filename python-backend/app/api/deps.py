@@ -80,5 +80,13 @@ async def get_current_user(
     return user
 
 
+async def require_superadmin(
+    current_user: AuthUserRead = Depends(get_current_user),
+) -> AuthUserRead:
+    if not current_user.isSuperAdmin:
+        raise HTTPException(status_code=403, detail="Super-admin access required.")
+    return current_user
+
+
 def get_export_service() -> ExportService:
     return ExportService()

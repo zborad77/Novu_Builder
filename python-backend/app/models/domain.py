@@ -44,6 +44,7 @@ class User(TimestampMixin, Base):
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(64), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_superadmin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     organization: Mapped["Organization"] = relationship(back_populates="users")
     created_projects: Mapped[list["Project"]] = relationship(back_populates="created_by_user")

@@ -1,6 +1,5 @@
 #include "loginview.h"
 
-#include <QFormLayout>
 #include <QFrame>
 #include <QLabel>
 #include <QLineEdit>
@@ -23,7 +22,7 @@ LoginView::LoginView(QWidget *parent)
     eyebrow->setObjectName("eyebrowLabel");
     auto *title = new QLabel("Prihlaseni do desktop klienta", card);
     title->setObjectName("titleLabel");
-    auto *subtitle = new QLabel("Zadej sve prihlasovaci udaje. Pripojuje se k lokalni instanci backendu.", card);
+    auto *subtitle = new QLabel(QString::fromUtf8("Zadej sv\u00e9 p\u0159ihla\u0161ovac\u00ed \u00fadaje pro p\u0159ipojen\u00ed k syst\u00e9mu NOVU."), card);
     subtitle->setWordWrap(true);
     subtitle->setObjectName("subtitleLabel");
 
@@ -32,36 +31,34 @@ LoginView::LoginView(QWidget *parent)
     m_errorLabel->setWordWrap(true);
     m_errorLabel->hide();
 
-    auto *formLayout = new QFormLayout();
-    formLayout->setLabelAlignment(Qt::AlignLeft);
-    formLayout->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
-    formLayout->setHorizontalSpacing(16);
-    formLayout->setVerticalSpacing(12);
-
     m_emailEdit = new QLineEdit(card);
-    m_emailEdit->setPlaceholderText("radek@novu.local");
+    m_emailEdit->setPlaceholderText("E-mail");
     m_passwordEdit = new QLineEdit(card);
-    m_passwordEdit->setPlaceholderText("demo");
+    m_passwordEdit->setPlaceholderText("Heslo");
     m_passwordEdit->setEchoMode(QLineEdit::Password);
     m_loginButton = new QPushButton("Prihlasit", card);
-
-    formLayout->addRow("E-mail", m_emailEdit);
-    formLayout->addRow("Heslo", m_passwordEdit);
+    m_loginButton->setWhatsThis(QString::fromUtf8("Ode\u0161le p\u0159ihla\u0161ovac\u00ed \u00fadaje na server. Po \u00fasp\u011b\u0161n\u00e9m p\u0159ihl\u00e1\u0161en\u00ed se otev\u0159e hlavn\u00ed obrazovka."));
 
     cardLayout->addWidget(eyebrow);
     cardLayout->addWidget(title);
     cardLayout->addWidget(subtitle);
     cardLayout->addWidget(m_errorLabel);
-    cardLayout->addLayout(formLayout);
+    cardLayout->addWidget(m_emailEdit);
+    cardLayout->addWidget(m_passwordEdit);
     cardLayout->addWidget(m_loginButton, 0, Qt::AlignLeft);
 
     layout->addStretch();
     layout->addWidget(card, 0, Qt::AlignCenter);
     layout->addStretch();
 
-    connect(m_loginButton, &QPushButton::clicked, this, [this]() {
+    m_loginButton->setDefault(true);
+
+    auto doLogin = [this]() {
         emit loginRequested(m_emailEdit->text(), m_passwordEdit->text());
-    });
+    };
+    connect(m_loginButton, &QPushButton::clicked, this, doLogin);
+    connect(m_emailEdit, &QLineEdit::returnPressed, this, doLogin);
+    connect(m_passwordEdit, &QLineEdit::returnPressed, this, doLogin);
 
     setStyleSheet(R"(
         QWidget {

@@ -46,6 +46,8 @@ qt_add_executable(FotoNabidkaDesktop
     src/dto/uploadimagedto.h
     src/widgets/imageoverlaywidget.cpp
     src/widgets/imageoverlaywidget.h
+    src/views/serversetupdialog.cpp
+    src/views/serversetupdialog.h
 )
 
 target_include_directories(FotoNabidkaDesktop PRIVATE src)

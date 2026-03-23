@@ -6,11 +6,20 @@
 
 #include <QApplication>
 #include <QBuffer>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDoubleValidator>
+#include <QPainter>
+#include <QStyledItemDelegate>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QProcess>
 #include <QFormLayout>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -37,11 +46,84 @@
 #include "services/apiservice.h"
 #include "viewmodels/casedetailviewmodel.h"
 
+class NoFocusRectDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    void paint(QPainter *painter, const QStyleOptionViewItem &option,
+               const QModelIndex &index) const override
+    {
+        QStyleOptionViewItem opt = option;
+        opt.state &= ~QStyle::State_HasFocus;
+        QStyledItemDelegate::paint(painter, opt, index);
+    }
+};
+
 namespace {
 constexpr int kPreparedImageMaxEdge = 1600;
 constexpr int kPreparedImageQuality = 85;
 constexpr int kImagePollingIntervalMs = 1500;
 constexpr int kImagePollingAttemptLimit = 8;
+
+QString formatMaterialItem(const CaseDto::ProposalMaterialItem &item)
+{
+    QString label = item.name;
+    if (!item.unit.isEmpty()) {
+        label += QString::fromUtf8(" \u2014 %1 %2 \u00d7 %3 CZK")
+            .arg(item.quantity, 0, 'f', 2)
+            .arg(item.unit)
+            .arg(item.unitPrice, 0, 'f', 2);
+    }
+    label += QString::fromUtf8(" = %1 CZK").arg(item.totalPrice, 0, 'f', 2);
+    return label;
+}
+
+QString localizeRepairScope(const QString &scope)
+{
+    if (scope == "local_repair")      return QString::fromUtf8("Lok\u00e1ln\u00ed oprava");
+    if (scope == "full_repaint")      return QString::fromUtf8("Cel\u00fd n\u00e1t\u011br");
+    if (scope == "structural_repair") return QString::fromUtf8("Strukturaln\u00ed oprava");
+    if (scope == "full_reconstruction") return QString::fromUtf8("Cel\u00e1 rekonstrukce");
+    if (scope == "cleaning")          return QString::fromUtf8("\u010ci\u0161t\u011bn\u00ed");
+    return scope;
+}
+
+QString localizeObjectType(const QString &type)
+{
+    if (type == "facade")  return QString::fromUtf8("Fas\u00e1da");
+    if (type == "roof")    return QString::fromUtf8("St\u0159echa");
+    if (type == "floor")   return QString::fromUtf8("Podlaha");
+    if (type == "wall")    return QString::fromUtf8("Ze\u010f");
+    if (type == "ceiling") return QString::fromUtf8("Strop");
+    return type;
+}
+
+QString localizeSurfaceCondition(const QString &cond)
+{
+    if (cond == "requires_attention") return QString::fromUtf8("Vy\u017eaduje pozornost");
+    if (cond == "good")               return QString::fromUtf8("Dobr\u00fd stav");
+    if (cond == "critical")           return QString::fromUtf8("Kritick\u00fd stav");
+    if (cond == "moderate")           return QString::fromUtf8("St\u0159edn\u00ed stav");
+    return cond;
+}
+
+QString localizeRecommendedScope(const QString &scope)
+{
+    return localizeRepairScope(scope);
+}
+
+QString localizeBlockingReason(const QString &reason)
+{
+    if (reason.contains("Final proposal has not been created"))
+        return QString::fromUtf8("Fin\u00e1ln\u00ed verze nab\u00eddky nebyla je\u0161t\u011b vytvo\u0159ena.");
+    if (reason.contains("not enough photos") || reason.contains("No photos"))
+        return QString::fromUtf8("Nedostatek fotek pro anal\u00fdzu.");
+    if (reason.contains("analysis") && reason.contains("not"))
+        return QString::fromUtf8("AI anal\u00fdza nebyla dokon\u010dena.");
+    if (reason.contains("draft") && reason.contains("not"))
+        return QString::fromUtf8("N\u00e1vrh nebyl p\u0159ipraven.");
+    return reason;
+}
 
 QString serverProcessingStatusLabel(const QString &status)
 {
@@ -130,7 +212,7 @@ QString workflowBlockingReasonsLabel(const QStringList &blockingReasons)
     renderedReasons.reserve(blockingReasons.size());
     for (const auto &reason : blockingReasons) {
         if (!reason.trimmed().isEmpty()) {
-            renderedReasons << QString::fromLatin1("\xE2\x80\xA2 ") + reason.trimmed();
+            renderedReasons << QString::fromUtf8("\u2022 ") + localizeBlockingReason(reason.trimmed());
         }
     }
 
@@ -465,6 +547,13 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     // ── Tab widget ────────────────────────────────────────────────────────────
     m_tabWidget = new QTabWidget(card);
     m_tabWidget->setObjectName("detailTabs");
+    m_tabWidget->setWhatsThis(QString::fromUtf8(
+        "Z\u00e1lo\u017eky zak\u00e1zky:\n"
+        "\u2022 P\u0159ehled \u2014 souhrn AI anal\u00fdzy a cen\n"
+        "\u2022 Fotky \u2014 spr\u00e1va fotek\n"
+        "\u2022 Anal\u00fdza \u2014 v\u00fdsledky AI (jen desktop)\n"
+        "\u2022 Nab\u00eddka \u2014 editace nab\u00eddky\n"
+        "\u2022 V\u00fdstup zak\u00e1zky \u2014 export a odesl\u00e1n\u00ed"));
     cardLayout->addWidget(m_tabWidget, 1);
 
     // Helper: creates a scrollable page and registers it as a tab
@@ -603,6 +692,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     m_dashWorkflowList->setObjectName("workflowList");
     m_dashWorkflowList->setMaximumHeight(170);
     m_dashWorkflowList->setFocusPolicy(Qt::NoFocus);
+    m_dashWorkflowList->setItemDelegate(new NoFocusRectDelegate(m_dashWorkflowList));
     m_dashWorkflowList->addItem(QString::fromUtf8("Postup pr\u00e1ce bude k dispozici po dokon\u010den\u00ed anal\u00fdzy."));
     workflowDashLayout->addWidget(workflowDashTitle);
     workflowDashLayout->addWidget(m_dashWorkflowList);
@@ -615,6 +705,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     actionsRowLayout->setSpacing(10);
     m_dashRunAnalysisButton = new QPushButton(QString::fromUtf8("Spustit AI anal\u00fdzu"));
     m_dashRunAnalysisButton->setEnabled(false);
+    m_dashRunAnalysisButton->setWhatsThis(QString::fromUtf8("Odešle fotky na server a spust\u00ed AI anal\u00fdzu. Server automaticky zjist\u00ed plochu, doporu\u010d\u00ed materi\u00e1ly a postup pr\u00e1ce."));
     actionsRowLayout->addWidget(m_dashRunAnalysisButton);
     actionsRowLayout->addStretch();
 
@@ -622,8 +713,8 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     overviewLayout->addWidget(m_dashPhotoLabel);
     overviewLayout->addWidget(columnsWidget);
     overviewLayout->addWidget(workflowDashCard);
-    overviewLayout->addWidget(actionsCard);
     overviewLayout->addStretch();
+    actionsCard->hide(); // Spustit analýzu patří jen do záložky Analýza
 
     // ════════════════════════════════════════════════════════════════════════
     // TAB 2 — Fotky
@@ -646,14 +737,18 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     m_overlayModeViewButton->setCheckable(true);
     m_overlayModeViewButton->setChecked(true);
     m_overlayModeViewButton->setObjectName("overlayModeBtn");
+    m_overlayModeViewButton->setWhatsThis(QString::fromUtf8("Prohlíže\u010dí re\u017eim \u2014 m\u016f\u017eete proch\u00e1zet fotky bez kreslen\u00ed oblasti."));
     m_overlayModeRectButton = new QPushButton("Obdelnik");
     m_overlayModeRectButton->setCheckable(true);
     m_overlayModeRectButton->setObjectName("overlayModeBtn");
+    m_overlayModeRectButton->setWhatsThis(QString::fromUtf8("Nakreslete obd\u00e9ln\u00edk kolem oblasti opravy. Po nakreslen\u00ed klikn\u011bte na Ulo\u017eit."));
     m_overlayModePolyButton = new QPushButton("Polygon");
     m_overlayModePolyButton->setCheckable(true);
     m_overlayModePolyButton->setObjectName("overlayModeBtn");
+    m_overlayModePolyButton->setWhatsThis(QString::fromUtf8("Nakreslete polygon kolem nepravideln\u00e9 oblasti opravy. Klikn\u011bte pro ka\u017ed\u00fd bod, dvouklikem ukon\u010d\u00edte."));
     m_overlayConfirmButton = new QPushButton("Ulozit vyber oblasti");
     m_overlayConfirmButton->setEnabled(false);
+    m_overlayConfirmButton->setWhatsThis(QString::fromUtf8("Ulo\u017e\u00ed nakreslenou oblast na server. Oblast bude pou\u017eita p\u0159i AI anal\u00fdze pro p\u0159esn\u011bj\u0161\u00ed v\u00fdpo\u010det plochy."));
     m_overlayAreaEdit = new QLineEdit();
     m_overlayAreaEdit->setPlaceholderText("Upresnena plocha (m\u00B2) \u2014 volitelne");
     m_overlayAreaEdit->setMaximumWidth(220);
@@ -706,7 +801,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     m_thumbnailStripLayout->setSpacing(12);
     m_thumbnailScrollArea->setWidget(m_thumbnailStripWidget);
 
-    auto *pcUploadTitle = new QLabel("Nahrat fotografie z pocitace");
+    auto *pcUploadTitle = new QLabel(QString::fromUtf8("P\u0159idat dal\u0161\u00ed fotografie z po\u010d\u00edta\u010de"));
     pcUploadTitle->setObjectName("subSectionTitle");
     auto *pcUploadHintLabel = new QLabel(
         "Alternativni vstup \xe2\x80\x94 pouzijte pokud neni k dispozici mobilni aplikace nebo pro zpracovani archivnich zakazek.");
@@ -718,17 +813,18 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     m_pendingLocalImagesList = new QListWidget();
     m_pendingLocalImagesList->setObjectName("detailList");
     m_pendingLocalImagesList->setMaximumHeight(120);
+    m_pendingLocalImagesList->setFocusPolicy(Qt::NoFocus);
+    m_pendingLocalImagesList->setItemDelegate(new NoFocusRectDelegate(m_pendingLocalImagesList));
     m_pendingLocalImagesList->setVisible(false);
     auto *pcUploadActionsLayout = new QHBoxLayout();
     pcUploadActionsLayout->setSpacing(10);
     m_addImagesButton = new QPushButton("Vybrat fotografie z disku");
-    m_convertImagesButton = new QPushButton("Pripravit ke konverzi");
+    m_addImagesButton->setWhatsThis(QString::fromUtf8("Otev\u0159e dialog pro v\u00fdb\u011br fotek z va\u0161eho po\u010d\u00edta\u010de. M\u016f\u017eete vybrat v\u00edce fotek najednou."));
+    m_convertImagesButton = new QPushButton(QString::fromUtf8("P\u0159ipravit fotky"));
     m_convertImagesButton->setEnabled(false);
-    m_uploadImagesButton = new QPushButton("Odeslat na server");
-    m_uploadImagesButton->setEnabled(false);
+    m_convertImagesButton->setWhatsThis(QString::fromUtf8("Zkomprimuje a p\u0159iprav\u00ed vybran\u00e9 fotky pro nahr\u00e1n\u00ed na server (zmen\u0161\u00ed velikost soubor\u016f)."));
     pcUploadActionsLayout->addWidget(m_addImagesButton);
     pcUploadActionsLayout->addWidget(m_convertImagesButton);
-    pcUploadActionsLayout->addWidget(m_uploadImagesButton);
     pcUploadActionsLayout->addStretch();
 
     photosLayout->addWidget(m_primaryImageLabel);
@@ -747,7 +843,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     // ════════════════════════════════════════════════════════════════════════
     // TAB 3 — Analýza
     // ════════════════════════════════════════════════════════════════════════
-    auto *analysisLayout = makeScrollPage(m_tabWidget, "Analyza");
+    auto *analysisLayout = makeScrollPage(m_tabWidget, QString::fromUtf8("Spustit anal\u00fdzu"));
 
     auto *runAnalysisCard = new QFrame();
     runAnalysisCard->setObjectName("proposalInnerCard");
@@ -755,11 +851,12 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     runAnalysisCardLayout->setContentsMargins(16, 16, 16, 16);
     runAnalysisCardLayout->setSpacing(10);
     auto *runAnalysisHint = new QLabel(
-        "Po nahrani fotek spustte AI analyzu. Server vyhodnosti typ objektu, stav povrchu, plochu a navrhne materialy i postup prace.");
+        QString::fromUtf8("Po nahr\u00e1n\u00ed fotek spus\u0165te AI anal\u00fdzu. Server vyhodnost\u00ed typ objektu, stav povrchu, plochu a navrhne materi\u00e1ly i postup pr\u00e1ce."));
     runAnalysisHint->setObjectName("hintLabel");
     runAnalysisHint->setWordWrap(true);
-    m_runAnalysisButton = new QPushButton("Spustit AI analyzu");
+    m_runAnalysisButton = new QPushButton(QString::fromUtf8("Spustit anal\u00fdzu"));
     m_runAnalysisButton->setEnabled(false);
+    m_runAnalysisButton->setWhatsThis(QString::fromUtf8("Ode\u0161le fotky na server a spust\u00ed AI anal\u00fdzu. Server automaticky zjist\u00ed plochu, doporu\u010d\u00ed materi\u00e1ly a postup pr\u00e1ce."));
     m_analysisJobStatusLabel = new QLabel(QString());
     m_analysisJobStatusLabel->setObjectName("hintLabel");
     m_analysisJobStatusLabel->setWordWrap(true);
@@ -771,79 +868,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     runAnalysisCardLayout->addLayout(runAnalysisActionsRow);
     runAnalysisCardLayout->addWidget(m_analysisJobStatusLabel);
 
-    auto *findingsCard = new QFrame();
-    findingsCard->setObjectName("summaryCard");
-    auto *findingsOuterLayout = new QVBoxLayout(findingsCard);
-    findingsOuterLayout->setContentsMargins(16, 16, 16, 16);
-    findingsOuterLayout->setSpacing(12);
-
-    auto *findingsSummaryCard = new QFrame(findingsCard);
-    findingsSummaryCard->setObjectName("proposalInnerCard");
-    auto *findingsFormLayout = new QFormLayout(findingsSummaryCard);
-    findingsFormLayout->setContentsMargins(12, 12, 12, 12);
-    findingsFormLayout->setVerticalSpacing(8);
-    m_analysisObjectTypeLabel = new QLabel("-", findingsSummaryCard);
-    m_analysisAreaLabel = new QLabel("-", findingsSummaryCard);
-    m_analysisSurfaceConditionLabel = new QLabel("-", findingsSummaryCard);
-    m_analysisRecommendedScopeLabel = new QLabel("-", findingsSummaryCard);
-    m_analysisRecommendedScopeLabel->setWordWrap(true);
-    m_analysisDurationLabel = new QLabel("-", findingsSummaryCard);
-    findingsFormLayout->addRow("Typ objektu", m_analysisObjectTypeLabel);
-    findingsFormLayout->addRow("Plocha (odhad)", m_analysisAreaLabel);
-    findingsFormLayout->addRow("Stav povrchu", m_analysisSurfaceConditionLabel);
-    findingsFormLayout->addRow("Doporuceny rozsah", m_analysisRecommendedScopeLabel);
-    findingsFormLayout->addRow("Odhad trvani", m_analysisDurationLabel);
-
-    auto *findingsWorkflowTitle = new QLabel("Technologicky postup prace", findingsCard);
-    findingsWorkflowTitle->setObjectName("subSectionTitle");
-    m_analysisWorkflowList = new QListWidget(findingsCard);
-    m_analysisWorkflowList->setObjectName("detailList");
-    m_analysisWorkflowList->setMaximumHeight(200);
-
-    auto *findingsMaterialsTitle = new QLabel("Potrebne materialy", findingsCard);
-    findingsMaterialsTitle->setObjectName("subSectionTitle");
-    m_analysisMaterialsList = new QListWidget(findingsCard);
-    m_analysisMaterialsList->setObjectName("detailList");
-    m_analysisMaterialsList->setMaximumHeight(200);
-
-    auto *findingsQuoteTitle = new QLabel("Cenove varianty", findingsCard);
-    findingsQuoteTitle->setObjectName("subSectionTitle");
-    auto *findingsQuoteRow = new QHBoxLayout();
-    findingsQuoteRow->setSpacing(12);
-
-    auto makeVariantCard = [&](const QString &title, QLabel *&totalLabel) -> QFrame * {
-        auto *vc = new QFrame(findingsCard);
-        vc->setObjectName("variantCard");
-        auto *vl = new QVBoxLayout(vc);
-        vl->setContentsMargins(14, 14, 14, 14);
-        vl->setSpacing(8);
-        auto *vTitle = new QLabel(title, vc);
-        vTitle->setObjectName("variantTitle");
-        vTitle->setAlignment(Qt::AlignCenter);
-        totalLabel = new QLabel("-", vc);
-        totalLabel->setObjectName("variantTotal");
-        totalLabel->setAlignment(Qt::AlignCenter);
-        totalLabel->setWordWrap(true);
-        vl->addWidget(vTitle);
-        vl->addWidget(totalLabel);
-        vl->addStretch();
-        return vc;
-    };
-
-    findingsQuoteRow->addWidget(makeVariantCard("Ekonomicka", m_quoteEconomyValueLabel));
-    findingsQuoteRow->addWidget(makeVariantCard("Standardni", m_quoteStandardValueLabel));
-    findingsQuoteRow->addWidget(makeVariantCard("Premium", m_quotePremiumValueLabel));
-
-    findingsOuterLayout->addWidget(findingsSummaryCard);
-    findingsOuterLayout->addWidget(findingsWorkflowTitle);
-    findingsOuterLayout->addWidget(m_analysisWorkflowList);
-    findingsOuterLayout->addWidget(findingsMaterialsTitle);
-    findingsOuterLayout->addWidget(m_analysisMaterialsList);
-    findingsOuterLayout->addWidget(findingsQuoteTitle);
-    findingsOuterLayout->addLayout(findingsQuoteRow);
-
     analysisLayout->addWidget(runAnalysisCard);
-    analysisLayout->addWidget(findingsCard);
     analysisLayout->addStretch();
 
     // ════════════════════════════════════════════════════════════════════════
@@ -891,23 +916,92 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     proposalActionsLayout->setSpacing(10);
     m_saveProposalButton = new QPushButton("Ulozit navrh", proposalCard);
     m_saveProposalButton->setEnabled(false);
+    m_saveProposalButton->setWhatsThis(QString::fromUtf8("Ulo\u017e\u00ed rozepsan\u00fd n\u00e1vrh nab\u00eddky na server. N\u00e1vrh z\u016fstane ve stavu 'rozpracov\u00e1no' a m\u016f\u017eete ho d\u00e1le upravovat."));
     m_createFinalProposalButton = new QPushButton("Vytvorit finalni verzi", proposalCard);
     m_createFinalProposalButton->setEnabled(false);
+    m_createFinalProposalButton->setWhatsThis(QString::fromUtf8("Vytvo\u0159\u00ed fin\u00e1ln\u00ed verzi nab\u00eddky. Server automaticky vygeneruje DOCX a PDF dokumenty p\u0159ipraven\u00e9 k odesl\u00e1n\u00ed z\u00e1kazn\u00edkovi."));
     proposalActionsLayout->addWidget(m_saveProposalButton);
     proposalActionsLayout->addWidget(m_createFinalProposalButton);
     proposalActionsLayout->addStretch();
 
-    auto *proposalWorkItemsTitle = new QLabel("Navrzene kroky prace", proposalCard);
+    auto *proposalWorkItemsTitle = new QLabel(QString::fromUtf8("Technologick\u00fd postup"), proposalCard);
     proposalWorkItemsTitle->setObjectName("subSectionTitle");
-    m_proposalWorkItemsList = new QListWidget(proposalCard);
-    m_proposalWorkItemsList->setObjectName("detailList");
-    m_proposalWorkItemsList->setMaximumHeight(150);
+    m_proposalWorkItemsList = new QLabel(proposalCard);
+    m_proposalWorkItemsList->setObjectName("hintLabel");
+    m_proposalWorkItemsList->setWordWrap(true);
 
     auto *proposalMaterialsTitle = new QLabel("Navrzene materialy", proposalCard);
     proposalMaterialsTitle->setObjectName("subSectionTitle");
     m_proposalMaterialsList = new QListWidget(proposalCard);
     m_proposalMaterialsList->setObjectName("detailList");
-    m_proposalMaterialsList->setMaximumHeight(150);
+    m_proposalMaterialsList->setMaximumHeight(200);
+    m_proposalMaterialsList->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_proposalMaterialsList->setFocusPolicy(Qt::NoFocus);
+    m_proposalMaterialsList->setItemDelegate(new NoFocusRectDelegate(m_proposalMaterialsList));
+    m_proposalMaterialsList->setToolTip(QString::fromUtf8("Dvojklikem na polo\u017eku otev\u0159ete editaci mno\u017estv\u00ed a ceny."));
+    connect(m_proposalMaterialsList, &QListWidget::itemDoubleClicked, this,
+        [this](QListWidgetItem *item) {
+            const int row = m_proposalMaterialsList->row(item);
+            if (row < 0 || row >= m_currentProposalMaterialItems.size()) return;
+
+            auto &mat = m_currentProposalMaterialItems[row];
+
+            QDialog dlg(this);
+            dlg.setWindowTitle(QString::fromUtf8("Upravit polo\u017eku"));
+            auto *layout = new QFormLayout(&dlg);
+            layout->setContentsMargins(16, 16, 16, 16);
+            layout->setSpacing(10);
+
+            layout->addRow(QString::fromUtf8("N\u00e1zev:"), new QLabel(mat.name, &dlg));
+
+            auto *qtyEdit = new QLineEdit(QString::number(mat.quantity, 'f', 2), &dlg);
+            qtyEdit->setValidator(new QDoubleValidator(0, 1e9, 4, qtyEdit));
+            layout->addRow(QString::fromUtf8("Mno\u017estv\u00ed:"), qtyEdit);
+
+            auto *unitEdit = new QLineEdit(mat.unit, &dlg);
+            layout->addRow("Jednotka:", unitEdit);
+
+            auto *priceEdit = new QLineEdit(QString::number(mat.unitPrice, 'f', 2), &dlg);
+            priceEdit->setValidator(new QDoubleValidator(0, 1e9, 4, priceEdit));
+            layout->addRow(QString::fromUtf8("Cena/j. (CZK):"), priceEdit);
+
+            auto *totalLabel = new QLabel(&dlg);
+            layout->addRow("Celkem:", totalLabel);
+
+            auto updateTotal = [qtyEdit, priceEdit, totalLabel]() {
+                const double q = qtyEdit->text().replace(',', '.').toDouble();
+                const double p = priceEdit->text().replace(',', '.').toDouble();
+                totalLabel->setText(QString::fromUtf8("%1 CZK").arg(q * p, 0, 'f', 2));
+            };
+            updateTotal();
+            connect(qtyEdit, &QLineEdit::textChanged, &dlg, [updateTotal](const QString &) { updateTotal(); });
+            connect(priceEdit, &QLineEdit::textChanged, &dlg, [updateTotal](const QString &) { updateTotal(); });
+
+            auto *buttons = new QDialogButtonBox(
+                QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+            layout->addRow(buttons);
+            connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+            connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+            if (dlg.exec() != QDialog::Accepted) return;
+
+            const double newQty   = qtyEdit->text().replace(',', '.').toDouble();
+            const double newPrice = priceEdit->text().replace(',', '.').toDouble();
+            mat.quantity  = newQty;
+            mat.unit      = unitEdit->text().trimmed();
+            mat.unitPrice = newPrice;
+            mat.totalPrice = newQty * newPrice;
+
+            item->setText(formatMaterialItem(mat));
+
+            // Přepočítej celkové náklady na materiál
+            double total = 0.0;
+            for (const auto &m : m_currentProposalMaterialItems) total += m.totalPrice;
+            if (m_proposalMaterialCostEdit)
+                m_proposalMaterialCostEdit->setText(QString::number(total, 'f', 2));
+
+            m_isDirty = true;
+        });
 
     auto *finalProposalTitle = new QLabel("Finalni verze nabidky", proposalCard);
     finalProposalTitle->setObjectName("subSectionTitle");
@@ -963,10 +1057,17 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     exportActionsLayout->setSpacing(10);
     m_downloadDraftDocxButton = new QPushButton(QString::fromUtf8("N\u00e1vrh (DOCX)"), sendCard);
     m_downloadDraftDocxButton->setEnabled(false);
+    m_downloadDraftDocxButton->setWhatsThis(QString::fromUtf8("St\u00e1hne pracovn\u00ed verzi nab\u00eddky ve form\u00e1tu Word (DOCX). Vhodn\u00e9 pro dal\u0161\u00ed \u00fapravy p\u0159ed odesl\u00e1n\u00edm."));
     m_downloadQuoteDocxButton = new QPushButton(QString::fromUtf8("Nab\u00eddka (DOCX)"), sendCard);
     m_downloadQuoteDocxButton->setEnabled(false);
+    m_downloadQuoteDocxButton->setWhatsThis(QString::fromUtf8("St\u00e1hne fin\u00e1ln\u00ed nab\u00eddku ve form\u00e1tu Word (DOCX). Dostupn\u00e9 po vytvo\u0159en\u00ed fin\u00e1ln\u00ed verze."));
     m_downloadQuotePdfButton = new QPushButton(QString::fromUtf8("Nab\u00eddka (PDF)"), sendCard);
     m_downloadQuotePdfButton->setEnabled(false);
+    m_downloadQuotePdfButton->setWhatsThis(QString::fromUtf8("St\u00e1hne fin\u00e1ln\u00ed nab\u00eddku ve form\u00e1tu PDF. Tento soubor je ur\u010den p\u0159\u00edmo pro z\u00e1kazn\u00edka."));
+    m_exportZipButton = new QPushButton(QString::fromUtf8("Exportovat jako ZIP"), sendCard);
+    m_exportZipButton->setObjectName("exportZipButton");
+    m_exportZipButton->setEnabled(false);
+    m_exportZipButton->setWhatsThis(QString::fromUtf8("Ulo\u017e\u00ed cel\u00e9 podklady zak\u00e1zky do ZIP archivu: fin\u00e1ln\u00ed nab\u00eddka (DOCX), fotky a datov\u00fd soubor JSON."));
     exportActionsLayout->addWidget(m_downloadDraftDocxButton);
     exportActionsLayout->addWidget(m_downloadQuoteDocxButton);
     exportActionsLayout->addWidget(m_downloadQuotePdfButton);
@@ -981,6 +1082,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     connect(m_downloadQuotePdfButton, &QPushButton::clicked, this, [this]() {
         downloadExport("quote-pdf");
     });
+    connect(m_exportZipButton, &QPushButton::clicked, this, &CaseDetailView::exportAsZip);
 
     // Separator line
     auto *separator = new QFrame(sendCard);
@@ -995,12 +1097,18 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     sendHint->setWordWrap(true);
     m_sendCaseButton = new QPushButton(QString::fromUtf8("Odeslat z\u00e1kazn\u00edkovi"), sendCard);
     m_sendCaseButton->setEnabled(false);
+    m_sendCaseButton->setWhatsThis(QString::fromUtf8("Ode\u0161le fin\u00e1ln\u00ed nab\u00eddku z\u00e1kazn\u00edkovi emailem. Z\u00e1kazn\u00edk obdr\u017e\u00ed PDF p\u0159\u00edlohu. Akce je nevratn\u00e1."));
     auto *sendActionsRow = new QHBoxLayout();
     sendActionsRow->addWidget(m_sendCaseButton);
     sendActionsRow->addStretch();
 
+    auto *zipActionsRow = new QHBoxLayout();
+    zipActionsRow->addWidget(m_exportZipButton);
+    zipActionsRow->addStretch();
+
     sendCardLayout->addWidget(exportTitle);
     sendCardLayout->addLayout(exportActionsLayout);
+    sendCardLayout->addLayout(zipActionsRow);
     sendCardLayout->addWidget(separator);
     sendCardLayout->addWidget(sendHint);
     sendCardLayout->addLayout(sendActionsRow);
@@ -1138,7 +1246,14 @@ CaseDetailView::CaseDetailView(QWidget *parent)
         }
         QListWidget#detailList::item:selected {
             background: #f0d8bb;
-            border: 1px solid #d18841;
+            color: #1f2933;
+            border: none;
+            outline: none;
+        }
+        QListWidget#detailList::item:focus {
+            color: #1f2933;
+            border: none;
+            outline: none;
         }
         QScrollArea#thumbnailScrollArea {
             background: #f7efe4;
@@ -1299,9 +1414,6 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     connect(m_convertImagesButton, &QPushButton::clicked, this, [this]() {
         convertPendingLocalImages();
     });
-    connect(m_uploadImagesButton, &QPushButton::clicked, this, [this]() {
-        uploadPreparedLocalImages();
-    });
     m_imagePollingTimer = new QTimer(this);
     m_imagePollingTimer->setInterval(kImagePollingIntervalMs);
     connect(m_imagePollingTimer, &QTimer::timeout, this, [this]() {
@@ -1377,6 +1489,7 @@ void CaseDetailView::setCase(const QString &caseId)
 
 void CaseDetailView::applyCaseData(const CaseDto &caseDto)
 {
+    m_currentCase = caseDto;
     m_isReferenceDataset = caseDto.isReferenceDataset;
     m_source = caseDto.source.isEmpty() ? QStringLiteral("mobile") : caseDto.source;
     const bool isDesktopCase = (m_source == QStringLiteral("desktop"));
@@ -1390,6 +1503,7 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
     m_currentRepairScope = caseDto.repairScope;
     m_currentProposalWorkItems = caseDto.proposalWorkItems;
     m_currentProposalMaterials = caseDto.proposalMaterials;
+    m_currentProposalMaterialItems = caseDto.proposalMaterialItems;
     m_expectedPrimaryFilename = caseDto.expectedPrimaryFilename;
     m_expectedAnalysisReferenceFilename = caseDto.expectedAnalysisReferenceFilename;
     m_referenceSourcePage = caseDto.referenceSourcePage;
@@ -1401,12 +1515,12 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
             : caseDto.description);
     m_statusValueLabel->setText(caseDto.status.isEmpty() ? "-" : caseDto.status);
     m_addressValueLabel->setText(caseDto.addressLabel.isEmpty() ? "-" : caseDto.addressLabel);
-    m_scopeValueLabel->setText(caseDto.repairScope.isEmpty() ? "-" : caseDto.repairScope);
+    m_scopeValueLabel->setText(caseDto.repairScope.isEmpty() ? "-" : localizeRepairScope(caseDto.repairScope));
     m_areaValueLabel->setText(caseDto.areaLabel.isEmpty() ? "-" : caseDto.areaLabel);
 
     // ── Dashboard widgets ─────────────────────────────────────────────────
     if (m_dashObjTypeLabel) m_dashObjTypeLabel->setText(
-        caseDto.analysisObjectType.isEmpty() ? "-" : caseDto.analysisObjectType);
+        caseDto.analysisObjectType.isEmpty() ? "-" : localizeObjectType(caseDto.analysisObjectType));
     if (m_dashAreaLabel) {
         if (caseDto.hasAnalysis && caseDto.analysisEstimatedAreaSqm > 0.0) {
             const int pct = static_cast<int>(caseDto.analysisAreaConfidence * 100.0 + 0.5);
@@ -1416,9 +1530,9 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
         } else { m_dashAreaLabel->setText("-"); }
     }
     if (m_dashSurfaceLabel) m_dashSurfaceLabel->setText(
-        caseDto.analysisSurfaceCondition.isEmpty() ? "-" : caseDto.analysisSurfaceCondition);
+        caseDto.analysisSurfaceCondition.isEmpty() ? "-" : localizeSurfaceCondition(caseDto.analysisSurfaceCondition));
     if (m_dashScopeLabel) m_dashScopeLabel->setText(
-        caseDto.analysisRecommendedScope.isEmpty() ? "-" : caseDto.analysisRecommendedScope);
+        caseDto.analysisRecommendedScope.isEmpty() ? "-" : localizeRecommendedScope(caseDto.analysisRecommendedScope));
     if (m_dashDurationLabel) {
         if (caseDto.hasAnalysis && (caseDto.analysisDurationDays > 0.0 || caseDto.analysisLaborHours > 0.0)) {
             m_dashDurationLabel->setText(
@@ -1478,17 +1592,18 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
             : caseDto.finalProposalSummary);
     m_finalProposalTotalValueLabel->setText(
         caseDto.finalProposalTotalPriceLabel.isEmpty() ? "-" : caseDto.finalProposalTotalPriceLabel);
-    m_proposalWorkItemsList->clear();
-    if (caseDto.proposalWorkItems.isEmpty()) {
-        m_proposalWorkItemsList->addItem("Navrh praci se doplni po zpracovani fotek.");
-    } else {
-        m_proposalWorkItemsList->addItems(caseDto.proposalWorkItems);
-    }
+    m_proposalWorkItemsList->setText(
+        caseDto.proposalWorkItems.isEmpty()
+            ? QString::fromUtf8("N\u00e1vrh praci se dopln\u00ed po zpracov\u00e1n\u00ed fotek.")
+            : caseDto.proposalWorkItems.join(QString::fromUtf8(" \u2022 ")));
     m_proposalMaterialsList->clear();
-    if (caseDto.proposalMaterials.isEmpty()) {
-        m_proposalMaterialsList->addItem("Navrh materialu se doplni po zpracovani fotek.");
+    if (m_currentProposalMaterialItems.isEmpty()) {
+        m_proposalMaterialsList->addItem(
+            QString::fromUtf8("N\u00e1vrh materi\u00e1lu se dopln\u00ed po zpracov\u00e1n\u00ed fotek."));
     } else {
-        m_proposalMaterialsList->addItems(caseDto.proposalMaterials);
+        for (const auto &mat : m_currentProposalMaterialItems) {
+            m_proposalMaterialsList->addItem(formatMaterialItem(mat));
+        }
     }
 
     m_analysisId = caseDto.analysisId;
@@ -1498,7 +1613,8 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
 
     // Analysis / Findings
     if (m_analysisObjectTypeLabel) {
-        m_analysisObjectTypeLabel->setText(caseDto.analysisObjectType.isEmpty() ? "-" : caseDto.analysisObjectType);
+        m_analysisObjectTypeLabel->setText(
+            caseDto.analysisObjectType.isEmpty() ? "-" : localizeObjectType(caseDto.analysisObjectType));
     }
     if (m_analysisAreaLabel) {
         if (caseDto.hasAnalysis && caseDto.analysisEstimatedAreaSqm > 0.0) {
@@ -1510,10 +1626,12 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
         }
     }
     if (m_analysisSurfaceConditionLabel) {
-        m_analysisSurfaceConditionLabel->setText(caseDto.analysisSurfaceCondition.isEmpty() ? "-" : caseDto.analysisSurfaceCondition);
+        m_analysisSurfaceConditionLabel->setText(
+            caseDto.analysisSurfaceCondition.isEmpty() ? "-" : localizeSurfaceCondition(caseDto.analysisSurfaceCondition));
     }
     if (m_analysisRecommendedScopeLabel) {
-        m_analysisRecommendedScopeLabel->setText(caseDto.analysisRecommendedScope.isEmpty() ? "-" : caseDto.analysisRecommendedScope);
+        m_analysisRecommendedScopeLabel->setText(
+            caseDto.analysisRecommendedScope.isEmpty() ? "-" : localizeRecommendedScope(caseDto.analysisRecommendedScope));
     }
     if (m_analysisDurationLabel) {
         if (caseDto.hasAnalysis && (caseDto.analysisDurationDays > 0.0 || caseDto.analysisLaborHours > 0.0)) {
@@ -1581,6 +1699,9 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
         m_downloadQuotePdfButton->setEnabled(
             !caseDto.id.isEmpty() && !caseDto.finalProposalStatus.isEmpty());
     }
+    if (m_exportZipButton) {
+        m_exportZipButton->setEnabled(!caseDto.id.isEmpty());
+    }
     if (m_saveAsButton) {
         m_saveAsButton->setEnabled(true);
     }
@@ -1626,7 +1747,7 @@ void CaseDetailView::setReadOnly(bool readOnly)
         m_runAnalysisButton, m_overlayModeRectButton, m_overlayModePolyButton,
         m_overlayConfirmButton, m_setPrimaryButton, m_setAnalysisReferenceButton,
         m_moveUpButton, m_moveDownButton, m_addImagesButton, m_convertImagesButton,
-        m_uploadImagesButton, m_saveProposalButton, m_createFinalProposalButton,
+        m_saveProposalButton, m_createFinalProposalButton,
         m_sendCaseButton,
     };
     for (auto *btn : actionButtons) {
@@ -1638,6 +1759,40 @@ void CaseDetailView::switchToPhotosTab()
 {
     if (m_tabWidget) {
         m_tabWidget->setCurrentIndex(1);
+    }
+}
+
+void CaseDetailView::triggerSave()
+{
+    saveProposalDraft();
+}
+
+void CaseDetailView::navigateToField(const QString &fieldKey)
+{
+    if (!m_tabWidget) return;
+
+    // Nabídka tab is always at index 3
+    m_tabWidget->setCurrentIndex(3);
+
+    QWidget *targetWidget = nullptr;
+    if      (fieldKey == QLatin1String("subject"))            targetWidget = m_proposalSubjectEdit;
+    else if (fieldKey == QLatin1String("material_cost"))      targetWidget = m_proposalMaterialCostEdit;
+    else if (fieldKey == QLatin1String("labor_cost"))         targetWidget = m_proposalLaborCostEdit;
+    else if (fieldKey == QLatin1String("materials"))          targetWidget = m_proposalMaterialsList;
+    else if (fieldKey == QLatin1String("amortization"))       targetWidget = m_proposalAmortizationEdit;
+    else if (fieldKey == QLatin1String("margin"))             targetWidget = m_proposalMarginEdit;
+    else if (fieldKey == QLatin1String("material_suppliers")) targetWidget = m_proposalSupplierEdit;
+
+    if (!targetWidget) return;
+
+    // Scroll to the widget within the tab's QScrollArea
+    if (auto *scrollArea = qobject_cast<QScrollArea *>(m_tabWidget->widget(3))) {
+        scrollArea->ensureWidgetVisible(targetWidget);
+    }
+
+    targetWidget->setFocus();
+    if (auto *edit = qobject_cast<QLineEdit *>(targetWidget)) {
+        edit->selectAll();
     }
 }
 
@@ -1697,12 +1852,14 @@ void CaseDetailView::clearCase()
     m_finalProposalSummaryValueLabel->setText("Po potvrzeni server vytvori finalni verzi a automaticky pripravi DOCX i PDF.");
     m_finalProposalTotalValueLabel->setText("-");
     if (m_proposalWorkItemsList) {
-        m_proposalWorkItemsList->clear();
-        m_proposalWorkItemsList->addItem("Navrzene kroky se objevi po serverovem zpracovani fotek.");
+        m_proposalWorkItemsList->setText(
+            QString::fromUtf8("Navr\u017een\u00e9 kroky se objev\u00ed po serverov\u00e9m zpracov\u00e1n\u00ed fotek."));
     }
+    m_currentProposalMaterialItems.clear();
     if (m_proposalMaterialsList) {
         m_proposalMaterialsList->clear();
-        m_proposalMaterialsList->addItem("Navrzene materialy se objevi po serverovem zpracovani fotek.");
+        m_proposalMaterialsList->addItem(
+            QString::fromUtf8("Navr\u017een\u00e9 materi\u00e1ly se objev\u00ed po serverov\u00e9m zpracov\u00e1n\u00ed fotek."));
     }
     if (m_analysisObjectTypeLabel) { m_analysisObjectTypeLabel->setText("-"); }
     if (m_analysisAreaLabel) { m_analysisAreaLabel->setText("-"); }
@@ -1801,13 +1958,15 @@ void CaseDetailView::createFinalProposal()
         return;
     }
 
-    const auto confirmation = QMessageBox::question(
-        this,
-        "Vytvo\u0159it fin\u00E1ln\u00ED verzi",
-        "Ze sou\u010Dasn\u00E9ho n\u00E1vrhu vznikne fin\u00E1ln\u00ED verze a server k n\u00ED automaticky p\u0159iprav\u00ED DOCX i PDF. Pokra\u010Dovat?",
-        QMessageBox::Yes | QMessageBox::No,
-        QMessageBox::No);
-    if (confirmation != QMessageBox::Yes) {
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle(QString::fromUtf8("Vytvo\u0159it fin\u00e1ln\u00ed verzi"));
+    msgBox.setText(QString::fromUtf8("Ze sou\u010dasn\u00e9ho n\u00e1vrhu vznikne fin\u00e1ln\u00ed verze a server k n\u00ed automaticky p\u0159iprav\u00ed DOCX i PDF. Pokra\u010dovat?"));
+    msgBox.setIcon(QMessageBox::Question);
+    auto *btnAno = msgBox.addButton(QString::fromUtf8("Ano"), QMessageBox::YesRole);
+    msgBox.addButton(QString::fromUtf8("Ne"), QMessageBox::NoRole);
+    msgBox.setDefaultButton(btnAno);
+    msgBox.exec();
+    if (msgBox.clickedButton() != btnAno) {
         return;
     }
 
@@ -2164,13 +2323,17 @@ void CaseDetailView::convertPendingLocalImages()
         [](const LocalPreparedImage &image) { return image.state == LocalImageState::ReadyToUpload; }));
 
     if (readyCount == static_cast<int>(m_preparedLocalImages.size())) {
-        setImageHintMessage(QString("Zkonvertovano %1 fotek pro dalsi odeslani.").arg(readyCount));
+        setImageHintMessage(QString::fromUtf8("P\u0159ipraveno %1 fotek, nahr\u00e1v\u00e1m na server\u2026").arg(readyCount));
+        uploadPreparedLocalImages();
     } else {
         setImageHintMessage(
-            QString("Zkonvertovano %1 z %2 fotek. Zbytek potrebuje kontrolu.")
+            QString::fromUtf8("P\u0159ipraveno %1 z %2 fotek. Zbytek se nepoda\u0159ilo zpracovat.")
                 .arg(readyCount)
                 .arg(m_preparedLocalImages.size()),
             readyCount == 0);
+        if (readyCount > 0) {
+            uploadPreparedLocalImages();
+        }
     }
 }
 
@@ -2251,13 +2414,6 @@ void CaseDetailView::updatePendingLocalImagesPanel()
     }
     if (m_convertImagesButton) {
         m_convertImagesButton->setEnabled(!m_pendingLocalImagePaths.isEmpty());
-    }
-    if (m_uploadImagesButton) {
-        const bool hasReadyImages = std::any_of(
-            m_preparedLocalImages.begin(),
-            m_preparedLocalImages.end(),
-            [](const LocalPreparedImage &image) { return image.state == LocalImageState::ReadyToUpload; });
-        m_uploadImagesButton->setEnabled(hasReadyImages);
     }
 }
 
@@ -2392,6 +2548,150 @@ void CaseDetailView::downloadExport(const QString &exportType)
     setImageHintMessage(QString("Export byl ulozen a otevren: %1").arg(fileName));
 }
 
+void CaseDetailView::exportAsZip()
+{
+    if (m_caseId.isEmpty() || m_currentCase.id.isEmpty()) {
+        return;
+    }
+
+    // Sanitize title for filename
+    QString safeTitle = m_currentCase.title.isEmpty() ? m_caseId : m_currentCase.title;
+    for (const QChar ch : {'\\', '/', ':', '*', '?', '"', '<', '>', '|'}) {
+        safeTitle.replace(ch, '_');
+    }
+    const QString defaultName = QString("Zakazka_%1.zip").arg(safeTitle);
+
+    const QString zipPath = QFileDialog::getSaveFileName(
+        this,
+        QString::fromUtf8("Ulo\u017eit zak\u00e1zku jako ZIP"),
+        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + "/" + defaultName,
+        QString::fromUtf8("ZIP archiv (*.zip)")
+    );
+    if (zipPath.isEmpty()) {
+        return;
+    }
+
+    setImageHintMessage(QString::fromUtf8("P\u0159ipravuji ZIP export\u2026"));
+    QApplication::processEvents();
+
+    // Prepare temp working directory
+    const QString tempBase = QStandardPaths::writableLocation(QStandardPaths::TempLocation)
+        + "/FotoNabidka/export_" + m_caseId;
+    QDir(tempBase).removeRecursively();
+    QDir().mkpath(tempBase + "/fotky");
+
+    ApiService apiService;
+    QString errorMessage;
+    int errors = 0;
+
+    // 1. Download DOCX (final proposal)
+    const auto exportResult = apiService.triggerExport(m_caseId, "proposal-docx", &errorMessage);
+    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    if (!exportResult.downloadUrl.isEmpty()) {
+        const auto docxBytes = apiService.downloadExportFile(exportResult.downloadUrl, &errorMessage);
+        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+        if (!docxBytes.isEmpty()) {
+            const QString docxName = exportResult.fileName.isEmpty()
+                ? QString("Nabidka_%1.docx").arg(safeTitle)
+                : exportResult.fileName;
+            QFile docxFile(tempBase + "/" + docxName);
+            if (docxFile.open(QIODevice::WriteOnly)) {
+                docxFile.write(docxBytes);
+                docxFile.close();
+            }
+        } else {
+            ++errors;
+        }
+    } else {
+        ++errors;
+    }
+
+    // 2. Download images (previews)
+    for (const auto &image : m_images) {
+        if (image.previewUrl.isEmpty()) { continue; }
+        const auto imgBytes = apiService.fetchImageData(image.previewUrl, &errorMessage);
+        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+        if (imgBytes.isEmpty()) { ++errors; continue; }
+        QString imgName = image.originalFilename.isEmpty()
+            ? image.id + ".jpg"
+            : image.originalFilename;
+        QFile imgFile(tempBase + "/fotky/" + imgName);
+        if (imgFile.open(QIODevice::WriteOnly)) {
+            imgFile.write(imgBytes);
+            imgFile.close();
+        }
+    }
+
+    // 3. Create JSON data file
+    QJsonObject json;
+    json["id"]           = m_currentCase.id;
+    json["title"]        = m_currentCase.title;
+    json["status"]       = m_currentCase.status;
+    json["addressLabel"] = m_currentCase.addressLabel;
+    json["description"]  = m_currentCase.description;
+    json["propertyType"] = m_currentCase.propertyType;
+    json["repairScope"]  = m_currentCase.repairScope;
+    json["createdBy"]    = m_currentCase.createdByName;
+    if (m_currentCase.hasAnalysis) {
+        QJsonObject analysis;
+        analysis["objectType"]       = m_currentCase.analysisObjectType;
+        analysis["surfaceCondition"] = m_currentCase.analysisSurfaceCondition;
+        analysis["recommendedScope"] = m_currentCase.analysisRecommendedScope;
+        analysis["estimatedAreaSqm"] = m_currentCase.analysisEstimatedAreaSqm;
+        analysis["durationDays"]     = m_currentCase.analysisDurationDays;
+        analysis["laborHours"]       = m_currentCase.analysisLaborHours;
+        json["analysis"] = analysis;
+    }
+    {
+        QJsonObject proposal;
+        proposal["subject"]             = m_currentCase.proposalSubject;
+        proposal["summary"]             = m_currentCase.proposalSummary;
+        proposal["materialCost"]        = m_currentCase.proposalMaterialCostLabel;
+        proposal["laborCost"]           = m_currentCase.proposalLaborCostLabel;
+        proposal["transportCost"]       = m_currentCase.proposalTransportCostLabel;
+        proposal["totalPrice"]          = m_currentCase.proposalTotalPriceLabel;
+        proposal["recommendedSupplier"] = m_currentCase.proposalRecommendedSupplier;
+        json["proposal"] = proposal;
+    }
+    if (!m_currentCase.finalProposalStatus.isEmpty()) {
+        QJsonObject finalProposal;
+        finalProposal["status"]     = m_currentCase.finalProposalStatus;
+        finalProposal["subject"]    = m_currentCase.finalProposalSubject;
+        finalProposal["summary"]    = m_currentCase.finalProposalSummary;
+        finalProposal["totalPrice"] = m_currentCase.finalProposalTotalPriceLabel;
+        json["finalProposal"] = finalProposal;
+    }
+    QFile jsonFile(tempBase + "/zakazka.json");
+    if (jsonFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        jsonFile.write(QJsonDocument(json).toJson(QJsonDocument::Indented));
+        jsonFile.close();
+    }
+
+    // 4. Create ZIP via PowerShell Compress-Archive
+    QFile::remove(zipPath);
+    const QString psCmd = QString(
+        "Compress-Archive -Path '%1\\*' -DestinationPath '%2' -Force"
+    ).arg(QDir::toNativeSeparators(tempBase), QDir::toNativeSeparators(zipPath));
+
+    QProcess process;
+    process.start("powershell",
+        QStringList() << "-NoProfile" << "-NonInteractive" << "-Command" << psCmd);
+    process.waitForFinished(30000);
+
+    QDir(tempBase).removeRecursively();
+
+    if (!QFile::exists(zipPath)) {
+        setImageHintMessage(QString::fromUtf8("ZIP se nepoda\u0159ilo vytvo\u0159it."), true);
+        return;
+    }
+
+    const QString resultMsg = errors > 0
+        ? QString::fromUtf8("ZIP ulo\u017een s %1 chybami: %2").arg(errors).arg(zipPath)
+        : QString::fromUtf8("ZIP ulo\u017een: %1").arg(zipPath);
+    setImageHintMessage(resultMsg, errors > 0);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(zipPath).absolutePath()));
+}
+
 void CaseDetailView::setSelectedImageAsPrimary()
 {
     const auto *image = selectedImage();
@@ -2452,13 +2752,14 @@ void CaseDetailView::duplicateCase(const QString &mode)
     }
 
     if (m_images.empty()) {
-        const auto confirmation = QMessageBox::question(
-            this,
-            "Vytvorit kopii bez fotek?",
-            "Aktualni zakazka zatim nema nactene zadne fotky. Pokud budes kopirovat z prazdne kopie, nova zakazka bude take bez fotek.\n\nPokracovat i tak?",
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No);
-        if (confirmation != QMessageBox::Yes) {
+        QMessageBox msgBoxCopy(this);
+        msgBoxCopy.setWindowTitle(QString::fromUtf8("Vytvo\u0159it kop\u00edji bez fotek?"));
+        msgBoxCopy.setText(QString::fromUtf8("Aktu\u00e1ln\u00ed zak\u00e1zka zat\u00edm nem\u00e1 na\u010dten\u00e9 \u017e\u00e1dn\u00e9 fotky. Nov\u00e1 zak\u00e1zka bude tak\u00e9 bez fotek.\n\nPokra\u010dovat i tak?"));
+        msgBoxCopy.setIcon(QMessageBox::Question);
+        auto *btnAnoCopy = msgBoxCopy.addButton(QString::fromUtf8("Ano"), QMessageBox::YesRole);
+        msgBoxCopy.addButton(QString::fromUtf8("Ne"), QMessageBox::NoRole);
+        msgBoxCopy.exec();
+        if (msgBoxCopy.clickedButton() != btnAnoCopy) {
             return;
         }
     }
@@ -2483,16 +2784,15 @@ void CaseDetailView::sendCurrentCase()
         return;
     }
 
-    const auto confirmation = QMessageBox::question(
-        this,
-        "Odeslat zakazku",
-        QString(
-            "Zakazka \"%1\" bude oznacena jako odeslana a presunuta do historie.\n\n"
-            "Tuto akci ted pouzivame jako potvrzeni finalni verze. Pokracovat?")
-            .arg(m_titleLabel->text().isEmpty() ? "Bez nazvu" : m_titleLabel->text()),
-        QMessageBox::Yes | QMessageBox::No,
-        QMessageBox::No);
-    if (confirmation != QMessageBox::Yes) {
+    QMessageBox msgBoxSend(this);
+    msgBoxSend.setWindowTitle(QString::fromUtf8("Odeslat zak\u00e1zku"));
+    msgBoxSend.setText(QString::fromUtf8("Zak\u00e1zka \"%1\" bude ozna\u010dena jako odeslan\u00e1 a p\u0159eunuta do historie.\n\nZ\u00e1kazn\u00edk obdr\u017e\u00ed PDF na sv\u016fj email. Pokra\u010dovat?")
+        .arg(m_titleLabel->text().isEmpty() ? QString::fromUtf8("Bez n\u00e1zvu") : m_titleLabel->text()));
+    msgBoxSend.setIcon(QMessageBox::Question);
+    auto *btnAnoSend = msgBoxSend.addButton(QString::fromUtf8("Ano, odeslat"), QMessageBox::YesRole);
+    msgBoxSend.addButton(QString::fromUtf8("Ne"), QMessageBox::NoRole);
+    msgBoxSend.exec();
+    if (msgBoxSend.clickedButton() != btnAnoSend) {
         return;
     }
 

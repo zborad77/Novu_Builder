@@ -13,6 +13,7 @@
 
 QString ApiService::s_bearerToken;
 bool ApiService::s_sessionExpired = false;
+QString ApiService::s_globalBaseUrl;
 
 void ApiService::setGlobalToken(const QString &bearerToken)
 {
@@ -116,6 +117,7 @@ LoginResultDto ApiService::login(const QString &email, const QString &password, 
         .email = user.value("email").toString(),
         .fullName = user.value("fullName").toString(),
         .role = user.value("role").toString(),
+        .isSuperAdmin = user.value("isSuperAdmin").toBool(),
     };
 }
 
@@ -486,8 +488,18 @@ QByteArray waitForReply(QNetworkReply *reply, int timeoutMs, QString *errorMessa
 
 } // namespace
 
+void ApiService::setGlobalBaseUrl(const QString &baseUrl)
+{
+    s_globalBaseUrl = baseUrl;
+}
+
+QString ApiService::globalBaseUrl()
+{
+    return s_globalBaseUrl.isEmpty() ? QStringLiteral("http://127.0.0.1:8000/api/v1") : s_globalBaseUrl;
+}
+
 ApiService::ApiService(QString baseUrl)
-    : m_baseUrl(std::move(baseUrl))
+    : m_baseUrl(baseUrl.isEmpty() ? globalBaseUrl() : std::move(baseUrl))
 {
 }
 

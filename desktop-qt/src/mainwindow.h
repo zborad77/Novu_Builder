@@ -25,6 +25,7 @@ public:
 private:
     void handleLoginRequested(const QString &email, const QString &password);
     void handleSessionExpired();
+    void openServerSetupDialog(bool firstTime = false);
     QWidget *createWorkspaceShell();
     void syncActiveCaseWorkspace();
     void updateWorkspaceHeader();
@@ -48,9 +49,10 @@ private:
     QFrame *m_caseColumn = nullptr;
     QLabel *m_workspaceTitleLabel = nullptr;
     QLabel *m_workspaceSubtitleLabel = nullptr;
-    QPushButton *m_sidebarProjectButton = nullptr;
     QPushButton *m_sidebarServerCasesButton = nullptr;
     QPushButton *m_sidebarWorkCasesButton = nullptr;
     QPushButton *m_sidebarHistoryButton = nullptr;
     QPushButton *m_sidebarNewCaseButton = nullptr;
+    QPushButton *m_serverButton = nullptr;
+    QString m_caseListSection; // "Rozpracované zakázky" | "Historie zakázek"
 };

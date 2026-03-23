@@ -27,6 +27,9 @@ public:
     static void clearSessionExpired();
     static void markSessionExpired();
 
+    static void setGlobalBaseUrl(const QString &baseUrl);
+    [[nodiscard]] static QString globalBaseUrl();
+
     [[nodiscard]] LoginResultDto login(
         const QString &email,
         const QString &password,
@@ -92,4 +95,5 @@ private:
     QString m_baseUrl;
     static QString s_bearerToken;
     static bool s_sessionExpired;
+    static QString s_globalBaseUrl;
 };

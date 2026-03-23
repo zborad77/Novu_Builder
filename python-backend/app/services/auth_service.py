@@ -28,6 +28,7 @@ def _user_to_read(user: User) -> AuthUserRead:
         role=user.role,
         isActive=user.is_active,
         organizationId=user.organization_id,
+        isSuperAdmin=user.is_superadmin,
     )
 
 

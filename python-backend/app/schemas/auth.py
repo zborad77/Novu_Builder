@@ -10,6 +10,7 @@ class AuthUserRead(BaseModel):
     role: str
     isActive: bool
     organizationId: str
+    isSuperAdmin: bool = False
 
 
 class LoginRequest(BaseModel):

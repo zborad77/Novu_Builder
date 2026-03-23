@@ -34,6 +34,8 @@ public:
     void setCase(const QString &caseId);
     void clearCase();
     void switchToPhotosTab();
+    void navigateToField(const QString &fieldKey);
+    void triggerSave();
     [[nodiscard]] bool hasUnsavedChanges() const;
     [[nodiscard]] QString caseSource() const;
     void setReadOnly(bool readOnly);
@@ -95,6 +97,7 @@ private:
     void stopAnalysisPolling();
     void pollAnalysisStatus();
     void downloadExport(const QString &exportType);
+    void exportAsZip();
     [[nodiscard]] bool refreshImagesFromBackend(QString *errorMessage = nullptr);
     void setPrimaryImagePreview(const QPixmap &pixmap);
     void setPrimaryImagePlaceholder(const QString &message);
@@ -156,7 +159,7 @@ private:
     QScrollArea *m_thumbnailScrollArea = nullptr;
     QWidget *m_thumbnailStripWidget = nullptr;
     QHBoxLayout *m_thumbnailStripLayout = nullptr;
-    QListWidget *m_proposalWorkItemsList = nullptr;
+    QLabel *m_proposalWorkItemsList = nullptr;
     QListWidget *m_proposalMaterialsList = nullptr;
     QLabel *m_pendingLocalImagesLabel = nullptr;
     QListWidget *m_pendingLocalImagesList = nullptr;
@@ -166,18 +169,19 @@ private:
     QPushButton *m_moveDownButton = nullptr;
     QPushButton *m_addImagesButton = nullptr;
     QPushButton *m_convertImagesButton = nullptr;
-    QPushButton *m_uploadImagesButton = nullptr;
     QPushButton *m_saveProposalButton = nullptr;
     QPushButton *m_createFinalProposalButton = nullptr;
     QPushButton *m_downloadDraftDocxButton = nullptr;
     QPushButton *m_downloadQuoteDocxButton = nullptr;
     QPushButton *m_downloadQuotePdfButton = nullptr;
+    QPushButton *m_exportZipButton = nullptr;
     QPushButton *m_saveAsButton = nullptr;
     QPushButton *m_newVariantButton = nullptr;
     QPushButton *m_sendCaseButton = nullptr;
     QPixmap m_primaryImagePixmap;
     std::vector<ImageDto> m_images;
     std::vector<QPushButton *> m_thumbnailButtons;
+    CaseDto m_currentCase;
     QString m_caseId;
     QString m_analysisId;
     QString m_selectedImageId;
@@ -186,6 +190,7 @@ private:
     QString m_currentRepairScope;
     QStringList m_currentProposalWorkItems;
     QStringList m_currentProposalMaterials;
+    QList<CaseDto::ProposalMaterialItem> m_currentProposalMaterialItems;
     QString m_expectedPrimaryFilename;
     QString m_expectedAnalysisReferenceFilename;
     QString m_referenceSourcePage;

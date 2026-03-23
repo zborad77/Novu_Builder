@@ -1,6 +1,7 @@
 #include "casebrowserview.h"
 
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
@@ -129,6 +130,20 @@ CaseBrowserView::CaseBrowserView(QWidget *parent)
             color: #9a7a50;
             font-style: italic;
         }
+        QLabel#sourceBadgeMobile {
+            font-size: 11px;
+            color: #1a6eb5;
+            background: #ddeeff;
+            border-radius: 6px;
+            padding: 1px 6px;
+        }
+        QLabel#sourceBadgeDesktop {
+            font-size: 11px;
+            color: #2e6b3e;
+            background: #d6f0dd;
+            border-radius: 6px;
+            padding: 1px 6px;
+        }
         QWidget#cardsContainer {
             background: #fffaf2;
         }
@@ -209,11 +224,30 @@ void CaseBrowserView::buildCards(const std::vector<CaseDto> &cases, Mode mode)
         cardInnerLayout->setContentsMargins(8, 8, 8, 8);
         cardInnerLayout->setSpacing(4);
 
+        // Title row: name + source badge
+        auto *titleRow = new QWidget(card);
+        titleRow->setAttribute(Qt::WA_TransparentForMouseEvents);
+        auto *titleRowLayout = new QHBoxLayout(titleRow);
+        titleRowLayout->setContentsMargins(0, 0, 0, 0);
+        titleRowLayout->setSpacing(8);
+
         auto *titleLbl = new QLabel(caseDto.title.isEmpty()
             ? QString::fromUtf8("(bez n\u00e1zvu)")
-            : caseDto.title, card);
+            : caseDto.title, titleRow);
         titleLbl->setObjectName("caseCardTitle");
         titleLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+        const bool isMobile = (caseDto.source == QLatin1String("mobile"));
+        const QString badgeText = isMobile
+            ? QString::fromUtf8("Mobil")
+            : QString::fromUtf8("PC");
+        auto *sourceBadge = new QLabel(badgeText, titleRow);
+        sourceBadge->setObjectName(isMobile ? "sourceBadgeMobile" : "sourceBadgeDesktop");
+        sourceBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+        titleRowLayout->addWidget(titleLbl);
+        titleRowLayout->addWidget(sourceBadge);
+        titleRowLayout->addStretch();
 
         const QString statusText = localizedCaseStatus(caseDto.status);
         const QString infoText = caseDto.addressLabel.isEmpty()
@@ -223,7 +257,7 @@ void CaseBrowserView::buildCards(const std::vector<CaseDto> &cases, Mode mode)
         infoLbl->setObjectName("caseCardInfo");
         infoLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
 
-        cardInnerLayout->addWidget(titleLbl);
+        cardInnerLayout->addWidget(titleRow);
         cardInnerLayout->addWidget(infoLbl);
 
         if (!caseDto.createdByName.isEmpty()) {

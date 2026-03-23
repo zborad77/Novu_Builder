@@ -71,9 +71,11 @@ NewCaseView::NewCaseView(QWidget *parent)
     auto *headerRow = new QHBoxLayout();
     auto *backButton = new QPushButton(QString::fromUtf8("← Zp\u011bt"));
     backButton->setObjectName("secondaryButton");
+    backButton->setWhatsThis(QString::fromUtf8("Zru\u0161\u00ed tvorbu nov\u00e9 zak\u00e1zky a vr\u00e1t\u00ed se zp\u011bt."));
     m_submitButton = new QPushButton(QString::fromUtf8("Odeslat k anal\u00fdze AI"));
     m_submitButton->setObjectName("primaryButton");
     m_submitButton->setEnabled(false);
+    m_submitButton->setWhatsThis(QString::fromUtf8("Ode\u0161le zak\u00e1zku a fotky na server k AI anal\u00fdze. Zak\u00e1zka se zobraz\u00ed v Rozpracovan\u00fdch zak\u00e1zk\u00e1ch."));
     headerRow->addWidget(backButton);
     headerRow->addStretch();
     headerRow->addWidget(m_submitButton);
@@ -126,6 +128,7 @@ NewCaseView::NewCaseView(QWidget *parent)
     auto *photosTitle = new QLabel(QString::fromUtf8("V\u00fdb\u011br fotografii"));
     photosTitle->setObjectName("subSectionTitle");
     m_selectPhotosButton = new QPushButton(QString::fromUtf8("Vybrat fotografie z disku"));
+    m_selectPhotosButton->setWhatsThis(QString::fromUtf8("Otev\u0159e dialog pro v\u00fdb\u011br fotek z po\u010d\u00edta\u010de. Prvn\u00ed vybran\u00e1 fotka bude pou\u017eita jako reference pro AI anal\u00fdzu."));
     m_photoCountLabel = new QLabel(QString::fromUtf8("Zat\u00edm \u017e\u00e1dn\u00e9 fotografie."));
     m_photoCountLabel->setObjectName("hintLabel");
 
@@ -172,8 +175,11 @@ NewCaseView::NewCaseView(QWidget *parent)
     overlayLabel->setObjectName("hintLabel");
     m_overlayModeViewButton = new QPushButton(QString::fromUtf8("Prohl\u00ed\u017eet"));
     m_overlayModeViewButton->setObjectName("overlayModeActive");
+    m_overlayModeViewButton->setWhatsThis(QString::fromUtf8("Prohl\u00ed\u017ee\u010d\u00ed re\u017eim \u2014 m\u016f\u017eete proch\u00e1zet n\u00e1hled bez kreslen\u00ed oblasti."));
     m_overlayModeRectButton = new QPushButton(QString::fromUtf8("Obd\u00e9ln\u00edk"));
+    m_overlayModeRectButton->setWhatsThis(QString::fromUtf8("Nakreslete obd\u00e9ln\u00edk kolem oblasti opravy. Pom\u016f\u017ee AI p\u0159esn\u011bji odhadnout plochu."));
     m_overlayModePolyButton = new QPushButton(QString::fromUtf8("Polygon"));
+    m_overlayModePolyButton->setWhatsThis(QString::fromUtf8("Nakreslete polygon kolem nepravideln\u00e9 oblasti opravy. Klikejte pro ka\u017ed\u00fd bod, dvouklikem ukon\u010d\u00edte."));
     m_overlayAreaEdit = new QLineEdit();
     m_overlayAreaEdit->setPlaceholderText(QString::fromUtf8("Upřesněná plocha (m²)"));
     m_overlayAreaEdit->setFixedWidth(160);
@@ -211,6 +217,12 @@ NewCaseView::NewCaseView(QWidget *parent)
     connect(backButton, &QPushButton::clicked, this, &NewCaseView::cancelled);
     connect(m_selectPhotosButton, &QPushButton::clicked, this, &NewCaseView::selectPhotos);
     connect(m_submitButton, &QPushButton::clicked, this, &NewCaseView::submit);
+    connect(m_titleEdit, &QLineEdit::textChanged, this, [this]() {
+        if (m_submitButton) {
+            m_submitButton->setEnabled(
+                !m_titleEdit->text().trimmed().isEmpty() && !m_photoPaths.isEmpty());
+        }
+    });
 
     connect(m_overlayModeViewButton, &QPushButton::clicked, this, [this]() {
         m_overlayWidget->setMode(ImageOverlayWidget::Mode::View);
@@ -311,7 +323,8 @@ void NewCaseView::selectPhotos()
     updatePrimaryPreview();
 
     if (m_submitButton) {
-        m_submitButton->setEnabled(!m_photoPaths.isEmpty());
+        m_submitButton->setEnabled(
+            !m_photoPaths.isEmpty() && m_titleEdit && !m_titleEdit->text().trimmed().isEmpty());
     }
 }
 
@@ -365,6 +378,7 @@ void NewCaseView::updateThumbnailStrip()
 
     const int totalWidth = count * (kThumbSize + 4 + 8);
     m_thumbnailStripWidget->setFixedWidth(qMax(totalWidth, 100));
+    m_thumbnailStripWidget->setFixedHeight(kThumbSize + 4);
 }
 
 void NewCaseView::setThumbnailSelection(int index)
@@ -376,8 +390,8 @@ void NewCaseView::setThumbnailSelection(int index)
         const bool selected = (i == m_primaryIndex);
         m_thumbnailButtons.at(i)->setStyleSheet(
             selected
-                ? "border: 3px solid #c97b3d; border-radius: 8px; background: #f4e3cf;"
-                : "border: 1px solid #e6d4bc; border-radius: 8px; background: transparent;");
+                ? "border: 3px solid #c97b3d; border-radius: 8px; background: #f4e3cf; padding: 0px;"
+                : "border: 1px solid #e6d4bc; border-radius: 8px; background: transparent; padding: 0px;");
     }
 
     updatePrimaryPreview();

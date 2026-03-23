@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_current_user
+from app.api.routes.admin import router as admin_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.analysis_jobs import router as analysis_jobs_router
 from app.api.routes.cases import router as cases_router
@@ -34,3 +35,4 @@ api_router.include_router(pricebooks_router, **_protected)
 api_router.include_router(exports_router, **_protected)
 api_router.include_router(material_catalog_router, **_protected)
 api_router.include_router(suppliers_router, **_protected)
+api_router.include_router(admin_router, **_protected)

@@ -10,4 +10,5 @@ struct LoginResultDto
     QString email;
     QString fullName;
     QString role;
+    bool isSuperAdmin = false;
 };

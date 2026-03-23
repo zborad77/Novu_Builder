@@ -23,8 +23,6 @@ from app.services.proposal_draft_service import (
 from app.storage.local_photo_storage import copy_storage_file
 
 
-DEFAULT_ORGANIZATION_ID = "org_1"
-DEFAULT_CREATED_BY_USER_ID = "usr_1"
 MIN_READY_PHOTOS_FOR_FINAL_PROPOSAL = 3
 
 
@@ -316,8 +314,14 @@ class ProjectService:
     async def get_project(self, project_id: str) -> Project | None:
         return await self.repository.get_project(project_id)
 
-    async def list_projects(self, *, status: str | None = None, search: str | None = None) -> list[ProjectSummary]:
-        projects = await self.repository.list_projects(status=status, search=search)
+    async def list_projects(
+        self,
+        *,
+        organization_id: str | None = None,
+        status: str | None = None,
+        search: str | None = None,
+    ) -> list[ProjectSummary]:
+        projects = await self.repository.list_projects(organization_id=organization_id, status=status, search=search)
         return [build_project_summary(project) for project in projects]
 
     async def get_project_detail(self, project_id: str) -> ProjectDetail | None:
@@ -326,12 +330,12 @@ class ProjectService:
             return None
         return build_project_detail(project)
 
-    async def create_project(self, payload: ProjectCreate) -> Project:
+    async def create_project(self, payload: ProjectCreate, *, organization_id: str, created_by_user_id: str) -> Project:
         project_id = f"prj_{uuid4().hex[:8]}"
         return await self.repository.create_project(
             project_id=project_id,
-            organization_id=DEFAULT_ORGANIZATION_ID,
-            created_by_user_id=DEFAULT_CREATED_BY_USER_ID,
+            organization_id=organization_id,
+            created_by_user_id=created_by_user_id,
             title=payload.title.strip(),
             description=payload.description.strip() if payload.description else "",
             client_id=payload.clientId,

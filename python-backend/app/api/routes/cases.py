@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.deps import get_project_service
+from app.api.deps import get_current_user, get_project_service
+from app.schemas.auth import AuthUserRead
 from app.schemas.project import (
     ProjectCreate,
     ProjectCreateResponse,
@@ -22,10 +23,13 @@ async def list_cases(
     updated_to: str | None = Query(default=None),
     page: int | None = Query(default=None),
     search: str | None = Query(default=None),
+    org_id: str | None = Query(default=None, description="Super-admin only: filter by organization"),
     service: ProjectService = Depends(get_project_service),
+    current_user: AuthUserRead = Depends(get_current_user),
 ) -> ProjectListResponse:
     del updated_from, updated_to, page
-    items = await service.list_projects(status=status_filter, search=search)
+    effective_org_id = (org_id if org_id else None) if current_user.isSuperAdmin else current_user.organizationId
+    items = await service.list_projects(organization_id=effective_org_id, status=status_filter, search=search)
     return ProjectListResponse(items=items, total=len(items))
 
 
@@ -33,10 +37,15 @@ async def list_cases(
 async def create_case(
     payload: ProjectCreate,
     service: ProjectService = Depends(get_project_service),
+    current_user: AuthUserRead = Depends(get_current_user),
 ) -> ProjectCreateResponse:
     if not payload.title.strip():
         raise HTTPException(status_code=400, detail="Case title is required.")
-    case = await service.create_project(payload)
+    case = await service.create_project(
+        payload,
+        organization_id=current_user.organizationId,
+        created_by_user_id=current_user.id,
+    )
     return ProjectCreateResponse(id=case.id, status=case.status)
 
 

@@ -11,12 +11,21 @@ class ProjectRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def list_projects(self, *, status: str | None = None, search: str | None = None) -> Sequence[Project]:
+    async def list_projects(
+        self,
+        *,
+        organization_id: str | None = None,
+        status: str | None = None,
+        search: str | None = None,
+    ) -> Sequence[Project]:
         query: Select[tuple[Project]] = (
             select(Project)
             .options(selectinload(Project.photos), selectinload(Project.proposal_draft), selectinload(Project.final_proposals), selectinload(Project.created_by_user))
             .order_by(Project.updated_at.desc(), Project.created_at.desc())
         )
+
+        if organization_id:
+            query = query.where(Project.organization_id == organization_id)
 
         if status:
             query = query.where(Project.status == status)

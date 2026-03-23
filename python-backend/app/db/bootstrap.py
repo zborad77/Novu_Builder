@@ -59,6 +59,37 @@ def _ensure_seed_photo_files(seeded_photos: list[dict]) -> None:
 
 
 async def ensure_dev_seed(session: AsyncSession) -> None:
+    # NOVU platform organization (super-admin home)
+    novu_org = await session.get(Organization, "org_novu")
+    if novu_org is None:
+        session.add(
+            Organization(
+                id="org_novu",
+                name="NOVU Platform",
+                ico="",
+                email="admin@novu.cz",
+                phone="",
+                default_currency="CZK",
+            )
+        )
+
+    # NOVU super-admin account
+    novu_admin = await session.get(User, "usr_novu_admin")
+    if novu_admin is None:
+        session.add(
+            User(
+                id="usr_novu_admin",
+                organization_id="org_novu",
+                email="admin@novu.cz",
+                password_hash=hash_password("NovuAdmin2024!"),
+                full_name="NOVU Admin",
+                role="superadmin",
+                is_active=True,
+                is_superadmin=True,
+            )
+        )
+
+    # Demo customer organization
     organization = await session.get(Organization, "org_1")
     if organization is None:
         session.add(
@@ -81,8 +112,9 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
                 email="demo@novu.local",
                 password_hash=hash_password("demo1234"),
                 full_name="Demo Manager",
-                role="manager",
+                role="dispatcher",
                 is_active=True,
+                is_superadmin=False,
             )
         )
 
