@@ -28,6 +28,8 @@ qt_add_executable(FotoNabidkaDesktop
     src/views/newcaseview.h
     src/views/casebrowserview.cpp
     src/views/casebrowserview.h
+    src/views/adminpanelview.cpp
+    src/views/adminpanelview.h
     src/viewmodels/loginviewmodel.cpp
     src/viewmodels/loginviewmodel.h
     src/viewmodels/dashboardviewmodel.cpp
@@ -40,6 +42,8 @@ qt_add_executable(FotoNabidkaDesktop
     src/services/apiservice.h
     src/services/sessionservice.cpp
     src/services/sessionservice.h
+    src/dto/adminjobdto.h
+    src/dto/adminuserdto.h
     src/dto/casedto.h
     src/dto/imagedto.h
     src/dto/logindto.h

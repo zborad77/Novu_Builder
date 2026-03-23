@@ -6,6 +6,8 @@
 #include <QVector>
 #include <vector>
 
+#include "dto/adminjobdto.h"
+#include "dto/adminuserdto.h"
 #include "dto/casedto.h"
 #include "dto/exportdto.h"
 #include "dto/imagedto.h"
@@ -87,6 +89,21 @@ public:
         QString *errorMessage = nullptr) const;
     [[nodiscard]] QByteArray downloadExportFile(
         const QString &downloadUrl,
+        QString *errorMessage = nullptr) const;
+
+    // ── Admin (superadmin only) ────────────────────────────────────────────
+    [[nodiscard]] std::vector<AdminUserDto> fetchAdminUsers(
+        const QString &orgId = {},
+        QString *errorMessage = nullptr) const;
+    [[nodiscard]] bool resetUserPassword(
+        const QString &userId,
+        const QString &newPassword,
+        QString *errorMessage = nullptr) const;
+    [[nodiscard]] std::vector<AdminJobDto> fetchAdminJobs(
+        const QString &statusFilter = {},
+        QString *errorMessage = nullptr) const;
+    [[nodiscard]] QString fetchAdminLogs(
+        int lines = 200,
         QString *errorMessage = nullptr) const;
 
 private:

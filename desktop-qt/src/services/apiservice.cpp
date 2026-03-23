@@ -983,3 +983,130 @@ QByteArray ApiService::fetchImageData(const QString &imageUrl, QString *errorMes
     }
     return payload;
 }
+
+// ── Admin API ─────────────────────────────────────────────────────────────────
+
+std::vector<AdminUserDto> ApiService::fetchAdminUsers(const QString &orgId, QString *errorMessage) const
+{
+    if (errorMessage) errorMessage->clear();
+
+    QString path = "/api/v1/admin/users";
+    if (!orgId.isEmpty()) {
+        path += "?org_id=" + QString::fromUtf8(QUrl::toPercentEncoding(orgId));
+    }
+
+    QNetworkAccessManager manager;
+    auto *reply = manager.get(makeAuthRequest(QUrl(m_baseUrl + path)));
+    const auto payload = waitForReply(reply, 8000, errorMessage);
+    if (payload.isNull()) return {};
+
+    const auto doc = QJsonDocument::fromJson(payload);
+    if (!doc.isObject()) {
+        if (errorMessage) *errorMessage = "Neplatna odpoved serveru.";
+        return {};
+    }
+
+    std::vector<AdminUserDto> result;
+    const auto items = doc.object().value("items").toArray();
+    for (const auto &item : items) {
+        const auto obj = item.toObject();
+        AdminUserDto u;
+        u.id = obj.value("id").toString();
+        u.orgId = obj.value("organizationId").toString();
+        u.orgName = obj.value("organizationName").toString();
+        u.email = obj.value("email").toString();
+        u.fullName = obj.value("fullName").toString();
+        u.role = obj.value("role").toString();
+        u.isActive = obj.value("isActive").toBool(true);
+        u.isSuperAdmin = obj.value("isSuperAdmin").toBool(false);
+        result.push_back(u);
+    }
+    return result;
+}
+
+bool ApiService::resetUserPassword(const QString &userId, const QString &newPassword, QString *errorMessage) const
+{
+    if (errorMessage) errorMessage->clear();
+
+    QJsonObject body;
+    body["password"] = newPassword;
+
+    QNetworkAccessManager manager;
+    const QUrl url(m_baseUrl + "/api/v1/admin/users/" + userId + "/reset-password");
+    auto *reply = manager.post(makeAuthRequest(url), QJsonDocument(body).toJson(QJsonDocument::Compact));
+    const auto payload = waitForReply(reply, 8000, errorMessage);
+
+    // 204 No Content = success (payload empty, no error set)
+    if (errorMessage && !errorMessage->isEmpty()) return false;
+    if (payload.isEmpty()) return true;
+
+    const auto doc = QJsonDocument::fromJson(payload);
+    if (errorMessage) {
+        *errorMessage = doc.object().value("detail").toString(QString::fromUtf8("Reset hesla selhal."));
+    }
+    return false;
+}
+
+std::vector<AdminJobDto> ApiService::fetchAdminJobs(const QString &statusFilter, QString *errorMessage) const
+{
+    if (errorMessage) errorMessage->clear();
+
+    QString path = "/api/v1/admin/jobs";
+    if (!statusFilter.isEmpty()) {
+        path += "?status=" + QString::fromUtf8(QUrl::toPercentEncoding(statusFilter));
+    }
+
+    QNetworkAccessManager manager;
+    auto *reply = manager.get(makeAuthRequest(QUrl(m_baseUrl + path)));
+    const auto payload = waitForReply(reply, 8000, errorMessage);
+    if (payload.isNull()) return {};
+
+    const auto doc = QJsonDocument::fromJson(payload);
+    if (!doc.isArray()) {
+        if (errorMessage) *errorMessage = "Neplatna odpoved serveru.";
+        return {};
+    }
+
+    std::vector<AdminJobDto> result;
+    for (const auto &item : doc.array()) {
+        const auto obj = item.toObject();
+        AdminJobDto j;
+        j.id = obj.value("id").toString();
+        j.caseId = obj.value("caseId").toString();
+        j.caseTitle = obj.value("caseTitle").toString();
+        j.orgId = obj.value("orgId").toString();
+        j.orgName = obj.value("orgName").toString();
+        j.status = obj.value("status").toString();
+        j.jobType = obj.value("jobType").toString();
+        j.startedAt = obj.value("startedAt").toString();
+        j.finishedAt = obj.value("finishedAt").toString();
+        j.errorMessage = obj.value("errorMessage").toString();
+        j.createdAt = obj.value("createdAt").toString();
+        result.push_back(j);
+    }
+    return result;
+}
+
+QString ApiService::fetchAdminLogs(int lines, QString *errorMessage) const
+{
+    if (errorMessage) errorMessage->clear();
+
+    const QString path = QString("/api/v1/admin/logs?lines=%1").arg(lines);
+
+    QNetworkAccessManager manager;
+    auto *reply = manager.get(makeAuthRequest(QUrl(m_baseUrl + path)));
+    const auto payload = waitForReply(reply, 10000, errorMessage);
+    if (payload.isNull()) return {};
+
+    const auto doc = QJsonDocument::fromJson(payload);
+    if (!doc.isArray()) {
+        if (errorMessage) *errorMessage = "Neplatna odpoved serveru.";
+        return {};
+    }
+
+    QStringList linesList;
+    for (const auto &item : doc.array()) {
+        linesList.append(item.toString());
+    }
+    return linesList.join('\n');
+}

@@ -1,6 +1,7 @@
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, text
@@ -78,7 +79,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, settings.log_file)
 
     app = FastAPI(
         title=settings.app_name,
@@ -102,6 +103,22 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        start = time.monotonic()
+        response = await call_next(request)
+        duration_ms = round((time.monotonic() - start) * 1000)
+        # Skip noisy health/static calls in logs
+        if not request.url.path.startswith("/mock-storage"):
+            logger.info(
+                "http.request",
+                method=request.method,
+                path=request.url.path,
+                status=response.status_code,
+                duration_ms=duration_ms,
+            )
+        return response
+
     app.include_router(api_router, prefix=settings.api_v1_prefix)
     app.mount("/mock-storage", StaticFiles(directory=STORAGE_ROOT), name="mock-storage")
     return app

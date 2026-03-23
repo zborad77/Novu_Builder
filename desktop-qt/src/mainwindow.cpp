@@ -16,6 +16,7 @@
 #include <QWhatsThis>
 
 #include "services/apiservice.h"
+#include "views/adminpanelview.h"
 #include "views/casebrowserview.h"
 #include "views/casedetailview.h"
 #include "views/caselistview.h"
@@ -73,12 +74,19 @@ void MainWindow::handleLoginRequested(const QString &email, const QString &passw
     m_session.saveToSettings();
     ApiService::setGlobalToken(result.accessToken);
 
+    const bool isSuperAdmin = result.isSuperAdmin
+        || result.role == QLatin1String("superadmin");
+
     // Server button visible only for admins
     if (m_serverButton) {
-        const bool isAdmin = result.isSuperAdmin
-            || result.role == QLatin1String("superadmin")
+        const bool isAdmin = isSuperAdmin
             || result.role == QLatin1String("company-admin");
         m_serverButton->setVisible(isAdmin);
+    }
+
+    // Admin panel button visible only for superadmin
+    if (m_sidebarAdminButton) {
+        m_sidebarAdminButton->setVisible(isSuperAdmin);
     }
 
     m_stack->setCurrentIndex(1);
@@ -123,11 +131,16 @@ QWidget *MainWindow::createWorkspaceShell()
     m_sidebarNewCaseButton->setWhatsThis(QString::fromUtf8("Vytvo\u0159\u00ed novou zak\u00e1zku p\u0159\u00edmo z po\u010d\u00edta\u010de \u2014 bez mobiln\u00ed aplikace. Vhodn\u00e9 pro archivn\u00ed nebo testovac\u00ed zak\u00e1zky."));
     auto *loginButton = new QPushButton("Login view", sidebar);
     loginButton->setWhatsThis(QString::fromUtf8("Odhl\u00e1s\u00ed aktu\u00e1ln\u00edho u\u017eivatele a vr\u00e1t\u00ed se na p\u0159ihla\u0161ovac\u00ed obrazovku."));
+    m_sidebarAdminButton = new QPushButton(QString::fromUtf8("\u2699 Admin"), sidebar);
+    m_sidebarAdminButton->setWhatsThis(QString::fromUtf8("Otev\u0159e admin panel \u2014 spr\u00e1va u\u017eivatel\u016f, p\u0159ehled jobs a logy serveru. Pouze pro superadmina."));
+    m_sidebarAdminButton->setVisible(false);
+
     sidebarLayout->addWidget(m_sidebarServerCasesButton);
     sidebarLayout->addWidget(m_sidebarWorkCasesButton);
     sidebarLayout->addWidget(m_sidebarHistoryButton);
     sidebarLayout->addWidget(m_sidebarNewCaseButton);
     sidebarLayout->addStretch();
+    sidebarLayout->addWidget(m_sidebarAdminButton);
     sidebarLayout->addWidget(loginButton);
 
     auto *content = new QWidget(workspace);
@@ -268,10 +281,12 @@ QWidget *MainWindow::createWorkspaceShell()
         }
     )");
 
+    m_adminPanelView = new AdminPanelView(m_detailStack);
     m_detailStack->addWidget(m_caseDetailView);   // index 0
     m_detailStack->addWidget(m_newCaseView);       // index 1
     m_detailStack->addWidget(m_caseBrowserView);   // index 2
     m_detailStack->addWidget(m_welcomeView);       // index 3
+    m_detailStack->addWidget(m_adminPanelView);    // index 4
     m_detailStack->setCurrentIndex(3);
     detailColumnLayout->addWidget(m_detailStack, 1);
 
@@ -463,6 +478,10 @@ QWidget *MainWindow::createWorkspaceShell()
         if (!confirmNavigateAway()) return;
         showNewCaseView();
         setSidebarActiveSection(m_sidebarNewCaseButton);
+    });
+    connect(m_sidebarAdminButton, &QPushButton::clicked, this, [this]() {
+        showAdminPanelView();
+        setSidebarActiveSection(m_sidebarAdminButton);
     });
 
     // WhatsThis mode
@@ -705,6 +724,18 @@ void MainWindow::showWelcomeView()
         m_workspaceSubtitleLabel->setText(
             QString::fromUtf8("Vyberte zak\u00e1zku nebo na\u010dt\u011bte frontu ze serveru."));
     setSidebarActiveSection(nullptr);
+}
+
+void MainWindow::showAdminPanelView()
+{
+    if (m_caseColumn) m_caseColumn->hide();
+    if (m_detailStack) m_detailStack->setCurrentIndex(4);
+    if (m_workspaceTitleLabel)
+        m_workspaceTitleLabel->setText(QString::fromUtf8("Admin panel"));
+    if (m_workspaceSubtitleLabel)
+        m_workspaceSubtitleLabel->setText(
+            QString::fromUtf8("Spr\u00e1va u\u017eivatel\u016f, p\u0159ehled anal\u00fdz a logy serveru."));
+    if (m_adminPanelView) m_adminPanelView->refresh();
 }
 
 void MainWindow::showCaseDetailView()

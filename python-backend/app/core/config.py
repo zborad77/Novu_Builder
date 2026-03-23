@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     db_seed_on_startup: bool = Field(default=True, alias="DB_SEED_ON_STARTUP")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    log_file: str = Field(default="", alias="LOG_FILE")
     storage_root: str = Field(default="", alias="STORAGE_ROOT")
     ai_analysis_provider: str = Field(default="mock", alias="AI_ANALYSIS_PROVIDER")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")

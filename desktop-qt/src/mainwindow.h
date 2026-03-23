@@ -9,6 +9,7 @@ class QStackedWidget;
 class QLabel;
 class QPushButton;
 class QWidget;
+class AdminPanelView;
 class CaseBrowserView;
 class CaseDetailView;
 class CaseListView;
@@ -34,6 +35,7 @@ private:
     void showWelcomeView();
     void showNewCaseView();
     void showCaseDetailView();
+    void showAdminPanelView();
     void setSidebarActiveSection(QPushButton *activeButton);
     bool confirmNavigateAway();
 
@@ -44,6 +46,7 @@ private:
     CaseDetailView *m_caseDetailView = nullptr;
     NewCaseView *m_newCaseView = nullptr;
     CaseBrowserView *m_caseBrowserView = nullptr;
+    AdminPanelView *m_adminPanelView = nullptr;
     QStackedWidget *m_detailStack = nullptr;
     QWidget *m_welcomeView = nullptr;
     QFrame *m_caseColumn = nullptr;
@@ -53,6 +56,7 @@ private:
     QPushButton *m_sidebarWorkCasesButton = nullptr;
     QPushButton *m_sidebarHistoryButton = nullptr;
     QPushButton *m_sidebarNewCaseButton = nullptr;
+    QPushButton *m_sidebarAdminButton = nullptr;
     QPushButton *m_serverButton = nullptr;
     QString m_caseListSection; // "Rozpracované zakázky" | "Historie zakázek"
 };
