@@ -2,8 +2,10 @@
 .env
 .env.*
 !.env.example
+!.env.production.example
 .vscode/
 storage/
+!python-backend/app/storage/
 my-app/
 prisma/dev.db
 python-backend/.venv/

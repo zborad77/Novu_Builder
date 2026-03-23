@@ -111,8 +111,11 @@ class AnalysisService:
                     provider_key=self.provider_key,
                     project={
                         "id": project.id,
+                        "title": project.title,
                         "description": project.description,
                         "address_label": project.address_label,
+                        "property_type": project.property_type,
+                        "repair_scope": project.repair_scope,
                     },
                     photos=photos,
                 )
@@ -138,8 +141,11 @@ class AnalysisService:
             provider_key=self.provider_key,
             project={
                 "id": project.id,
+                "title": project.title,
                 "description": project.description,
                 "address_label": project.address_label,
+                "property_type": project.property_type,
+                "repair_scope": project.repair_scope,
             },
             photos=photos,
         )

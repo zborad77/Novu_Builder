@@ -67,6 +67,19 @@ async def create_quote_docx(
     return ExportCreateResponse(exportId=export.id, status=export.status)
 
 
+@router.post("/cases/{case_id}/exports/case-zip", response_model=ExportCreateResponse, status_code=status.HTTP_201_CREATED)
+async def create_case_zip(
+    case_id: str,
+    project_service: ProjectService = Depends(get_project_service),
+    export_service: ExportService = Depends(get_export_service),
+) -> ExportCreateResponse:
+    detail = await project_service.get_project_detail(case_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    export = export_service.create_case_zip_export(case_detail=detail)
+    return ExportCreateResponse(exportId=export.id, status=export.status)
+
+
 @router.get("/exports/{export_id}", response_model=ExportRead)
 async def get_export(
     export_id: str,

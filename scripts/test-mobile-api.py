@@ -195,7 +195,7 @@ def run_tests(base_url: str, email: str, password: str):
             token=token,
             files={"files": ("test_photo.jpg", jpeg_bytes, "image/jpeg")},
         )
-        photo_id = result.get("id") or result.get("photoId")
+        photo_id = (result.get("uploaded") or [{}])[0].get("id")
         ok(f"Photo ID: {photo_id}")
     except Exception as e:
         fail(f"Photo upload failed: {e}")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unicodedata
 from datetime import UTC, datetime
 from io import BytesIO
@@ -10,7 +11,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from app.schemas.export import ExportRead
 from app.schemas.project import ProjectDetail, ProposalDraftField, ProposalDraftItem, ProposalDraftSection
-from app.storage.local_photo_storage import sanitize_filename, write_storage_file
+from app.storage.local_photo_storage import STORAGE_ROOT, sanitize_filename, write_storage_file
 
 
 _EXPORT_STORE: dict[str, ExportRead] = {}
@@ -720,6 +721,35 @@ def _build_pdf_bytes(case_detail: ProjectDetail) -> bytes:
     return pdf.getvalue()
 
 
+def _build_case_zip_bytes(case_detail: ProjectDetail) -> bytes:
+    """Sestaví ZIP archiv zakázky: project.json + analysis.json + photos/."""
+    buffer = BytesIO()
+    with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
+        # project.json
+        project_data = case_detail.model_dump(mode="json")
+        archive.writestr("project.json", json.dumps(project_data, ensure_ascii=False, indent=2))
+
+        # analysis.json
+        if case_detail.latestAnalysis:
+            archive.writestr(
+                "analysis.json",
+                json.dumps(case_detail.latestAnalysis, ensure_ascii=False, indent=2),
+            )
+
+        # photos/
+        for photo in case_detail.photos:
+            storage_key = photo.get("storageKey") if isinstance(photo, dict) else getattr(photo, "storageKey", None)
+            if not storage_key:
+                continue
+            photo_path = STORAGE_ROOT / storage_key
+            if not photo_path.is_file():
+                continue
+            archive_name = f"photos/{photo_path.name}"
+            archive.writestr(archive_name, photo_path.read_bytes())
+
+    return buffer.getvalue()
+
+
 class ExportService:
     def create_export(self, *, case_id: str, export_type: str) -> ExportRead:
         export_id = f"exp_{uuid4().hex[:8]}"
@@ -823,6 +853,29 @@ class ExportService:
             self.create_quote_docx_export(case_detail=case_detail),
             self.create_quote_pdf_export(case_detail=case_detail),
         ]
+
+    def create_case_zip_export(self, *, case_detail: ProjectDetail) -> ExportRead:
+        export_id = f"exp_{uuid4().hex[:8]}"
+        now = datetime.now(UTC)
+        base_name = sanitize_filename(case_detail.title or case_detail.id)
+        file_name = f"{base_name}.zip"
+        relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
+        write_storage_file(
+            relative_storage_key=relative_storage_key.as_posix(),
+            content=_build_case_zip_bytes(case_detail),
+        )
+        export = ExportRead(
+            id=export_id,
+            caseId=case_detail.id,
+            exportType="case-zip",
+            status="completed",
+            fileName=file_name,
+            downloadUrl=f"/mock-storage/{relative_storage_key.as_posix()}",
+            createdAt=now,
+            completedAt=now,
+        )
+        _EXPORT_STORE[export_id] = export
+        return export
 
     def get_export(self, export_id: str) -> ExportRead | None:
         return _EXPORT_STORE.get(export_id)
