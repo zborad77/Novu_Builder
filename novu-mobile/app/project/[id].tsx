@@ -149,10 +149,10 @@ async function fetchAnalysisJob(jobId: string): Promise<AnalysisJob> {
 }
 
 async function fetchLatestAnalysisResult(projectId: string): Promise<AnalysisResult | null> {
-  const res = await fetch(`${getBaseUrl()}/projects/${projectId}/analysis`, { headers: await authHeaders() });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  const res = await fetch(`${getBaseUrl()}/cases/${projectId}`, { headers: await authHeaders() });
+  if (!res.ok) return null;
+  const detail = await res.json();
+  return detail.latestAnalysis ?? null;
 }
 
 // ── Screen ───────────────────────────────────────────────────────────────────
