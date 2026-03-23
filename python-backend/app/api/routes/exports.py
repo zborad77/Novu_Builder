@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import get_export_service, get_project_service
+from app.api.deps import get_export_service, get_project_service, require_manager
+from app.schemas.auth import AuthUserRead
 from app.schemas.export import ExportCreateResponse, ExportRead
 from app.services.export_service import ExportService
 from app.services.project_service import ProjectService
@@ -11,6 +12,7 @@ router = APIRouter(tags=["exports"])
 @router.post("/cases/{case_id}/exports/report-pdf", response_model=ExportCreateResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_report_pdf(
     case_id: str,
+    _: AuthUserRead = Depends(require_manager),
     project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportCreateResponse:
@@ -24,6 +26,7 @@ async def create_report_pdf(
 @router.post("/cases/{case_id}/exports/proposal-docx", response_model=ExportCreateResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_proposal_docx(
     case_id: str,
+    _: AuthUserRead = Depends(require_manager),
     project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportCreateResponse:
@@ -39,6 +42,7 @@ async def create_proposal_docx(
 @router.post("/cases/{case_id}/exports/quote-pdf", response_model=ExportCreateResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_quote_pdf(
     case_id: str,
+    _: AuthUserRead = Depends(require_manager),
     project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportCreateResponse:
@@ -55,6 +59,7 @@ async def create_quote_pdf(
 @router.post("/cases/{case_id}/exports/quote-docx", response_model=ExportCreateResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_quote_docx(
     case_id: str,
+    _: AuthUserRead = Depends(require_manager),
     project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportCreateResponse:
@@ -70,6 +75,7 @@ async def create_quote_docx(
 @router.post("/cases/{case_id}/exports/case-zip", response_model=ExportCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_case_zip(
     case_id: str,
+    _: AuthUserRead = Depends(require_manager),
     project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportCreateResponse:

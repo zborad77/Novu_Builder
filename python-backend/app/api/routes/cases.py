@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.deps import get_current_user, get_project_service
+from app.api.deps import get_current_user, get_project_service, require_manager
 from app.schemas.auth import AuthUserRead
 from app.schemas.project import (
     ProjectCreate,
@@ -65,6 +65,7 @@ async def duplicate_case(
     case_id: str,
     payload: ProjectDuplicateRequest,
     service: ProjectService = Depends(get_project_service),
+    _: AuthUserRead = Depends(require_manager),
 ) -> ProjectCreateResponse:
     try:
         duplicated = await service.duplicate_project(case_id, payload)
@@ -80,6 +81,7 @@ async def patch_case(
     case_id: str,
     payload: ProjectPatch,
     service: ProjectService = Depends(get_project_service),
+    _: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
     updated = await service.update_project(case_id, payload.model_dump(exclude_unset=True))
     if not updated:
@@ -92,6 +94,7 @@ async def patch_case_proposal_draft(
     case_id: str,
     payload: ProjectProposalDraftPatch,
     service: ProjectService = Depends(get_project_service),
+    _: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
     updated = await service.update_proposal_draft(case_id, payload.model_dump(exclude_unset=True))
     if not updated:
@@ -103,6 +106,7 @@ async def patch_case_proposal_draft(
 async def create_case_final_proposal(
     case_id: str,
     service: ProjectService = Depends(get_project_service),
+    _: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
     try:
         updated = await service.create_final_proposal(case_id)
@@ -117,6 +121,7 @@ async def create_case_final_proposal(
 async def archive_case(
     case_id: str,
     service: ProjectService = Depends(get_project_service),
+    _: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
     updated = await service.update_project(case_id, {"status": "archived"})
     if not updated:
@@ -128,6 +133,7 @@ async def archive_case(
 async def send_case(
     case_id: str,
     service: ProjectService = Depends(get_project_service),
+    _: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
     try:
         updated = await service.mark_project_sent(case_id)

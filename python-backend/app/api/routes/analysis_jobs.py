@@ -1,6 +1,6 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
-from app.api.deps import get_analysis_service, get_current_user, get_project_service
+from app.api.deps import get_analysis_service, get_current_user, get_project_service, require_manager
 from app.schemas.analysis import AnalysisTriggerResponse
 from app.schemas.auth import AuthUserRead
 from app.services.analysis_service import AnalysisService
@@ -68,7 +68,7 @@ async def patch_analysis_selection(
     case_id: str,
     result_id: str,
     body: dict,
-    current_user: AuthUserRead = Depends(get_current_user),
+    _: AuthUserRead = Depends(require_manager),
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
 ) -> dict:

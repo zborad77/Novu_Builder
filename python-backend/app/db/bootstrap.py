@@ -112,7 +112,22 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
                 email="demo@novu.local",
                 password_hash=hash_password("demo1234"),
                 full_name="Demo Manager",
-                role="dispatcher",
+                role="manager",
+                is_active=True,
+                is_superadmin=False,
+            )
+        )
+
+    tech = await session.get(User, "usr_2")
+    if tech is None:
+        session.add(
+            User(
+                id="usr_2",
+                organization_id="org_1",
+                email="tech@novu.local",
+                password_hash=hash_password("tech1234"),
+                full_name="Demo Technician",
+                role="technician",
                 is_active=True,
                 is_superadmin=False,
             )

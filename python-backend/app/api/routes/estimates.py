@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.deps import get_project_service, get_quote_variant_service
+from app.api.deps import get_project_service, get_quote_variant_service, require_manager
+from app.schemas.auth import AuthUserRead
 from app.schemas.quote_variant import QuoteVariantListResponse, QuoteVariantRecalculateResponse
 from app.services.project_service import ProjectService
 from app.services.quote_variant_service import QuoteVariantService
@@ -24,6 +25,7 @@ async def list_case_estimates(
 @router.post("/cases/{case_id}/estimates/recalculate", response_model=QuoteVariantRecalculateResponse)
 async def recalculate_case_estimates(
     case_id: str,
+    _: AuthUserRead = Depends(require_manager),
     project_service: ProjectService = Depends(get_project_service),
     quote_service: QuoteVariantService = Depends(get_quote_variant_service),
 ) -> QuoteVariantRecalculateResponse:

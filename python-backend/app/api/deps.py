@@ -88,5 +88,14 @@ async def require_superadmin(
     return current_user
 
 
+async def require_manager(
+    current_user: AuthUserRead = Depends(get_current_user),
+) -> AuthUserRead:
+    """Manager nebo superadmin. Technician nemá přístup."""
+    if current_user.role not in ("manager", "superadmin") and not current_user.isSuperAdmin:
+        raise HTTPException(status_code=403, detail="Manager access required.")
+    return current_user
+
+
 def get_export_service() -> ExportService:
     return ExportService()
