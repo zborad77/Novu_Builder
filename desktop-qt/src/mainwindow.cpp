@@ -282,6 +282,9 @@ QWidget *MainWindow::createWorkspaceShell()
     )");
 
     m_adminPanelView = new AdminPanelView(m_detailStack);
+    connect(m_adminPanelView, &AdminPanelView::impersonationStarted,
+            this, &MainWindow::startImpersonation);
+
     m_detailStack->addWidget(m_caseDetailView);   // index 0
     m_detailStack->addWidget(m_newCaseView);       // index 1
     m_detailStack->addWidget(m_caseBrowserView);   // index 2

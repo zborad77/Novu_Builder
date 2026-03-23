@@ -36,6 +36,9 @@ private:
     void showNewCaseView();
     void showCaseDetailView();
     void showAdminPanelView();
+    void startImpersonation(const QString &token, const QString &userFullName,
+                            const QString &orgId, const QString &userId);
+    void stopImpersonation();
     void setSidebarActiveSection(QPushButton *activeButton);
     bool confirmNavigateAway();
 
@@ -59,4 +62,10 @@ private:
     QPushButton *m_sidebarAdminButton = nullptr;
     QPushButton *m_serverButton = nullptr;
     QString m_caseListSection; // "Rozpracované zakázky" | "Historie zakázek"
+
+    // Impersonation
+    QString m_savedAdminToken;
+    QFrame *m_impersonationBanner = nullptr;
+    QLabel *m_impersonationLabel = nullptr;
+    QPushButton *m_stopImpersonationBtn = nullptr;
 };

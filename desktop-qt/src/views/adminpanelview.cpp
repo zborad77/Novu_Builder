@@ -6,7 +6,6 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
-#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -62,6 +61,16 @@ static const QString kStyleSheet = R"(
     }
     QPushButton#actionBtn:hover { background: #c96a2c; }
     QPushButton#actionBtn:disabled { background: #c8bfb5; }
+    QPushButton#impersonateBtn {
+        background: #2c3e50;
+        color: #f5c28b;
+        border: none;
+        border-radius: 8px;
+        padding: 7px 18px;
+        font-weight: 600;
+    }
+    QPushButton#impersonateBtn:hover { background: #1a252f; }
+    QPushButton#impersonateBtn:disabled { background: #c8bfb5; color: #fff; }
     QPushButton#secondaryBtn {
         background: #f7efe4;
         color: #314252;
@@ -71,20 +80,12 @@ static const QString kStyleSheet = R"(
         font-weight: 600;
     }
     QPushButton#secondaryBtn:hover { background: #eadcc8; }
-    QComboBox {
+    QComboBox, QLineEdit {
         border: 1px solid #eadcc8;
         border-radius: 8px;
         padding: 6px 10px;
         background: #fff;
         color: #314252;
-    }
-    QTextEdit {
-        border: 1px solid #eadcc8;
-        border-radius: 8px;
-        background: #1e1e2e;
-        color: #cdd6f4;
-        font-family: monospace;
-        font-size: 12px;
     }
     QLabel#sectionTitle {
         font-size: 16px;
@@ -114,20 +115,24 @@ AdminPanelView::AdminPanelView(QWidget *parent)
 
     auto *jobsTab = new QWidget(m_tabs);
     buildJobsTab(jobsTab);
-    m_tabs->addTab(jobsTab, "Anal\u00fdzy (jobs)");
+    m_tabs->addTab(jobsTab, QString::fromUtf8("Anal\u00fdzy"));
 
-    auto *logsTab = new QWidget(m_tabs);
-    buildLogsTab(logsTab);
-    m_tabs->addTab(logsTab, "Logy");
+    auto *companiesTab = new QWidget(m_tabs);
+    buildCompaniesTab(companiesTab);
+    m_tabs->addTab(companiesTab, "Firmy");
+
+    auto *auditTab = new QWidget(m_tabs);
+    buildAuditTab(auditTab);
+    m_tabs->addTab(auditTab, "Audit trail");
 
     layout->addWidget(m_tabs);
-
     setStyleSheet(kStyleSheet);
 
     connect(m_tabs, &QTabWidget::currentChanged, this, [this](int idx) {
         if (idx == 0) loadUsers();
         else if (idx == 1) loadJobs();
-        else if (idx == 2) loadLogs();
+        else if (idx == 2) loadCompanies();
+        else if (idx == 3) loadAudit();
     });
 }
 
@@ -156,16 +161,25 @@ void AdminPanelView::buildUsersTab(QWidget *tab)
     m_resetPwBtn->setEnabled(false);
     toolbar->addWidget(m_resetPwBtn);
 
+    m_impersonateBtn = new QPushButton(QString::fromUtf8("Impersonovat"), tab);
+    m_impersonateBtn->setObjectName("impersonateBtn");
+    m_impersonateBtn->setEnabled(false);
+    m_impersonateBtn->setToolTip(QString::fromUtf8(
+        "P\u0159ihl\u00e1s\u00ed v\u00e1s jako tento u\u017eivatel po dobu 15 minut. "
+        "Vhodn\u00e9 pro reprodukci bug\u016f."));
+    toolbar->addWidget(m_impersonateBtn);
+
     layout->addLayout(toolbar);
 
-    m_usersTable = new QTableWidget(0, 6, tab);
+    m_usersTable = new QTableWidget(0, 7, tab);
     m_usersTable->setHorizontalHeaderLabels({
         "ID", QString::fromUtf8("Jm\u00e9no"), "Email", "Role",
-        QString::fromUtf8("Firma"), QString::fromUtf8("Aktivn\u00ed")
+        "Firma", QString::fromUtf8("Aktivn\u00ed"), "SuperAdmin"
     });
-    m_usersTable->horizontalHeader()->setStretchLastSection(true);
+    m_usersTable->horizontalHeader()->setStretchLastSection(false);
     m_usersTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     m_usersTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    m_usersTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
     m_usersTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_usersTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_usersTable->setAlternatingRowColors(true);
@@ -174,9 +188,18 @@ void AdminPanelView::buildUsersTab(QWidget *tab)
     connect(refreshBtn, &QPushButton::clicked, this, &AdminPanelView::loadUsers);
     connect(m_orgFilter, &QComboBox::currentIndexChanged, this, &AdminPanelView::loadUsers);
     connect(m_usersTable, &QTableWidget::itemSelectionChanged, this, [this]() {
-        m_resetPwBtn->setEnabled(m_usersTable->currentRow() >= 0);
+        const bool sel = m_usersTable->currentRow() >= 0;
+        m_resetPwBtn->setEnabled(sel);
+        // Disable impersonate for superadmins (column 6 = "✓" for superadmin)
+        if (sel) {
+            const auto *saItem = m_usersTable->item(m_usersTable->currentRow(), 6);
+            m_impersonateBtn->setEnabled(saItem && saItem->text() != QString::fromUtf8("\u2713"));
+        } else {
+            m_impersonateBtn->setEnabled(false);
+        }
     });
     connect(m_resetPwBtn, &QPushButton::clicked, this, &AdminPanelView::onResetPassword);
+    connect(m_impersonateBtn, &QPushButton::clicked, this, &AdminPanelView::onImpersonate);
 }
 
 void AdminPanelView::loadUsers()
@@ -191,7 +214,6 @@ void AdminPanelView::loadUsers()
         return;
     }
 
-    // Repopulate org filter from data (keep current selection)
     const QString currentOrg = m_orgFilter->currentData().toString();
     m_orgFilter->blockSignals(true);
     m_orgFilter->clear();
@@ -216,7 +238,10 @@ void AdminPanelView::loadUsers()
         m_usersTable->setItem(row, 2, new QTableWidgetItem(u.email));
         m_usersTable->setItem(row, 3, new QTableWidgetItem(u.role));
         m_usersTable->setItem(row, 4, new QTableWidgetItem(u.orgName));
-        m_usersTable->setItem(row, 5, new QTableWidgetItem(u.isActive ? "✓" : "✗"));
+        m_usersTable->setItem(row, 5, new QTableWidgetItem(u.isActive
+            ? QString::fromUtf8("\u2713") : QString::fromUtf8("\u2717")));
+        m_usersTable->setItem(row, 6, new QTableWidgetItem(u.isSuperAdmin
+            ? QString::fromUtf8("\u2713") : QString()));
     }
 }
 
@@ -225,19 +250,18 @@ void AdminPanelView::onResetPassword()
     const int row = m_usersTable->currentRow();
     if (row < 0) return;
 
-    const QString userId = m_usersTable->item(row, 0)->text();
+    const QString userId   = m_usersTable->item(row, 0)->text();
     const QString userName = m_usersTable->item(row, 1)->text();
-    const QString userEmail = m_usersTable->item(row, 2)->text();
+    const QString userEmail= m_usersTable->item(row, 2)->text();
 
-    // Dialog se dvěma poli pro nové heslo + potvrzení
     auto *dialog = new QDialog(this);
     dialog->setWindowTitle(QString::fromUtf8("Reset hesla — %1").arg(userName));
     dialog->setMinimumWidth(360);
     auto *form = new QFormLayout(dialog);
 
-    auto *pwEdit = new QLineEdit(dialog);
+    auto *pwEdit  = new QLineEdit(dialog);
     pwEdit->setEchoMode(QLineEdit::Password);
-    pwEdit->setPlaceholderText(QString::fromUtf8("Nove heslo (min. 6 znaku)"));
+    pwEdit->setPlaceholderText(QString::fromUtf8("Nov\u00e9 heslo (min. 6 znak\u016f)"));
 
     auto *pw2Edit = new QLineEdit(dialog);
     pw2Edit->setEchoMode(QLineEdit::Password);
@@ -252,19 +276,16 @@ void AdminPanelView::onResetPassword()
     form->addRow(QString::fromUtf8("Potvrzen\u00ed:"), pw2Edit);
     form->addRow(errorLabel);
 
-    auto *buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);
     form->addRow(buttons);
 
     connect(buttons, &QDialogButtonBox::accepted, dialog, [=]() {
-        const QString pw = pwEdit->text();
-        const QString pw2 = pw2Edit->text();
-        if (pw.length() < 6) {
+        if (pwEdit->text().length() < 6) {
             errorLabel->setText(QString::fromUtf8("Heslo mus\u00ed m\u00edt alespo\u0148 6 znak\u016f."));
             errorLabel->setVisible(true);
             return;
         }
-        if (pw != pw2) {
+        if (pwEdit->text() != pw2Edit->text()) {
             errorLabel->setText(QString::fromUtf8("Hesla se neshoduj\u00ed."));
             errorLabel->setVisible(true);
             return;
@@ -273,24 +294,54 @@ void AdminPanelView::onResetPassword()
     });
     connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
 
-    if (dialog->exec() != QDialog::Accepted) {
-        dialog->deleteLater();
-        return;
-    }
+    if (dialog->exec() != QDialog::Accepted) { dialog->deleteLater(); return; }
 
     const QString newPassword = pwEdit->text();
     dialog->deleteLater();
 
     ApiService api;
     QString err;
-    const bool ok = api.resetUserPassword(userId, newPassword, &err);
-    if (!ok) {
-        QMessageBox::warning(this, QString::fromUtf8("Chyba"), err.isEmpty()
-            ? QString::fromUtf8("Reset hesla selhal.") : err);
+    if (!api.resetUserPassword(userId, newPassword, &err)) {
+        QMessageBox::warning(this, QString::fromUtf8("Chyba"),
+            err.isEmpty() ? QString::fromUtf8("Reset hesla selhal.") : err);
         return;
     }
     QMessageBox::information(this, QString::fromUtf8("Hotovo"),
         QString::fromUtf8("Heslo pro %1 bylo \u00fasp\u011b\u0161n\u011b zm\u011bn\u011bno.").arg(userName));
+}
+
+void AdminPanelView::onImpersonate()
+{
+    const int row = m_usersTable->currentRow();
+    if (row < 0) return;
+
+    const QString userId   = m_usersTable->item(row, 0)->text();
+    const QString userName = m_usersTable->item(row, 1)->text();
+    const QString orgName  = m_usersTable->item(row, 4)->text();
+
+    const auto answer = QMessageBox::question(
+        this,
+        QString::fromUtf8("Impersonovat u\u017eivatele"),
+        QString::fromUtf8(
+            "Chcete se p\u0159ihl\u00e1sit jako <b>%1</b> (%2)?<br><br>"
+            "Token vyprch\u00e1 za 15 minut.<br>"
+            "V\u0161echny akce budou zalogov\u00e1ny v audit trailu.")
+            .arg(userName, orgName),
+        QMessageBox::Yes | QMessageBox::Cancel);
+
+    if (answer != QMessageBox::Yes) return;
+
+    ApiService api;
+    QString err;
+    const auto dto = api.impersonateUser(userId, &err);
+
+    if (dto.accessToken.isEmpty()) {
+        QMessageBox::warning(this, QString::fromUtf8("Chyba"),
+            err.isEmpty() ? QString::fromUtf8("Impersonace selhala.") : err);
+        return;
+    }
+
+    emit impersonationStarted(dto.accessToken, dto.userFullName, dto.orgId, dto.userId);
 }
 
 // ── Jobs Tab ──────────────────────────────────────────────────────────────────
@@ -338,13 +389,9 @@ void AdminPanelView::loadJobs()
 {
     ApiService api;
     QString err;
-    const QString statusFilter = m_jobStatusFilter->currentData().toString();
-    const auto jobs = api.fetchAdminJobs(statusFilter, &err);
+    const auto jobs = api.fetchAdminJobs(m_jobStatusFilter->currentData().toString(), &err);
 
-    if (!err.isEmpty()) {
-        QMessageBox::warning(this, QString::fromUtf8("Chyba"), err);
-        return;
-    }
+    if (!err.isEmpty()) { QMessageBox::warning(this, QString::fromUtf8("Chyba"), err); return; }
 
     m_jobsTable->setRowCount(0);
     for (const auto &j : jobs) {
@@ -352,7 +399,7 @@ void AdminPanelView::loadJobs()
         m_jobsTable->insertRow(row);
         m_jobsTable->setItem(row, 0, new QTableWidgetItem(j.id.left(12) + "..."));
         auto *statusItem = new QTableWidgetItem(j.status);
-        if (j.status == "running") statusItem->setForeground(QColor("#2ecc71"));
+        if (j.status == "running")   statusItem->setForeground(QColor("#2ecc71"));
         else if (j.status == "failed") statusItem->setForeground(QColor("#e74c3c"));
         else if (j.status == "pending") statusItem->setForeground(QColor("#e07b39"));
         m_jobsTable->setItem(row, 1, statusItem);
@@ -364,9 +411,60 @@ void AdminPanelView::loadJobs()
     }
 }
 
-// ── Logs Tab ──────────────────────────────────────────────────────────────────
+// ── Companies Tab ─────────────────────────────────────────────────────────────
 
-void AdminPanelView::buildLogsTab(QWidget *tab)
+void AdminPanelView::buildCompaniesTab(QWidget *tab)
+{
+    auto *layout = new QVBoxLayout(tab);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(10);
+
+    auto *toolbar = new QHBoxLayout();
+    auto *refreshBtn = new QPushButton(QString::fromUtf8("Obnovit"), tab);
+    refreshBtn->setObjectName("secondaryBtn");
+    toolbar->addStretch();
+    toolbar->addWidget(refreshBtn);
+    layout->addLayout(toolbar);
+
+    m_companiesTable = new QTableWidget(0, 6, tab);
+    m_companiesTable->setHorizontalHeaderLabels({
+        "ID", QString::fromUtf8("N\u00e1zev"), QString::fromUtf8("I\u010cO"),
+        "Email", "Tel.", QString::fromUtf8("U\u017eivatel\u016f")
+    });
+    m_companiesTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    m_companiesTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    m_companiesTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_companiesTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_companiesTable->setAlternatingRowColors(true);
+    layout->addWidget(m_companiesTable);
+
+    connect(refreshBtn, &QPushButton::clicked, this, &AdminPanelView::loadCompanies);
+}
+
+void AdminPanelView::loadCompanies()
+{
+    ApiService api;
+    QString err;
+    const auto companies = api.fetchAdminCompanies(&err);
+
+    if (!err.isEmpty()) { QMessageBox::warning(this, QString::fromUtf8("Chyba"), err); return; }
+
+    m_companiesTable->setRowCount(0);
+    for (const auto &c : companies) {
+        const int row = m_companiesTable->rowCount();
+        m_companiesTable->insertRow(row);
+        m_companiesTable->setItem(row, 0, new QTableWidgetItem(c.id));
+        m_companiesTable->setItem(row, 1, new QTableWidgetItem(c.name));
+        m_companiesTable->setItem(row, 2, new QTableWidgetItem(c.ico));
+        m_companiesTable->setItem(row, 3, new QTableWidgetItem(c.email));
+        m_companiesTable->setItem(row, 4, new QTableWidgetItem(c.phone));
+        m_companiesTable->setItem(row, 5, new QTableWidgetItem(QString::number(c.userCount)));
+    }
+}
+
+// ── Audit Tab ─────────────────────────────────────────────────────────────────
+
+void AdminPanelView::buildAuditTab(QWidget *tab)
 {
     auto *layout = new QVBoxLayout(tab);
     layout->setContentsMargins(12, 12, 12, 12);
@@ -374,37 +472,83 @@ void AdminPanelView::buildLogsTab(QWidget *tab)
 
     auto *toolbar = new QHBoxLayout();
 
-    m_logStatusLabel = new QLabel(QString::fromUtf8("Posledn\u00edch 200 \u0159\u00e1dk\u016f logu"), tab);
-    toolbar->addWidget(m_logStatusLabel, 1);
+    m_auditOrgFilter = new QComboBox(tab);
+    m_auditOrgFilter->addItem(QString::fromUtf8("V\u0161echny firmy"), QString());
+    toolbar->addWidget(new QLabel("Firma:", tab));
+    toolbar->addWidget(m_auditOrgFilter, 1);
+
+    m_auditActionFilter = new QLineEdit(tab);
+    m_auditActionFilter->setPlaceholderText(QString::fromUtf8("Filtr akce (pr. case, auth...)"));
+    toolbar->addWidget(m_auditActionFilter, 1);
 
     auto *refreshBtn = new QPushButton(QString::fromUtf8("Obnovit"), tab);
     refreshBtn->setObjectName("secondaryBtn");
     toolbar->addWidget(refreshBtn);
     layout->addLayout(toolbar);
 
-    m_logView = new QTextEdit(tab);
-    m_logView->setReadOnly(true);
-    layout->addWidget(m_logView);
+    m_auditTable = new QTableWidget(0, 7, tab);
+    m_auditTable->setHorizontalHeaderLabels({
+        QString::fromUtf8("Kdy"), QString::fromUtf8("U\u017eivatel"),
+        "Akce", QString::fromUtf8("Typ"), "ID", "Firma", "IP"
+    });
+    m_auditTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    m_auditTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    m_auditTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_auditTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_auditTable->setAlternatingRowColors(true);
+    layout->addWidget(m_auditTable);
 
-    connect(refreshBtn, &QPushButton::clicked, this, &AdminPanelView::loadLogs);
+    connect(refreshBtn, &QPushButton::clicked, this, &AdminPanelView::loadAudit);
+    connect(m_auditActionFilter, &QLineEdit::returnPressed, this, &AdminPanelView::loadAudit);
 }
 
-void AdminPanelView::loadLogs()
+void AdminPanelView::loadAudit()
 {
     ApiService api;
     QString err;
-    const QString logs = api.fetchAdminLogs(200, &err);
+    const QString orgId  = m_auditOrgFilter->currentData().toString();
+    const QString action = m_auditActionFilter->text().trimmed();
+    const auto logs = api.fetchAdminAudit(orgId, action, 300, &err);
 
-    if (!err.isEmpty()) {
-        m_logView->setPlainText(QString::fromUtf8("Chyba: ") + err);
-        return;
+    if (!err.isEmpty()) { QMessageBox::warning(this, QString::fromUtf8("Chyba"), err); return; }
+
+    // Refresh org filter from current users if empty
+    if (m_auditOrgFilter->count() <= 1) {
+        const auto companies = api.fetchAdminCompanies(nullptr);
+        for (const auto &c : companies) {
+            m_auditOrgFilter->addItem(c.name, c.id);
+        }
     }
 
-    m_logView->setPlainText(logs);
-    // Scroll to bottom (nejnovější záznamy dole)
-    auto *scrollBar = m_logView->verticalScrollBar();
-    scrollBar->setValue(scrollBar->maximum());
-    m_logStatusLabel->setText(QString::fromUtf8("Posledn\u00edch 200 \u0159\u00e1dk\u016f — obnoveno"));
+    m_auditTable->setRowCount(0);
+    for (const auto &a : logs) {
+        const int row = m_auditTable->rowCount();
+        m_auditTable->insertRow(row);
+
+        // Format timestamp: show only date+time without TZ noise
+        QString ts = a.createdAt;
+        if (ts.length() > 19) ts = ts.left(19).replace('T', ' ');
+        m_auditTable->setItem(row, 0, new QTableWidgetItem(ts));
+
+        // If impersonated, mark it
+        QString userLabel = a.userEmail;
+        if (!a.impersonatedBy.isEmpty())
+            userLabel += QString::fromUtf8(" \u26a0\ufe0f");
+        m_auditTable->setItem(row, 1, new QTableWidgetItem(userLabel));
+        m_auditTable->setItem(row, 2, new QTableWidgetItem(a.action));
+        m_auditTable->setItem(row, 3, new QTableWidgetItem(a.resourceType));
+        m_auditTable->setItem(row, 4, new QTableWidgetItem(a.resourceId));
+        m_auditTable->setItem(row, 5, new QTableWidgetItem(a.orgId));
+        m_auditTable->setItem(row, 6, new QTableWidgetItem(a.ip));
+
+        // Color code impersonated rows
+        if (!a.impersonatedBy.isEmpty()) {
+            for (int col = 0; col < 7; ++col) {
+                if (auto *item = m_auditTable->item(row, col))
+                    item->setBackground(QColor("#fff3cd"));
+            }
+        }
+    }
 }
 
 void AdminPanelView::refresh()
@@ -412,5 +556,6 @@ void AdminPanelView::refresh()
     const int idx = m_tabs->currentIndex();
     if (idx == 0) loadUsers();
     else if (idx == 1) loadJobs();
-    else if (idx == 2) loadLogs();
+    else if (idx == 2) loadCompanies();
+    else if (idx == 3) loadAudit();
 }

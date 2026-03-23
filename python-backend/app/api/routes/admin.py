@@ -1,15 +1,17 @@
 import collections
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_superadmin
+from app.api.deps import get_auth_service, require_superadmin
 from app.core.config import get_settings
 from app.db.session import get_db_session
-from app.models.domain import AnalysisJob, Organization, Project
+from app.models.domain import AnalysisJob, AuditLog, Organization, Project, User
 from app.schemas.auth import AuthUserRead
 from app.schemas.company import (
     AdminUserCreate,
@@ -21,6 +23,7 @@ from app.schemas.company import (
     CompanyPatch,
     CompanyRead,
 )
+from app.services.auth_service import AuthService
 from app.services.company_service import CompanyService
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -208,3 +211,99 @@ async def get_recent_logs(
         for line in f:
             deque.append(line.decode("utf-8", errors="replace").rstrip())
     return list(deque)
+
+
+# ── Audit Trail ────────────────────────────────────────────────────────────────
+
+@router.get("/audit", response_model=list[dict])
+async def get_audit_log(
+    org_id: str | None = Query(default=None),
+    action: str | None = Query(default=None),
+    user_id: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=10, le=2000),
+    session: AsyncSession = Depends(get_db_session),
+    _: AuthUserRead = Depends(require_superadmin),
+) -> list[dict]:
+    query = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)
+    if org_id:
+        query = query.where(AuditLog.org_id == org_id)
+    if action:
+        query = query.where(AuditLog.action.ilike(f"%{action}%"))
+    if user_id:
+        query = query.where(AuditLog.user_id == user_id)
+
+    result = await session.execute(query)
+    rows = result.scalars().all()
+
+    return [
+        {
+            "id": row.id,
+            "userId": row.user_id,
+            "userEmail": row.user_email,
+            "orgId": row.org_id,
+            "action": row.action,
+            "resourceType": row.resource_type,
+            "resourceId": row.resource_id,
+            "detail": row.detail,
+            "impersonatedBy": row.impersonated_by,
+            "ip": row.ip,
+            "createdAt": row.created_at.isoformat(),
+        }
+        for row in rows
+    ]
+
+
+# ── Impersonation ──────────────────────────────────────────────────────────────
+
+class ImpersonateResponse(BaseModel):
+    accessToken: str
+    userId: str
+    userEmail: str
+    userFullName: str
+    orgId: str
+    role: str
+    expiresInMinutes: int = 15
+
+
+@router.post("/impersonate/{user_id}", response_model=ImpersonateResponse)
+async def impersonate_user(
+    user_id: str,
+    current_user: AuthUserRead = Depends(require_superadmin),
+    session: AsyncSession = Depends(get_db_session),
+) -> ImpersonateResponse:
+    """
+    Issue a short-lived (15 min) access token scoped to the target user.
+    The token carries impersonated_by=<admin_id> for audit trail.
+    """
+    target = await session.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if target.is_superadmin:
+        raise HTTPException(status_code=403, detail="Cannot impersonate another superadmin.")
+
+    settings = get_settings()
+    import jwt as pyjwt
+
+    jti = uuid4().hex
+    exp = datetime.now(UTC) + timedelta(minutes=15)
+    token = pyjwt.encode(
+        {
+            "sub": target.id,
+            "jti": jti,
+            "type": "access",
+            "exp": exp,
+            "impersonated_by": current_user.id,
+        },
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+    )
+
+    return ImpersonateResponse(
+        accessToken=token,
+        userId=target.id,
+        userEmail=target.email,
+        userFullName=target.full_name,
+        orgId=target.organization_id,
+        role=target.role,
+        expiresInMinutes=15,
+    )

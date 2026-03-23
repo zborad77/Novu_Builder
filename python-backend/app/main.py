@@ -8,6 +8,7 @@ from sqlalchemy import select, text
 import structlog
 
 from app.api.router import api_router
+from app.core.audit import AuditMiddleware
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.base import Base
@@ -93,6 +94,7 @@ def create_app() -> FastAPI:
         "schema": "pending",
         "storage": "pending",
     }
+    app.add_middleware(AuditMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[

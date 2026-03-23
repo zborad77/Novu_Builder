@@ -8,6 +8,9 @@
 
 #include "dto/adminjobdto.h"
 #include "dto/adminuserdto.h"
+#include "dto/auditlogdto.h"
+#include "dto/companydto.h"
+#include "dto/impersonatedto.h"
 #include "dto/casedto.h"
 #include "dto/exportdto.h"
 #include "dto/imagedto.h"
@@ -104,6 +107,16 @@ public:
         QString *errorMessage = nullptr) const;
     [[nodiscard]] QString fetchAdminLogs(
         int lines = 200,
+        QString *errorMessage = nullptr) const;
+    [[nodiscard]] std::vector<AuditLogDto> fetchAdminAudit(
+        const QString &orgId = {},
+        const QString &action = {},
+        int limit = 200,
+        QString *errorMessage = nullptr) const;
+    [[nodiscard]] ImpersonateDto impersonateUser(
+        const QString &userId,
+        QString *errorMessage = nullptr) const;
+    [[nodiscard]] std::vector<CompanyDto> fetchAdminCompanies(
         QString *errorMessage = nullptr) const;
 
 private:

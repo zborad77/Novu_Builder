@@ -1110,3 +1110,108 @@ QString ApiService::fetchAdminLogs(int lines, QString *errorMessage) const
     }
     return linesList.join('\n');
 }
+
+std::vector<AuditLogDto> ApiService::fetchAdminAudit(const QString &orgId, const QString &action, int limit, QString *errorMessage) const
+{
+    if (errorMessage) errorMessage->clear();
+
+    QString path = QString("/api/v1/admin/audit?limit=%1").arg(limit);
+    if (!orgId.isEmpty())
+        path += "&org_id=" + QString::fromUtf8(QUrl::toPercentEncoding(orgId));
+    if (!action.isEmpty())
+        path += "&action=" + QString::fromUtf8(QUrl::toPercentEncoding(action));
+
+    QNetworkAccessManager manager;
+    auto *reply = manager.get(makeAuthRequest(QUrl(m_baseUrl + path)));
+    const auto payload = waitForReply(reply, 10000, errorMessage);
+    if (payload.isNull()) return {};
+
+    const auto doc = QJsonDocument::fromJson(payload);
+    if (!doc.isArray()) {
+        if (errorMessage) *errorMessage = "Neplatna odpoved serveru.";
+        return {};
+    }
+
+    std::vector<AuditLogDto> result;
+    for (const auto &item : doc.array()) {
+        const auto obj = item.toObject();
+        AuditLogDto a;
+        a.id = obj.value("id").toString();
+        a.userId = obj.value("userId").toString();
+        a.userEmail = obj.value("userEmail").toString();
+        a.orgId = obj.value("orgId").toString();
+        a.action = obj.value("action").toString();
+        a.resourceType = obj.value("resourceType").toString();
+        a.resourceId = obj.value("resourceId").toString();
+        a.detail = obj.value("detail").toString();
+        a.impersonatedBy = obj.value("impersonatedBy").toString();
+        a.ip = obj.value("ip").toString();
+        a.createdAt = obj.value("createdAt").toString();
+        result.push_back(a);
+    }
+    return result;
+}
+
+ImpersonateDto ApiService::impersonateUser(const QString &userId, QString *errorMessage) const
+{
+    if (errorMessage) errorMessage->clear();
+
+    QNetworkAccessManager manager;
+    const QUrl url(m_baseUrl + "/api/v1/admin/impersonate/" + userId);
+    QNetworkRequest req = makeAuthRequest(url);
+    auto *reply = manager.post(req, QByteArray());
+    const auto payload = waitForReply(reply, 8000, errorMessage);
+    if (payload.isNull()) return {};
+
+    const auto doc = QJsonDocument::fromJson(payload);
+    if (!doc.isObject()) {
+        if (errorMessage) *errorMessage = "Neplatna odpoved serveru.";
+        return {};
+    }
+
+    const auto obj = doc.object();
+    if (obj.contains("detail")) {
+        if (errorMessage) *errorMessage = obj.value("detail").toString();
+        return {};
+    }
+
+    return ImpersonateDto{
+        .accessToken = obj.value("accessToken").toString(),
+        .userId = obj.value("userId").toString(),
+        .userEmail = obj.value("userEmail").toString(),
+        .userFullName = obj.value("userFullName").toString(),
+        .orgId = obj.value("orgId").toString(),
+        .role = obj.value("role").toString(),
+        .expiresInMinutes = obj.value("expiresInMinutes").toInt(15),
+    };
+}
+
+std::vector<CompanyDto> ApiService::fetchAdminCompanies(QString *errorMessage) const
+{
+    if (errorMessage) errorMessage->clear();
+
+    QNetworkAccessManager manager;
+    auto *reply = manager.get(makeAuthRequest(QUrl(m_baseUrl + "/api/v1/admin/companies")));
+    const auto payload = waitForReply(reply, 8000, errorMessage);
+    if (payload.isNull()) return {};
+
+    const auto doc = QJsonDocument::fromJson(payload);
+    if (!doc.isObject()) {
+        if (errorMessage) *errorMessage = "Neplatna odpoved serveru.";
+        return {};
+    }
+
+    std::vector<CompanyDto> result;
+    for (const auto &item : doc.object().value("items").toArray()) {
+        const auto obj = item.toObject();
+        CompanyDto c;
+        c.id = obj.value("id").toString();
+        c.name = obj.value("name").toString();
+        c.ico = obj.value("ico").toString();
+        c.email = obj.value("email").toString();
+        c.phone = obj.value("phone").toString();
+        c.userCount = obj.value("userCount").toInt();
+        result.push_back(c);
+    }
+    return result;
+}

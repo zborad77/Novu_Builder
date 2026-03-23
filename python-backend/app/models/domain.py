@@ -351,3 +351,20 @@ class RevokedToken(Base):
     jti: Mapped[str] = mapped_column(String(64), primary_key=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class AuditLog(Base):
+    """Immutable audit trail — who did what and when."""
+    __tablename__ = "audit_logs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    user_email: Mapped[str | None] = mapped_column(String(255))
+    org_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    action: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    resource_type: Mapped[str | None] = mapped_column(String(64), index=True)
+    resource_id: Mapped[str | None] = mapped_column(String(64))
+    detail: Mapped[str | None] = mapped_column(Text)
+    impersonated_by: Mapped[str | None] = mapped_column(String(64))
+    ip: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
