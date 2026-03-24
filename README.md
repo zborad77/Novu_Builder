@@ -179,3 +179,19 @@ powershell -ExecutionPolicy Bypass -File scripts\start-dev.ps1 -DryRun
 1. Rozvijet `desktop-qt` jako cilovy kancelarsky klient.
 2. Dovest Python backend ke stabilnimu produkcnimu API tvaru.
 3. React ponechat jen jako referencni prototyp workflow a obrazovek.
+
+## TODO: Auth cleanup (technical debt)
+
+POST /api/v1/auth/change-password aktuálně ověřuje staré heslo přes `AuthService.login()`.
+
+Důsledek:
+- při ověření se zbytečně generují access/refresh tokeny
+- tokeny nejsou použity ani vráceny
+- není to bezpečnostní problém, ale architektonicky nečisté
+
+Plán do budoucna:
+- přidat do `AuthService` metodu např. `verify_password(user_id, plain_password) -> bool`
+- použít ji místo `login()` v change-password endpointu
+- oddělit ověřování hesla od generování tokenů
+
+Priorita: nízká (neblokuje funkčnost ani bezpečnost)
