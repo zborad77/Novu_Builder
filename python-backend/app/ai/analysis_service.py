@@ -15,7 +15,9 @@ PROVIDERS = {
 
 
 def get_analysis_provider(provider_key: str):
-    normalized_key = (provider_key or "mock").strip().lower()
+    if not provider_key or not provider_key.strip():
+        raise ValueError("AI analysis provider key is not configured (AI_ANALYSIS_PROVIDER is empty)")
+    normalized_key = provider_key.strip().lower()
     provider = PROVIDERS.get(normalized_key)
     if provider is None:
         raise ValueError(f"Unknown AI analysis provider: {normalized_key}")
