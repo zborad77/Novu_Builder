@@ -8,9 +8,10 @@ import type {
   PhotoUploadResponse,
 } from '../types';
 
-const DEFAULT_BASE_URL = 'http://localhost:8000/api';
+const DEFAULT_BASE_URL = 'http://localhost:8000/api/v1';
+const REQUEST_TIMEOUT_MS = 15_000;
 
-function getBaseUrl(): string {
+export function getBaseUrl(): string {
   const extra = Constants.expoConfig?.extra as { apiUrl?: string } | undefined;
   return extra?.apiUrl ?? DEFAULT_BASE_URL;
 }
@@ -50,17 +51,33 @@ async function request<T>(
 ): Promise<T> {
   const url = `${getBaseUrl()}${path}`;
   const authHeaders = await getAuthHeaders();
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders,
-      ...(options.headers as Record<string, string>),
-    },
-  });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders,
+        ...(options.headers as Record<string, string>),
+      },
+    });
+  } catch (err: unknown) {
+    clearTimeout(timer);
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error('Požadavek vypršel — zkontrolujte připojení k internetu.');
+    }
+    throw err;
+  }
+  clearTimeout(timer);
+
   if (!response.ok) {
     const body = await response.text();
-    let message = `HTTP ${response.status}`;
+    let message = `Chyba serveru (HTTP ${response.status})`;
     try {
       const json = JSON.parse(body);
       message = json.detail ?? json.message ?? message;
@@ -104,6 +121,22 @@ export const ProjectsApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+  },
+};
+
+export interface AnalysisJobStatus {
+  id: string;
+  status: string;
+  errorMessage: string | null;
+}
+
+export const AnalysisApi = {
+  async startJob(caseId: string): Promise<{ jobId: string }> {
+    return request<{ jobId: string }>(`/cases/${caseId}/analysis-jobs`, { method: 'POST' });
+  },
+
+  async getJob(jobId: string): Promise<AnalysisJobStatus> {
+    return request<AnalysisJobStatus>(`/analysis-jobs/${jobId}`);
   },
 };
 

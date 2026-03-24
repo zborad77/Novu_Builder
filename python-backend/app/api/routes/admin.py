@@ -1,14 +1,15 @@
 import collections
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_auth_service, require_superadmin
+from app.api.deps import get_analysis_service, get_auth_service, require_superadmin
 from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.models.domain import AnalysisJob, AuditLog, Organization, Project, User
@@ -23,8 +24,14 @@ from app.schemas.company import (
     CompanyPatch,
     CompanyRead,
 )
+from app.core.limiter import limiter
+from app.core.security import enforce_password_strength
+from app.services.analysis_service import AnalysisService, to_job_read
 from app.services.auth_service import AuthService
 from app.services.company_service import CompanyService
+
+import structlog as _structlog
+_log = _structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -98,6 +105,11 @@ async def create_user(
     service: CompanyService = Depends(get_company_service),
     _: AuthUserRead = Depends(require_superadmin),
 ) -> AdminUserRead:
+    if payload.password:
+        try:
+            enforce_password_strength(payload.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         user = await service.create_user(payload)
     except ValueError as exc:
@@ -137,20 +149,64 @@ class ResetPasswordPayload(BaseModel):
 
 
 @router.post("/users/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit(get_settings().rate_limit_admin)
 async def reset_user_password(
+    request: Request,
     user_id: str,
     payload: ResetPasswordPayload,
+    current_user: AuthUserRead = Depends(require_superadmin),
     service: CompanyService = Depends(get_company_service),
-    _: AuthUserRead = Depends(require_superadmin),
+    session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    if len(payload.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+    try:
+        enforce_password_strength(payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    target = await session.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+
     updated = await service.patch_user(user_id, AdminUserPatch(password=payload.password))
     if not updated:
         raise HTTPException(status_code=404, detail="User not found.")
 
+    _log.warning(
+        "admin.user.reset_password",
+        admin_id=current_user.id,
+        target_user_id=user_id,
+        target_email=target.email,
+    )
+
+    # Explicit audit log with target detail (middleware writes basic entry too)
+    try:
+        admin_obj = await session.get(User, current_user.id)
+        audit = AuditLog(
+            id=uuid4().hex,
+            user_id=current_user.id,
+            user_email=admin_obj.email if admin_obj else None,
+            org_id=admin_obj.organization_id if admin_obj else None,
+            action="admin.user.reset_password",
+            resource_type="user",
+            resource_id=user_id,
+            detail=json.dumps({"target_email": target.email, "target_org": target.organization_id}),
+            created_at=datetime.now(UTC),
+        )
+        session.add(audit)
+        await session.commit()
+    except Exception:
+        pass
+
 
 # ── Analysis Jobs (all orgs) ───────────────────────────────────────────────────
+
+def _enrich_job(job: AnalysisJob, case_title: str, org_id: str, org_name: str) -> dict:
+    base = to_job_read(job)
+    base["caseTitle"] = case_title
+    base["orgId"] = org_id
+    base["orgName"] = org_name
+    return base
+
 
 @router.get("/jobs", response_model=list[dict])
 async def list_all_jobs(
@@ -169,23 +225,72 @@ async def list_all_jobs(
 
     result = await session.execute(query)
     rows = result.all()
+    return [_enrich_job(job, case_title, org_id, org_name) for job, case_title, org_id, org_name in rows]
 
-    return [
-        {
-            "id": job.id,
-            "caseId": job.project_id,
-            "caseTitle": case_title,
-            "orgId": org_id,
-            "orgName": org_name,
-            "status": job.status,
-            "jobType": job.job_type,
-            "startedAt": job.started_at.isoformat() if job.started_at else None,
-            "finishedAt": job.finished_at.isoformat() if job.finished_at else None,
-            "errorMessage": job.error_message,
-            "createdAt": job.created_at.isoformat(),
-        }
-        for job, case_title, org_id, org_name in rows
-    ]
+
+@router.get("/jobs/{job_id}", response_model=dict)
+async def get_admin_job(
+    job_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    _: AuthUserRead = Depends(require_superadmin),
+) -> dict:
+    job = await session.get(AnalysisJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Analysis job not found.")
+
+    # Enrich with case + org info
+    project = await session.get(Project, job.project_id)
+    case_title = project.title if project else ""
+    org_id = project.organization_id if project else ""
+    org_name = ""
+    if project:
+        org = await session.get(Organization, project.organization_id)
+        org_name = org.name if org else ""
+
+    return _enrich_job(job, case_title, org_id, org_name)
+
+
+@router.post("/jobs/{job_id}/retry", response_model=dict, status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit(get_settings().rate_limit_admin)
+async def admin_retry_job(
+    request: Request,
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: AuthUserRead = Depends(require_superadmin),
+    analysis_service: AnalysisService = Depends(get_analysis_service),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict:
+    new_job = await analysis_service.retry_job(job_id)
+    if not new_job:
+        raise HTTPException(status_code=404, detail="Analysis job not found.")
+    background_tasks.add_task(analysis_service.execute_job, new_job.id, new_job.project_id)
+
+    # Write explicit audit log entry with retry context
+    original = await session.get(AnalysisJob, job_id)
+    try:
+        from app.models.domain import User as UserModel
+        user_obj = await session.get(UserModel, current_user.id)
+        audit = AuditLog(
+            id=uuid4().hex,
+            user_id=current_user.id,
+            user_email=user_obj.email if user_obj else None,
+            org_id=user_obj.organization_id if user_obj else None,
+            action="admin.job.retry",
+            resource_type="analysis_job",
+            resource_id=job_id,
+            detail=json.dumps({
+                "new_job_id": new_job.id,
+                "retry_count": new_job.retry_count,
+                "original_status": original.status if original else None,
+            }),
+            created_at=datetime.now(UTC),
+        )
+        session.add(audit)
+        await session.commit()
+    except Exception:
+        pass
+
+    return {"newJobId": new_job.id, "status": new_job.status, "retryCount": new_job.retry_count}
 
 
 # ── Logs ───────────────────────────────────────────────────────────────────────
@@ -266,7 +371,9 @@ class ImpersonateResponse(BaseModel):
 
 
 @router.post("/impersonate/{user_id}", response_model=ImpersonateResponse)
+@limiter.limit(get_settings().rate_limit_admin)
 async def impersonate_user(
+    request: Request,
     user_id: str,
     current_user: AuthUserRead = Depends(require_superadmin),
     session: AsyncSession = Depends(get_db_session),
@@ -297,6 +404,30 @@ async def impersonate_user(
         settings.jwt_secret,
         algorithm=settings.jwt_algorithm,
     )
+
+    # Write rich audit entry (middleware writes basic one; this adds detail context)
+    try:
+        admin_obj = await session.get(User, current_user.id)
+        audit = AuditLog(
+            id=uuid4().hex,
+            user_id=current_user.id,
+            user_email=admin_obj.email if admin_obj else None,
+            org_id=admin_obj.organization_id if admin_obj else None,
+            action="admin.impersonate",
+            resource_type="user",
+            resource_id=target.id,
+            detail=json.dumps({
+                "impersonated_email": target.email,
+                "impersonated_role": target.role,
+                "impersonated_org": target.organization_id,
+                "expires_minutes": 15,
+            }),
+            created_at=datetime.now(UTC),
+        )
+        session.add(audit)
+        await session.commit()
+    except Exception:
+        pass
 
     return ImpersonateResponse(
         accessToken=token,

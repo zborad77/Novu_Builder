@@ -26,6 +26,11 @@ void ApiService::clearGlobalToken()
     s_bearerToken.clear();
 }
 
+QString ApiService::globalToken()
+{
+    return s_bearerToken;
+}
+
 bool ApiService::sessionExpired()
 {
     return s_sessionExpired;

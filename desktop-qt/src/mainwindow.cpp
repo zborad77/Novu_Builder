@@ -296,6 +296,46 @@ QWidget *MainWindow::createWorkspaceShell()
     body->addWidget(caseColumn, 1);
     body->addWidget(detailColumn, 2);
 
+    // Impersonation banner (hidden by default, shown when impersonating)
+    m_impersonationBanner = new QFrame(content);
+    m_impersonationBanner->setObjectName("impersonationBanner");
+    auto *bannerLayout = new QHBoxLayout(m_impersonationBanner);
+    bannerLayout->setContentsMargins(16, 8, 16, 8);
+    bannerLayout->setSpacing(12);
+    m_impersonationLabel = new QLabel(m_impersonationBanner);
+    m_impersonationLabel->setObjectName("impersonationLabel");
+    m_stopImpersonationBtn = new QPushButton(QString::fromUtf8("Ukon\u010dit impersonaci"), m_impersonationBanner);
+    m_stopImpersonationBtn->setObjectName("stopImpersonationBtn");
+    m_stopImpersonationBtn->setFixedHeight(28);
+    bannerLayout->addWidget(m_impersonationLabel, 1);
+    bannerLayout->addWidget(m_stopImpersonationBtn);
+    m_impersonationBanner->setVisible(false);
+    m_impersonationBanner->setStyleSheet(R"(
+        QFrame#impersonationBanner {
+            background: #fff3cd;
+            border: 1px solid #f0c040;
+            border-radius: 8px;
+        }
+        QLabel#impersonationLabel {
+            color: #7b5a00;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        QPushButton#stopImpersonationBtn {
+            background: #e0a800;
+            border: 1px solid #c89500;
+            border-radius: 6px;
+            color: #fff;
+            font-weight: 700;
+            padding: 4px 12px;
+        }
+        QPushButton#stopImpersonationBtn:hover {
+            background: #c89500;
+        }
+    )");
+    connect(m_stopImpersonationBtn, &QPushButton::clicked, this, &MainWindow::stopImpersonation);
+
+    contentLayout->addWidget(m_impersonationBanner);
     contentLayout->addWidget(header);
     contentLayout->addLayout(body, 1);
 
@@ -739,6 +779,59 @@ void MainWindow::showAdminPanelView()
         m_workspaceSubtitleLabel->setText(
             QString::fromUtf8("Spr\u00e1va u\u017eivatel\u016f, p\u0159ehled anal\u00fdz a logy serveru."));
     if (m_adminPanelView) m_adminPanelView->refresh();
+}
+
+void MainWindow::startImpersonation(const QString &token, const QString &userFullName,
+                                    const QString &orgId, const QString &userId)
+{
+    (void)orgId;
+    (void)userId;
+
+    // Save current admin token so we can restore it later
+    m_savedAdminToken = ApiService::globalToken();
+
+    // Apply the impersonation token for all subsequent API calls
+    ApiService::setGlobalToken(token);
+
+    // Show the warning banner
+    if (m_impersonationLabel) {
+        m_impersonationLabel->setText(
+            QString::fromUtf8("\u26a0\ufe0f Impersonace aktivn\u00ed \u2014 p\u0159ihl\u00e1\u0161en jako: %1")
+                .arg(userFullName.isEmpty() ? userId : userFullName));
+    }
+    if (m_impersonationBanner) {
+        m_impersonationBanner->setVisible(true);
+    }
+
+    // Reload the case list under the impersonated user's context
+    if (m_caseListView) {
+        m_caseListView->reloadCases(QString(), false);
+    }
+    showWelcomeView();
+    statusBar()->showMessage(
+        QString::fromUtf8("Impersonace: p\u0159ihl\u00e1\u0161en jako %1").arg(userFullName),
+        6000);
+}
+
+void MainWindow::stopImpersonation()
+{
+    if (m_savedAdminToken.isEmpty()) return;
+
+    // Restore admin token
+    ApiService::setGlobalToken(m_savedAdminToken);
+    m_savedAdminToken.clear();
+
+    // Hide banner
+    if (m_impersonationBanner) {
+        m_impersonationBanner->setVisible(false);
+    }
+
+    // Reload case list under the original admin context
+    if (m_caseListView) {
+        m_caseListView->reloadCases(QString(), false);
+    }
+    showAdminPanelView();
+    statusBar()->showMessage(QString::fromUtf8("Impersonace ukon\u010dena."), 4000);
 }
 
 void MainWindow::showCaseDetailView()

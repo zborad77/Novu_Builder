@@ -176,9 +176,14 @@ class AnalysisJob(Base):
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
     requested_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    parent_job_id: Mapped[str | None] = mapped_column(String(64))   # set when this is a retry
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_message: Mapped[str | None] = mapped_column(Text)
+    error_traceback: Mapped[str | None] = mapped_column(Text)       # full traceback
+    input_payload: Mapped[str | None] = mapped_column(Text)         # JSON: co šlo do AI
+    output_summary: Mapped[str | None] = mapped_column(Text)        # JSON: co přišlo zpět
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="analysis_jobs")

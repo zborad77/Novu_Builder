@@ -13,8 +13,8 @@ import {
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { PROJECT_STATUS_LABELS } from '../../src/types';
-import { TokenStorage, PhotosApi } from '../../src/services/api';
-import Constants from 'expo-constants';
+import { TokenStorage, PhotosApi, AnalysisApi, getBaseUrl } from '../../src/services/api';
+
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -73,12 +73,6 @@ interface AnalysisResult {
   modelName: string | null;
 }
 
-interface AnalysisJob {
-  id: string;
-  status: string;
-  errorMessage: string | null;
-}
-
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const STATUS_COLOR: Record<string, string> = {
@@ -118,11 +112,6 @@ const SCOPE_LABELS: Record<string, string> = {
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
-function getBaseUrl(): string {
-  const extra = Constants.expoConfig?.extra as { apiUrl?: string } | undefined;
-  return extra?.apiUrl ?? 'http://localhost:8000/api/v1';
-}
-
 function photoThumbUrl(photo: ProjectPhoto, baseUrl: string): string {
   const thumb = photo.variants?.thumbnail?.url ?? photo.variants?.medium?.url ?? photo.url ?? '';
   if (!thumb) return '';
@@ -136,23 +125,29 @@ async function authHeaders(): Promise<Record<string, string>> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-async function fetchProjectDetail(id: string): Promise<ProjectDetail> {
-  const res = await fetch(`${getBaseUrl()}/cases/${id}`, { headers: await authHeaders() });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+const FETCH_TIMEOUT_MS = 15_000;
+
+function fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
-async function fetchAnalysisJob(jobId: string): Promise<AnalysisJob> {
-  const res = await fetch(`${getBaseUrl()}/analysis-jobs/${jobId}`, { headers: await authHeaders() });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+async function fetchProjectDetail(id: string): Promise<ProjectDetail> {
+  const res = await fetchWithTimeout(`${getBaseUrl()}/cases/${id}`, { headers: await authHeaders() });
+  if (!res.ok) throw new Error(`Chyba serveru (HTTP ${res.status})`);
   return res.json();
 }
 
 async function fetchLatestAnalysisResult(projectId: string): Promise<AnalysisResult | null> {
-  const res = await fetch(`${getBaseUrl()}/cases/${projectId}`, { headers: await authHeaders() });
-  if (!res.ok) return null;
-  const detail = await res.json();
-  return detail.latestAnalysis ?? null;
+  try {
+    const res = await fetchWithTimeout(`${getBaseUrl()}/cases/${projectId}`, { headers: await authHeaders() });
+    if (!res.ok) return null;
+    const detail = await res.json();
+    return detail.latestAnalysis ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Screen ───────────────────────────────────────────────────────────────────
@@ -166,6 +161,7 @@ export default function ProjectDetailScreen() {
   const [uploading, setUploading] = useState(false);
   const [sending, setSending] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [pollingJobId, setPollingJobId] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -205,21 +201,25 @@ export default function ProjectDetailScreen() {
     pollingRef.current = setInterval(async () => {
       attempts++;
       try {
-        const job = await fetchAnalysisJob(jobId);
+        const job = await AnalysisApi.getJob(jobId);
         if (job.status === 'completed') {
           stopPolling();
           setPollingJobId(null);
-          const result = await fetchLatestAnalysisResult(id!).catch(() => null);
+          const result = await fetchLatestAnalysisResult(id!);
           setAnalysisResult(result);
+          setAnalysisError(null);
           await load();
         } else if (job.status === 'failed' || job.status === 'error') {
           stopPolling();
           setPollingJobId(null);
-          Alert.alert('Analýza selhala', job.errorMessage ?? 'Neznámá chyba.');
+          const msg = job.errorMessage ?? 'Analýza selhala z neznámého důvodu.';
+          setAnalysisError(msg);
+          Alert.alert('Analýza selhala', msg);
         } else if (attempts >= 30) {
           // 30 × 2s = 60s timeout
           stopPolling();
           setPollingJobId(null);
+          setAnalysisError('Zpracování trvá příliš dlouho. Zkuste obnovit stránku.');
           Alert.alert('Zpracování trvá déle', 'Výsledek bude zobrazen po dokončení. Obnovte stránku.');
         }
       } catch {
@@ -265,22 +265,13 @@ export default function ProjectDetailScreen() {
           text: 'Odeslat',
           onPress: async () => {
             setSending(true);
+            setAnalysisError(null);
             try {
-              const res = await fetch(`${getBaseUrl()}/cases/${id}/analysis-jobs`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  ...(await authHeaders()),
-                },
-              });
-              if (!res.ok) {
-                const body = await res.json().catch(() => ({}));
-                throw new Error(body.detail ?? `HTTP ${res.status}`);
-              }
-              const data = await res.json();
+              const data = await AnalysisApi.startJob(id!);
               startPolling(data.jobId);
             } catch (err: unknown) {
-              Alert.alert('Chyba', err instanceof Error ? err.message : 'Odeslání selhalo.');
+              const msg = err instanceof Error ? err.message : 'Odeslání selhalo.';
+              Alert.alert('Chyba', msg);
             } finally {
               setSending(false);
             }
@@ -438,6 +429,17 @@ export default function ProjectDetailScreen() {
           </TouchableOpacity>
         )}
       </View>
+
+      {/* Stav analýzy — selhání */}
+      {analysisError && !pollingJobId && (
+        <View style={styles.analysisErrorCard}>
+          <Text style={styles.analysisErrorTitle}>Analýza selhala</Text>
+          <Text style={styles.analysisErrorMsg}>{analysisError}</Text>
+          <TouchableOpacity onPress={() => setAnalysisError(null)}>
+            <Text style={styles.analysisErrorDismiss}>Zavřít</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Výsledek analýzy */}
       {analysisResult && <AnalysisResultCard result={analysisResult} />}
@@ -692,6 +694,36 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   pollingText: { color: '#1565C0', fontSize: 15, fontWeight: '600' },
+
+  // Analysis error card
+  analysisErrorCard: {
+    backgroundColor: '#FFEBEE',
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
+    borderRadius: 12,
+    padding: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: '#C62828',
+  },
+  analysisErrorTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#C62828',
+    marginBottom: 6,
+  },
+  analysisErrorMsg: {
+    fontSize: 13,
+    color: '#B71C1C',
+    lineHeight: 19,
+    marginBottom: 10,
+  },
+  analysisErrorDismiss: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#C62828',
+    textDecorationLine: 'underline',
+  },
 
   // Analysis card
   analysisCard: {

@@ -15,6 +15,10 @@ def _resolve_storage_root() -> Path:
 
 STORAGE_ROOT = _resolve_storage_root()
 
+# Canonical subdirectories — all persistent data lives here
+UPLOADS_ROOT = STORAGE_ROOT / "projects"   # photo uploads: projects/{project_id}/{filename}
+EXPORTS_ROOT = STORAGE_ROOT / "exports"    # generated exports: exports/{case_id}/{export_id}-{filename}
+
 
 def ensure_directory(target_directory: Path) -> None:
     target_directory.mkdir(parents=True, exist_ok=True)
@@ -29,7 +33,7 @@ def sanitize_filename(filename: str | None) -> str:
 def save_original_photo(*, project_id: str, original_filename: str | None, content: bytes) -> tuple[str, Path]:
     safe_filename = sanitize_filename(original_filename)
     relative_directory = Path("projects") / project_id
-    target_directory = STORAGE_ROOT / relative_directory
+    target_directory = UPLOADS_ROOT / project_id
     stored_filename = f"{time_ns()}-{uuid4().hex[:8]}-{safe_filename}"
     relative_storage_key = (relative_directory / stored_filename).as_posix()
     absolute_path = STORAGE_ROOT / relative_storage_key

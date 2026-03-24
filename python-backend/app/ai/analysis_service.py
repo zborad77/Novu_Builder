@@ -1,10 +1,10 @@
 from collections.abc import Sequence
-from pathlib import Path
 
 from app.ai.providers.claude_vision_provider import ClaudeVisionProvider
 from app.ai.providers.mock_vision_provider import MockVisionProvider
 from app.ai.providers.openai_vision_provider import OpenAIVisionProvider
 from app.models import ProjectPhoto
+from app.storage.local_photo_storage import STORAGE_ROOT as _STORAGE_ROOT
 
 
 PROVIDERS = {
@@ -12,9 +12,6 @@ PROVIDERS = {
     "openai": OpenAIVisionProvider(),
     "claude": ClaudeVisionProvider(),
 }
-
-# Kořen lokálního úložiště fotek
-_STORAGE_ROOT = Path(__file__).resolve().parents[3] / "storage"
 
 
 def get_analysis_provider(provider_key: str):

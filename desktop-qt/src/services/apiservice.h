@@ -28,6 +28,7 @@ public:
 
     static void setGlobalToken(const QString &bearerToken);
     static void clearGlobalToken();
+    [[nodiscard]] static QString globalToken();
     [[nodiscard]] static bool sessionExpired();
     static void clearSessionExpired();
     static void markSessionExpired();

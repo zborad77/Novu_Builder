@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import unicodedata
 from datetime import UTC, datetime
 from io import BytesIO
@@ -9,12 +10,63 @@ from uuid import uuid4
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import structlog
+
 from app.schemas.export import ExportRead
 from app.schemas.project import ProjectDetail, ProposalDraftField, ProposalDraftItem, ProposalDraftSection
-from app.storage.local_photo_storage import STORAGE_ROOT, sanitize_filename, write_storage_file
+from app.storage.local_photo_storage import EXPORTS_ROOT, STORAGE_ROOT, sanitize_filename, write_storage_file
 
+_logger = structlog.get_logger(__name__)
 
+# In-memory cache — populated on first access and rebuilt from disk after restart
 _EXPORT_STORE: dict[str, ExportRead] = {}
+
+
+def _save_export_meta(export: ExportRead) -> None:
+    """Persist export metadata to disk atomically (write tmp → rename)."""
+    EXPORTS_ROOT.mkdir(parents=True, exist_ok=True)
+    meta_path = EXPORTS_ROOT / f"{export.id}.json"
+    tmp_path = meta_path.with_suffix(".json.tmp")
+    tmp_path.write_text(export.model_dump_json(), encoding="utf-8")
+    os.replace(tmp_path, meta_path)  # atomic on POSIX; best-effort on Windows
+
+
+def _load_export_meta(export_id: str) -> ExportRead | None:
+    """Load export metadata from disk sidecar."""
+    meta_path = EXPORTS_ROOT / f"{export_id}.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        return ExportRead.model_validate_json(meta_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        _logger.warning("export.meta_load_failed", export_id=export_id, error=str(exc))
+        return None
+
+
+def _find_export_file(export_id: str) -> Path | None:
+    """Scan disk for the export file when the sidecar is missing."""
+    matches = list(EXPORTS_ROOT.glob(f"*/{export_id}-*"))
+    return matches[0] if matches else None
+
+
+def _export_from_file(export_id: str, file_path: Path) -> ExportRead:
+    """Reconstruct a minimal ExportRead from a file on disk (no sidecar)."""
+    case_id = file_path.parent.name
+    file_name = file_path.name[len(export_id) + 1:]  # strip "{export_id}-" prefix
+    ext = file_path.suffix.lower()
+    export_type = {"pdf": "quote-pdf", "docx": "quote-docx", "zip": "case-zip"}.get(ext.lstrip("."), "unknown")
+    relative_key = f"exports/{case_id}/{file_path.name}"
+    mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=UTC)
+    return ExportRead(
+        id=export_id,
+        caseId=case_id,
+        exportType=export_type,
+        status="completed",
+        fileName=file_name,
+        downloadUrl=f"/mock-storage/{relative_key}",
+        createdAt=mtime,
+        completedAt=mtime,
+    )
 
 
 def _analysis_lines(case_detail: ProjectDetail) -> list[str]:
@@ -765,6 +817,7 @@ class ExportService:
             completedAt=now,
         )
         _EXPORT_STORE[export_id] = export
+        _save_export_meta(export)
         return export
 
     def create_quote_docx_export(self, *, case_detail: ProjectDetail) -> ExportRead:
@@ -792,6 +845,7 @@ class ExportService:
             completedAt=now,
         )
         _EXPORT_STORE[export_id] = export
+        _save_export_meta(export)
         return export
 
     def create_proposal_docx_export(self, *, case_detail: ProjectDetail) -> ExportRead:
@@ -819,6 +873,7 @@ class ExportService:
             completedAt=now,
         )
         _EXPORT_STORE[export_id] = export
+        _save_export_meta(export)
         return export
 
     def create_quote_pdf_export(self, *, case_detail: ProjectDetail) -> ExportRead:
@@ -846,6 +901,7 @@ class ExportService:
             completedAt=now,
         )
         _EXPORT_STORE[export_id] = export
+        _save_export_meta(export)
         return export
 
     def create_final_proposal_exports(self, *, case_detail: ProjectDetail) -> list[ExportRead]:
@@ -875,7 +931,27 @@ class ExportService:
             completedAt=now,
         )
         _EXPORT_STORE[export_id] = export
+        _save_export_meta(export)
         return export
 
     def get_export(self, export_id: str) -> ExportRead | None:
-        return _EXPORT_STORE.get(export_id)
+        # 1. In-memory cache
+        if export_id in _EXPORT_STORE:
+            return _EXPORT_STORE[export_id]
+
+        # 2. JSON sidecar on disk
+        export = _load_export_meta(export_id)
+        if export is not None:
+            _EXPORT_STORE[export_id] = export
+            return export
+
+        # 3. Sidecar missing or corrupt — check if export file physically exists
+        file_path = _find_export_file(export_id)
+        if file_path is not None:
+            _logger.warning("export.meta_missing_reconstructed", export_id=export_id, path=str(file_path))
+            export = _export_from_file(export_id, file_path)
+            _EXPORT_STORE[export_id] = export
+            return export
+
+        # 4. Nothing found → caller returns 404
+        return None

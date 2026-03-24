@@ -35,7 +35,14 @@ class AnalysisRepository:
         )
         return list(result.scalars().all())
 
-    async def create_queued_job(self, project: Project, *, user_id: str | None = None) -> AnalysisJob:
+    async def create_queued_job(
+        self,
+        project: Project,
+        *,
+        user_id: str | None = None,
+        parent_job_id: str | None = None,
+        retry_count: int = 0,
+    ) -> AnalysisJob:
         timestamp = datetime.now(UTC)
         job = AnalysisJob(
             id=f"job_{uuid4().hex[:8]}",
@@ -43,6 +50,8 @@ class AnalysisRepository:
             status="queued",
             job_type="manual_trigger",
             requested_by_user_id=user_id or project.created_by_user_id or "usr_1",
+            parent_job_id=parent_job_id,
+            retry_count=retry_count,
             started_at=None,
             finished_at=None,
             error_message=None,

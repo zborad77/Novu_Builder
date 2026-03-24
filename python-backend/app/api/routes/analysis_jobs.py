@@ -89,19 +89,19 @@ async def patch_analysis_selection(
     return {"id": updated.id, "status": "ok"}
 
 
-@router.post("/analysis-jobs/{job_id}/retry", response_model=AnalysisTriggerResponse)
+@router.post("/analysis-jobs/{job_id}/retry", response_model=AnalysisTriggerResponse, status_code=status.HTTP_202_ACCEPTED)
 async def retry_analysis_job(
     job_id: str,
-    project_service: ProjectService = Depends(get_project_service),
+    background_tasks: BackgroundTasks,
+    _: AuthUserRead = Depends(require_manager),
     analysis_service: AnalysisService = Depends(get_analysis_service),
 ) -> AnalysisTriggerResponse:
-    job = await analysis_service.get_job(job_id)
-    if not job:
+    new_job = await analysis_service.retry_job(job_id)
+    if not new_job:
         raise HTTPException(status_code=404, detail="Analysis job not found.")
-    project = await project_service.get_project(job["projectId"])
-    if not project:
-        raise HTTPException(status_code=404, detail="Case not found.")
-    payload = await analysis_service.retry_analysis_job(job_id, project)
-    if not payload:
-        raise HTTPException(status_code=404, detail="Analysis job not found.")
-    return AnalysisTriggerResponse(**payload)
+    background_tasks.add_task(analysis_service.execute_job, new_job.id, new_job.project_id)
+    return AnalysisTriggerResponse(
+        jobId=new_job.id,
+        status=new_job.status,
+        provider=analysis_service.provider_key,
+    )

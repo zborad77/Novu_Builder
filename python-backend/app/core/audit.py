@@ -51,6 +51,7 @@ _PATH_ACTIONS: dict[tuple[str, str], str] = {
     ("POST", "/admin/companies"): "admin.company.create",
     ("PATCH", "/admin/companies/{id}"): "admin.company.update",
     ("POST", "/admin/impersonate/{id}"): "admin.impersonate",
+    ("POST", "/admin/jobs/{id}/retry"): "admin.job.retry",
 }
 
 _SKIP_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc"}

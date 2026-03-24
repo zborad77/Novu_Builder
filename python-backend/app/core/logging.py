@@ -5,10 +5,15 @@ import sys
 import structlog
 
 
-def configure_logging(log_level: str = "INFO", log_file: str = "") -> None:
+def configure_logging(log_level: str = "INFO", log_file: str = "", log_error_file: str = "") -> None:
     level = getattr(logging, log_level.upper(), logging.INFO)
 
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    # stdout — always
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(level)
+    handlers: list[logging.Handler] = [stdout_handler]
+
+    use_json = False
 
     if log_file:
         file_handler = logging.handlers.RotatingFileHandler(
@@ -17,11 +22,23 @@ def configure_logging(log_level: str = "INFO", log_file: str = "") -> None:
             backupCount=5,
             encoding="utf-8",
         )
+        file_handler.setLevel(level)
         handlers.append(file_handler)
+        use_json = True
+
+    if log_error_file:
+        # ERROR-only rotating file — separate from the main log
+        error_handler = logging.handlers.RotatingFileHandler(
+            log_error_file,
+            maxBytes=5 * 1024 * 1024,  # 5 MB
+            backupCount=10,             # keep more error rotations
+            encoding="utf-8",
+        )
+        error_handler.setLevel(logging.ERROR)
+        handlers.append(error_handler)
+        use_json = True
 
     logging.basicConfig(format="%(message)s", handlers=handlers, level=level)
-
-    use_json = bool(log_file)
 
     structlog.configure(
         processors=[
