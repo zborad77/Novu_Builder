@@ -1,14 +1,16 @@
 """
-Run all infrastructure health checks in order.
+Runner — executes all check scripts in order and prints a summary.
 
 Checks (in order):
-  1. test-env.py            — required environment variables
-  2. test-db-connection.py  — database TCP connectivity
-  3. test-redis-connection.py — Redis TCP connectivity (skipped if REDIS_URL not set)
+  1. test-env.py             — required environment variables
+  2. test-db-connection.py   — database TCP connectivity
+  3. test-redis-connection.py — Redis TCP connectivity (SKIP if REDIS_URL not set)
   4. test-backend-startup.py — HTTP health endpoint + JSON validation
+  5. test-api-contracts.py   — HTTP contract smoke test
+  6. test-import-startup.py  — backend import + create_app() check
 
 Exit code:
-  0 — all checks passed (SKIP counts as pass)
+  0 — all checks passed or skipped
   1 — one or more checks failed
 
 Usage:
@@ -24,28 +26,32 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).parent
 
 CHECKS = [
-    {"name": "env",             "script": "test-env.py",             "extra_args": []},
-    {"name": "db-connection",   "script": "test-db-connection.py",   "extra_args": []},
-    {"name": "redis-connection","script": "test-redis-connection.py", "extra_args": []},
-    {"name": "backend-startup", "script": "test-backend-startup.py",  "extra_args": ["--url", "{url}"]},
+    {"name": "env",              "script": "test-env.py",              "extra_args": []},
+    {"name": "db-connection",    "script": "test-db-connection.py",    "extra_args": []},
+    {"name": "redis-connection", "script": "test-redis-connection.py", "extra_args": []},
+    {"name": "backend-startup",  "script": "test-backend-startup.py",  "extra_args": ["--url", "{url}"]},
+    {"name": "api-contracts",    "script": "test-api-contracts.py",    "extra_args": ["--url", "{url}"]},
+    {"name": "import-startup",   "script": "test-import-startup.py",   "extra_args": []},
 ]
 
-WIDTH = 20
 
-
-def run_check(name: str, script: Path, extra_args: list[str]) -> bool:
-    print(f"\n{'─' * 40}")
-    print(f"  CHECK: {name}")
-    print(f"{'─' * 40}")
+def run_check(name: str, script: Path, extra_args: list[str]) -> str:
+    """Run a single check script. Returns 'OK', 'SKIP', or 'FAIL'."""
+    print(f"\n{'-' * 40}", flush=True)
+    print(f"  CHECK: {name}", flush=True)
+    print(f"{'-' * 40}", flush=True)
     result = subprocess.run(
         [sys.executable, str(script)] + extra_args,
         text=True,
+        capture_output=False,
     )
-    return result.returncode == 0
+    if result.returncode != 0:
+        return "FAIL"
+    return "OK"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run all infrastructure health checks")
+    parser = argparse.ArgumentParser(description="Run all health and diagnostic checks")
     parser.add_argument("--url", default="http://localhost:8000", help="Backend base URL (default: %(default)s)")
     args = parser.parse_args()
 
@@ -54,18 +60,18 @@ def main() -> None:
     for check in CHECKS:
         extra = [a.replace("{url}", args.url) for a in check["extra_args"]]
         script = SCRIPTS_DIR / check["script"]
-        passed = run_check(check["name"], script, extra)
-        results.append((check["name"], "OK" if passed else "FAIL"))
+        status = run_check(check["name"], script, extra)
+        results.append((check["name"], status))
 
-    print(f"\n{'═' * 40}")
+    print(f"\n{'=' * 40}")
     print("  SUMMARY")
-    print(f"{'═' * 40}")
+    print(f"{'=' * 40}")
     any_failed = False
     for name, status in results:
         print(f"  {status:<6}  {name}")
         if status == "FAIL":
             any_failed = True
-    print(f"{'═' * 40}")
+    print(f"{'=' * 40}")
 
     if any_failed:
         print("  RESULT: FAIL")
