@@ -249,29 +249,6 @@ class AnalysisService:
         )
         return new_job
 
-    async def trigger_analysis(self, project: Project) -> dict:
-        photos = await self.photo_repository.list_photos_by_project_id(project.id)
-        analysis = await run_project_analysis(
-            provider_key=self.provider_key,
-            project={
-                "id": project.id,
-                "title": project.title,
-                "description": project.description,
-                "address_label": project.address_label,
-                "property_type": project.property_type,
-                "repair_scope": project.repair_scope,
-            },
-            photos=photos,
-        )
-        job, result = await self.repository.create_analysis_record(project, analysis)
-        return {
-            "jobId": job.id,
-            "status": job.status,
-            "provider": analysis.get("providerKey"),
-            "modelName": result.model_name,
-            "modelVersion": result.model_version,
-        }
-
     async def cancel_analysis_job(self, job_id: str) -> dict | None:
         job = await self.repository.get_analysis_job(job_id)
         if not job:
