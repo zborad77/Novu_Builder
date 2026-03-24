@@ -12,6 +12,9 @@ Modules checked (in dependency order):
   5. app.models             — all domain models (ORM)
   6. app.api.router         — all route modules + their services,
                               repositories and schemas (transitive)
+  7. app.main               — entrypoint: calls create_app() at module level,
+                              registers middlewares, routes and static files;
+                              verifies result is a FastAPI instance
 
 Usage:
     python scripts/test-import-startup.py
@@ -33,6 +36,7 @@ CHECKS = [
     ("app.db.session",    "engine + session factory"),
     ("app.models",        "all domain models"),
     ("app.api.router",    "all routes, services, repositories, schemas"),
+    ("app.main",          "entrypoint — create_app() + FastAPI instance"),
 ]
 
 
@@ -43,7 +47,14 @@ def main() -> None:
 
     for module, description in CHECKS:
         try:
-            __import__(module)
+            mod = __import__(module)
+            # For app.main: verify that create_app() produced a FastAPI instance.
+            if module == "app.main":
+                import importlib
+                main_mod = importlib.import_module("app.main")
+                from fastapi import FastAPI
+                if not isinstance(main_mod.app, FastAPI):
+                    raise TypeError(f"app.main.app is {type(main_mod.app)!r}, expected FastAPI")
             print(f"  OK    {module}  ({description})")
             results.append((module, True, ""))
         except Exception as exc:
