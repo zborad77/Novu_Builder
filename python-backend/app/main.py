@@ -17,7 +17,7 @@ from app.core.logging import configure_logging
 from app.db.base import Base
 from app.db.bootstrap import ensure_dev_seed
 from app.db.session import AsyncSessionFactory, engine
-from app.models import Project
+from app.models import AnalysisJob, Project
 from app.repositories.token_repository import TokenRepository
 from app.storage.local_photo_storage import EXPORTS_ROOT, STORAGE_ROOT, UPLOADS_ROOT
 
@@ -113,6 +113,23 @@ async def lifespan(app: FastAPI):
         deleted = await TokenRepository(session).delete_expired()
         if deleted:
             logger.info("startup.revoked_tokens_cleanup", deleted=deleted)
+
+    try:
+        async with AsyncSessionFactory() as session:
+            result = await session.execute(
+                select(AnalysisJob).where(AnalysisJob.status == "running")
+            )
+            stale_jobs = result.scalars().all()
+            if stale_jobs:
+                logger.warning(
+                    "startup.stale_jobs_detected",
+                    count=len(stale_jobs),
+                    job_ids=[job.id for job in stale_jobs],
+                )
+            else:
+                logger.info("startup.stale_jobs_detected", count=0)
+    except Exception as exc:
+        logger.warning("startup.stale_jobs_check_failed", error=str(exc))
 
     yield
 
