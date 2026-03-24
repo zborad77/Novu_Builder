@@ -110,13 +110,18 @@ class AnalysisRepository:
         return job, result
 
     async def create_analysis_record(self, project: Project, analysis: dict) -> tuple[AnalysisJob, AnalysisResult]:
+        if project.created_by_user_id is None:
+            raise ValueError(
+                f"Cannot create analysis record for project {project.id}: "
+                "created_by_user_id is required but was not provided."
+            )
         timestamp = datetime.now(UTC)
         job = AnalysisJob(
             id=f"job_{uuid4().hex[:8]}",
             project_id=project.id,
             status=analysis.get("jobStatus", "completed"),
             job_type=analysis.get("jobType", "manual_trigger"),
-            requested_by_user_id=project.created_by_user_id or "usr_1",
+            requested_by_user_id=project.created_by_user_id,
             started_at=timestamp,
             finished_at=timestamp,
             error_message=analysis.get("errorMessage"),
