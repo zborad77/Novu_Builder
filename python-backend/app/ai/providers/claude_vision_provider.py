@@ -10,13 +10,14 @@ Model: claude-opus-4-6 (výchozí), lze přebít přes CLAUDE_VISION_MODEL v .en
 
 import base64
 import json
-import logging
 import os
 from pathlib import Path
 
+import structlog
+
 from app.core.config import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 _SYSTEM_PROMPT = """
 Jsi expert na stavební diagnostiku a cenové nabídky.
@@ -70,8 +71,9 @@ class ClaudeVisionProvider:
         self._model: str = os.getenv("CLAUDE_VISION_MODEL", "claude-opus-4-6")
         if not self._api_key:
             logger.warning(
-                "ClaudeVisionProvider: ANTHROPIC_API_KEY není nastavený. "
-                "Analýza selže při spuštění. Přidej ANTHROPIC_API_KEY do .env"
+                "claude.provider.init",
+                problem="ANTHROPIC_API_KEY not set",
+                hint="Add ANTHROPIC_API_KEY to python-backend/.env",
             )
 
     def _check_ready(self) -> None:
@@ -158,12 +160,10 @@ class ClaudeVisionProvider:
         content = self._build_content(project, photos)
 
         logger.info(
-            "claude_vision_analyze",
-            extra={
-                "model": self._model,
-                "photo_count": len(photos),
-                "project_id": project.get("id"),
-            },
+            "claude.vision.analyze",
+            model=self._model,
+            photo_count=len(photos),
+            project_id=project.get("id"),
         )
 
         response = await client.messages.create(

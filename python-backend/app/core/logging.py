@@ -38,15 +38,50 @@ def configure_logging(log_level: str = "INFO", log_file: str = "", log_error_fil
         handlers.append(error_handler)
         use_json = True
 
-    logging.basicConfig(format="%(message)s", handlers=handlers, level=level)
+    # Shared pre-chain used by both structlog and the stdlib ProcessorFormatter.
+    # add_logger_name adds the originating module to every entry ("logger" key).
+    shared_processors: list = [
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+    ]
 
+    # Exception rendering: structured dict for JSON (machine-parseable),
+    # formatted string for console (human-readable).
+    exc_processor = (
+        structlog.processors.dict_tracebacks
+        if use_json
+        else structlog.processors.format_exc_info
+    )
+
+    renderer = (
+        structlog.processors.JSONRenderer()
+        if use_json
+        else structlog.dev.ConsoleRenderer()
+    )
+
+    # Apply structlog's ProcessorFormatter to all stdlib handlers so that
+    # uvicorn / SQLAlchemy / third-party logs share the same format and context.
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processor=renderer,
+        foreign_pre_chain=shared_processors,
+    )
+    for handler in handlers:
+        handler.setFormatter(formatter)
+
+    logging.basicConfig(handlers=handlers, level=level)
+
+    # structlog uses PrintLoggerFactory (direct output) so that its own loggers
+    # render independently of stdlib — avoids the wrap_for_formatter chicken-and-egg
+    # problem when loggers are called before configure_logging() runs (e.g. at
+    # module import time in provider __init__ methods).
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.dict_tracebacks,
-            structlog.processors.JSONRenderer() if use_json else structlog.dev.ConsoleRenderer(),
+            *shared_processors,
+            exc_processor,
+            renderer,
         ],
         wrapper_class=structlog.make_filtering_bound_logger(level),
         context_class=dict,
