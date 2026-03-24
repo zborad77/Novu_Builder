@@ -43,13 +43,19 @@ class AnalysisRepository:
         parent_job_id: str | None = None,
         retry_count: int = 0,
     ) -> AnalysisJob:
+        resolved_user_id = user_id or project.created_by_user_id
+        if resolved_user_id is None:
+            raise ValueError(
+                f"Cannot create analysis job for project {project.id}: "
+                "requestor user_id is required but was not provided."
+            )
         timestamp = datetime.now(UTC)
         job = AnalysisJob(
             id=f"job_{uuid4().hex[:8]}",
             project_id=project.id,
             status="queued",
             job_type="manual_trigger",
-            requested_by_user_id=user_id or project.created_by_user_id or "usr_1",
+            requested_by_user_id=resolved_user_id,
             parent_job_id=parent_job_id,
             retry_count=retry_count,
             started_at=None,
