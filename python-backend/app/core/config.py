@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     storage_root: str = Field(default="", alias="STORAGE_ROOT")
     ai_analysis_provider: str = Field(default="mock", alias="AI_ANALYSIS_PROVIDER")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     jwt_secret: str = Field(default="change-me-in-production", alias="JWT_SECRET")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     jwt_access_token_expire_minutes: int = Field(default=60, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")

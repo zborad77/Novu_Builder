@@ -14,6 +14,8 @@ import logging
 import os
 from pathlib import Path
 
+from app.core.config import get_settings
+
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """
@@ -63,8 +65,14 @@ class ClaudeVisionProvider:
     key = "claude"
 
     def __init__(self) -> None:
-        self._api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
+        settings = get_settings()
+        self._api_key: str | None = settings.anthropic_api_key
         self._model: str = os.getenv("CLAUDE_VISION_MODEL", "claude-opus-4-6")
+        if not self._api_key:
+            logger.warning(
+                "ClaudeVisionProvider: ANTHROPIC_API_KEY není nastavený. "
+                "Analýza selže při spuštění. Přidej ANTHROPIC_API_KEY do .env"
+            )
 
     def _check_ready(self) -> None:
         if not self._api_key:
