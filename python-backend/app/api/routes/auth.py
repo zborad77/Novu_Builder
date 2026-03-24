@@ -14,7 +14,8 @@ from app.schemas.auth import (
     LogoutResponse,
     RefreshRequest,
 )
-from app.services.auth_service import AuthService
+from app.models import User
+from app.services.auth_service import AuthService, hash_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -68,6 +69,8 @@ async def me(
 @router.post("/change-password", response_model=ChangePasswordResponse)
 async def change_password(
     payload: ChangePasswordRequest,
+    current_user: AuthUserRead = Depends(get_current_user),
+    service: AuthService = Depends(get_auth_service),
 ) -> ChangePasswordResponse:
     if not payload.currentPassword or not payload.newPassword:
         raise HTTPException(status_code=400, detail="Both passwords are required.")
@@ -75,4 +78,12 @@ async def change_password(
         enforce_password_strength(payload.newPassword)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    verified = await service.login(email=current_user.email, password=payload.currentPassword)
+    if not verified:
+        raise HTTPException(status_code=401, detail="Current password is incorrect.")
+    user = await service.session.get(User, current_user.id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    user.password_hash = hash_password(payload.newPassword)
+    await service.session.commit()
     return ChangePasswordResponse(message="Password changed.")
