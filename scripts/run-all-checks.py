@@ -19,6 +19,7 @@ Usage:
 """
 
 import sys
+import json
 import argparse
 import subprocess
 import threading
@@ -122,6 +123,11 @@ def main() -> None:
         default="http://localhost:8000",
         help="Backend base URL (default: %(default)s)",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON instead of human-readable text",
+    )
     args = parser.parse_args()
 
     results: list[tuple[str, str]] = []
@@ -141,25 +147,32 @@ def main() -> None:
             status, detail = run_check(script, extra_args)
         results.append((label, status, detail))
 
-    # Summary
-    print(f"\n{'═' * 42}")
-    print("  SUMMARY")
-    print(f"{'═' * 42}")
+    any_failed = any(status == "FAIL" for _, status, _ in results)
+    overall = "FAIL" if any_failed else "OK"
 
-    any_failed = False
-    for name, status, detail in results:
-        marker = "✓" if status == "OK" else ("~" if status == "SKIP" else "✗")
-        suffix = f"  [{detail}]" if detail else ""
-        print(f"  {marker}  {status:<4}  {name}{suffix}")
-        if status == "FAIL":
-            any_failed = True
-
-    print(f"{'═' * 42}")
-    if any_failed:
-        print("  RESULT: FAIL")
-        sys.exit(1)
+    if args.json:
+        payload = {
+            "result": overall,
+            "checks": [
+                {"name": name, "status": status, **({"detail": detail} if detail else {})}
+                for name, status, detail in results
+            ],
+        }
+        print(json.dumps(payload, indent=2))
     else:
-        print("  RESULT: OK")
+        # Default human-readable summary — unchanged
+        print(f"\n{'═' * 42}")
+        print("  SUMMARY")
+        print(f"{'═' * 42}")
+        for name, status, detail in results:
+            marker = "✓" if status == "OK" else ("~" if status == "SKIP" else "✗")
+            suffix = f"  [{detail}]" if detail else ""
+            print(f"  {marker}  {status:<4}  {name}{suffix}")
+        print(f"{'═' * 42}")
+        print(f"  RESULT: {overall}")
+
+    if any_failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
