@@ -250,9 +250,16 @@ def create_app() -> FastAPI:
             content={"detail": "Internal server error"},
         )
 
-    from app.api.routes.storage import router as storage_router
     app.include_router(api_router, prefix=settings.api_v1_prefix)
-    app.include_router(storage_router)
+
+    # WARNING: /mock-storage serves local filesystem files through an
+    # authenticated route. It is a dev-only facility — in production, files
+    # are served by a dedicated storage backend (S3/CDN). Never enable this
+    # mount in production; doing so exposes the local storage directory.
+    if settings.is_development:
+        from app.api.routes.storage import router as storage_router
+        app.include_router(storage_router)
+
     return app
 
 

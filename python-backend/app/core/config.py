@@ -90,6 +90,10 @@ class Settings(BaseSettings):
         return self.database_url
 
     @property
+    def is_development(self) -> bool:
+        return self.app_env.lower() == "development"
+
+    @property
     def should_auto_create_schema(self) -> bool:
         return self.app_env.lower() == "development" and self.db_auto_create_schema
 
