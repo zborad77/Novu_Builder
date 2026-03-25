@@ -232,6 +232,11 @@ async def reset_user_password(
 
 # ── Analysis Jobs (all orgs) ───────────────────────────────────────────────────
 
+# Maximum length for error messages returned to clients.
+# Raw exception text may contain internal file paths or stack details.
+_ADMIN_JOB_MAX_ERROR_LEN = 500
+
+
 def _enrich_job(job: AnalysisJob, case_title: str, org_id: str, org_name: str) -> dict:
     base = to_job_read(job)
     base["caseTitle"] = case_title
@@ -240,11 +245,34 @@ def _enrich_job(job: AnalysisJob, case_title: str, org_id: str, org_name: str) -
     return base
 
 
+def _sanitize_admin_job(job_dict: dict) -> dict:
+    """Strip or truncate fields that expose internal implementation details.
+
+    Removed:
+        errorTraceback — full Python stack trace; exposes file paths,
+                         library versions and internal code structure.
+    Truncated:
+        errorMessage  — raw exception text; may contain internal paths or
+                        DB details. Kept up to _ADMIN_JOB_MAX_ERROR_LEN chars
+                        for admin debugging; longer messages are cut.
+
+    All other fields are retained: they are operational metadata (status,
+    timing, org context, high-level AI results) that are legitimate for
+    superadmin consumption.
+    """
+    sanitized = {k: v for k, v in job_dict.items() if k != "errorTraceback"}
+    msg = sanitized.get("errorMessage")
+    if msg and len(msg) > _ADMIN_JOB_MAX_ERROR_LEN:
+        sanitized["errorMessage"] = msg[:_ADMIN_JOB_MAX_ERROR_LEN] + " … [truncated]"
+    return sanitized
+
+
 @router.get("/jobs", response_model=list[dict])
 async def list_all_jobs(
     job_status: str | None = Query(default=None, alias="status"),
     org_id: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_db_session),
     _: AuthUserRead = Depends(require_admin_capability("admin:jobs")),
 ) -> list[dict]:
@@ -253,6 +281,7 @@ async def list_all_jobs(
         .join(Project, AnalysisJob.project_id == Project.id)
         .join(Organization, Project.organization_id == Organization.id)
         .order_by(AnalysisJob.created_at.desc())
+        .offset(offset)
         .limit(limit)
     )
     if job_status:
@@ -262,7 +291,10 @@ async def list_all_jobs(
 
     result = await session.execute(query)
     rows = result.all()
-    return [_enrich_job(job, case_title, oid, org_name) for job, case_title, oid, org_name in rows]
+    return [
+        _sanitize_admin_job(_enrich_job(job, case_title, oid, org_name))
+        for job, case_title, oid, org_name in rows
+    ]
 
 
 @router.get("/jobs/{job_id}", response_model=dict)
@@ -284,7 +316,7 @@ async def get_admin_job(
         org = await session.get(Organization, project.organization_id)
         org_name = org.name if org else ""
 
-    return _enrich_job(job, case_title, org_id, org_name)
+    return _sanitize_admin_job(_enrich_job(job, case_title, org_id, org_name))
 
 
 @router.post("/jobs/{job_id}/retry", response_model=dict, status_code=status.HTTP_202_ACCEPTED)
