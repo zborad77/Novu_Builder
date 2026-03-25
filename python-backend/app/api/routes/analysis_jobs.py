@@ -22,7 +22,10 @@ async def create_analysis_job(
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
     job = await analysis_service.create_job(project, user_id=current_user.id)
-    background_tasks.add_task(analysis_service.execute_job, job.id, case_id, org_id)
+    background_tasks.add_task(
+        analysis_service.execute_job, job.id, case_id, org_id,
+        is_superadmin_context=current_user.isSuperAdmin,
+    )
     return AnalysisTriggerResponse(
         jobId=job.id,
         status=job.status,
@@ -128,10 +131,17 @@ async def retry_analysis_job(
         if not project:
             raise HTTPException(status_code=404, detail="Analysis job not found.")
     org_id = None if current_user.isSuperAdmin else current_user.organizationId
-    new_job = await analysis_service.retry_job(job_id, organization_id=org_id)
+    new_job = await analysis_service.retry_job(
+        job_id,
+        organization_id=org_id,
+        is_superadmin_context=current_user.isSuperAdmin,
+    )
     if not new_job:
         raise HTTPException(status_code=404, detail="Analysis job not found.")
-    background_tasks.add_task(analysis_service.execute_job, new_job.id, new_job.project_id, org_id)
+    background_tasks.add_task(
+        analysis_service.execute_job, new_job.id, new_job.project_id, org_id,
+        is_superadmin_context=current_user.isSuperAdmin,
+    )
     return AnalysisTriggerResponse(
         jobId=new_job.id,
         status=new_job.status,

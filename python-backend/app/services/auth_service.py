@@ -89,7 +89,11 @@ class AuthService:
         user = await self.session.get(User, payload["sub"])
         if not user or not user.is_active:
             return None
-        return _user_to_read(user)
+        result = _user_to_read(user)
+        impersonated_by = payload.get("impersonated_by")
+        if impersonated_by:
+            result = result.model_copy(update={"impersonatedBy": impersonated_by})
+        return result
 
     async def refresh(self, refresh_token: str) -> tuple[str, str, AuthUserRead] | None:
         payload = self.decode_token(refresh_token)

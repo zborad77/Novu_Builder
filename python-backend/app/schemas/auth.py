@@ -11,6 +11,7 @@ class AuthUserRead(BaseModel):
     isActive: bool
     organizationId: str
     isSuperAdmin: bool = False
+    impersonatedBy: str | None = None  # set when token was issued via /admin/impersonate
 
 
 class LoginRequest(BaseModel):

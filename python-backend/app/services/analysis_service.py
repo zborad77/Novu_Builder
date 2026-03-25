@@ -138,9 +138,32 @@ class AnalysisService:
             retry_count=retry_count,
         )
 
-    async def execute_job(self, job_id: str, project_id: str, organization_id: str | None = None) -> None:
-        """Runs the analysis in the background. Uses its own DB session."""
+    async def execute_job(
+        self,
+        job_id: str,
+        project_id: str,
+        organization_id: str | None = None,
+        *,
+        is_superadmin_context: bool = False,
+    ) -> None:
+        """Runs the analysis in the background. Uses its own DB session.
+
+        organization_id=None is the superadmin cross-tenant path. Callers MUST
+        set is_superadmin_context=True when intentionally omitting organization_id;
+        otherwise a 403 is raised to prevent accidental tenant-isolation bypass.
+        """
         log = logger.bind(job_id=job_id, project_id=project_id)
+
+        if organization_id is None and not is_superadmin_context:
+            log.warning(
+                "SECURITY_EVENT: execute_job_missing_org_id",
+                job_id=job_id,
+                project_id=project_id,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="organization_id is required for non-superadmin context.",
+            )
 
         async with AsyncSessionFactory() as session:
             repo = AnalysisRepository(session)
@@ -268,12 +291,31 @@ class AnalysisService:
                     exc_info=True,
                 )
 
-    async def retry_job(self, job_id: str, organization_id: str | None = None) -> AnalysisJob | None:
+    async def retry_job(
+        self,
+        job_id: str,
+        organization_id: str | None = None,
+        *,
+        is_superadmin_context: bool = False,
+    ) -> AnalysisJob | None:
         """
         Creates a new queued job that is a retry of the given job.
         The caller (route) must schedule execute_job via BackgroundTasks.
-        Raises HTTPException on missing org_id (400), org mismatch (403), or job not found (404).
+        Raises HTTPException on org mismatch (403) or job not found (404).
+
+        organization_id=None is the superadmin cross-tenant path. Callers MUST
+        set is_superadmin_context=True when intentionally omitting organization_id.
         """
+        if organization_id is None and not is_superadmin_context:
+            logger.warning(
+                "SECURITY_EVENT: retry_job_missing_org_id",
+                job_id=job_id,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="organization_id is required for non-superadmin context.",
+            )
+
         if organization_id is None:
             # Superadmin path — no org filter; observable via log
             logger.info("worker.superadmin_bypass", job_id=job_id)

@@ -1,5 +1,4 @@
 import collections
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -26,6 +25,7 @@ from app.schemas.company import (
 )
 from app.core.limiter import limiter
 from app.core.security import enforce_password_strength
+from app.core.audit import write_audit_log
 from app.services.analysis_service import AnalysisService, to_job_read
 from app.services.auth_service import AuthService
 from app.services.company_service import CompanyService
@@ -61,22 +61,14 @@ async def create_company(
     if not payload.name.strip():
         raise HTTPException(status_code=400, detail="Company name is required.")
     company = await service.create_company(payload)
-    try:
-        admin_obj = await service.session.get(User, current_user.id)
-        service.session.add(AuditLog(
-            id=uuid4().hex,
-            user_id=current_user.id,
-            user_email=admin_obj.email if admin_obj else None,
-            org_id=admin_obj.organization_id if admin_obj else None,
-            action="admin.company.create",
-            resource_type="company",
-            resource_id=company.id,
-            detail=json.dumps({"name": company.name}),
-            created_at=datetime.now(UTC),
-        ))
-        await service.session.commit()
-    except Exception:
-        pass
+    await write_audit_log(
+        service.session,
+        current_user_id=current_user.id,
+        action="admin.company.create",
+        resource_type="company",
+        resource_id=company.id,
+        detail={"name": company.name},
+    )
     return company
 
 
@@ -102,22 +94,14 @@ async def patch_company(
     updated = await service.patch_company(company_id, payload)
     if not updated:
         raise HTTPException(status_code=404, detail="Company not found.")
-    try:
-        admin_obj = await service.session.get(User, current_user.id)
-        service.session.add(AuditLog(
-            id=uuid4().hex,
-            user_id=current_user.id,
-            user_email=admin_obj.email if admin_obj else None,
-            org_id=admin_obj.organization_id if admin_obj else None,
-            action="admin.company.patch",
-            resource_type="company",
-            resource_id=company_id,
-            detail=json.dumps({"changes": payload.model_dump(exclude_unset=True)}),
-            created_at=datetime.now(UTC),
-        ))
-        await service.session.commit()
-    except Exception:
-        pass
+    await write_audit_log(
+        service.session,
+        current_user_id=current_user.id,
+        action="admin.company.patch",
+        resource_type="company",
+        resource_id=company_id,
+        detail={"changes": payload.model_dump(exclude_unset=True)},
+    )
     return updated
 
 
@@ -150,22 +134,14 @@ async def create_user(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not user:
         raise HTTPException(status_code=404, detail="Organization not found.")
-    try:
-        admin_obj = await service.session.get(User, current_user.id)
-        service.session.add(AuditLog(
-            id=uuid4().hex,
-            user_id=current_user.id,
-            user_email=admin_obj.email if admin_obj else None,
-            org_id=admin_obj.organization_id if admin_obj else None,
-            action="admin.user.create",
-            resource_type="user",
-            resource_id=user.id,
-            detail=json.dumps({"email": user.email, "role": user.role, "target_org": user.organizationId}),
-            created_at=datetime.now(UTC),
-        ))
-        await service.session.commit()
-    except Exception:
-        pass
+    await write_audit_log(
+        service.session,
+        current_user_id=current_user.id,
+        action="admin.user.create",
+        resource_type="user",
+        resource_id=user.id,
+        detail={"email": user.email, "role": user.role, "target_org": user.organizationId},
+    )
     return user
 
 
@@ -191,22 +167,14 @@ async def patch_user(
     updated = await service.patch_user(user_id, payload)
     if not updated:
         raise HTTPException(status_code=404, detail="User not found.")
-    try:
-        admin_obj = await service.session.get(User, current_user.id)
-        service.session.add(AuditLog(
-            id=uuid4().hex,
-            user_id=current_user.id,
-            user_email=admin_obj.email if admin_obj else None,
-            org_id=admin_obj.organization_id if admin_obj else None,
-            action="admin.user.patch",
-            resource_type="user",
-            resource_id=user_id,
-            detail=json.dumps({"changes": payload.model_dump(exclude_unset=True, exclude={"password"})}),
-            created_at=datetime.now(UTC),
-        ))
-        await service.session.commit()
-    except Exception:
-        pass
+    await write_audit_log(
+        service.session,
+        current_user_id=current_user.id,
+        action="admin.user.patch",
+        resource_type="user",
+        resource_id=user_id,
+        detail={"changes": payload.model_dump(exclude_unset=True, exclude={"password"})},
+    )
     return updated
 
 
@@ -244,24 +212,14 @@ async def reset_user_password(
         target_email=target.email,
     )
 
-    # Explicit audit log with target detail (middleware writes basic entry too)
-    try:
-        admin_obj = await session.get(User, current_user.id)
-        audit = AuditLog(
-            id=uuid4().hex,
-            user_id=current_user.id,
-            user_email=admin_obj.email if admin_obj else None,
-            org_id=admin_obj.organization_id if admin_obj else None,
-            action="admin.user.reset_password",
-            resource_type="user",
-            resource_id=user_id,
-            detail=json.dumps({"target_email": target.email, "target_org": target.organization_id}),
-            created_at=datetime.now(UTC),
-        )
-        session.add(audit)
-        await session.commit()
-    except Exception:
-        pass
+    await write_audit_log(
+        session,
+        current_user_id=current_user.id,
+        action="admin.user.reset_password",
+        resource_type="user",
+        resource_id=user_id,
+        detail={"target_email": target.email, "target_org": target.organization_id},
+    )
 
 
 # ── Analysis Jobs (all orgs) ───────────────────────────────────────────────────
@@ -327,33 +285,25 @@ async def admin_retry_job(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
     # organization_id=None is intentional: superadmin operates across all orgs
-    new_job = await analysis_service.retry_job(job_id, organization_id=None)
-    background_tasks.add_task(analysis_service.execute_job, new_job.id, new_job.project_id, None)
+    new_job = await analysis_service.retry_job(job_id, organization_id=None, is_superadmin_context=True)
+    background_tasks.add_task(
+        analysis_service.execute_job, new_job.id, new_job.project_id, None,
+        is_superadmin_context=True,
+    )
 
-    # Write explicit audit log entry with retry context
     original = await session.get(AnalysisJob, job_id)
-    try:
-        from app.models.domain import User as UserModel
-        user_obj = await session.get(UserModel, current_user.id)
-        audit = AuditLog(
-            id=uuid4().hex,
-            user_id=current_user.id,
-            user_email=user_obj.email if user_obj else None,
-            org_id=user_obj.organization_id if user_obj else None,
-            action="admin.job.retry",
-            resource_type="analysis_job",
-            resource_id=job_id,
-            detail=json.dumps({
-                "new_job_id": new_job.id,
-                "retry_count": new_job.retry_count,
-                "original_status": original.status if original else None,
-            }),
-            created_at=datetime.now(UTC),
-        )
-        session.add(audit)
-        await session.commit()
-    except Exception:
-        pass
+    await write_audit_log(
+        session,
+        current_user_id=current_user.id,
+        action="admin.job.retry",
+        resource_type="analysis_job",
+        resource_id=job_id,
+        detail={
+            "new_job_id": new_job.id,
+            "retry_count": new_job.retry_count,
+            "original_status": original.status if original else None,
+        },
+    )
 
     return {"newJobId": new_job.id, "status": new_job.status, "retryCount": new_job.retry_count}
 
@@ -470,29 +420,19 @@ async def impersonate_user(
         algorithm=settings.jwt_algorithm,
     )
 
-    # Write rich audit entry (middleware writes basic one; this adds detail context)
-    try:
-        admin_obj = await session.get(User, current_user.id)
-        audit = AuditLog(
-            id=uuid4().hex,
-            user_id=current_user.id,
-            user_email=admin_obj.email if admin_obj else None,
-            org_id=admin_obj.organization_id if admin_obj else None,
-            action="admin.impersonate",
-            resource_type="user",
-            resource_id=target.id,
-            detail=json.dumps({
-                "impersonated_email": target.email,
-                "impersonated_role": target.role,
-                "impersonated_org": target.organization_id,
-                "expires_minutes": 15,
-            }),
-            created_at=datetime.now(UTC),
-        )
-        session.add(audit)
-        await session.commit()
-    except Exception:
-        pass
+    await write_audit_log(
+        session,
+        current_user_id=current_user.id,
+        action="admin.impersonate",
+        resource_type="user",
+        resource_id=target.id,
+        detail={
+            "impersonated_email": target.email,
+            "impersonated_role": target.role,
+            "impersonated_org": target.organization_id,
+            "expires_minutes": 15,
+        },
+    )
 
     return ImpersonateResponse(
         accessToken=token,

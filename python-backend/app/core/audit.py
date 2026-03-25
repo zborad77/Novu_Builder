@@ -110,6 +110,42 @@ def _decode_user(authorization: str | None) -> tuple[str | None, str | None]:
         return None, None
 
 
+async def write_audit_log(
+    session,
+    *,
+    current_user_id: str,
+    action: str,
+    resource_type: str,
+    resource_id: str,
+    detail: dict,
+) -> None:
+    """Write a rich AuditLog entry reusing an existing DB session.
+
+    Looks up the actor's email and org_id from the DB for full traceability.
+    Silently swallows any exception — audit logging is non-critical and must
+    never break the main request path.
+    """
+    try:
+        from app.models.domain import AuditLog as _AuditLog
+        from app.models.domain import User as _User
+
+        actor = await session.get(_User, current_user_id)
+        session.add(_AuditLog(
+            id=uuid4().hex,
+            user_id=current_user_id,
+            user_email=actor.email if actor else None,
+            org_id=actor.organization_id if actor else None,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            detail=json.dumps(detail, ensure_ascii=False),
+            created_at=datetime.now(UTC),
+        ))
+        await session.commit()
+    except Exception:
+        pass
+
+
 class AuditMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         path = request.url.path

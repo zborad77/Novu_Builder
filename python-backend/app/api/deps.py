@@ -85,6 +85,8 @@ async def require_superadmin(
 ) -> AuthUserRead:
     if not current_user.isSuperAdmin:
         raise HTTPException(status_code=403, detail="Super-admin access required.")
+    if current_user.impersonatedBy:
+        raise HTTPException(status_code=403, detail="Impersonated tokens cannot access admin routes.")
     return current_user
 
 
