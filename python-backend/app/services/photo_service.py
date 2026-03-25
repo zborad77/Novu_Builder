@@ -63,6 +63,7 @@ def to_read_model(photo: ProjectPhoto) -> ProjectPhotoRead:
     ai_input_url = f"/mock-storage/{photo.ai_input_storage_key}" if photo.ai_input_storage_key else None
     return ProjectPhotoRead(
         id=photo.id,
+        projectId=photo.project_id,
         originalFilename=photo.original_filename,
         storageKey=photo.storage_key,
         mimeType=photo.mime_type,

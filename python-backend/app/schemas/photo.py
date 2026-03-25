@@ -20,6 +20,7 @@ class PhotoVariants(BaseModel):
 
 class ProjectPhotoRead(BaseModel):
     id: str
+    projectId: str
     originalFilename: str
     storageKey: str
     mimeType: str

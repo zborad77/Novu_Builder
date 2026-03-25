@@ -83,10 +83,16 @@ async def upload_case_images(
 @router.get("/images/{image_id}/preview")
 async def get_image_preview(
     image_id: str,
+    current_user: AuthUserRead = Depends(get_current_user),
+    project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ):
     photo = await photo_service.get_photo_by_id(image_id)
     if not photo:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    project = await project_service.get_project(photo.projectId, organization_id=org_id)
+    if not project:
         raise HTTPException(status_code=404, detail="Image not found.")
     preview_url = photo.variants.preview.url or photo.url
     return RedirectResponse(url=preview_url)
