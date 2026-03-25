@@ -47,6 +47,8 @@ async def health(request: Request) -> dict:
             queued_row = await session.execute(
                 select(func.count()).where(AnalysisJob.status == "queued")
             )
+            # func.count() always returns an int; `or 0` is a belt-and-suspenders guard
+            # against unexpected None from certain async DBAPI drivers — safe to keep
             jobs_running = running_row.scalar_one() or 0
             jobs_queued = queued_row.scalar_one() or 0
 

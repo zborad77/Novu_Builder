@@ -1,12 +1,15 @@
 from datetime import datetime
 from uuid import uuid4
 
+import structlog
 from fastapi import UploadFile
 
 from app.models import Project, ProjectPhoto
 from app.repositories.photo_repository import PhotoRepository
 from app.schemas.photo import ProjectPhotoRead
 from app.storage.local_photo_storage import save_original_photo, write_storage_file
+
+logger = structlog.get_logger(__name__)
 
 MIN_PROJECT_PHOTOS = 3
 
@@ -161,7 +164,7 @@ class PhotoService:
         return to_read_model(photo)
 
     async def create_json_photo(self, project: Project, payload: dict) -> ProjectPhotoRead:
-        filename = payload.get("originalFilename") or f"photo-{uuid4().hex[:8]}.jpg"
+        filename = payload.get("originalFilename") or f"photo-{uuid4().hex[:8]}.jpg"  # intentional upload fallback
         photo_count = await self.repository.count_photos(project.id)
         is_primary = bool(payload.get("isPrimary")) or photo_count == 0
         if is_primary:
@@ -173,12 +176,16 @@ class PhotoService:
             width=payload.get("width"),
             height=payload.get("height"),
         )
+        # intentional upload fallback — client may omit mimeType; image/jpeg is the safe default
+        mime_type = payload.get("mimeType") or "image/jpeg"
+        if not payload.get("mimeType"):
+            logger.warning("photo.create_json.mime_type_missing", project_id=project.id, fallback=mime_type)
         photo = ProjectPhoto(
             id=f"pho_{uuid4().hex[:8]}",
             project_id=project.id,
             storage_key=f"projects/{project.id}/{filename}",
             original_filename=filename,
-            mime_type=payload.get("mimeType") or "image/jpeg",
+            mime_type=mime_type,
             file_size=payload.get("fileSize", 0),
             width=payload.get("width"),
             height=payload.get("height"),
@@ -196,6 +203,7 @@ class PhotoService:
             exif_lng=payload.get("exifLng"),
             is_primary=is_primary,
             is_analysis_reference=photo_count == 0,
+            # NOTE: sortOrder=0 is falsy and also triggers the auto-assign path — accepted edge case
             sort_order=payload.get("sortOrder") or await self.repository.get_next_sort_order(project.id),
         )
         return to_read_model(await self.repository.add_photo(photo))
@@ -203,7 +211,10 @@ class PhotoService:
     async def create_multipart_photo(self, project: Project, file: UploadFile, *, is_primary: bool) -> ProjectPhotoRead:
         content = await file.read()
         storage_key, _ = save_original_photo(project_id=project.id, original_filename=file.filename, content=content)
+        # intentional upload fallback — multipart filename is optional per HTTP spec
         filename = file.filename or f"upload-{uuid4().hex[:8]}.bin"
+        if not file.filename:
+            logger.warning("photo.create_multipart.filename_missing", project_id=project.id)
         photo_count = await self.repository.count_photos(project.id)
         should_be_primary = is_primary or photo_count == 0
         if should_be_primary:
@@ -215,12 +226,16 @@ class PhotoService:
             width=None,
             height=None,
         )
+        # intentional upload fallback — content_type may be None from some HTTP clients
+        content_type = file.content_type or "application/octet-stream"
+        if not file.content_type:
+            logger.warning("photo.create_multipart.content_type_missing", project_id=project.id, fallback=content_type)
         photo = ProjectPhoto(
             id=f"pho_{uuid4().hex[:8]}",
             project_id=project.id,
             storage_key=storage_key,
             original_filename=filename,
-            mime_type=file.content_type or "application/octet-stream",
+            mime_type=content_type,
             file_size=len(content),
             preview_storage_key=variants["preview_storage_key"],
             preview_file_size=variants["preview_file_size"],

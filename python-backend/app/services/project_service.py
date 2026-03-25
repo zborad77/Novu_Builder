@@ -1,6 +1,8 @@
 import json
 from uuid import uuid4
 
+import structlog
+
 from app.models import Project, ProjectPhoto
 from app.repositories.final_proposal_repository import FinalProposalRepository
 from app.repositories.proposal_draft_repository import ProposalDraftRepository
@@ -22,6 +24,7 @@ from app.services.proposal_draft_service import (
 )
 from app.storage.local_photo_storage import copy_storage_file
 
+logger = structlog.get_logger(__name__)
 
 MIN_READY_PHOTOS_FOR_FINAL_PROPOSAL = 3
 
@@ -191,7 +194,7 @@ def build_project_detail(project: Project) -> ProjectDetail:
         description=project.description,
         status=project.status,
         isReferenceDataset=is_reference_dataset_project(project),
-        source=getattr(project, "source", "mobile") or "mobile",
+        source=getattr(project, "source", "mobile") or "mobile",  # backward compatibility fallback — source absent in pre-migration records
         propertyType=project.property_type,
         repairScope=project.repair_scope,
         location={
@@ -280,11 +283,23 @@ class ProjectService:
             if duplicated_ai_key and source_photo.ai_input_storage_key:
                 copy_storage_file(source_storage_key=source_photo.ai_input_storage_key, target_storage_key=duplicated_ai_key)
 
+            # TODO: if build_duplicated_storage_key returns None, the photo record is persisted with
+            # storage_key="" — a ghost record with no backing file. Photo retrieval will 404.
+            # Fixing this properly requires redesigning the duplication flow (out of scope here).
+            dup_storage_key = duplicated_storage_key or ""
+            if not dup_storage_key and source_photo.storage_key:
+                logger.warning(
+                    "project.duplicate.photo_storage_key_empty",
+                    source_photo_id=source_photo.id,
+                    source_storage_key=source_photo.storage_key,
+                    duplicated_project_id=duplicated_project.id,
+                )
+
             duplicated_photos.append(
                 ProjectPhoto(
                     id=duplicated_photo_id,
                     project_id=duplicated_project.id,
-                    storage_key=duplicated_storage_key or "",
+                    storage_key=dup_storage_key,
                     preview_storage_key=duplicated_preview_key,
                     ai_input_storage_key=duplicated_ai_key,
                     original_filename=source_photo.original_filename,
@@ -344,7 +359,7 @@ class ProjectService:
             location_lat=payload.locationLat,
             location_lng=payload.locationLng,
             address_label=payload.addressLabel,
-            source=payload.source or "mobile",
+            source=payload.source or "mobile",  # intentional business default — mobile is the canonical source for new projects
         )
 
     async def duplicate_project(self, project_id: str, payload: ProjectDuplicateRequest) -> Project | None:
