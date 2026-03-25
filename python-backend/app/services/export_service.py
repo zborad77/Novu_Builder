@@ -16,7 +16,7 @@ from app.schemas.export import ExportRead
 from app.schemas.project import ProjectDetail, ProposalDraftField, ProposalDraftItem, ProposalDraftSection
 from app.storage.local_photo_storage import EXPORTS_ROOT, STORAGE_ROOT, sanitize_filename, write_storage_file
 
-_logger = structlog.get_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 # In-memory cache — populated on first access and rebuilt from disk after restart
 _EXPORT_STORE: dict[str, ExportRead] = {}
@@ -39,7 +39,7 @@ def _load_export_meta(export_id: str) -> ExportRead | None:
     try:
         return ExportRead.model_validate_json(meta_path.read_text(encoding="utf-8"))
     except Exception as exc:
-        _logger.warning("export.meta_load_failed", export_id=export_id, error=str(exc))
+        logger.warning("export.meta_load_failed", export_id=export_id, error=str(exc))
         return None
 
 
@@ -948,7 +948,7 @@ class ExportService:
         # 3. Sidecar missing or corrupt — check if export file physically exists
         file_path = _find_export_file(export_id)
         if file_path is not None:
-            _logger.warning("export.meta_missing_reconstructed", export_id=export_id, path=str(file_path))
+            logger.warning("export.meta_missing_reconstructed", export_id=export_id, path=str(file_path))
             export = _export_from_file(export_id, file_path)
             _EXPORT_STORE[export_id] = export
             return export

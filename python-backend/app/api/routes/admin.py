@@ -30,8 +30,9 @@ from app.services.analysis_service import AnalysisService, to_job_read
 from app.services.auth_service import AuthService
 from app.services.company_service import CompanyService
 
-import structlog as _structlog
-_log = _structlog.get_logger(__name__)
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -171,7 +172,7 @@ async def reset_user_password(
     if not updated:
         raise HTTPException(status_code=404, detail="User not found.")
 
-    _log.warning(
+    logger.warning(
         "admin.user.reset_password",
         admin_id=current_user.id,
         target_user_id=user_id,
