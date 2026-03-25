@@ -52,13 +52,25 @@ def check(label: str, method: str, url: str, expected: int, body: bytes | None =
     return False
 
 
-def check_auth(label: str, method: str, url: str, body: bytes | None = None) -> bool:
+def check_auth(
+    label: str,
+    method: str,
+    url: str,
+    body: bytes | None = None,
+    _track: list | None = None,
+) -> bool:
     """Accept 401 or 403 — both are valid 'not authorized' responses."""
     actual = _request(method, url, body)
     if actual is None:
+        if _track is not None:
+            _track.append((label, url, method, None))
         return False
+    if _track is not None:
+        _track.append((label, url, method, actual))
     if actual in (401, 403):
         print(f"  OK    {label}  ({actual})")
+        # event: auth.check.status_observed
+        print(f"        auth.check.status_observed  endpoint={url}  method={method}  returned_status={actual}")
         return True
     print(f"  FAIL  {label}  expected 401 or 403, got {actual}")
     return False
@@ -80,18 +92,28 @@ def main() -> None:
     print(f"Auth & validation contracts: {base}\n")
     print("-- 401 / 403  (no token) --")
 
+    auth_observed: list[tuple[str, str, str, int | None]] = []
+
     results = [
         check_auth(
             "GET /auth/me requires token",
             "GET", f"{base}/auth/me",
+            _track=auth_observed,
         ),
         check_auth(
             "POST /auth/change-password requires token (valid body, no token)",
             "POST", f"{base}/auth/change-password", body=change_password_valid_body,
+            _track=auth_observed,
         ),
 
         *([print("") or True][0:0]),  # blank line separator (no-op trick)
     ]
+
+    # Inconsistency check: warn if endpoints return different valid auth statuses (non-breaking)
+    valid_statuses = {s for _, _, _, s in auth_observed if s in (401, 403)}
+    if len(valid_statuses) > 1:
+        details = "  ".join(f"{lbl}={s}" for lbl, _, _, s in auth_observed if s is not None)
+        print(f"\n  WARNING  auth.check.status_inconsistency  {details}")
 
     print("\n-- 422  (invalid input, public endpoints) --")
 
