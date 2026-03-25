@@ -2,7 +2,7 @@
 Redis connectivity check — TCP socket only, no PING command.
 
 Reads REDIS_URL from environment.
-If REDIS_URL is not set → SKIP (exit code 0).
+If REDIS_URL is not set → SKIP (exit code 2).
 
 Usage:
     REDIS_URL=redis://localhost:6379/0 python scripts/test-redis-connection.py
@@ -25,7 +25,7 @@ def fail(reason: str) -> None:
 def main() -> None:
     if not REDIS_URL:
         print("SKIP: REDIS_URL is not set")
-        sys.exit(0)
+        sys.exit(2)
 
     parsed = urllib.parse.urlparse(REDIS_URL)
     host = parsed.hostname or "localhost"

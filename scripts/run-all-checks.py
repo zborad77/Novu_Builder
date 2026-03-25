@@ -45,10 +45,12 @@ def run_check(script: Path, extra_args: list) -> tuple[str, str]:
     """
     Run a single check script and return (status, detail).
 
-    status: 'OK', 'SKIP', or 'FAIL'
-    detail: '' for normal results, 'timeout {CHECK_TIMEOUT}s' on timeout
+    Exit code convention:
+      0 → OK
+      1 → FAIL
+      2 → SKIP
 
-    SKIP is detected by exit code 0 + first output line starting with 'SKIP'.
+    detail: '' for normal results, 'timeout {CHECK_TIMEOUT}s' on timeout.
     Output is streamed to stdout in real time via a reader thread so that
     proc.wait(timeout=...) can enforce the per-check deadline.
     """
@@ -59,14 +61,10 @@ def run_check(script: Path, extra_args: list) -> tuple[str, str]:
         text=True,
     )
 
-    first_line: list[str | None] = [None]
-
     def _read() -> None:
         assert proc.stdout is not None
         for line in proc.stdout:
             print(line, end="", flush=True)
-            if first_line[0] is None:
-                first_line[0] = line.strip()
 
     reader = threading.Thread(target=_read, daemon=True)
     reader.start()
@@ -81,10 +79,10 @@ def run_check(script: Path, extra_args: list) -> tuple[str, str]:
 
     reader.join()
 
+    if proc.returncode == 2:
+        return "SKIP", ""
     if proc.returncode != 0:
         return "FAIL", ""
-    if first_line[0] is not None and first_line[0].upper().startswith("SKIP"):
-        return "SKIP", ""
     return "OK", ""
 
 
