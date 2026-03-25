@@ -29,9 +29,14 @@ Exit codes:
 
 Notes:
   - Creates only data with title prefix "[FLOW-TEST]" — safe to archive
-  - Archive (step 7) always runs, even when earlier steps fail
-  - Works with any provider; warns if provider is not mock (real AI may be slow)
+  - Archive (step 7) runs unconditionally if a case was created (via try/finally)
+  - Archive failure is reported as secondary warning, never overwrites main flow result
+  - Polling uses time.monotonic() — immune to system clock changes
+  - Polling logs status transitions only, not every identical poll
   - Poll timeout: 120 s (enough for real providers; mock completes in < 5 s)
+  - Consecutive HTTP errors during polling abort poll after 3 failures
+  - Response bodies in diagnostics are truncated to 300 chars
+  - Passwords and tokens are never logged
 """
 
 import argparse
@@ -44,15 +49,24 @@ import urllib.request
 from datetime import datetime, timezone
 
 DEFAULT_URL = "http://localhost:8000"
-TIMEOUT = 10
-POLL_INTERVAL = 3          # seconds between job status checks
-POLL_MAX_WAIT = 120        # total seconds before giving up
+HTTP_TIMEOUT = 10                  # per-request HTTP timeout (seconds)
+POLL_INTERVAL = 3                  # seconds between job status polls
+POLL_MAX_WAIT = 120                # total seconds to wait for job terminal state
+POLL_MAX_CONSECUTIVE_ERRORS = 3   # abort poll after N consecutive HTTP errors
 TEST_TITLE_PREFIX = "[FLOW-TEST]"
 TERMINAL_STATUSES = {"completed", "failed", "canceled", "cancelled", "error"}
+MAX_BODY_LOG = 300                 # truncate response bodies in diagnostics
 
 
 # ---------------------------------------------------------------------------
-# HTTP helpers
+# Diagnostics context — populated as flow progresses, used in fail messages
+# ---------------------------------------------------------------------------
+
+_ctx: dict = {}   # keys: case_id, job_id, last_job_status
+
+
+# ---------------------------------------------------------------------------
+# HTTP helper
 # ---------------------------------------------------------------------------
 
 def _request(
@@ -60,8 +74,8 @@ def _request(
     url: str,
     body: bytes | None = None,
     token: str | None = None,
-) -> tuple[int, dict | None]:
-    """Return (status_code, parsed_json_or_None)."""
+) -> tuple[int, dict | list | None]:
+    """Return (http_status, parsed_json_or_None). Never raises."""
     headers: dict[str, str] = {}
     if body is not None:
         headers["Content-Type"] = "application/json"
@@ -70,7 +84,7 @@ def _request(
 
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             raw = resp.read()
             try:
                 return resp.status, json.loads(raw)
@@ -83,19 +97,24 @@ def _request(
         except json.JSONDecodeError:
             return exc.code, None
     except urllib.error.URLError as exc:
-        print(f"  FAIL  [{method} {url}]  connection error — {exc.reason}")
-        return -1, None
+        print(f"    connection error  [{method} {url}]  — {exc.reason}")
+        return 0, None
     except Exception as exc:
-        print(f"  FAIL  [{method} {url}]  unexpected error — {exc}")
-        return -1, None
+        print(f"    unexpected error  [{method} {url}]  — {exc}")
+        return 0, None
 
 
 # ---------------------------------------------------------------------------
-# Assertion helpers
+# Output helpers
 # ---------------------------------------------------------------------------
 
 _passed = 0
 _failed = 0
+
+
+def _step(n: int, label: str) -> None:
+    bar = "─" * max(0, 40 - len(label))
+    print(f"\n── Step {n}: {label} {bar}", flush=True)
 
 
 def ok(label: str, detail: str = "") -> None:
@@ -112,24 +131,249 @@ def fail(label: str, detail: str = "") -> None:
     print(f"  FAIL  {label}{suffix}")
 
 
-def assert_status(label: str, actual: int, expected: int) -> bool:
-    if actual == expected:
-        ok(label, str(actual))
-        return True
-    fail(label, f"expected {expected}, got {actual}")
-    return False
+def _diag(label: str, endpoint: str, http_status: int, body: object = None) -> None:
+    """Print failure diagnostics. Never logs token, password, or full payloads."""
+    print(f"  DIAG  {label}")
+    print(f"        endpoint    : {endpoint}")
+    print(f"        http_status : {http_status}")
+    if body is not None:
+        print(f"        response    : {_truncate(body)}")
+    if _ctx.get("case_id"):
+        print(f"        case_id     : {_ctx['case_id']}")
+    if _ctx.get("job_id"):
+        print(f"        job_id      : {_ctx['job_id']}")
+    if _ctx.get("last_job_status"):
+        print(f"        last_status : {_ctx['last_job_status']}")
 
 
-def assert_field(label: str, data: dict | None, field: str) -> bool:
-    if data and data.get(field) is not None:
-        ok(label, f"{field}={data[field]!r}")
-        return True
-    fail(label, f"field '{field}' missing or null in response")
-    return False
+def _truncate(body: object) -> str:
+    raw = json.dumps(body) if not isinstance(body, str) else body
+    return raw[:MAX_BODY_LOG] + ("…" if len(raw) > MAX_BODY_LOG else "")
+
+
+def _safe_body(body: object) -> object:
+    """Redact credential fields before passing to diagnostics."""
+    REDACT = {"accessToken", "refreshToken", "token", "password", "secret"}
+    if not isinstance(body, dict):
+        return body
+    return {k: ("<redacted>" if k in REDACT else v) for k, v in body.items()}
 
 
 # ---------------------------------------------------------------------------
-# Main flow
+# Polling
+# ---------------------------------------------------------------------------
+
+def _poll_job(url: str, token: str | None) -> str:
+    """
+    Poll job status URL until a terminal status is reached or POLL_MAX_WAIT expires.
+
+    - Uses time.monotonic() — immune to system clock changes.
+    - Logs only on status transitions, not on every identical poll.
+    - Allows up to POLL_MAX_CONSECUTIVE_ERRORS HTTP errors before aborting.
+    - Returns the last known job status string.
+    """
+    start = time.monotonic()
+    deadline = start + POLL_MAX_WAIT
+    last_logged_status: str | None = None
+    consecutive_errors = 0
+    job_status = "unknown"
+    poll_n = 0
+
+    while True:
+        now = time.monotonic()
+        remaining = deadline - now
+
+        if remaining <= 0:
+            elapsed = now - start
+            fail(
+                "poll job timeout",
+                f"did not reach terminal status within {POLL_MAX_WAIT}s  "
+                f"last_status={job_status!r}  elapsed={elapsed:.1f}s",
+            )
+            print(
+                f"  DIAG  timeout polling {url}\n"
+                f"        last_status={job_status!r}  elapsed={elapsed:.1f}s"
+            )
+            return job_status
+
+        time.sleep(min(POLL_INTERVAL, remaining))
+        poll_n += 1
+        elapsed = time.monotonic() - start
+
+        http_status, body = _request("GET", url, token=token)
+
+        if http_status != 200 or not isinstance(body, dict):
+            consecutive_errors += 1
+            print(
+                f"  WARN  poll #{poll_n} at {elapsed:.1f}s — HTTP {http_status}  "
+                f"(errors: {consecutive_errors}/{POLL_MAX_CONSECUTIVE_ERRORS})",
+                flush=True,
+            )
+            if consecutive_errors >= POLL_MAX_CONSECUTIVE_ERRORS:
+                fail(
+                    "poll job aborted",
+                    f"{consecutive_errors} consecutive HTTP errors  "
+                    f"last_status={job_status!r}  url={url}",
+                )
+                return job_status
+            continue
+
+        consecutive_errors = 0
+        job_status = body.get("status") or "unknown"
+
+        # Log only on status change — suppress identical-poll noise
+        if job_status != last_logged_status:
+            arrow = f"{last_logged_status!r} → " if last_logged_status is not None else ""
+            print(f"  ...   {elapsed:.1f}s  status: {arrow}{job_status!r}", flush=True)
+            last_logged_status = job_status
+
+        if job_status in TERMINAL_STATUSES:
+            if job_status == "completed":
+                ok("job reached terminal state", f"completed  elapsed={elapsed:.1f}s  polls={poll_n}")
+            else:
+                fail(
+                    "job reached terminal state",
+                    f"status={job_status!r}  elapsed={elapsed:.1f}s  polls={poll_n}",
+                )
+                if body.get("errorMessage"):
+                    print(f"  DIAG  errorMessage: {_truncate(body['errorMessage'])}")
+            return job_status
+
+
+# ---------------------------------------------------------------------------
+# Cleanup (always runs if a case was created; failure is secondary warning)
+# ---------------------------------------------------------------------------
+
+def _cleanup(case_id: str | None, base: str, token: str | None, skip: bool) -> None:
+    _step(7, "Archive case (cleanup)")
+    if not case_id:
+        print("  SKIP  no case was created")
+        return
+    if skip:
+        print(f"  SKIP  --skip-cleanup set — case {case_id!r} left in database")
+        return
+
+    endpoint = f"{base}/cases/{case_id}/archive"
+    http_status, body = _request("POST", endpoint, b"", token=token)
+    if http_status == 200:
+        # Housekeeping — does not count in _passed/_failed
+        print(f"  OK    case archived  id={case_id!r}")
+    else:
+        # Secondary warning — deliberately does not call fail() to avoid
+        # overwriting the main flow result with a cleanup issue
+        print(f"  WARN  archive returned {http_status} — case {case_id!r} may remain in DB")
+        if body:
+            print(f"        response: {_truncate(body)}")
+
+
+# ---------------------------------------------------------------------------
+# Flow steps (separate function so try/finally guarantees cleanup,
+# while main() always prints the summary)
+# ---------------------------------------------------------------------------
+
+def _run_flow(base: str, email: str, skip_cleanup: bool, ts: str, token_ref: list) -> None:
+    """
+    Execute steps 1–7. Uses try/finally to guarantee cleanup runs.
+    Early return on fatal errors; cleanup fires via finally in all cases.
+    token_ref is a one-element list so the token can be passed to cleanup
+    even when early-exit happens before the outer scope sees it.
+    """
+    token: str | None = None
+
+    try:
+        # ── Step 1: Login ──────────────────────────────────────────────────
+        _step(1, "Login")
+        endpoint = f"{base}/auth/login"
+        # Password is read from token_ref[1] and sent to the API — never printed
+        http_status, body = _request(
+            "POST", endpoint,
+            json.dumps({"email": email, "password": token_ref[1]}).encode(),
+        )
+        if http_status != 200 or not isinstance(body, dict) or not body.get("accessToken"):
+            fail("login", f"POST /auth/login → {http_status}")
+            _diag("login failed", endpoint, http_status, _safe_body(body))
+            return  # finally: cleanup skipped (no case yet)
+        token = body["accessToken"]
+        token_ref[0] = token
+        user_info = body.get("user") or {}
+        user_email = user_info.get("email", email) if isinstance(user_info, dict) else email
+        ok("authenticated", f"user={user_email}")
+
+        # ── Step 2: Create case ────────────────────────────────────────────
+        _step(2, "Create case")
+        endpoint = f"{base}/cases"
+        http_status, body = _request(
+            "POST", endpoint,
+            json.dumps({
+                "title": f"{TEST_TITLE_PREFIX} {ts}",
+                "description": "Automated flow test — safe to archive",
+                "propertyType": "house",
+                "repairScope": "full_reconstruction",
+            }).encode(),
+            token=token,
+        )
+        if http_status != 201 or not isinstance(body, dict) or not body.get("id"):
+            fail("create case", f"POST /cases → {http_status}")
+            _diag("create case failed", endpoint, http_status, body)
+            return  # finally: cleanup skipped (no case yet)
+        _ctx["case_id"] = body["id"]
+        ok("case created", f"id={_ctx['case_id']}")
+
+        # ── Step 3: Fetch case ─────────────────────────────────────────────
+        _step(3, "Fetch case")
+        endpoint = f"{base}/cases/{_ctx['case_id']}"
+        http_status, body = _request("GET", endpoint, token=token)
+        if http_status != 200 or not isinstance(body, dict):
+            fail("fetch case", f"GET /cases/{_ctx['case_id']} → {http_status}")
+            _diag("fetch case failed", endpoint, http_status, body)
+            # non-fatal — continue to trigger job
+        elif body.get("id") != _ctx["case_id"]:
+            fail("case id matches", f"expected {_ctx['case_id']!r}, got {body.get('id')!r}")
+        else:
+            ok("case fetched", f"status={body.get('status')}")
+
+        # ── Step 4: Trigger analysis job ──────────────────────────────────
+        _step(4, "Trigger analysis job")
+        endpoint = f"{base}/cases/{_ctx['case_id']}/analysis-jobs"
+        http_status, body = _request("POST", endpoint, b"", token=token)
+        if http_status not in (200, 202) or not isinstance(body, dict) or not body.get("jobId"):
+            fail("trigger job", f"POST .../analysis-jobs → {http_status}")
+            _diag("trigger job failed", endpoint, http_status, body)
+            return  # finally: cleanup will archive the case
+        _ctx["job_id"] = body["jobId"]
+        provider = body.get("provider") or "unknown"
+        ok("job triggered", f"jobId={_ctx['job_id']}  provider={provider}")
+        if provider not in ("mock", "unknown"):
+            print(f"  WARN  provider={provider!r} — real AI calls may be slow or require API keys")
+
+        # ── Step 5: Poll job ───────────────────────────────────────────────
+        _step(5, f"Poll job (max {POLL_MAX_WAIT}s, interval {POLL_INTERVAL}s)")
+        job_status = _poll_job(f"{base}/analysis-jobs/{_ctx['job_id']}", token=token)
+        _ctx["last_job_status"] = job_status
+
+        # ── Step 6: Verify result ──────────────────────────────────────────
+        _step(6, "Verify analysis result")
+        if job_status != "completed":
+            print(f"  SKIP  job status={job_status!r} — cannot verify latestAnalysis")
+        else:
+            endpoint = f"{base}/cases/{_ctx['case_id']}"
+            http_status, body = _request("GET", endpoint, token=token)
+            if http_status != 200 or not isinstance(body, dict):
+                fail("verify result", f"GET /cases/{_ctx['case_id']} → {http_status}")
+                _diag("fetch case for result check failed", endpoint, http_status, body)
+            elif body.get("latestAnalysis") is not None:
+                ok("latestAnalysis present on case")
+            else:
+                fail("latestAnalysis present on case", "field is null after completed job")
+                _diag("latestAnalysis missing", endpoint, http_status, None)
+
+    finally:
+        # Step 7 always runs when a case was created — even on early return / exception
+        _cleanup(_ctx.get("case_id"), base, token_ref[0], skip_cleanup)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
@@ -161,172 +405,23 @@ def main() -> None:
         sys.exit(2)
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    case_title = f"{TEST_TITLE_PREFIX} {ts}"
-    token: str | None = None
-    case_id: str | None = None
 
     print(f"Business flow: {base}")
     print(f"User:          {args.email}")
-    print(f"Case title:    {case_title}\n")
+    print(f"Case title:    {TEST_TITLE_PREFIX} {ts}")
 
-    # ------------------------------------------------------------------
-    # Step 1 — Login
-    # ------------------------------------------------------------------
-    print("-- Step 1: Login --")
-    status, body = _request(
-        "POST",
-        f"{base}/auth/login",
-        json.dumps({"email": args.email, "password": args.password}).encode(),
-    )
-    if not assert_status("POST /auth/login", status, 200):
-        _abort("Login failed — is the backend running with dev seed?")
-        return
-    if not assert_field("accessToken present", body, "accessToken"):
-        _abort("Login response malformed.")
-        return
-    token = body["accessToken"]  # type: ignore[index]
+    # token_ref[0] = resolved token (for cleanup)
+    # token_ref[1] = password (passed into _run_flow to avoid storing in outer scope)
+    token_ref = [None, args.password]
 
-    # ------------------------------------------------------------------
-    # Step 2 — Create case
-    # ------------------------------------------------------------------
-    print("\n-- Step 2: Create case --")
-    status, body = _request(
-        "POST",
-        f"{base}/cases",
-        json.dumps({
-            "title": case_title,
-            "description": "Automated smoke-test case — safe to archive.",
-            "propertyType": "house",
-            "repairScope": "full_reconstruction",
-        }).encode(),
-        token=token,
-    )
-    if not assert_status("POST /cases", status, 201):
-        _abort("Could not create test case.")
-        return
-    if not assert_field("case id returned", body, "id"):
-        _abort("Create case response malformed.")
-        return
-    case_id = body["id"]  # type: ignore[index]
+    _run_flow(base, args.email, args.skip_cleanup, ts, token_ref)
 
-    # ------------------------------------------------------------------
-    # Step 3 — Read case back
-    # ------------------------------------------------------------------
-    print("\n-- Step 3: Read case --")
-    status, body = _request("GET", f"{base}/cases/{case_id}", token=token)
-    assert_status("GET /cases/{id}", status, 200)
-    if body and body.get("id") == case_id:
-        ok("case id matches")
-    else:
-        fail("case id matches", f"got {body.get('id') if body else None!r}")
-
-    # ------------------------------------------------------------------
-    # Step 4 — Trigger analysis
-    # ------------------------------------------------------------------
-    print("\n-- Step 4: Trigger analysis --")
-    status, body = _request(
-        "POST",
-        f"{base}/cases/{case_id}/analysis-jobs",
-        b"",
-        token=token,
-    )
-    if not assert_status("POST /cases/{id}/analysis-jobs", status, 202):
-        _abort("Could not trigger analysis.", case_id=case_id, base=base, token=token, skip=args.skip_cleanup)
-        return
-    if not assert_field("jobId returned", body, "jobId"):
-        _abort("Trigger response malformed.", case_id=case_id, base=base, token=token, skip=args.skip_cleanup)
-        return
-
-    job_id = body["jobId"]  # type: ignore[index]
-    provider = body.get("provider", "?")  # type: ignore[index]
-    ok("provider", provider)
-
-    if provider not in ("mock", "?"):
-        print(f"\n  WARN  provider={provider!r} — this test is designed for mock provider.")
-        print("        Real AI calls may be slow or fail if API keys are not set.")
-
-    # ------------------------------------------------------------------
-    # Step 5 — Poll job to completion
-    # ------------------------------------------------------------------
-    print(f"\n-- Step 5: Poll job {job_id} (max {POLL_MAX_WAIT}s) --")
-    deadline = time.monotonic() + POLL_MAX_WAIT
-    job_status = "queued"
-    elapsed = 0.0
-
-    while time.monotonic() < deadline:
-        time.sleep(POLL_INTERVAL)
-        elapsed += POLL_INTERVAL
-        status, job = _request("GET", f"{base}/analysis-jobs/{job_id}", token=token)
-        if status != 200 or not job:
-            fail(f"poll attempt at {elapsed:.0f}s", f"status={status}")
-            break
-        job_status = job.get("status", "unknown")
-        print(f"  ...   {elapsed:.0f}s  status={job_status}")
-        if job_status in TERMINAL_STATUSES:
-            break
-
-    if job_status == "completed":
-        ok("job completed", f"in {elapsed:.0f}s")
-    else:
-        fail("job completed", f"final status={job_status!r} after {elapsed:.0f}s")
-
-    # ------------------------------------------------------------------
-    # Step 6 — Verify result present on case
-    # ------------------------------------------------------------------
-    print("\n-- Step 6: Verify analysis result on case --")
-    if job_status == "completed":
-        result_url = f"{base}/cases/{case_id}"
-        status, detail = _request("GET", result_url, token=token)
-        if status == 200 and detail:
-            analysis = detail.get("latestAnalysis")
-            if analysis is not None:
-                ok("latestAnalysis present on case")
-            else:
-                fail("latestAnalysis present on case", "field is null after completed job")
-        else:
-            fail("GET case detail for result", f"status={status}")
-    else:
-        print("  SKIP  (job did not complete)")
-
-    # ------------------------------------------------------------------
-    # Step 7 — Cleanup: archive case
-    # ------------------------------------------------------------------
-    _cleanup(case_id, base, token, args.skip_cleanup)
-
-    # ------------------------------------------------------------------
-    # Summary
-    # ------------------------------------------------------------------
+    # Summary always runs — _run_flow uses try/finally internally
     total = _passed + _failed
     print(f"\n{_passed}/{total} passed")
     if _failed:
+        print("FAIL: one or more flow steps failed — see output above")
         sys.exit(1)
-
-
-def _abort(reason: str, case_id: str | None = None, base: str = "", token: str | None = None, skip: bool = False) -> None:
-    global _failed
-    _failed += 1
-    print(f"\n  ABORT {reason}")
-    if case_id:
-        _cleanup(case_id, base, token, skip)
-
-
-def _cleanup(case_id: str | None, base: str, token: str | None, skip: bool) -> None:
-    if not case_id:
-        return
-    print("\n-- Step 7: Cleanup (archive case) --")
-    if skip:
-        print(f"  SKIP  --skip-cleanup set. Case {case_id!r} left in database.")
-        return
-    status, _ = _request(
-        "POST",
-        f"{base}/cases/{case_id}/archive",
-        b"",
-        token=token,
-    )
-    if status == 200:
-        ok(f"case {case_id!r} archived")
-    else:
-        print(f"  WARN  archive returned {status} — case may remain in database")
 
 
 if __name__ == "__main__":
