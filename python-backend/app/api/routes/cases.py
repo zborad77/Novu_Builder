@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.deps import get_current_user, get_project_service, require_manager
+from app.api.deps import get_current_user, get_project_service, require_manager, resolve_org_id
 from app.schemas.auth import AuthUserRead
 from app.schemas.project import (
     ProjectCreate,
@@ -55,7 +55,7 @@ async def get_case(
     service: ProjectService = Depends(get_project_service),
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> ProjectDetail:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     detail = await service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -69,7 +69,7 @@ async def duplicate_case(
     service: ProjectService = Depends(get_project_service),
     current_user: AuthUserRead = Depends(require_manager),
 ) -> ProjectCreateResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     try:
         duplicated = await service.duplicate_project(case_id, payload, organization_id=org_id)
     except ValueError as exc:
@@ -86,7 +86,7 @@ async def patch_case(
     service: ProjectService = Depends(get_project_service),
     current_user: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     updated = await service.update_project(case_id, payload.model_dump(exclude_unset=True), organization_id=org_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -100,7 +100,7 @@ async def patch_case_proposal_draft(
     service: ProjectService = Depends(get_project_service),
     current_user: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     updated = await service.update_proposal_draft(case_id, payload.model_dump(exclude_unset=True), organization_id=org_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -113,7 +113,7 @@ async def create_case_final_proposal(
     service: ProjectService = Depends(get_project_service),
     current_user: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     try:
         updated = await service.create_final_proposal(case_id, organization_id=org_id)
     except ValueError as exc:
@@ -129,7 +129,7 @@ async def archive_case(
     service: ProjectService = Depends(get_project_service),
     current_user: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     updated = await service.update_project(case_id, {"status": "archived"}, organization_id=org_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -142,7 +142,7 @@ async def send_case(
     service: ProjectService = Depends(get_project_service),
     current_user: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     try:
         updated = await service.mark_project_sent(case_id, organization_id=org_id)
     except ValueError as exc:
@@ -158,7 +158,7 @@ async def get_case_timeline(
     service: ProjectService = Depends(get_project_service),
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> list[dict]:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     detail = await service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")

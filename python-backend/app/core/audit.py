@@ -14,6 +14,7 @@ fully verified by the route dependency.
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -62,10 +63,61 @@ _PATH_ACTIONS: dict[tuple[str, str], str] = {
     ("PATCH", "/admin/companies/{id}"): "admin.company.update",
     ("POST", "/admin/impersonate/{id}"): "admin.impersonate",
     ("POST", "/admin/jobs/{id}/retry"): "admin.job.retry",
+    ("PATCH", "/suppliers/{id}"): "supplier.update",
+    ("POST", "/pricebooks"): "pricebook.create",
 }
 
 _SKIP_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc"}
 _SKIP_PREFIXES = ("/mock-storage",)
+
+# ── Cross-tenant denial rate limiter ────────────────────────────────────────
+# Prevents log flooding when a single user probes resources in a tight loop.
+# State: user_id → (window_start_monotonic, event_count_in_window)
+_DENY_WINDOW_SEC: int = 60
+_DENY_MAX_PER_WINDOW: int = 5
+_deny_counts: dict[str, tuple[float, int]] = {}
+
+
+def log_cross_tenant_denied(
+    log,
+    *,
+    resource: str,
+    resource_id: str,
+    user_id: str,
+    org_id: str | None,
+) -> None:
+    """Emit SECURITY_EVENT: cross_tenant_access_denied with per-user rate limiting.
+
+    The first _DENY_MAX_PER_WINDOW events per user per _DENY_WINDOW_SEC are logged
+    normally.  On the (max+1)-th event a single throttle notice is emitted.
+    All subsequent events in the same window are silently suppressed to prevent
+    log flooding during brute-force probing.
+    """
+    now = time.monotonic()
+    window_start, count = _deny_counts.get(user_id, (now, 0))
+
+    if now - window_start > _DENY_WINDOW_SEC:
+        window_start, count = now, 0
+
+    count += 1
+    _deny_counts[user_id] = (window_start, count)
+
+    if count <= _DENY_MAX_PER_WINDOW:
+        log.warning(
+            "SECURITY_EVENT: cross_tenant_access_denied",
+            resource=resource,
+            resource_id=resource_id,
+            user_id=user_id,
+            org_id=org_id,
+        )
+    elif count == _DENY_MAX_PER_WINDOW + 1:
+        log.warning(
+            "SECURITY_EVENT: cross_tenant_access_denied_throttled",
+            user_id=user_id,
+            org_id=org_id,
+            suppressed_from_count=count,
+            window_sec=_DENY_WINDOW_SEC,
+        )
 
 
 def _classify(method: str, path: str) -> tuple[str, str | None, str | None]:

@@ -124,6 +124,24 @@ def require_admin_capability(capability: str):
     return _check
 
 
+def resolve_org_id(current_user: AuthUserRead) -> str | None:
+    """Return the effective organization_id for tenant-scoped queries.
+
+    Superadmin → None (intentional cross-tenant bypass, logged at service layer).
+    Regular user → their organizationId.
+    Fail-fast if a non-superadmin user somehow has no organizationId set — this
+    prevents an accidental tenant-isolation bypass caused by a misconfigured user.
+    """
+    if current_user.isSuperAdmin:
+        return None
+    if not current_user.organizationId:
+        raise HTTPException(
+            status_code=403,
+            detail="User has no organization assigned.",
+        )
+    return current_user.organizationId
+
+
 async def require_manager(
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> AuthUserRead:

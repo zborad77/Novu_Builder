@@ -2,7 +2,8 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
-from app.api.deps import get_current_user, get_photo_service, get_project_service
+from app.api.deps import get_current_user, get_photo_service, get_project_service, resolve_org_id
+from app.core.audit import log_cross_tenant_denied
 from app.schemas.auth import AuthUserRead
 
 logger = structlog.get_logger(__name__)
@@ -29,7 +30,7 @@ async def list_case_images(
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PhotoListResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -45,7 +46,7 @@ async def upload_case_images(
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PhotoUploadResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -93,12 +94,12 @@ async def get_image_preview(
     photo = await photo_service.get_photo_by_id(image_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Image not found.")
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     project = await project_service.get_project(photo.projectId, organization_id=org_id)
     if not project:
         if not current_user.isSuperAdmin:
-            logger.warning(
-                "SECURITY_EVENT: cross_tenant_access_denied",
+            log_cross_tenant_denied(
+                logger,
                 resource="image_preview", resource_id=image_id,
                 user_id=current_user.id, org_id=current_user.organizationId,
             )
@@ -115,7 +116,7 @@ async def set_case_primary_image(
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PrimaryPhotoResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -133,7 +134,7 @@ async def set_case_analysis_reference_image(
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> AnalysisReferencePhotoResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -155,7 +156,7 @@ async def move_case_image(
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PhotoListResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -176,7 +177,7 @@ async def delete_case_image(
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> DeletePhotoResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")

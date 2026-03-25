@@ -1,7 +1,8 @@
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
-from app.api.deps import get_analysis_service, get_current_user, get_project_service, require_manager
+from app.api.deps import get_analysis_service, get_current_user, get_project_service, require_manager, resolve_org_id
+from app.core.audit import log_cross_tenant_denied
 from app.schemas.analysis import AnalysisTriggerResponse
 from app.schemas.auth import AuthUserRead
 from app.services.analysis_service import AnalysisService
@@ -20,7 +21,7 @@ async def create_analysis_job(
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
 ) -> AnalysisTriggerResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -43,7 +44,7 @@ async def list_case_analysis_jobs(
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
 ) -> list[dict]:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -57,12 +58,12 @@ async def get_analysis_job(
     analysis_service: AnalysisService = Depends(get_analysis_service),
     project_service: ProjectService = Depends(get_project_service),
 ) -> dict:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     job = await analysis_service.get_job(job_id, organization_id=org_id)
     if not job:
         if not current_user.isSuperAdmin:
-            logger.warning(
-                "SECURITY_EVENT: cross_tenant_access_denied",
+            log_cross_tenant_denied(
+                logger,
                 resource="analysis_job", resource_id=job_id,
                 user_id=current_user.id, org_id=current_user.organizationId,
             )
@@ -77,12 +78,12 @@ async def cancel_analysis_job(
     analysis_service: AnalysisService = Depends(get_analysis_service),
     project_service: ProjectService = Depends(get_project_service),
 ) -> dict:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     updated = await analysis_service.cancel_analysis_job(job_id, organization_id=org_id)
     if not updated:
         if not current_user.isSuperAdmin:
-            logger.warning(
-                "SECURITY_EVENT: cross_tenant_access_denied",
+            log_cross_tenant_denied(
+                logger,
                 resource="analysis_job_cancel", resource_id=job_id,
                 user_id=current_user.id, org_id=current_user.organizationId,
             )
@@ -99,7 +100,7 @@ async def patch_analysis_selection(
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
 ) -> dict:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -129,12 +130,12 @@ async def retry_analysis_job(
     analysis_service: AnalysisService = Depends(get_analysis_service),
     project_service: ProjectService = Depends(get_project_service),
 ) -> AnalysisTriggerResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     original_job = await analysis_service.get_job(job_id, organization_id=org_id)
     if not original_job:
         if not current_user.isSuperAdmin:
-            logger.warning(
-                "SECURITY_EVENT: cross_tenant_access_denied",
+            log_cross_tenant_denied(
+                logger,
                 resource="analysis_job_retry", resource_id=job_id,
                 user_id=current_user.id, org_id=current_user.organizationId,
             )

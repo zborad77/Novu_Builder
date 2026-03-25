@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from app.api.deps import get_current_user, get_project_service
+from app.api.deps import get_current_user, get_project_service, resolve_org_id
 from app.schemas.auth import AuthUserRead
 from app.services.project_service import ProjectService
 from app.storage.local_photo_storage import STORAGE_ROOT
@@ -43,7 +43,7 @@ async def serve_storage_file(
     case_id = parts[1]
 
     # Validate org access
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="File not found.")

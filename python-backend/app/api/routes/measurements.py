@@ -1,7 +1,8 @@
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import get_analysis_service, get_current_user, get_project_service
+from app.api.deps import get_analysis_service, get_current_user, get_project_service, resolve_org_id
+from app.core.audit import log_cross_tenant_denied
 from app.schemas.auth import AuthUserRead
 
 logger = structlog.get_logger(__name__)
@@ -50,7 +51,7 @@ async def create_or_update_measurement(
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
 ) -> MeasurementRead:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -71,12 +72,12 @@ async def patch_measurement(
     analysis_service: AnalysisService = Depends(get_analysis_service),
     project_service: ProjectService = Depends(get_project_service),
 ) -> MeasurementRead:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     existing = await analysis_service.get_analysis_result_by_id(measurement_id, organization_id=org_id)
     if not existing:
         if not current_user.isSuperAdmin:
-            logger.warning(
-                "SECURITY_EVENT: cross_tenant_access_denied",
+            log_cross_tenant_denied(
+                logger,
                 resource="measurement_patch", resource_id=measurement_id,
                 user_id=current_user.id, org_id=current_user.organizationId,
             )
@@ -97,12 +98,12 @@ async def confirm_measurement(
     analysis_service: AnalysisService = Depends(get_analysis_service),
     project_service: ProjectService = Depends(get_project_service),
 ) -> MeasurementRead:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     existing = await analysis_service.get_analysis_result_by_id(measurement_id, organization_id=org_id)
     if not existing:
         if not current_user.isSuperAdmin:
-            logger.warning(
-                "SECURITY_EVENT: cross_tenant_access_denied",
+            log_cross_tenant_denied(
+                logger,
                 resource="measurement_confirm", resource_id=measurement_id,
                 user_id=current_user.id, org_id=current_user.organizationId,
             )

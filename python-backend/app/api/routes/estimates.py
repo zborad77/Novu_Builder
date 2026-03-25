@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.deps import get_current_user, get_project_service, get_quote_variant_service, require_manager
+from app.api.deps import get_current_user, get_project_service, get_quote_variant_service, require_manager, resolve_org_id
 from app.schemas.auth import AuthUserRead
 from app.schemas.quote_variant import QuoteVariantListResponse, QuoteVariantRecalculateResponse
 from app.services.project_service import ProjectService
@@ -16,7 +16,7 @@ async def list_case_estimates(
     project_service: ProjectService = Depends(get_project_service),
     quote_service: QuoteVariantService = Depends(get_quote_variant_service),
 ) -> QuoteVariantListResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -31,7 +31,7 @@ async def recalculate_case_estimates(
     project_service: ProjectService = Depends(get_project_service),
     quote_service: QuoteVariantService = Depends(get_quote_variant_service),
 ) -> QuoteVariantRecalculateResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")

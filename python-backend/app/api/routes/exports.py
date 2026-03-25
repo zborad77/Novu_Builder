@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import get_export_service, get_current_user, get_project_service, require_manager
+from app.api.deps import get_export_service, get_current_user, get_project_service, require_manager, resolve_org_id
 from app.schemas.auth import AuthUserRead
 from app.schemas.export import ExportCreateResponse, ExportRead
 from app.services.export_service import ExportService
@@ -16,7 +16,7 @@ async def create_report_pdf(
     project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportCreateResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -31,7 +31,7 @@ async def create_proposal_docx(
     project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportCreateResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -48,7 +48,7 @@ async def create_quote_pdf(
     project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportCreateResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -66,7 +66,7 @@ async def create_quote_docx(
     project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportCreateResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -83,7 +83,7 @@ async def create_case_zip(
     project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportCreateResponse:
-    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    org_id = resolve_org_id(current_user)
     detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
