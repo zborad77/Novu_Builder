@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_analysis_service, get_auth_service, require_superadmin
+from app.api.deps import get_analysis_service, get_auth_service, require_admin_capability, require_superadmin
 from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.models.domain import AnalysisJob, AuditLog, Organization, Project, User
@@ -53,10 +53,12 @@ async def list_companies(
 
 
 @router.post("/companies", response_model=CompanyRead, status_code=status.HTTP_201_CREATED)
+@limiter.limit(get_settings().rate_limit_admin_write)
 async def create_company(
+    request: Request,
     payload: CompanyCreate,
     service: CompanyService = Depends(get_company_service),
-    current_user: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_admin_capability("admin:write")),
 ) -> CompanyRead:
     if not payload.name.strip():
         raise HTTPException(status_code=400, detail="Company name is required.")
@@ -85,11 +87,13 @@ async def get_company(
 
 
 @router.patch("/companies/{company_id}", response_model=CompanyRead)
+@limiter.limit(get_settings().rate_limit_admin_write)
 async def patch_company(
+    request: Request,
     company_id: str,
     payload: CompanyPatch,
     service: CompanyService = Depends(get_company_service),
-    current_user: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_admin_capability("admin:write")),
 ) -> CompanyRead:
     updated = await service.patch_company(company_id, payload)
     if not updated:
@@ -118,10 +122,12 @@ async def list_users(
 
 
 @router.post("/users", response_model=AdminUserRead, status_code=status.HTTP_201_CREATED)
+@limiter.limit(get_settings().rate_limit_admin_write)
 async def create_user(
+    request: Request,
     payload: AdminUserCreate,
     service: CompanyService = Depends(get_company_service),
-    current_user: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_admin_capability("admin:write")),
 ) -> AdminUserRead:
     if payload.password:
         try:
@@ -158,11 +164,13 @@ async def get_user(
 
 
 @router.patch("/users/{user_id}", response_model=AdminUserRead)
+@limiter.limit(get_settings().rate_limit_admin_write)
 async def patch_user(
+    request: Request,
     user_id: str,
     payload: AdminUserPatch,
     service: CompanyService = Depends(get_company_service),
-    current_user: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_admin_capability("admin:write")),
 ) -> AdminUserRead:
     updated = await service.patch_user(user_id, payload)
     if not updated:
@@ -183,12 +191,12 @@ class ResetPasswordPayload(BaseModel):
 
 
 @router.post("/users/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
-@limiter.limit(get_settings().rate_limit_admin)
+@limiter.limit(get_settings().rate_limit_admin_sensitive)
 async def reset_user_password(
     request: Request,
     user_id: str,
     payload: ResetPasswordPayload,
-    current_user: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_admin_capability("admin:write")),
     service: CompanyService = Depends(get_company_service),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
@@ -235,28 +243,33 @@ def _enrich_job(job: AnalysisJob, case_title: str, org_id: str, org_name: str) -
 @router.get("/jobs", response_model=list[dict])
 async def list_all_jobs(
     job_status: str | None = Query(default=None, alias="status"),
+    org_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
     session: AsyncSession = Depends(get_db_session),
-    _: AuthUserRead = Depends(require_superadmin),
+    _: AuthUserRead = Depends(require_admin_capability("admin:jobs")),
 ) -> list[dict]:
     query = (
         select(AnalysisJob, Project.title, Project.organization_id, Organization.name)
         .join(Project, AnalysisJob.project_id == Project.id)
         .join(Organization, Project.organization_id == Organization.id)
         .order_by(AnalysisJob.created_at.desc())
+        .limit(limit)
     )
     if job_status:
         query = query.where(AnalysisJob.status == job_status)
+    if org_id:
+        query = query.where(Project.organization_id == org_id)
 
     result = await session.execute(query)
     rows = result.all()
-    return [_enrich_job(job, case_title, org_id, org_name) for job, case_title, org_id, org_name in rows]
+    return [_enrich_job(job, case_title, oid, org_name) for job, case_title, oid, org_name in rows]
 
 
 @router.get("/jobs/{job_id}", response_model=dict)
 async def get_admin_job(
     job_id: str,
     session: AsyncSession = Depends(get_db_session),
-    _: AuthUserRead = Depends(require_superadmin),
+    _: AuthUserRead = Depends(require_admin_capability("admin:jobs")),
 ) -> dict:
     job = await session.get(AnalysisJob, job_id)
     if not job:
@@ -275,12 +288,12 @@ async def get_admin_job(
 
 
 @router.post("/jobs/{job_id}/retry", response_model=dict, status_code=status.HTTP_202_ACCEPTED)
-@limiter.limit(get_settings().rate_limit_admin)
+@limiter.limit(get_settings().rate_limit_admin_write)
 async def admin_retry_job(
     request: Request,
     job_id: str,
     background_tasks: BackgroundTasks,
-    current_user: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_admin_capability("admin:jobs")),
     analysis_service: AnalysisService = Depends(get_analysis_service),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
@@ -386,11 +399,11 @@ class ImpersonateResponse(BaseModel):
 
 
 @router.post("/impersonate/{user_id}", response_model=ImpersonateResponse)
-@limiter.limit(get_settings().rate_limit_admin)
+@limiter.limit(get_settings().rate_limit_admin_sensitive)
 async def impersonate_user(
     request: Request,
     user_id: str,
-    current_user: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_admin_capability("admin:impersonate")),
     session: AsyncSession = Depends(get_db_session),
 ) -> ImpersonateResponse:
     """

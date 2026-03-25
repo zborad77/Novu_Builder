@@ -90,6 +90,40 @@ async def require_superadmin(
     return current_user
 
 
+# ── Granular RBAC foundation ────────────────────────────────────────────────────
+#
+# All capabilities currently map to superadmin-only. When per-role permissions
+# are introduced (e.g. from a DB permission table), extend _check() here without
+# changing any route signature.
+
+ADMIN_CAPABILITIES: frozenset[str] = frozenset({
+    "admin:read",
+    "admin:write",
+    "admin:jobs",
+    "admin:impersonate",
+})
+
+
+def require_admin_capability(capability: str):
+    """Return a FastAPI dependency that enforces the given admin capability.
+
+    Current behaviour: superadmin → allowed, everyone else → 403.
+    Future: swap in per-user capability lookup inside _check() without touching routes.
+    """
+    if capability not in ADMIN_CAPABILITIES:
+        raise ValueError(f"Unknown admin capability: {capability!r}")
+
+    async def _check(
+        current_user: AuthUserRead = Depends(require_superadmin),
+    ) -> AuthUserRead:
+        # Hook for future per-capability checks. require_superadmin already
+        # handles auth + impersonation blocking for now.
+        return current_user
+
+    _check.__name__ = f"require_{capability.replace(':', '_')}"
+    return _check
+
+
 async def require_manager(
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> AuthUserRead:

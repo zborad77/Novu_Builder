@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     # Rate limiting (requests / window per IP)
     rate_limit_login: str = Field(default="10/minute", alias="RATE_LIMIT_LOGIN")
     rate_limit_admin: str = Field(default="60/minute", alias="RATE_LIMIT_ADMIN")
+    rate_limit_admin_write: str = Field(default="10/minute", alias="RATE_LIMIT_ADMIN_WRITE")
+    rate_limit_admin_sensitive: str = Field(default="5/minute", alias="RATE_LIMIT_ADMIN_SENSITIVE")
 
     # Error monitoring — leave empty to disable Sentry (default: off)
     sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")

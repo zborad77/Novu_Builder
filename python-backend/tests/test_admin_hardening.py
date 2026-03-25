@@ -18,6 +18,7 @@ import pytest
 from fastapi import HTTPException
 
 import app.api.routes.admin as admin_module
+from app.api.deps import ADMIN_CAPABILITIES, require_admin_capability, require_superadmin
 from app.api.routes.admin import (
     admin_retry_job,
     create_company,
@@ -31,22 +32,35 @@ from app.api.deps import require_superadmin
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
 
-def _dep_names(endpoint) -> list[str]:
-    """Return the string names of all FastAPI Depends() in the endpoint signature."""
-    sig = inspect.signature(endpoint)
-    names = []
-    for param in sig.parameters.values():
-        default = param.default
-        if hasattr(default, "dependency"):
-            names.append(getattr(default.dependency, "__name__", repr(default.dependency)))
-    return names
-
-
 def _source(fn) -> str:
     return inspect.getsource(fn)
 
 
-# ── 1. All admin write routes require superadmin ────────────────────────────────
+def _has_admin_access_dep(endpoint) -> bool:
+    """Return True if endpoint directly depends on require_superadmin OR
+    on any require_admin_capability dependency (which itself wraps require_superadmin).
+    """
+    sig = inspect.signature(endpoint)
+    for param in sig.parameters.values():
+        dep = getattr(param.default, "dependency", None)
+        if dep is None:
+            continue
+        if dep is require_superadmin:
+            return True
+        # require_admin_capability returns a closure whose name starts with require_admin_
+        name = getattr(dep, "__name__", "")
+        if name.startswith("require_admin_") or name.startswith("require_"):
+            # Verify it internally uses require_superadmin by inspecting its source
+            try:
+                src = inspect.getsource(dep)
+                if "require_superadmin" in src:
+                    return True
+            except (TypeError, OSError):
+                pass
+    return False
+
+
+# ── 1. All admin write routes require superadmin (directly or via capability) ──
 
 class TestAdminRoutesRequireSuperadmin:
 
@@ -63,14 +77,10 @@ class TestAdminRoutesRequireSuperadmin:
     ]
 
     @pytest.mark.parametrize("endpoint", _write_routes)
-    def test_write_route_depends_on_require_superadmin(self, endpoint):
-        sig = inspect.signature(endpoint)
-        found = any(
-            getattr(param.default, "dependency", None) is require_superadmin
-            for param in sig.parameters.values()
-        )
-        assert found, (
-            f"{endpoint.__name__} must depend on require_superadmin"
+    def test_write_route_has_admin_access_dependency(self, endpoint):
+        """Route must depend on require_superadmin or a require_admin_capability wrapper."""
+        assert _has_admin_access_dep(endpoint), (
+            f"{endpoint.__name__} must depend on require_superadmin or require_admin_capability"
         )
 
     @pytest.mark.parametrize("endpoint", _read_routes)

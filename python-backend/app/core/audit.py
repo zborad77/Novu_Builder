@@ -122,8 +122,9 @@ async def write_audit_log(
     """Write a rich AuditLog entry reusing an existing DB session.
 
     Looks up the actor's email and org_id from the DB for full traceability.
-    Silently swallows any exception — audit logging is non-critical and must
-    never break the main request path.
+    Failures are logged as SECURITY_EVENT warnings and do not propagate — audit
+    logging must never break the main request path (fail-open). For fail-closed
+    enforcement, use transactional audit writes at the repository layer.
     """
     try:
         from app.models.domain import AuditLog as _AuditLog
@@ -142,8 +143,14 @@ async def write_audit_log(
             created_at=datetime.now(UTC),
         ))
         await session.commit()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            "SECURITY_EVENT: audit_write_failed",
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            error=str(exc),
+        )
 
 
 class AuditMiddleware(BaseHTTPMiddleware):
