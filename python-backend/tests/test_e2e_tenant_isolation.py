@@ -510,6 +510,146 @@ class TestPositivePath:
 
 
 # =============================================================================
+# 10. Case final-state actions and remaining case-scoped endpoints
+# =============================================================================
+
+class TestCaseFinalActionsIsolation:
+
+    async def test_tenant_b_cannot_create_final_proposal_on_tenant_a_case(
+        self, app_client, token_b, case_a_id
+    ):
+        """POST /cases/{id}/final-proposal by Tenant B → 404.
+
+        The service calls get_project(id, org_b) which returns None before any
+        business logic (draft readiness check) is reached.
+        """
+        resp = await app_client.post(
+            f"/api/v1/cases/{case_a_id}/final-proposal",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert resp.status_code == 404, resp.text
+
+    async def test_tenant_b_cannot_send_tenant_a_case(
+        self, app_client, token_b, case_a_id
+    ):
+        """POST /cases/{id}/send by Tenant B → 404.
+
+        mark_project_sent() calls get_project(id, org_b) → None before
+        the 'status must be active' ValueError is reached.
+        """
+        resp = await app_client.post(
+            f"/api/v1/cases/{case_a_id}/send",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert resp.status_code == 404, resp.text
+
+    async def test_tenant_b_cannot_get_timeline_of_tenant_a_case(
+        self, app_client, token_b, case_a_id
+    ):
+        """GET /cases/{id}/timeline by Tenant B → 404."""
+        resp = await app_client.get(
+            f"/api/v1/cases/{case_a_id}/timeline",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert resp.status_code == 404, resp.text
+
+    async def test_tenant_b_cannot_list_estimates_of_tenant_a_case(
+        self, app_client, token_b, case_a_id
+    ):
+        """GET /cases/{id}/estimates by Tenant B → 404."""
+        resp = await app_client.get(
+            f"/api/v1/cases/{case_a_id}/estimates",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert resp.status_code == 404, resp.text
+
+    async def test_tenant_b_cannot_recalculate_estimates_of_tenant_a_case(
+        self, app_client, token_b, case_a_id
+    ):
+        """POST /cases/{id}/estimates/recalculate by Tenant B → 404.
+
+        get_project(id, org_b) fires before the 'no analysis result' check.
+        """
+        resp = await app_client.post(
+            f"/api/v1/cases/{case_a_id}/estimates/recalculate",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert resp.status_code == 404, resp.text
+
+    async def test_tenant_b_cannot_create_quote_pdf_for_tenant_a_case(
+        self, app_client, token_b, case_a_id
+    ):
+        """POST /cases/{id}/exports/quote-pdf by Tenant B → 404."""
+        resp = await app_client.post(
+            f"/api/v1/cases/{case_a_id}/exports/quote-pdf",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert resp.status_code == 404, resp.text
+
+    async def test_tenant_b_cannot_create_quote_docx_for_tenant_a_case(
+        self, app_client, token_b, case_a_id
+    ):
+        """POST /cases/{id}/exports/quote-docx by Tenant B → 404."""
+        resp = await app_client.post(
+            f"/api/v1/cases/{case_a_id}/exports/quote-docx",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert resp.status_code == 404, resp.text
+
+
+# =============================================================================
+# 11. Export metadata download isolation (GET /exports/{id})
+# =============================================================================
+
+class TestExportDownloadIsolation:
+
+    async def test_tenant_b_cannot_read_tenant_a_export_metadata(
+        self, app_client, token_a, token_b, case_a_id
+    ):
+        """GET /exports/{id} for an export created by Tenant A → 404 for Tenant B.
+
+        Tenant A triggers a report-pdf export (202), obtaining an export_id.
+        Tenant B then tries to read that export metadata directly.
+        The tenant ownership check in the route must block the cross-tenant read.
+        """
+        # Tenant A creates an export
+        create_resp = await app_client.post(
+            f"/api/v1/cases/{case_a_id}/exports/report-pdf",
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert create_resp.status_code == 202, create_resp.text
+        export_id = create_resp.json()["exportId"]
+
+        # Tenant B tries to read the export metadata
+        read_resp = await app_client.get(
+            f"/api/v1/exports/{export_id}",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert read_resp.status_code == 404, (
+            f"Tenant B read Tenant A's export metadata (export_id={export_id!r}): "
+            f"{read_resp.text}"
+        )
+
+    async def test_tenant_a_can_read_own_export_metadata(
+        self, app_client, token_a, case_a_id
+    ):
+        """[Positive] GET /exports/{id} for own export → 200."""
+        create_resp = await app_client.post(
+            f"/api/v1/cases/{case_a_id}/exports/report-pdf",
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert create_resp.status_code == 202, create_resp.text
+        export_id = create_resp.json()["exportId"]
+
+        read_resp = await app_client.get(
+            f"/api/v1/exports/{export_id}",
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert read_resp.status_code == 200, read_resp.text
+        assert read_resp.json()["id"] == export_id
+
+
+# =============================================================================
 # Scenarios NOT covered — infrastructure gaps
 # =============================================================================
 #
@@ -524,13 +664,11 @@ class TestPositivePath:
 #    test DB, which is a unit-test technique, not E2E.  Tagged for follow-up
 #    once the mock provider supports a no-photo path.
 #
-# B. Quote-variant cross-tenant access
-#    Requires: completed analysis + pricing flow to create QuoteVariant rows.
-#    Same dependency as (A).
+# B. Quote-variant cross-tenant access (listing variants)
+#    GET /cases/{id}/estimates returns an empty list for a brand-new case —
+#    there is nothing to steal yet.  Recalculate is covered above (→ 404).
+#    Full variant isolation test requires a completed analysis result.
 #
-# C. Export file download isolation (GET /exports/{id})
-#    ExportService currently stores export metadata in-memory (not in DB) and
-#    the mock export path never writes real file bytes.  There is no persistent
-#    export ID to steal.  The route is also unprotected by tenant checks
-#    (any authenticated user can read any export ID if they know it).
-#    This is a separate concern tracked outside of isolation tests.
+# C. analysis-results selection PATCH
+#    PATCH /cases/{case_id}/analysis-results/{result_id}/selection
+#    Requires: an existing AnalysisResult row (same dependency as A).

@@ -94,9 +94,18 @@ async def create_case_zip(
 @router.get("/exports/{export_id}", response_model=ExportRead)
 async def get_export(
     export_id: str,
+    current_user: AuthUserRead = Depends(get_current_user),
+    project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportRead:
     export = export_service.get_export(export_id)
     if not export:
         raise HTTPException(status_code=404, detail="Export not found.")
+    if not current_user.isSuperAdmin:
+        project = await project_service.get_project(
+            export.caseId,
+            organization_id=current_user.organizationId,
+        )
+        if not project:
+            raise HTTPException(status_code=404, detail="Export not found.")
     return export
