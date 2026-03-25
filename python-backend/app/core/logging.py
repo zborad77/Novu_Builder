@@ -38,11 +38,18 @@ def configure_logging(log_level: str = "INFO", log_file: str = "", log_error_fil
         handlers.append(error_handler)
         use_json = True
 
-    # Shared pre-chain used by both structlog and the stdlib ProcessorFormatter.
-    # add_logger_name adds the originating module to every entry ("logger" key).
-    shared_processors: list = [
+    # Processors for stdlib (foreign) loggers — logger is a stdlib Logger with .name.
+    stdlib_processors: list = [
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+    ]
+
+    # Processors for native structlog loggers (PrintLogger) — no .name attribute,
+    # so add_logger_name is omitted here.
+    shared_processors: list = [
+        structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
     ]
@@ -65,7 +72,7 @@ def configure_logging(log_level: str = "INFO", log_file: str = "", log_error_fil
     # uvicorn / SQLAlchemy / third-party logs share the same format and context.
     formatter = structlog.stdlib.ProcessorFormatter(
         processor=renderer,
-        foreign_pre_chain=shared_processors,
+        foreign_pre_chain=stdlib_processors,
     )
     for handler in handlers:
         handler.setFormatter(formatter)
