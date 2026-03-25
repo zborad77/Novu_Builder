@@ -64,7 +64,7 @@ class TestExecuteJobOrgScope:
 
     @pytest.mark.asyncio
     async def test_execute_job_fails_on_project_mismatch(self):
-        """If job.project_id != project_id, job is failed — no analysis runs."""
+        """If job.project_id != project_id, job is failed and HTTPException(403) is raised."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
         from app.repositories.photo_repository import PhotoRepository
@@ -90,16 +90,17 @@ class TestExecuteJobOrgScope:
                     provider_key="mock",
                 )
                 # Call with project_id "prj_B" but job.project_id is "prj_A"
-                await service.execute_job("job_1", "prj_B", organization_id="org_A")
+                with pytest.raises(HTTPException) as exc_info:
+                    await service.execute_job("job_1", "prj_B", organization_id="org_A")
 
-        # Job should be marked failed due to mismatch
+        assert exc_info.value.status_code == 403
         assert job.status == "failed"
         assert "prj_A" in job.error_message
         assert "prj_B" in job.error_message
 
     @pytest.mark.asyncio
     async def test_execute_job_fails_when_project_not_in_org(self):
-        """If project does not belong to the given org, job is failed."""
+        """If project does not belong to the given org, job is failed and HTTPException(403) is raised."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
         from app.repositories.photo_repository import PhotoRepository
@@ -126,9 +127,10 @@ class TestExecuteJobOrgScope:
                     photo_repository=AsyncMock(spec=PhotoRepository),
                     provider_key="mock",
                 )
-                await service.execute_job("job_1", "prj_A", organization_id="org_B")
+                with pytest.raises(HTTPException) as exc_info:
+                    await service.execute_job("job_1", "prj_A", organization_id="org_B")
 
-        # Job must be failed — project not found in org_B
+        assert exc_info.value.status_code == 403
         assert job.status == "failed"
         assert "Project not found" in job.error_message
 

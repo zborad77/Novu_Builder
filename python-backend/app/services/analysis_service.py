@@ -76,6 +76,22 @@ def _safe_json_load(value: str | None) -> dict | None:
         return None
 
 
+async def _fail_job_and_raise(
+    job: AnalysisJob,
+    session,
+    *,
+    message: str,
+    status_code: int,
+    detail: str,
+) -> None:
+    """Mark job as failed, commit, then raise HTTPException. Never returns."""
+    job.status = "failed"
+    job.error_message = message
+    job.finished_at = datetime.now(UTC)
+    await session.commit()
+    raise HTTPException(status_code=status_code, detail=detail)
+
+
 class AnalysisService:
     def __init__(
         self,
@@ -133,24 +149,16 @@ class AnalysisService:
             job = await repo.get_analysis_job(job_id)
             if not job:
                 log.error("worker.job_not_found")
-                return
+                raise HTTPException(status_code=404, detail="Analysis job not found.")
 
             if job.project_id != project_id:
-                job.status = "failed"
-                job.error_message = f"Job {job_id} belongs to project {job.project_id}, not {project_id}."
-                job.finished_at = datetime.now(UTC)
-                await session.commit()
                 log.error("worker.job_project_mismatch", job_project_id=job.project_id, expected_project_id=project_id)
                 log.warning("SECURITY_EVENT: job_project_mismatch", job_id=job_id, job_project_id=job.project_id, requested_project_id=project_id)
-                return
+                await _fail_job_and_raise(job, session, message=f"Job {job_id} belongs to project {job.project_id}, not {project_id}.", status_code=403, detail="Job project mismatch.")
 
             if organization_id is None:
-                job.status = "failed"
-                job.error_message = "organization_id required."
-                job.finished_at = datetime.now(UTC)
-                await session.commit()
                 log.error("SECURITY_EVENT: missing_org_id", job_id=job_id, project_id=project_id)
-                raise HTTPException(status_code=400, detail="organization_id required")
+                await _fail_job_and_raise(job, session, message="organization_id required.", status_code=400, detail="organization_id required")
 
             if organization_id is not None:
                 project = await repo.get_project_in_org(project_id, organization_id)
@@ -158,13 +166,9 @@ class AnalysisService:
                 project = await session.get(Project, project_id)
 
             if not project:
-                job.status = "failed"
-                job.error_message = "Project not found."
-                job.finished_at = datetime.now(UTC)
-                await session.commit()
                 log.error("worker.project_not_found", organization_id=organization_id)
                 log.warning("SECURITY_EVENT: org_mismatch", project_id=project_id, organization_id=organization_id)
-                return
+                await _fail_job_and_raise(job, session, message="Project not found.", status_code=403, detail="Project not found.")
 
             job.status = "running"
             job.started_at = datetime.now(UTC)
