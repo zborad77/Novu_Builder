@@ -121,7 +121,7 @@ class AnalysisService:
             retry_count=retry_count,
         )
 
-    async def execute_job(self, job_id: str, project_id: str) -> None:
+    async def execute_job(self, job_id: str, project_id: str, organization_id: str | None = None) -> None:
         """Runs the analysis in the background. Uses its own DB session."""
         log = logger.bind(job_id=job_id, project_id=project_id)
 
@@ -134,13 +134,25 @@ class AnalysisService:
                 log.error("worker.job_not_found")
                 return
 
-            project = await session.get(Project, project_id)
+            if job.project_id != project_id:
+                job.status = "failed"
+                job.error_message = f"Job {job_id} belongs to project {job.project_id}, not {project_id}."
+                job.finished_at = datetime.now(UTC)
+                await session.commit()
+                log.error("worker.job_project_mismatch", job_project_id=job.project_id, expected_project_id=project_id)
+                return
+
+            if organization_id is not None:
+                project = await repo.get_project_in_org(project_id, organization_id)
+            else:
+                project = await session.get(Project, project_id)
+
             if not project:
                 job.status = "failed"
                 job.error_message = "Project not found."
                 job.finished_at = datetime.now(UTC)
                 await session.commit()
-                log.error("worker.project_not_found")
+                log.error("worker.project_not_found", organization_id=organization_id)
                 return
 
             job.status = "running"
@@ -241,7 +253,7 @@ class AnalysisService:
                     exc_info=True,
                 )
 
-    async def retry_job(self, job_id: str) -> AnalysisJob | None:
+    async def retry_job(self, job_id: str, organization_id: str | None = None) -> AnalysisJob | None:
         """
         Creates a new queued job that is a retry of the given job.
         The caller (route) must schedule execute_job via BackgroundTasks.
@@ -252,7 +264,11 @@ class AnalysisService:
             return None
 
         async with AsyncSessionFactory() as session:
-            project = await session.get(Project, original.project_id)
+            repo_inner = AnalysisRepository(session)
+            if organization_id is not None:
+                project = await repo_inner.get_project_in_org(original.project_id, organization_id)
+            else:
+                project = await session.get(Project, original.project_id)
             if not project:
                 return None
 

@@ -12,6 +12,15 @@ class AnalysisRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    async def get_project_in_org(self, project_id: str, organization_id: str) -> Project | None:
+        result = await self.session.execute(
+            select(Project).where(
+                Project.id == project_id,
+                Project.organization_id == organization_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def get_latest_analysis_result(self, project_id: str) -> AnalysisResult | None:
         result = await self.session.execute(
             select(AnalysisResult)
