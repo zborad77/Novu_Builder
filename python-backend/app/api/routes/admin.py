@@ -236,34 +236,96 @@ async def reset_user_password(
 # Raw exception text may contain internal file paths or stack details.
 _ADMIN_JOB_MAX_ERROR_LEN = 500
 
+# Key name fragments that suggest the value may contain a sensitive path or URL.
+# Applied to inputPayload / outputSummary dict keys (case-insensitive substring match).
+_SENSITIVE_KEY_FRAGMENTS: frozenset[str] = frozenset({
+    "path", "file", "filepath", "storage", "url",
+})
+
+# String markers that identify raw filesystem paths in string payloads.
+_SENSITIVE_PATH_MARKERS: tuple[str, ...] = ("/app/", "\\")
+
 
 def _enrich_job(job: AnalysisJob, case_title: str, org_id: str, org_name: str) -> dict:
     base = to_job_read(job)
     base["caseTitle"] = case_title
     base["orgId"] = org_id
+    # NOTE:
+    # orgName is exposed for admin usability.
+    # Be aware it may contain business-sensitive information.
     base["orgName"] = org_name
     return base
+
+
+def _sanitize_payload(payload: object) -> tuple[object, bool]:
+    """Return (sanitized_payload, was_changed).
+
+    dict  — mask values whose key name contains a sensitive fragment.
+    str   — replace with "[REDACTED_PATH]" if it looks like a filesystem path.
+    other — returned unchanged.
+    """
+    if payload is None:
+        return payload, False
+
+    if isinstance(payload, dict):
+        result: dict = {}
+        changed = False
+        for key, value in payload.items():
+            if any(frag in key.lower() for frag in _SENSITIVE_KEY_FRAGMENTS):
+                result[key] = "[REDACTED]"
+                changed = True
+            else:
+                result[key] = value
+        return result, changed
+
+    if isinstance(payload, str):
+        if any(marker in payload for marker in _SENSITIVE_PATH_MARKERS):
+            return "[REDACTED_PATH]", True
+        return payload, False
+
+    return payload, False
 
 
 def _sanitize_admin_job(job_dict: dict) -> dict:
     """Strip or truncate fields that expose internal implementation details.
 
-    Removed:
-        errorTraceback — full Python stack trace; exposes file paths,
-                         library versions and internal code structure.
-    Truncated:
-        errorMessage  — raw exception text; may contain internal paths or
-                        DB details. Kept up to _ADMIN_JOB_MAX_ERROR_LEN chars
-                        for admin debugging; longer messages are cut.
+    Changes made (new fields added, none removed except errorTraceback):
 
-    All other fields are retained: they are operational metadata (status,
-    timing, org context, high-level AI results) that are legitimate for
-    superadmin consumption.
+    errorTraceback        — removed entirely; full Python stack trace exposes
+                            file paths, library versions and code structure.
+    errorMessage          — truncated to _ADMIN_JOB_MAX_ERROR_LEN chars if longer;
+                            suffix "..." marks the cut.
+    errorMessageTruncated — True when errorMessage was cut, False otherwise.
+    inputPayload          — dict values whose key suggests a path/URL are masked
+                            as "[REDACTED]"; string payloads containing filesystem
+                            markers become "[REDACTED_PATH]".
+    inputPayloadSanitized — True when any masking was applied to inputPayload.
+    outputSummary         — same masking rules as inputPayload.
+    outputSummarySanitized — True when any masking was applied to outputSummary.
+
+    All other fields are retained (status, timing, org context, high-level AI
+    results) as they are legitimate operational metadata for superadmin use.
     """
     sanitized = {k: v for k, v in job_dict.items() if k != "errorTraceback"}
+
+    # ── errorMessage truncation ──────────────────────────────────────────────
     msg = sanitized.get("errorMessage")
     if msg and len(msg) > _ADMIN_JOB_MAX_ERROR_LEN:
-        sanitized["errorMessage"] = msg[:_ADMIN_JOB_MAX_ERROR_LEN] + " … [truncated]"
+        sanitized["errorMessage"] = msg[:_ADMIN_JOB_MAX_ERROR_LEN] + "..."
+        sanitized["errorMessageTruncated"] = True
+    else:
+        sanitized["errorMessageTruncated"] = False
+
+    # ── inputPayload path/url masking ────────────────────────────────────────
+    clean_payload, payload_changed = _sanitize_payload(sanitized.get("inputPayload"))
+    sanitized["inputPayload"] = clean_payload
+    sanitized["inputPayloadSanitized"] = payload_changed
+
+    # ── outputSummary path/url masking ───────────────────────────────────────
+    clean_summary, summary_changed = _sanitize_payload(sanitized.get("outputSummary"))
+    sanitized["outputSummary"] = clean_summary
+    sanitized["outputSummarySanitized"] = summary_changed
+
     return sanitized
 
 

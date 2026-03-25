@@ -15,6 +15,7 @@ import pytest
 from app.api.routes.admin import (
     _ADMIN_JOB_MAX_ERROR_LEN,
     _sanitize_admin_job,
+    _sanitize_payload,
     get_admin_job,
     list_all_jobs,
 )
@@ -94,8 +95,8 @@ class TestSanitizeAdminJob:
         raw = self._make_job_dict(errorMessage=long_msg)
         sanitized = _sanitize_admin_job(raw)
         msg = sanitized["errorMessage"]
-        assert len(msg) <= _ADMIN_JOB_MAX_ERROR_LEN + 20  # allow for " … [truncated]" suffix
-        assert "[truncated]" in msg
+        assert len(msg) <= _ADMIN_JOB_MAX_ERROR_LEN + 10  # allow for "..." suffix
+        assert "..." in msg
         assert msg.startswith("x" * _ADMIN_JOB_MAX_ERROR_LEN)
 
     def test_sanitizer_truncation_boundary(self):
@@ -104,7 +105,7 @@ class TestSanitizeAdminJob:
         raw = self._make_job_dict(errorMessage=exact_msg)
         sanitized = _sanitize_admin_job(raw)
         assert sanitized["errorMessage"] == exact_msg
-        assert "[truncated]" not in sanitized["errorMessage"]
+        assert "..." not in sanitized["errorMessage"]
 
     def test_sanitizer_keeps_none_error_message(self):
         raw = self._make_job_dict(errorMessage=None)
@@ -246,3 +247,161 @@ class TestNonAdminJobsUnchanged:
         """Sanitization helper must live in admin routes, not bleed into service layer."""
         from app.services import analysis_service
         assert not hasattr(analysis_service, "_sanitize_admin_job")
+
+
+# ── 6. errorMessageTruncated flag ─────────────────────────────────────────────
+
+class TestErrorMessageTruncatedFlag:
+
+    def _make_job_dict(self, **overrides) -> dict:
+        base = {
+            "id": "job-1", "projectId": "proj-1", "status": "failed",
+            "jobType": "analysis", "requestedByUserId": "user-1",
+            "parentJobId": None, "retryCount": 0, "startedAt": None,
+            "finishedAt": None, "durationSeconds": None,
+            "errorMessage": None, "errorTraceback": None,
+            "inputPayload": None, "outputSummary": None,
+            "createdAt": None, "caseTitle": "Case", "orgId": "org-1", "orgName": "Org",
+        }
+        base.update(overrides)
+        return base
+
+    def test_truncated_flag_true_when_message_truncated(self):
+        long_msg = "x" * (_ADMIN_JOB_MAX_ERROR_LEN + 50)
+        sanitized = _sanitize_admin_job(self._make_job_dict(errorMessage=long_msg))
+        assert sanitized["errorMessageTruncated"] is True
+
+    def test_truncated_flag_false_when_message_short(self):
+        sanitized = _sanitize_admin_job(self._make_job_dict(errorMessage="short error"))
+        assert sanitized["errorMessageTruncated"] is False
+
+    def test_truncated_flag_false_at_exact_boundary(self):
+        exact_msg = "b" * _ADMIN_JOB_MAX_ERROR_LEN
+        sanitized = _sanitize_admin_job(self._make_job_dict(errorMessage=exact_msg))
+        assert sanitized["errorMessageTruncated"] is False
+
+    def test_truncated_flag_false_when_message_none(self):
+        sanitized = _sanitize_admin_job(self._make_job_dict(errorMessage=None))
+        assert sanitized["errorMessageTruncated"] is False
+
+    def test_truncated_flag_present_in_all_cases(self):
+        """errorMessageTruncated must always be present in the output dict."""
+        for msg in (None, "short", "x" * (_ADMIN_JOB_MAX_ERROR_LEN + 1)):
+            sanitized = _sanitize_admin_job(self._make_job_dict(errorMessage=msg))
+            assert "errorMessageTruncated" in sanitized
+
+
+# ── 7. _sanitize_payload unit tests ───────────────────────────────────────────
+
+class TestSanitizePayload:
+
+    def test_none_returns_unchanged(self):
+        result, changed = _sanitize_payload(None)
+        assert result is None
+        assert changed is False
+
+    def test_dict_without_sensitive_keys_unchanged(self):
+        payload = {"provider": "mock", "photo_count": 3, "model": "gpt-4o"}
+        result, changed = _sanitize_payload(payload)
+        assert result == payload
+        assert changed is False
+
+    def test_dict_with_path_key_redacted(self):
+        payload = {"filePath": "/app/uploads/photo.jpg", "count": 2}
+        result, changed = _sanitize_payload(payload)
+        assert result["filePath"] == "[REDACTED]"
+        assert result["count"] == 2
+        assert changed is True
+
+    def test_dict_with_url_key_redacted(self):
+        payload = {"imageUrl": "https://storage.example.com/img.jpg"}
+        result, changed = _sanitize_payload(payload)
+        assert result["imageUrl"] == "[REDACTED]"
+        assert changed is True
+
+    def test_dict_with_storage_key_redacted(self):
+        payload = {"storageBackend": "gcs", "bucket": "my-bucket"}
+        result, changed = _sanitize_payload(payload)
+        assert result["storageBackend"] == "[REDACTED]"
+        assert changed is True
+
+    def test_dict_with_file_key_redacted(self):
+        payload = {"file": "upload.jpg"}
+        result, changed = _sanitize_payload(payload)
+        assert result["file"] == "[REDACTED]"
+        assert changed is True
+
+    def test_string_with_path_marker_redacted(self):
+        result, changed = _sanitize_payload("/app/services/analysis.py")
+        assert result == "[REDACTED_PATH]"
+        assert changed is True
+
+    def test_string_without_path_marker_unchanged(self):
+        result, changed = _sanitize_payload("analysis complete")
+        assert result == "analysis complete"
+        assert changed is False
+
+    def test_non_dict_non_string_unchanged(self):
+        for value in (42, 3.14, True, ["a", "b"]):
+            result, changed = _sanitize_payload(value)
+            assert result == value
+            assert changed is False
+
+
+# ── 8. inputPayload and outputSummary sanitization fields ─────────────────────
+
+class TestPayloadFieldSanitization:
+
+    def _make_job_dict(self, **overrides) -> dict:
+        base = {
+            "id": "job-1", "projectId": "proj-1", "status": "completed",
+            "jobType": "analysis", "requestedByUserId": "user-1",
+            "parentJobId": None, "retryCount": 0, "startedAt": None,
+            "finishedAt": None, "durationSeconds": None,
+            "errorMessage": None, "errorTraceback": None,
+            "inputPayload": None, "outputSummary": None,
+            "createdAt": None, "caseTitle": "Case", "orgId": "org-1", "orgName": "Org",
+        }
+        base.update(overrides)
+        return base
+
+    def test_input_payload_sanitized_false_for_clean_data(self):
+        payload = {"provider": "openai", "photo_count": 5}
+        sanitized = _sanitize_admin_job(self._make_job_dict(inputPayload=payload))
+        assert sanitized["inputPayloadSanitized"] is False
+        assert sanitized["inputPayload"] == payload
+
+    def test_input_payload_sanitized_true_when_path_key_present(self):
+        payload = {"provider": "openai", "filePath": "/app/uploads/x.jpg"}
+        sanitized = _sanitize_admin_job(self._make_job_dict(inputPayload=payload))
+        assert sanitized["inputPayloadSanitized"] is True
+        assert sanitized["inputPayload"]["filePath"] == "[REDACTED]"
+        assert sanitized["inputPayload"]["provider"] == "openai"
+
+    def test_input_payload_sanitized_false_when_none(self):
+        sanitized = _sanitize_admin_job(self._make_job_dict(inputPayload=None))
+        assert sanitized["inputPayloadSanitized"] is False
+        assert sanitized["inputPayload"] is None
+
+    def test_output_summary_sanitized_false_for_clean_data(self):
+        summary = {"model_name": "gpt-4o", "estimated_area_sqm": 12.5}
+        sanitized = _sanitize_admin_job(self._make_job_dict(outputSummary=summary))
+        assert sanitized["outputSummarySanitized"] is False
+        assert sanitized["outputSummary"] == summary
+
+    def test_output_summary_sanitized_true_when_url_key_present(self):
+        summary = {"reportUrl": "https://storage.example.com/report.pdf", "score": 0.9}
+        sanitized = _sanitize_admin_job(self._make_job_dict(outputSummary=summary))
+        assert sanitized["outputSummarySanitized"] is True
+        assert sanitized["outputSummary"]["reportUrl"] == "[REDACTED]"
+        assert sanitized["outputSummary"]["score"] == 0.9
+
+    def test_output_summary_sanitized_false_when_none(self):
+        sanitized = _sanitize_admin_job(self._make_job_dict(outputSummary=None))
+        assert sanitized["outputSummarySanitized"] is False
+
+    def test_sanitized_flags_always_present(self):
+        """Both *Sanitized flags must always appear in output."""
+        sanitized = _sanitize_admin_job(self._make_job_dict())
+        assert "inputPayloadSanitized" in sanitized
+        assert "outputSummarySanitized" in sanitized
