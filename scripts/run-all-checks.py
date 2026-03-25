@@ -7,7 +7,8 @@ Checks (in order):
   3. test-redis-connection.py — Redis TCP connectivity (SKIP if REDIS_URL not set)
   4. test-backend-startup.py  — HTTP health endpoint + JSON validation
   5. test-api-contracts.py    — HTTP contract smoke test
-  6. test-import-startup.py   — backend import + create_app() check
+  6. test-auth-validation.py  — auth (401/403) and validation (422) contracts
+  7. test-import-startup.py   — backend import + create_app() check
 
 Exit code:
   0 — all checks passed or skipped
@@ -36,7 +37,7 @@ RETRY_DELAY = 1     # seconds between attempts
 SCRIPTS_DIR = Path(__file__).parent
 
 # Scripts that accept --url; others receive no extra args.
-URL_SCRIPTS = {"test-backend-startup.py", "test-api-contracts.py"}
+URL_SCRIPTS = {"test-backend-startup.py", "test-api-contracts.py", "test-auth-validation.py"}
 
 CHECKS = [
     "test-env.py",
@@ -44,6 +45,7 @@ CHECKS = [
     "test-redis-connection.py",
     "test-backend-startup.py",
     "test-api-contracts.py",
+    "test-auth-validation.py",
     "test-import-startup.py",
 ]
 
