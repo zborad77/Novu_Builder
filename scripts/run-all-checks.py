@@ -19,6 +19,7 @@ Usage:
 """
 
 import sys
+import re
 import json
 import argparse
 import subprocess
@@ -47,6 +48,24 @@ CHECKS = [
 ]
 
 
+def _extract_reason(lines: list[str], status: str) -> str:
+    """Return a short human-readable reason from captured output lines."""
+    if status == "SKIP":
+        for line in lines:
+            if line.upper().startswith("SKIP:"):
+                return line[5:].strip()
+    elif status == "FAIL":
+        # Prefer the last "FAIL: <reason>" line (covers env/db/redis/backend-startup).
+        for line in reversed(lines):
+            if line.upper().startswith("FAIL:"):
+                return line[5:].strip()
+        # Fallback for api-contracts / import-startup: "X/Y passed" summary line.
+        for line in reversed(lines):
+            if re.search(r"\d+/\d+ passed", line):
+                return line.strip()
+    return ""
+
+
 def run_check(script: Path, extra_args: list) -> tuple[str, str]:
     """
     Run a single check script and return (status, detail).
@@ -67,10 +86,13 @@ def run_check(script: Path, extra_args: list) -> tuple[str, str]:
         text=True,
     )
 
+    lines: list[str] = []
+
     def _read() -> None:
         assert proc.stdout is not None
         for line in proc.stdout:
             print(line, end="", flush=True)
+            lines.append(line.rstrip())
 
     reader = threading.Thread(target=_read, daemon=True)
     reader.start()
@@ -86,9 +108,9 @@ def run_check(script: Path, extra_args: list) -> tuple[str, str]:
     reader.join()
 
     if proc.returncode == 2:
-        return "SKIP", ""
+        return "SKIP", _extract_reason(lines, "SKIP")
     if proc.returncode != 0:
-        return "FAIL", ""
+        return "FAIL", _extract_reason(lines, "FAIL")
     return "OK", ""
 
 
