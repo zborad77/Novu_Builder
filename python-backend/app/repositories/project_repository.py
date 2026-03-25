@@ -39,10 +39,10 @@ class ProjectRepository:
         result = await self.session.execute(query)
         return result.scalars().all()
 
-    async def get_project(self, project_id: str) -> Project | None:
+    async def get_project(self, project_id: str, *, organization_id: str | None = None) -> Project | None:
         from app.models import AnalysisResult, QuoteVariant, QuoteItem
         from sqlalchemy.orm import selectinload as sil
-        result = await self.session.execute(
+        query = (
             select(Project)
             .options(
                 selectinload(Project.client),
@@ -54,6 +54,9 @@ class ProjectRepository:
             )
             .where(Project.id == project_id)
         )
+        if organization_id is not None:
+            query = query.where(Project.organization_id == organization_id)
+        result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
     async def create_project(

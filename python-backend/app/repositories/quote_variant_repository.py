@@ -28,9 +28,11 @@ class QuoteVariantRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_default_pricing_profile(self) -> PricingProfile | None:
+    async def get_default_pricing_profile(self, organization_id: str) -> PricingProfile | None:
         result = await self.session.execute(
-            select(PricingProfile).where(PricingProfile.is_default.is_(True)).limit(1)
+            select(PricingProfile)
+            .where(PricingProfile.organization_id == organization_id, PricingProfile.is_default.is_(True))
+            .limit(1)
         )
         return result.scalar_one_or_none()
 

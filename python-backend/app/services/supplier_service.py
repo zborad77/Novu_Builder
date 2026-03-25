@@ -6,8 +6,8 @@ class SupplierService:
     def __init__(self, repository: SupplierRepository):
         self.repository = repository
 
-    async def list_suppliers(self, *, include_inactive: bool = False) -> list[SupplierRead]:
-        items = await self.repository.list_suppliers(active_only=not include_inactive)
+    async def list_suppliers(self, organization_id: str, *, include_inactive: bool = False) -> list[SupplierRead]:
+        items = await self.repository.list_suppliers(organization_id=organization_id, active_only=not include_inactive)
         return [
             SupplierRead(
                 id=item.id,
@@ -28,6 +28,7 @@ class SupplierService:
     async def update_supplier(
         self,
         supplier_id: str,
+        organization_id: str,
         *,
         name: str,
         website_url: str | None,
@@ -35,7 +36,7 @@ class SupplierService:
         contact_name: str | None,
         contact_email: str | None,
     ) -> SupplierRead | None:
-        supplier = await self.repository.get_supplier(supplier_id)
+        supplier = await self.repository.get_supplier_in_org(supplier_id, organization_id)
         if not supplier:
             return None
         updated = await self.repository.update_supplier(

@@ -53,8 +53,10 @@ async def create_case(
 async def get_case(
     case_id: str,
     service: ProjectService = Depends(get_project_service),
+    current_user: AuthUserRead = Depends(get_current_user),
 ) -> ProjectDetail:
-    detail = await service.get_project_detail(case_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    detail = await service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
     return detail
@@ -65,10 +67,11 @@ async def duplicate_case(
     case_id: str,
     payload: ProjectDuplicateRequest,
     service: ProjectService = Depends(get_project_service),
-    _: AuthUserRead = Depends(require_manager),
+    current_user: AuthUserRead = Depends(require_manager),
 ) -> ProjectCreateResponse:
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
     try:
-        duplicated = await service.duplicate_project(case_id, payload)
+        duplicated = await service.duplicate_project(case_id, payload, organization_id=org_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not duplicated:
@@ -81,9 +84,10 @@ async def patch_case(
     case_id: str,
     payload: ProjectPatch,
     service: ProjectService = Depends(get_project_service),
-    _: AuthUserRead = Depends(require_manager),
+    current_user: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
-    updated = await service.update_project(case_id, payload.model_dump(exclude_unset=True))
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    updated = await service.update_project(case_id, payload.model_dump(exclude_unset=True), organization_id=org_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Case not found.")
     return updated
@@ -94,9 +98,10 @@ async def patch_case_proposal_draft(
     case_id: str,
     payload: ProjectProposalDraftPatch,
     service: ProjectService = Depends(get_project_service),
-    _: AuthUserRead = Depends(require_manager),
+    current_user: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
-    updated = await service.update_proposal_draft(case_id, payload.model_dump(exclude_unset=True))
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    updated = await service.update_proposal_draft(case_id, payload.model_dump(exclude_unset=True), organization_id=org_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Case not found.")
     return updated
@@ -106,10 +111,11 @@ async def patch_case_proposal_draft(
 async def create_case_final_proposal(
     case_id: str,
     service: ProjectService = Depends(get_project_service),
-    _: AuthUserRead = Depends(require_manager),
+    current_user: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
     try:
-        updated = await service.create_final_proposal(case_id)
+        updated = await service.create_final_proposal(case_id, organization_id=org_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not updated:
@@ -121,9 +127,10 @@ async def create_case_final_proposal(
 async def archive_case(
     case_id: str,
     service: ProjectService = Depends(get_project_service),
-    _: AuthUserRead = Depends(require_manager),
+    current_user: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
-    updated = await service.update_project(case_id, {"status": "archived"})
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    updated = await service.update_project(case_id, {"status": "archived"}, organization_id=org_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Case not found.")
     return updated
@@ -133,10 +140,11 @@ async def archive_case(
 async def send_case(
     case_id: str,
     service: ProjectService = Depends(get_project_service),
-    _: AuthUserRead = Depends(require_manager),
+    current_user: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
     try:
-        updated = await service.mark_project_sent(case_id)
+        updated = await service.mark_project_sent(case_id, organization_id=org_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not updated:
@@ -148,8 +156,10 @@ async def send_case(
 async def get_case_timeline(
     case_id: str,
     service: ProjectService = Depends(get_project_service),
+    current_user: AuthUserRead = Depends(get_current_user),
 ) -> list[dict]:
-    detail = await service.get_project_detail(case_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    detail = await service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
     timeline = [

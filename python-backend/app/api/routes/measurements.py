@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import get_analysis_service, get_project_service
+from app.api.deps import get_analysis_service, get_current_user, get_project_service
+from app.schemas.auth import AuthUserRead
 from app.schemas.measurement import MeasurementRead, MeasurementUpsert
 from app.services.analysis_service import AnalysisService
 from app.services.project_service import ProjectService
@@ -42,10 +43,12 @@ def _to_measurement(result) -> MeasurementRead:
 async def create_or_update_measurement(
     case_id: str,
     payload: MeasurementUpsert,
+    current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
 ) -> MeasurementRead:
-    project = await project_service.get_project(case_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
     changes = payload.model_dump(exclude_unset=True)
@@ -61,8 +64,17 @@ async def create_or_update_measurement(
 async def patch_measurement(
     measurement_id: str,
     payload: MeasurementUpsert,
+    current_user: AuthUserRead = Depends(get_current_user),
     analysis_service: AnalysisService = Depends(get_analysis_service),
+    project_service: ProjectService = Depends(get_project_service),
 ) -> MeasurementRead:
+    existing = await analysis_service.get_analysis_result_by_id(measurement_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Measurement not found.")
+    if not current_user.isSuperAdmin:
+        project = await project_service.get_project(existing.projectId, organization_id=current_user.organizationId)
+        if not project:
+            raise HTTPException(status_code=404, detail="Measurement not found.")
     changes = payload.model_dump(exclude_unset=True)
     if "referenceImageId" in changes:
         changes["referencePhotoId"] = changes.pop("referenceImageId")
@@ -75,11 +87,17 @@ async def patch_measurement(
 @router.post("/measurements/{measurement_id}/confirm", response_model=MeasurementRead)
 async def confirm_measurement(
     measurement_id: str,
+    current_user: AuthUserRead = Depends(get_current_user),
     analysis_service: AnalysisService = Depends(get_analysis_service),
+    project_service: ProjectService = Depends(get_project_service),
 ) -> MeasurementRead:
     existing = await analysis_service.get_analysis_result_by_id(measurement_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Measurement not found.")
+    if not current_user.isSuperAdmin:
+        project = await project_service.get_project(existing.projectId, organization_id=current_user.organizationId)
+        if not project:
+            raise HTTPException(status_code=404, detail="Measurement not found.")
     updated = await analysis_service.update_manual_selection_by_result_id(
         measurement_id,
         {"finalAreaSource": "manual"},

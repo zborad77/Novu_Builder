@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
-from app.api.deps import get_photo_service, get_project_service
+from app.api.deps import get_current_user, get_photo_service, get_project_service
+from app.schemas.auth import AuthUserRead
 from app.schemas.photo import (
     AnalysisReferencePhotoResponse,
     DeletePhotoResponse,
@@ -21,10 +22,12 @@ router = APIRouter(tags=["images"])
 @router.get("/cases/{case_id}/images", response_model=PhotoListResponse)
 async def list_case_images(
     case_id: str,
+    current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PhotoListResponse:
-    detail = await project_service.get_project_detail(case_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
     items, meta = await photo_service.list_photos(case_id)
@@ -35,10 +38,12 @@ async def list_case_images(
 async def upload_case_images(
     request: Request,
     case_id: str,
+    current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PhotoUploadResponse:
-    project = await project_service.get_project(case_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
 
@@ -91,10 +96,12 @@ async def get_image_preview(
 async def set_case_primary_image(
     case_id: str,
     image_id: str,
+    current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PrimaryPhotoResponse:
-    detail = await project_service.get_project_detail(case_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
     photo = await photo_service.set_primary_photo(case_id, image_id)
@@ -107,10 +114,12 @@ async def set_case_primary_image(
 async def set_case_analysis_reference_image(
     case_id: str,
     image_id: str,
+    current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> AnalysisReferencePhotoResponse:
-    detail = await project_service.get_project_detail(case_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
     try:
@@ -127,10 +136,12 @@ async def move_case_image(
     case_id: str,
     image_id: str,
     payload: PhotoMoveRequest,
+    current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PhotoListResponse:
-    detail = await project_service.get_project_detail(case_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
 
@@ -146,10 +157,12 @@ async def move_case_image(
 async def delete_case_image(
     case_id: str,
     image_id: str,
+    current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> DeletePhotoResponse:
-    detail = await project_service.get_project_detail(case_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
     deleted = await photo_service.delete_photo(case_id, image_id)

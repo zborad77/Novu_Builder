@@ -6,8 +6,8 @@ class MaterialCatalogService:
     def __init__(self, repository: MaterialCatalogRepository):
         self.repository = repository
 
-    async def list_material_catalog(self, *, search: str | None = None, include_inactive: bool = False) -> list[MaterialCatalogRead]:
-        items = await self.repository.list_material_catalog(search=search, active_only=not include_inactive)
+    async def list_material_catalog(self, *, organization_id: str, search: str | None = None, include_inactive: bool = False) -> list[MaterialCatalogRead]:
+        items = await self.repository.list_material_catalog(organization_id=organization_id, search=search, active_only=not include_inactive)
         results = []
         for item in items:
             results.append(
@@ -29,7 +29,10 @@ class MaterialCatalogService:
             )
         return results
 
-    async def list_supplier_prices(self, material_id: str) -> list[SupplierPriceRead]:
+    async def list_supplier_prices(self, material_id: str, organization_id: str) -> list[SupplierPriceRead] | None:
+        material = await self.repository.get_material_in_org(material_id, organization_id)
+        if not material:
+            return None
         rows = await self.repository.list_supplier_prices(material_id)
         return [
             SupplierPriceRead(
@@ -54,8 +57,8 @@ class MaterialCatalogService:
             for price, supplier in rows
         ]
 
-    async def update_material(self, material_id: str, *, default_unit_price: float, default_supplier_id: str | None, notes: str | None) -> MaterialCatalogRead | None:
-        material = await self.repository.get_material(material_id)
+    async def update_material(self, material_id: str, organization_id: str, *, default_unit_price: float, default_supplier_id: str | None, notes: str | None) -> MaterialCatalogRead | None:
+        material = await self.repository.get_material_in_org(material_id, organization_id)
         if not material:
             return None
         updated = await self.repository.update_material(

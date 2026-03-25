@@ -10,16 +10,18 @@ class PricebookRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def list_pricebooks(self) -> list[PricingProfile]:
+    async def list_pricebooks(self, organization_id: str) -> list[PricingProfile]:
         result = await self.session.execute(
-            select(PricingProfile).order_by(PricingProfile.is_default.desc(), PricingProfile.name.asc())
+            select(PricingProfile)
+            .where(PricingProfile.organization_id == organization_id)
+            .order_by(PricingProfile.is_default.desc(), PricingProfile.name.asc())
         )
         return list(result.scalars().all())
 
-    async def create_pricebook(self, payload: dict) -> PricingProfile:
+    async def create_pricebook(self, payload: dict, organization_id: str) -> PricingProfile:
         pricebook = PricingProfile(
             id=f"pb_{uuid4().hex[:8]}",
-            organization_id="org_1",
+            organization_id=organization_id,
             name=payload["name"],
             hourly_rate=payload["hourlyRate"],
             daily_rate=payload["dailyRate"],
@@ -32,7 +34,7 @@ class PricebookRepository:
             is_default=payload["isDefault"],
         )
         if pricebook.is_default:
-            existing = await self.list_pricebooks()
+            existing = await self.list_pricebooks(organization_id)
             for item in existing:
                 item.is_default = False
         self.session.add(pricebook)
@@ -40,13 +42,13 @@ class PricebookRepository:
         await self.session.refresh(pricebook)
         return pricebook
 
-    async def list_pricebook_items(self, pricebook_id: str) -> tuple[PricingProfile | None, list[MaterialCatalog]]:
+    async def list_pricebook_items(self, pricebook_id: str, organization_id: str) -> tuple[PricingProfile | None, list[MaterialCatalog]]:
         pricebook = await self.session.get(PricingProfile, pricebook_id)
-        if not pricebook:
+        if not pricebook or pricebook.organization_id != organization_id:
             return None, []
         result = await self.session.execute(
             select(MaterialCatalog)
-            .where(MaterialCatalog.organization_id == pricebook.organization_id)
+            .where(MaterialCatalog.organization_id == organization_id)
             .order_by(MaterialCatalog.category.asc(), MaterialCatalog.name.asc())
         )
         return pricebook, list(result.scalars().all())

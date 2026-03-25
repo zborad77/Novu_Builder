@@ -8,7 +8,7 @@ class MaterialCatalogRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def list_material_catalog(self, *, organization_id: str = "org_1", active_only: bool = True, search: str | None = None) -> list[MaterialCatalog]:
+    async def list_material_catalog(self, *, organization_id: str, active_only: bool = True, search: str | None = None) -> list[MaterialCatalog]:
         query = select(MaterialCatalog).where(MaterialCatalog.organization_id == organization_id)
         if active_only:
             query = query.where(MaterialCatalog.is_active.is_(True))
@@ -20,6 +20,15 @@ class MaterialCatalogRepository:
 
     async def get_material(self, material_id: str) -> MaterialCatalog | None:
         return await self.session.get(MaterialCatalog, material_id)
+
+    async def get_material_in_org(self, material_id: str, organization_id: str) -> MaterialCatalog | None:
+        result = await self.session.execute(
+            select(MaterialCatalog).where(
+                MaterialCatalog.id == material_id,
+                MaterialCatalog.organization_id == organization_id,
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def list_supplier_prices(self, material_id: str) -> list[tuple[SupplierMaterialPrice, Supplier]]:
         result = await self.session.execute(

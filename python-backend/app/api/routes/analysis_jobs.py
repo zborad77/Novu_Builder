@@ -17,7 +17,8 @@ async def create_analysis_job(
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
 ) -> AnalysisTriggerResponse:
-    project = await project_service.get_project(case_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
     job = await analysis_service.create_job(project, user_id=current_user.id)
@@ -32,10 +33,12 @@ async def create_analysis_job(
 @router.get("/cases/{case_id}/analysis-jobs", response_model=list[dict])
 async def list_case_analysis_jobs(
     case_id: str,
+    current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
 ) -> list[dict]:
-    project = await project_service.get_project(case_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
     return await analysis_service.list_jobs(case_id)
@@ -44,23 +47,38 @@ async def list_case_analysis_jobs(
 @router.get("/analysis-jobs/{job_id}", response_model=dict)
 async def get_analysis_job(
     job_id: str,
+    current_user: AuthUserRead = Depends(get_current_user),
     analysis_service: AnalysisService = Depends(get_analysis_service),
+    project_service: ProjectService = Depends(get_project_service),
 ) -> dict:
     job = await analysis_service.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Analysis job not found.")
+    if not current_user.isSuperAdmin:
+        project = await project_service.get_project(job["projectId"], organization_id=current_user.organizationId)
+        if not project:
+            raise HTTPException(status_code=404, detail="Analysis job not found.")
     return job
 
 
 @router.post("/analysis-jobs/{job_id}/cancel", response_model=dict)
 async def cancel_analysis_job(
     job_id: str,
+    current_user: AuthUserRead = Depends(get_current_user),
     analysis_service: AnalysisService = Depends(get_analysis_service),
+    project_service: ProjectService = Depends(get_project_service),
 ) -> dict:
-    job = await analysis_service.cancel_analysis_job(job_id)
+    job = await analysis_service.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Analysis job not found.")
-    return job
+    if not current_user.isSuperAdmin:
+        project = await project_service.get_project(job["projectId"], organization_id=current_user.organizationId)
+        if not project:
+            raise HTTPException(status_code=404, detail="Analysis job not found.")
+    updated = await analysis_service.cancel_analysis_job(job_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Analysis job not found.")
+    return updated
 
 
 @router.patch("/cases/{case_id}/analysis-results/{result_id}/selection", response_model=dict)
@@ -68,13 +86,18 @@ async def patch_analysis_selection(
     case_id: str,
     result_id: str,
     body: dict,
-    _: AuthUserRead = Depends(require_manager),
+    current_user: AuthUserRead = Depends(require_manager),
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
 ) -> dict:
-    project = await project_service.get_project(case_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
+    # Verify the result belongs to this project
+    analysis_result = await analysis_service.get_analysis_result_by_id(result_id)
+    if not analysis_result or analysis_result.projectId != case_id:
+        raise HTTPException(status_code=404, detail="Analysis result not found.")
     changes: dict = {}
     if "polygon" in body:
         changes["selectedRepairPolygon"] = body["polygon"]
@@ -93,9 +116,17 @@ async def patch_analysis_selection(
 async def retry_analysis_job(
     job_id: str,
     background_tasks: BackgroundTasks,
-    _: AuthUserRead = Depends(require_manager),
+    current_user: AuthUserRead = Depends(require_manager),
     analysis_service: AnalysisService = Depends(get_analysis_service),
+    project_service: ProjectService = Depends(get_project_service),
 ) -> AnalysisTriggerResponse:
+    original_job = await analysis_service.get_job(job_id)
+    if not original_job:
+        raise HTTPException(status_code=404, detail="Analysis job not found.")
+    if not current_user.isSuperAdmin:
+        project = await project_service.get_project(original_job["projectId"], organization_id=current_user.organizationId)
+        if not project:
+            raise HTTPException(status_code=404, detail="Analysis job not found.")
     new_job = await analysis_service.retry_job(job_id)
     if not new_job:
         raise HTTPException(status_code=404, detail="Analysis job not found.")

@@ -38,16 +38,16 @@ class PricebookService:
     def __init__(self, repository: PricebookRepository):
         self.repository = repository
 
-    async def list_pricebooks(self) -> list[PricebookRead]:
-        pricebooks = await self.repository.list_pricebooks()
+    async def list_pricebooks(self, organization_id: str) -> list[PricebookRead]:
+        pricebooks = await self.repository.list_pricebooks(organization_id)
         return [to_pricebook_read(item) for item in pricebooks]
 
-    async def create_pricebook(self, payload: PricebookCreate) -> PricebookRead:
-        pricebook = await self.repository.create_pricebook(payload.model_dump())
+    async def create_pricebook(self, payload: PricebookCreate, organization_id: str) -> PricebookRead:
+        pricebook = await self.repository.create_pricebook(payload.model_dump(), organization_id)
         return to_pricebook_read(pricebook)
 
-    async def list_pricebook_items(self, pricebook_id: str) -> list[PricebookItemRead] | None:
-        pricebook, items = await self.repository.list_pricebook_items(pricebook_id)
+    async def list_pricebook_items(self, pricebook_id: str, organization_id: str) -> list[PricebookItemRead] | None:
+        pricebook, items = await self.repository.list_pricebook_items(pricebook_id, organization_id)
         if not pricebook:
             return None
         return [to_pricebook_item_read(item) for item in items]

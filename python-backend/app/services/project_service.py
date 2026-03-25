@@ -327,8 +327,8 @@ class ProjectService:
         self.repository.session.add_all(duplicated_photos)
         await self.repository.session.commit()
 
-    async def get_project(self, project_id: str) -> Project | None:
-        return await self.repository.get_project(project_id)
+    async def get_project(self, project_id: str, *, organization_id: str | None = None) -> Project | None:
+        return await self.repository.get_project(project_id, organization_id=organization_id)
 
     async def list_projects(
         self,
@@ -340,8 +340,8 @@ class ProjectService:
         projects = await self.repository.list_projects(organization_id=organization_id, status=status, search=search)
         return [build_project_summary(project) for project in projects]
 
-    async def get_project_detail(self, project_id: str) -> ProjectDetail | None:
-        project = await self.repository.get_project(project_id)
+    async def get_project_detail(self, project_id: str, *, organization_id: str | None = None) -> ProjectDetail | None:
+        project = await self.repository.get_project(project_id, organization_id=organization_id)
         if not project:
             return None
         return build_project_detail(project)
@@ -363,8 +363,8 @@ class ProjectService:
             source=payload.source or "mobile",  # intentional business default — mobile is the canonical source for new projects
         )
 
-    async def duplicate_project(self, project_id: str, payload: ProjectDuplicateRequest) -> Project | None:
-        source_project = await self.repository.get_project(project_id)
+    async def duplicate_project(self, project_id: str, payload: ProjectDuplicateRequest, *, organization_id: str | None = None) -> Project | None:
+        source_project = await self.repository.get_project(project_id, organization_id=organization_id)
         if not source_project:
             return None
 
@@ -390,8 +390,8 @@ class ProjectService:
         await self._duplicate_project_photos(source_project, duplicated_project)
         return await self.repository.get_project(duplicated_project.id)
 
-    async def mark_project_sent(self, project_id: str) -> ProjectDetail | None:
-        project = await self.repository.get_project(project_id)
+    async def mark_project_sent(self, project_id: str, *, organization_id: str | None = None) -> ProjectDetail | None:
+        project = await self.repository.get_project(project_id, organization_id=organization_id)
         if not project:
             return None
 
@@ -407,8 +407,8 @@ class ProjectService:
         updated = await self.repository.update_project(project, {"status": "sent"})
         return build_project_detail(updated)
 
-    async def update_proposal_draft(self, project_id: str, payload: dict) -> ProjectDetail | None:
-        project = await self.repository.get_project(project_id)
+    async def update_proposal_draft(self, project_id: str, payload: dict, *, organization_id: str | None = None) -> ProjectDetail | None:
+        project = await self.repository.get_project(project_id, organization_id=organization_id)
         if not project:
             return None
 
@@ -417,8 +417,8 @@ class ProjectService:
         project.proposal_draft = updated_draft
         return build_project_detail(project)
 
-    async def create_final_proposal(self, project_id: str) -> ProjectDetail | None:
-        project = await self.repository.get_project(project_id)
+    async def create_final_proposal(self, project_id: str, *, organization_id: str | None = None) -> ProjectDetail | None:
+        project = await self.repository.get_project(project_id, organization_id=organization_id)
         if not project:
             return None
 
@@ -443,8 +443,8 @@ class ProjectService:
         self.export_service.create_final_proposal_exports(case_detail=detail)
         return detail
 
-    async def update_project(self, project_id: str, payload: dict) -> ProjectDetail | None:
-        project = await self.repository.get_project(project_id)
+    async def update_project(self, project_id: str, payload: dict, *, organization_id: str | None = None) -> ProjectDetail | None:
+        project = await self.repository.get_project(project_id, organization_id=organization_id)
         if not project:
             return None
 

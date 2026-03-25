@@ -8,7 +8,7 @@ class SupplierRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def list_suppliers(self, *, organization_id: str = "org_1", active_only: bool = True) -> list[Supplier]:
+    async def list_suppliers(self, *, organization_id: str, active_only: bool = True) -> list[Supplier]:
         query = select(Supplier).where(Supplier.organization_id == organization_id)
         if active_only:
             query = query.where(Supplier.is_active.is_(True))
@@ -18,6 +18,15 @@ class SupplierRepository:
 
     async def get_supplier(self, supplier_id: str) -> Supplier | None:
         return await self.session.get(Supplier, supplier_id)
+
+    async def get_supplier_in_org(self, supplier_id: str, organization_id: str) -> Supplier | None:
+        result = await self.session.execute(
+            select(Supplier).where(
+                Supplier.id == supplier_id,
+                Supplier.organization_id == organization_id,
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def update_supplier(
         self,

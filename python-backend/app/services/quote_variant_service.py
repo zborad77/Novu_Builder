@@ -85,7 +85,7 @@ class QuoteVariantService:
     async def recalculate_quote_variants(self, project_id: str) -> list[QuoteVariantRead] | None:
         project = await self.repository.get_project(project_id)
         analysis = await self.repository.get_latest_analysis(project_id)
-        pricing_profile = await self.repository.get_default_pricing_profile()
+        pricing_profile = await self.repository.get_default_pricing_profile(project.organization_id)
 
         if not project or not analysis or not pricing_profile:
             return None
