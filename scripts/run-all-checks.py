@@ -2,12 +2,15 @@
 Runner — executes all check scripts in order and prints a summary.
 
 Checks (in order):
-  1. test-env.py             — required environment variables
-  2. test-db-connection.py   — database TCP connectivity
+  1. test-env.py              — required environment variables
+  2. test-db-connection.py    — database TCP connectivity
   3. test-redis-connection.py — Redis TCP connectivity (SKIP if REDIS_URL not set)
-  4. test-backend-startup.py — HTTP health endpoint + JSON validation
-  5. test-api-contracts.py   — HTTP contract smoke test
-  6. test-import-startup.py  — backend import + create_app() check
+  4. test-backend-startup.py  — HTTP health endpoint + JSON validation
+  5. test-api-contracts.py    — HTTP contract smoke test
+  6. test-auth-validation.py  — auth (401/403) and validation (422) contracts
+  7. test-business-flow.py        — create case → trigger analysis → verify result
+  8. test-performance-baseline.py — p95 latency check for critical endpoints
+  9. test-import-startup.py       — backend import + create_app() check
 
 Exit code:
   0 — all checks passed or skipped
@@ -31,7 +34,10 @@ CHECKS = [
     {"name": "redis-connection", "script": "test-redis-connection.py", "extra_args": []},
     {"name": "backend-startup",  "script": "test-backend-startup.py",  "extra_args": ["--url", "{url}"]},
     {"name": "api-contracts",    "script": "test-api-contracts.py",    "extra_args": ["--url", "{url}"]},
-    {"name": "import-startup",   "script": "test-import-startup.py",   "extra_args": []},
+    {"name": "auth-validation",  "script": "test-auth-validation.py",  "extra_args": ["--url", "{url}"]},
+    {"name": "business-flow",       "script": "test-business-flow.py",        "extra_args": ["--url", "{url}"]},
+    {"name": "performance-baseline", "script": "test-performance-baseline.py", "extra_args": ["--url", "{url}"]},
+    {"name": "import-startup",       "script": "test-import-startup.py",       "extra_args": []},
 ]
 
 

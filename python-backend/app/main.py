@@ -1,10 +1,12 @@
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, text
 import structlog
@@ -138,6 +140,20 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_file, settings.log_error_file)
 
+    # Error monitoring — opt-in via SENTRY_DSN env var
+    if settings.sentry_dsn:
+        try:
+            import sentry_sdk
+            sentry_sdk.init(
+                dsn=settings.sentry_dsn,
+                environment=settings.app_env,
+                traces_sample_rate=0.0,   # disable performance tracing — errors only
+                profiles_sample_rate=0.0,
+            )
+            logger.info("sentry.initialized", environment=settings.app_env)
+        except ImportError:
+            logger.warning("sentry.disabled", reason="sentry-sdk not installed")
+
     # In production, hide docs endpoints and disable debug tracebacks
     docs_url = "/docs" if settings.app_debug else None
     redoc_url = "/redoc" if settings.app_debug else None
@@ -195,7 +211,8 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         duration_ms = round((time.monotonic() - start) * 1000)
         if not request.url.path.startswith("/mock-storage"):
-            logger.info(
+            log = logger.error if response.status_code >= 500 else logger.info
+            log(
                 "http.request",
                 method=request.method,
                 path=request.url.path,
@@ -203,6 +220,36 @@ def create_app() -> FastAPI:
                 duration_ms=duration_ms,
             )
         return response
+
+    @app.middleware("http")
+    async def request_id_context(request: Request, call_next) -> Response:
+        """Bind a unique request ID to the structlog context for this request."""
+        structlog.contextvars.clear_contextvars()
+        request_id = request.headers.get("X-Request-ID") or uuid4().hex
+        structlog.contextvars.bind_contextvars(request_id=request_id)
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.error(
+            "http.unhandled_exception",
+            exc_type=type(exc).__name__,
+            method=request.method,
+            path=request.url.path,
+            exc_info=True,
+        )
+        if settings.sentry_dsn:
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_exception(exc)
+            except ImportError:
+                pass
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"},
+        )
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
     app.mount("/mock-storage", StaticFiles(directory=STORAGE_ROOT), name="mock-storage")

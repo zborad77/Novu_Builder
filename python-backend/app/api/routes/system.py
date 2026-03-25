@@ -10,6 +10,12 @@ from app.models import AnalysisJob
 router = APIRouter()
 
 
+@router.get("/alive")
+async def alive() -> dict:
+    """Liveness probe — confirms the process is running. No DB, no latency."""
+    return {"status": "alive"}
+
+
 @router.get("/")
 async def root() -> dict:
     settings = get_settings()

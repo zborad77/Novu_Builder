@@ -8,6 +8,7 @@ Aktivace:
 Model: claude-opus-4-6 (výchozí), lze přebít přes CLAUDE_VISION_MODEL v .env.
 """
 
+import asyncio
 import base64
 import json
 import os
@@ -18,6 +19,11 @@ import structlog
 from app.core.config import get_settings
 
 logger = structlog.get_logger(__name__)
+
+# Retry on transient API errors; permanent errors (auth, bad request) are not retried.
+_RETRY_DELAYS = (2.0, 4.0)  # pause between attempt 1→2 and 2→3  (3 attempts total)
+# HTTP client timeout — tighter than the job-level timeout in analysis_service.py
+_HTTP_TIMEOUT = 120.0
 
 _SYSTEM_PROMPT = """
 Jsi expert na stavební diagnostiku a cenové nabídky.
@@ -156,7 +162,7 @@ class ClaudeVisionProvider:
                 "Spusť: pip install anthropic"
             ) from exc
 
-        client = anthropic.AsyncAnthropic(api_key=self._api_key)
+        client = anthropic.AsyncAnthropic(api_key=self._api_key, timeout=_HTTP_TIMEOUT)
         content = self._build_content(project, photos)
 
         logger.info(
@@ -166,13 +172,31 @@ class ClaudeVisionProvider:
             project_id=project.get("id"),
         )
 
-        response = await client.messages.create(
-            model=self._model,
-            max_tokens=4096,
-            thinking={"type": "adaptive"},
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": content}],
-        )
+        response = None
+        for attempt, delay in enumerate((*_RETRY_DELAYS, None), start=1):
+            try:
+                response = await client.messages.create(
+                    model=self._model,
+                    max_tokens=4096,
+                    thinking={"type": "adaptive"},
+                    system=_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": content}],
+                )
+                break
+            except (
+                anthropic.APIConnectionError,
+                anthropic.RateLimitError,
+                anthropic.InternalServerError,
+            ) as exc:
+                if delay is None:
+                    raise  # exhausted retries
+                logger.warning(
+                    "claude.vision.retry",
+                    attempt=attempt,
+                    delay_s=delay,
+                    error=str(exc),
+                )
+                await asyncio.sleep(delay)
 
         # Najdi text blok (přeskočí thinking bloky)
         result_text = ""

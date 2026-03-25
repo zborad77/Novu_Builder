@@ -1,3 +1,4 @@
+import asyncio
 import json
 import traceback
 from datetime import UTC, datetime
@@ -12,6 +13,8 @@ from app.repositories.photo_repository import PhotoRepository
 from app.schemas.analysis import AnalysisResultRead, parse_json_field
 
 logger = structlog.get_logger(__name__)
+
+_JOB_TIMEOUT_SECONDS = 180  # 3 minutes — generous upper bound for vision API calls
 
 
 def to_read_model(result: AnalysisResult) -> AnalysisResultRead:
@@ -102,7 +105,16 @@ class AnalysisService:
 
     async def create_job(self, project: Project, *, user_id: str | None = None,
                          parent_job_id: str | None = None, retry_count: int = 0) -> AnalysisJob:
-        """Creates a queued job record and returns immediately."""
+        """Creates a queued job record, or returns an existing active job (idempotent)."""
+        existing = await self.repository.get_active_job_for_project(project.id)
+        if existing:
+            logger.info(
+                "worker.job_already_active",
+                project_id=project.id,
+                existing_job_id=existing.id,
+                status=existing.status,
+            )
+            return existing
         return await self.repository.create_queued_job(
             project, user_id=user_id,
             parent_job_id=parent_job_id,
@@ -156,17 +168,20 @@ class AnalysisService:
             )
 
             try:
-                analysis = await run_project_analysis(
-                    provider_key=self.provider_key,
-                    project={
-                        "id": project.id,
-                        "title": project.title,
-                        "description": project.description,
-                        "address_label": project.address_label,
-                        "property_type": project.property_type,
-                        "repair_scope": project.repair_scope,
-                    },
-                    photos=photos,
+                analysis = await asyncio.wait_for(
+                    run_project_analysis(
+                        provider_key=self.provider_key,
+                        project={
+                            "id": project.id,
+                            "title": project.title,
+                            "description": project.description,
+                            "address_label": project.address_label,
+                            "property_type": project.property_type,
+                            "repair_scope": project.repair_scope,
+                        },
+                        photos=photos,
+                    ),
+                    timeout=_JOB_TIMEOUT_SECONDS,
                 )
 
                 await repo.complete_job_with_result(job, project, analysis)
@@ -203,6 +218,13 @@ class AnalysisService:
                     log.info("worker.quote_variants_recalculated")
                 except Exception as qe:
                     log.warning("worker.quote_variants_failed", error=str(qe))
+
+            except asyncio.TimeoutError:
+                job.status = "failed"
+                job.error_message = f"Analysis timed out after {_JOB_TIMEOUT_SECONDS}s."
+                job.finished_at = datetime.now(UTC)
+                await session.commit()
+                log.error("worker.job_timeout", timeout_seconds=_JOB_TIMEOUT_SECONDS)
 
             except Exception as exc:
                 tb = traceback.format_exc()

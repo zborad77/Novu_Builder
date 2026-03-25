@@ -14,3 +14,4 @@ bcrypt
 PyJWT
 anthropic
 slowapi
+sentry-sdk[fastapi]

@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      APP_ENV: development
+      DATABASE_URL: sqlite+aiosqlite:///./ci-test.db
+      JWT_SECRET: ci-test-secret-do-not-use-in-production
+      STORAGE_ROOT: /tmp/novu-ci-storage
+      AI_ANALYSIS_PROVIDER: mock
+      LOG_LEVEL: WARNING
+      # REDIS_URL intentionally unset — test-redis-connection.py skips when missing
+      # SENTRY_DSN intentionally unset — error monitoring off in CI
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: python-backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r python-backend/requirements.txt
+
+      # --- No server needed ---
+
+      - name: Import & startup check
+        run: python scripts/test-import-startup.py
+
+      - name: Environment check
+        run: python scripts/test-env.py
+
+      # --- Start backend ---
+
+      - name: Start backend
+        run: |
+          cd python-backend
+          uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          echo $! > /tmp/backend.pid
+
+      - name: Wait for backend to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8000/alive > /dev/null 2>&1; then
+              echo "Backend ready after ${i}s"
+              exit 0
+            fi
+            echo "  waiting... (${i}s)"
+            sleep 1
+          done
+          echo "Backend did not start in 30s"
+          exit 1
+
+      # --- Live checks ---
+
+      - name: DB connectivity
+        run: python scripts/test-db-connection.py
+
+      - name: Health endpoint
+        run: python scripts/test-backend-startup.py --url http://127.0.0.1:8000
+
+      - name: API contracts
+        run: python scripts/test-api-contracts.py --url http://127.0.0.1:8000
+
+      - name: Auth & validation contracts
+        run: python scripts/test-auth-validation.py --url http://127.0.0.1:8000
+
+      - name: Business flow (create case → analysis → verify)
+        run: python scripts/test-business-flow.py --url http://127.0.0.1:8000

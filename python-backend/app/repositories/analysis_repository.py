@@ -27,6 +27,19 @@ class AnalysisRepository:
     async def get_analysis_job(self, job_id: str) -> AnalysisJob | None:
         return await self.session.get(AnalysisJob, job_id)
 
+    async def get_active_job_for_project(self, project_id: str) -> AnalysisJob | None:
+        """Return the most recent queued or running job for this project, or None."""
+        result = await self.session.execute(
+            select(AnalysisJob)
+            .where(
+                AnalysisJob.project_id == project_id,
+                AnalysisJob.status.in_(("queued", "running")),
+            )
+            .order_by(AnalysisJob.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def list_analysis_jobs_by_project_id(self, project_id: str) -> list[AnalysisJob]:
         result = await self.session.execute(
             select(AnalysisJob)

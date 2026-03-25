@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     rate_limit_login: str = Field(default="10/minute", alias="RATE_LIMIT_LOGIN")
     rate_limit_admin: str = Field(default="60/minute", alias="RATE_LIMIT_ADMIN")
 
+    # Error monitoring — leave empty to disable Sentry (default: off)
+    sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
