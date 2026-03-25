@@ -7,7 +7,6 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, text
 import structlog
 
@@ -251,8 +250,9 @@ def create_app() -> FastAPI:
             content={"detail": "Internal server error"},
         )
 
+    from app.api.routes.storage import router as storage_router
     app.include_router(api_router, prefix=settings.api_v1_prefix)
-    app.mount("/mock-storage", StaticFiles(directory=STORAGE_ROOT), name="mock-storage")
+    app.include_router(storage_router)
     return app
 
 
