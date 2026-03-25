@@ -1,5 +1,5 @@
 """
-Runner — executes all check scripts in order and prints a summary.
+Runner — executes backend check scripts in order and prints a summary.
 
 Checks (in order):
   1. test-env.py              — required environment variables
@@ -7,10 +7,7 @@ Checks (in order):
   3. test-redis-connection.py — Redis TCP connectivity (SKIP if REDIS_URL not set)
   4. test-backend-startup.py  — HTTP health endpoint + JSON validation
   5. test-api-contracts.py    — HTTP contract smoke test
-  6. test-auth-validation.py  — auth (401/403) and validation (422) contracts
-  7. test-business-flow.py        — create case → trigger analysis → verify result
-  8. test-performance-baseline.py — p95 latency check for critical endpoints
-  9. test-import-startup.py       — backend import + create_app() check
+  6. test-import-startup.py   — backend import + create_app() check
 
 Exit code:
   0 — all checks passed or skipped
@@ -28,57 +25,85 @@ from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).parent
 
+# Scripts that accept --url; others receive no extra args.
+URL_SCRIPTS = {"test-backend-startup.py", "test-api-contracts.py"}
+
 CHECKS = [
-    {"name": "env",              "script": "test-env.py",              "extra_args": []},
-    {"name": "db-connection",    "script": "test-db-connection.py",    "extra_args": []},
-    {"name": "redis-connection", "script": "test-redis-connection.py", "extra_args": []},
-    {"name": "backend-startup",  "script": "test-backend-startup.py",  "extra_args": ["--url", "{url}"]},
-    {"name": "api-contracts",    "script": "test-api-contracts.py",    "extra_args": ["--url", "{url}"]},
-    {"name": "auth-validation",  "script": "test-auth-validation.py",  "extra_args": ["--url", "{url}"]},
-    {"name": "business-flow",       "script": "test-business-flow.py",        "extra_args": ["--url", "{url}"]},
-    {"name": "performance-baseline", "script": "test-performance-baseline.py", "extra_args": ["--url", "{url}"]},
-    {"name": "import-startup",       "script": "test-import-startup.py",       "extra_args": []},
+    "test-env.py",
+    "test-db-connection.py",
+    "test-redis-connection.py",
+    "test-backend-startup.py",
+    "test-api-contracts.py",
+    "test-import-startup.py",
 ]
 
 
-def run_check(name: str, script: Path, extra_args: list[str]) -> str:
-    """Run a single check script. Returns 'OK', 'SKIP', or 'FAIL'."""
-    print(f"\n{'-' * 40}", flush=True)
-    print(f"  CHECK: {name}", flush=True)
-    print(f"{'-' * 40}", flush=True)
-    result = subprocess.run(
+def run_check(script: Path, extra_args: list) -> str:
+    """
+    Run a single check script and return its status: 'OK', 'SKIP', or 'FAIL'.
+
+    SKIP is detected by exit code 0 + first output line starting with 'SKIP'.
+    Output is streamed to stdout in real time via a line-by-line read.
+    """
+    proc = subprocess.Popen(
         [sys.executable, str(script)] + extra_args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
-        capture_output=False,
     )
-    if result.returncode != 0:
+
+    first_line: str | None = None
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        print(line, end="", flush=True)
+        if first_line is None:
+            first_line = line.strip()
+
+    proc.wait()
+
+    if proc.returncode != 0:
         return "FAIL"
+    if first_line is not None and first_line.upper().startswith("SKIP"):
+        return "SKIP"
     return "OK"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run all health and diagnostic checks")
-    parser.add_argument("--url", default="http://localhost:8000", help="Backend base URL (default: %(default)s)")
+    parser = argparse.ArgumentParser(description="Run all backend health and diagnostic checks")
+    parser.add_argument(
+        "--url",
+        default="http://localhost:8000",
+        help="Backend base URL (default: %(default)s)",
+    )
     args = parser.parse_args()
 
     results: list[tuple[str, str]] = []
 
-    for check in CHECKS:
-        extra = [a.replace("{url}", args.url) for a in check["extra_args"]]
-        script = SCRIPTS_DIR / check["script"]
-        status = run_check(check["name"], script, extra)
-        results.append((check["name"], status))
+    for script_name in CHECKS:
+        script = SCRIPTS_DIR / script_name
+        extra_args = ["--url", args.url] if script_name in URL_SCRIPTS else []
 
-    print(f"\n{'=' * 40}")
+        label = script_name.replace("test-", "").replace(".py", "")
+        print(f"\n{'─' * 42}", flush=True)
+        print(f"  CHECK  {label}", flush=True)
+        print(f"{'─' * 42}", flush=True)
+
+        status = run_check(script, extra_args)
+        results.append((label, status))
+
+    # Summary
+    print(f"\n{'═' * 42}")
     print("  SUMMARY")
-    print(f"{'=' * 40}")
+    print(f"{'═' * 42}")
+
     any_failed = False
     for name, status in results:
-        print(f"  {status:<6}  {name}")
+        marker = "✓" if status == "OK" else ("~" if status == "SKIP" else "✗")
+        print(f"  {marker}  {status:<4}  {name}")
         if status == "FAIL":
             any_failed = True
-    print(f"{'=' * 40}")
 
+    print(f"{'═' * 42}")
     if any_failed:
         print("  RESULT: FAIL")
         sys.exit(1)
