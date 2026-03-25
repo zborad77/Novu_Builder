@@ -22,9 +22,14 @@ import sys
 import argparse
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 CHECK_TIMEOUT = 15  # seconds per check
+
+RETRY_SCRIPTS = {"test-db-connection.py", "test-redis-connection.py"}
+RETRY_MAX = 3       # total attempts (1 initial + 2 retries)
+RETRY_DELAY = 1     # seconds between attempts
 
 SCRIPTS_DIR = Path(__file__).parent
 
@@ -86,6 +91,30 @@ def run_check(script: Path, extra_args: list) -> tuple[str, str]:
     return "OK", ""
 
 
+def run_check_with_retry(script: Path, extra_args: list, max_attempts: int) -> tuple[str, str]:
+    """
+    Wrap run_check with up to max_attempts total attempts.
+
+    Retry only on FAIL or timeout; SKIP stops immediately (no retry).
+    detail reflects attempt count when more than one attempt was needed.
+    """
+    for attempt in range(1, max_attempts + 1):
+        status, detail = run_check(script, extra_args)
+        if status != "FAIL":
+            # OK or SKIP — done, no retry needed
+            if attempt > 1:
+                detail = f"ok on attempt {attempt}/{max_attempts}"
+            return status, detail
+        if attempt < max_attempts:
+            print(f"  [retry {attempt}/{max_attempts - 1}: waiting {RETRY_DELAY}s ...]", flush=True)
+            time.sleep(RETRY_DELAY)
+
+    # All attempts exhausted
+    detail_parts = [detail] if detail else []
+    detail_parts.append(f"failed after {max_attempts} attempts")
+    return "FAIL", ", ".join(detail_parts)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run all backend health and diagnostic checks")
     parser.add_argument(
@@ -106,7 +135,10 @@ def main() -> None:
         print(f"  CHECK  {label}", flush=True)
         print(f"{'─' * 42}", flush=True)
 
-        status, detail = run_check(script, extra_args)
+        if script_name in RETRY_SCRIPTS:
+            status, detail = run_check_with_retry(script, extra_args, RETRY_MAX)
+        else:
+            status, detail = run_check(script, extra_args)
         results.append((label, status, detail))
 
     # Summary
