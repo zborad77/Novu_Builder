@@ -21,7 +21,10 @@ Usage:
 import sys
 import argparse
 import subprocess
+import threading
 from pathlib import Path
+
+CHECK_TIMEOUT = 15  # seconds per check
 
 SCRIPTS_DIR = Path(__file__).parent
 
@@ -38,12 +41,16 @@ CHECKS = [
 ]
 
 
-def run_check(script: Path, extra_args: list) -> str:
+def run_check(script: Path, extra_args: list) -> tuple[str, str]:
     """
-    Run a single check script and return its status: 'OK', 'SKIP', or 'FAIL'.
+    Run a single check script and return (status, detail).
+
+    status: 'OK', 'SKIP', or 'FAIL'
+    detail: '' for normal results, 'timeout {CHECK_TIMEOUT}s' on timeout
 
     SKIP is detected by exit code 0 + first output line starting with 'SKIP'.
-    Output is streamed to stdout in real time via a line-by-line read.
+    Output is streamed to stdout in real time via a reader thread so that
+    proc.wait(timeout=...) can enforce the per-check deadline.
     """
     proc = subprocess.Popen(
         [sys.executable, str(script)] + extra_args,
@@ -52,20 +59,33 @@ def run_check(script: Path, extra_args: list) -> str:
         text=True,
     )
 
-    first_line: str | None = None
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        print(line, end="", flush=True)
-        if first_line is None:
-            first_line = line.strip()
+    first_line: list[str | None] = [None]
 
-    proc.wait()
+    def _read() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+            if first_line[0] is None:
+                first_line[0] = line.strip()
+
+    reader = threading.Thread(target=_read, daemon=True)
+    reader.start()
+
+    try:
+        proc.wait(timeout=CHECK_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        reader.join(timeout=2)
+        print(f"\n  [TIMEOUT: check exceeded {CHECK_TIMEOUT}s — process killed]", flush=True)
+        return "FAIL", f"timeout {CHECK_TIMEOUT}s"
+
+    reader.join()
 
     if proc.returncode != 0:
-        return "FAIL"
-    if first_line is not None and first_line.upper().startswith("SKIP"):
-        return "SKIP"
-    return "OK"
+        return "FAIL", ""
+    if first_line[0] is not None and first_line[0].upper().startswith("SKIP"):
+        return "SKIP", ""
+    return "OK", ""
 
 
 def main() -> None:
@@ -88,8 +108,8 @@ def main() -> None:
         print(f"  CHECK  {label}", flush=True)
         print(f"{'─' * 42}", flush=True)
 
-        status = run_check(script, extra_args)
-        results.append((label, status))
+        status, detail = run_check(script, extra_args)
+        results.append((label, status, detail))
 
     # Summary
     print(f"\n{'═' * 42}")
@@ -97,9 +117,10 @@ def main() -> None:
     print(f"{'═' * 42}")
 
     any_failed = False
-    for name, status in results:
+    for name, status, detail in results:
         marker = "✓" if status == "OK" else ("~" if status == "SKIP" else "✗")
-        print(f"  {marker}  {status:<4}  {name}")
+        suffix = f"  [{detail}]" if detail else ""
+        print(f"  {marker}  {status:<4}  {name}{suffix}")
         if status == "FAIL":
             any_failed = True
 
