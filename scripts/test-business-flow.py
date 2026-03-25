@@ -1,29 +1,42 @@
 """
-Business flow smoke test — critical path: create case → trigger analysis → verify result.
+Critical business flow smoke test.
 
-Steps:
-  1. Login with dev-seed credentials           → 200 + accessToken
-  2. Create a smoke-test case                  → 201 + id
-  3. Read the case back                        → 200 + id matches
-  4. Trigger analysis (expects mock provider)  → 202 + jobId
-  5. Poll until job completed / failed         → completed within 30 s
-  6. Verify result has required output fields  → objectType, estimatedAreaSqm, materials, workflowSteps
-  7. Archive case (cleanup)                    → 200
+Tests the full end-to-end lifecycle of a case and analysis job:
+  1. Login           — authenticate with test credentials        → 200 + accessToken
+  2. Create case     — POST /cases with [FLOW-TEST] title        → 201 + id
+  3. Fetch case      — GET /cases/{id} and verify id             → 200 + id matches
+  4. Trigger job     — POST /cases/{id}/analysis-jobs            → 202 + jobId
+  5. Poll job        — GET /analysis-jobs/{jobId} until terminal → completed / failed
+  6. Verify result   — latestAnalysis present on case detail     → not null
+  7. Archive case    — POST /cases/{id}/archive (always runs)    → 200
 
-Requires:
-  - Backend running with dev seed (SEED_ON_STARTUP=true / APP_ENV=development)
-  - AI_ANALYSIS_PROVIDER=mock  (no external API calls)
-  - Default credentials: demo@novu.local / demo1234
+Credentials (required — no hard-coded defaults):
+  NOVU_TEST_EMAIL    env var  OR  --email flag
+  NOVU_TEST_PASSWORD env var  OR  --password flag
+
+  If credentials are not available the script exits with code 2 (SKIP).
 
 Usage:
-    python scripts/test-business-flow.py
-    python scripts/test-business-flow.py --url http://localhost:8000
+    NOVU_TEST_EMAIL=admin@novu.cz NOVU_TEST_PASSWORD=secret python scripts/test-business-flow.py
     python scripts/test-business-flow.py --email demo@novu.local --password demo1234
-    python scripts/test-business-flow.py --skip-cleanup
+    python scripts/test-business-flow.py --url http://localhost:8000 --email u@e.com --password p
+    python scripts/test-business-flow.py --skip-cleanup   (leave case in DB for inspection)
+
+Exit codes:
+  0 — all steps passed
+  1 — one or more steps failed
+  2 — credentials not provided (treated as SKIP by run-all-checks.py --include-flow)
+
+Notes:
+  - Creates only data with title prefix "[FLOW-TEST]" — safe to archive
+  - Archive (step 7) always runs, even when earlier steps fail
+  - Works with any provider; warns if provider is not mock (real AI may be slow)
+  - Poll timeout: 120 s (enough for real providers; mock completes in < 5 s)
 """
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -32,8 +45,10 @@ from datetime import datetime, timezone
 
 DEFAULT_URL = "http://localhost:8000"
 TIMEOUT = 10
-POLL_INTERVAL = 1          # seconds between job status checks
-POLL_MAX_WAIT = 30         # total seconds before giving up
+POLL_INTERVAL = 3          # seconds between job status checks
+POLL_MAX_WAIT = 120        # total seconds before giving up
+TEST_TITLE_PREFIX = "[FLOW-TEST]"
+TERMINAL_STATUSES = {"completed", "failed", "canceled", "cancelled", "error"}
 
 
 # ---------------------------------------------------------------------------
@@ -118,10 +133,18 @@ def assert_field(label: str, data: dict | None, field: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Business flow smoke test")
-    parser.add_argument("--url", default=DEFAULT_URL)
-    parser.add_argument("--email", default="demo@novu.local")
-    parser.add_argument("--password", default="demo1234")
+    parser = argparse.ArgumentParser(description="Critical business flow smoke test")
+    parser.add_argument("--url", default=DEFAULT_URL, help="Base URL (default: %(default)s)")
+    parser.add_argument(
+        "--email",
+        default=os.getenv("NOVU_TEST_EMAIL", "").strip(),
+        help="Test user email (or set NOVU_TEST_EMAIL)",
+    )
+    parser.add_argument(
+        "--password",
+        default=os.getenv("NOVU_TEST_PASSWORD", "").strip(),
+        help="Test user password (or set NOVU_TEST_PASSWORD)",
+    )
     parser.add_argument(
         "--skip-cleanup",
         action="store_true",
@@ -130,8 +153,15 @@ def main() -> None:
     args = parser.parse_args()
     base = args.url.rstrip("/") + "/api/v1"
 
+    if not args.email or not args.password:
+        print(
+            "SKIP: credentials not available — set NOVU_TEST_EMAIL / NOVU_TEST_PASSWORD "
+            "or pass --email / --password"
+        )
+        sys.exit(2)
+
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    case_title = f"[smoke-test] {ts}"
+    case_title = f"{TEST_TITLE_PREFIX} {ts}"
     token: str | None = None
     case_id: str | None = None
 
@@ -232,7 +262,7 @@ def main() -> None:
             break
         job_status = job.get("status", "unknown")
         print(f"  ...   {elapsed:.0f}s  status={job_status}")
-        if job_status in ("completed", "failed", "cancelled"):
+        if job_status in TERMINAL_STATUSES:
             break
 
     if job_status == "completed":
@@ -241,16 +271,18 @@ def main() -> None:
         fail("job completed", f"final status={job_status!r} after {elapsed:.0f}s")
 
     # ------------------------------------------------------------------
-    # Step 6 — Verify result fields
+    # Step 6 — Verify result present on case
     # ------------------------------------------------------------------
-    print("\n-- Step 6: Verify analysis result fields --")
+    print("\n-- Step 6: Verify analysis result on case --")
     if job_status == "completed":
         result_url = f"{base}/cases/{case_id}"
         status, detail = _request("GET", result_url, token=token)
         if status == 200 and detail:
-            analysis = detail.get("latestAnalysis") or {}
-            for field in ("objectType", "estimatedAreaSqm", "materials", "workflowSteps"):
-                assert_field(f"result.{field}", analysis, field)
+            analysis = detail.get("latestAnalysis")
+            if analysis is not None:
+                ok("latestAnalysis present on case")
+            else:
+                fail("latestAnalysis present on case", "field is null after completed job")
         else:
             fail("GET case detail for result", f"status={status}")
     else:

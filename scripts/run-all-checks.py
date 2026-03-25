@@ -10,6 +10,11 @@ Checks (in order):
   6. test-auth-validation.py  — auth (401/403) and validation (422) contracts
   7. test-import-startup.py   — backend import + create_app() check
 
+Optional (not included in default run):
+  8. test-business-flow.py    — full case + analysis job lifecycle (needs credentials)
+     Enabled with: --include-flow
+     Credentials: NOVU_TEST_EMAIL / NOVU_TEST_PASSWORD  or  --email / --password
+
 Exit code:
   0 — all checks passed or skipped
   1 — one or more checks failed
@@ -17,6 +22,7 @@ Exit code:
 Usage:
     python scripts/run-all-checks.py
     python scripts/run-all-checks.py --url http://localhost:8000
+    python scripts/run-all-checks.py --include-flow --email u@e.com --password secret
 """
 
 import sys
@@ -28,16 +34,21 @@ import threading
 import time
 from pathlib import Path
 
-CHECK_TIMEOUT = 15  # seconds per check
+CHECK_TIMEOUT = 15   # seconds per check (default)
+FLOW_TIMEOUT  = 180  # seconds for the business-flow check (long-running)
 
 RETRY_SCRIPTS = {"test-db-connection.py", "test-redis-connection.py"}
-RETRY_MAX = 3       # total attempts (1 initial + 2 retries)
-RETRY_DELAY = 1     # seconds between attempts
+RETRY_MAX = 3        # total attempts (1 initial + 2 retries)
+RETRY_DELAY = 1      # seconds between attempts
 
 SCRIPTS_DIR = Path(__file__).parent
 
 # Scripts that accept --url; others receive no extra args.
-URL_SCRIPTS = {"test-backend-startup.py", "test-api-contracts.py", "test-auth-validation.py"}
+URL_SCRIPTS = {"test-backend-startup.py", "test-api-contracts.py", "test-auth-validation.py",
+               "test-business-flow.py"}
+
+# Scripts that additionally accept --email / --password
+CRED_SCRIPTS = {"test-business-flow.py"}
 
 CHECKS = [
     "test-env.py",
@@ -47,6 +58,7 @@ CHECKS = [
     "test-api-contracts.py",
     "test-auth-validation.py",
     "test-import-startup.py",
+    # test-business-flow.py is NOT here — only added when --include-flow is passed
 ]
 
 
@@ -68,7 +80,7 @@ def _extract_reason(lines: list[str], status: str) -> str:
     return ""
 
 
-def run_check(script: Path, extra_args: list) -> tuple[str, str]:
+def run_check(script: Path, extra_args: list, timeout: int = CHECK_TIMEOUT) -> tuple[str, str]:
     """
     Run a single check script and return (status, detail).
 
@@ -77,7 +89,7 @@ def run_check(script: Path, extra_args: list) -> tuple[str, str]:
       1 → FAIL
       2 → SKIP
 
-    detail: '' for normal results, 'timeout {CHECK_TIMEOUT}s' on timeout.
+    detail: '' for normal results, 'timeout {N}s' on timeout.
     Output is streamed to stdout in real time via a reader thread so that
     proc.wait(timeout=...) can enforce the per-check deadline.
     """
@@ -100,12 +112,12 @@ def run_check(script: Path, extra_args: list) -> tuple[str, str]:
     reader.start()
 
     try:
-        proc.wait(timeout=CHECK_TIMEOUT)
+        proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
         reader.join(timeout=2)
-        print(f"\n  [TIMEOUT: check exceeded {CHECK_TIMEOUT}s — process killed]", flush=True)
-        return "FAIL", f"timeout {CHECK_TIMEOUT}s"
+        print(f"\n  [TIMEOUT: check exceeded {timeout}s — process killed]", flush=True)
+        return "FAIL", f"timeout {timeout}s"
 
     reader.join()
 
@@ -152,13 +164,37 @@ def main() -> None:
         action="store_true",
         help="Output results as JSON instead of human-readable text",
     )
+    parser.add_argument(
+        "--include-flow",
+        action="store_true",
+        help="Also run test-business-flow.py (requires NOVU_TEST_EMAIL / NOVU_TEST_PASSWORD or --email/--password)",
+    )
+    parser.add_argument(
+        "--email",
+        default="",
+        help="Test user email for --include-flow (or set NOVU_TEST_EMAIL)",
+    )
+    parser.add_argument(
+        "--password",
+        default="",
+        help="Test user password for --include-flow (or set NOVU_TEST_PASSWORD)",
+    )
     args = parser.parse_args()
+
+    checks = list(CHECKS)
+    if args.include_flow:
+        checks.append("test-business-flow.py")
 
     results: list[tuple[str, str]] = []
 
-    for script_name in CHECKS:
+    for script_name in checks:
         script = SCRIPTS_DIR / script_name
         extra_args = ["--url", args.url] if script_name in URL_SCRIPTS else []
+        if script_name in CRED_SCRIPTS:
+            if args.email:
+                extra_args += ["--email", args.email]
+            if args.password:
+                extra_args += ["--password", args.password]
 
         label = script_name.replace("test-", "").replace(".py", "")
         print(f"\n{'─' * 42}", flush=True)
@@ -167,6 +203,8 @@ def main() -> None:
 
         if script_name in RETRY_SCRIPTS:
             status, detail = run_check_with_retry(script, extra_args, RETRY_MAX)
+        elif script_name == "test-business-flow.py":
+            status, detail = run_check(script, extra_args, timeout=FLOW_TIMEOUT)
         else:
             status, detail = run_check(script, extra_args)
         results.append((label, status, detail))
