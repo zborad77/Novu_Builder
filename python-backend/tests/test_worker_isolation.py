@@ -218,8 +218,8 @@ class TestRetryJobOrgScope:
         assert "organization_id is not None" in src
 
     @pytest.mark.asyncio
-    async def test_retry_job_returns_none_when_project_not_in_org(self):
-        """retry_job returns None if project is not in the given organization."""
+    async def test_retry_job_raises_403_when_project_not_in_org(self):
+        """retry_job raises HTTPException(403) if project is not in the given organization."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
         from app.repositories.photo_repository import PhotoRepository
@@ -248,9 +248,10 @@ class TestRetryJobOrgScope:
                 provider_key="mock",
             )
 
-            result = await service.retry_job("job_old", organization_id="org_B")
+            with pytest.raises(HTTPException) as exc_info:
+                await service.retry_job("job_old", organization_id="org_B")
 
-        assert result is None
+        assert exc_info.value.status_code == 403
         mock_inner_repo.get_project_in_org.assert_called_once_with("prj_A", "org_B")
 
 

@@ -268,7 +268,7 @@ class AnalysisService:
         """
         Creates a new queued job that is a retry of the given job.
         The caller (route) must schedule execute_job via BackgroundTasks.
-        Returns the new job or None if original not found.
+        Raises HTTPException on missing org_id (400), org mismatch (403), or job not found (404).
         """
         if organization_id is None:
             logger.error("SECURITY_EVENT: missing_org_id", job_id=job_id)
@@ -276,7 +276,7 @@ class AnalysisService:
 
         original = await self.repository.get_analysis_job(job_id)
         if not original:
-            return None
+            raise HTTPException(status_code=404, detail="Analysis job not found.")
 
         async with AsyncSessionFactory() as session:
             repo_inner = AnalysisRepository(session)
@@ -286,7 +286,7 @@ class AnalysisService:
                 project = await session.get(Project, original.project_id)
             if not project:
                 logger.warning("SECURITY_EVENT: org_mismatch", project_id=original.project_id, organization_id=organization_id)
-                return None
+                raise HTTPException(status_code=403, detail="Project not found.")
 
         new_retry_count = (original.retry_count or 0) + 1
         new_job = await self.repository.create_queued_job(
