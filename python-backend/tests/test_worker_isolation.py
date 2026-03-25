@@ -306,20 +306,53 @@ class TestWorkerExplicitFail:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Missing organization_id at runtime — guard raises HTTP 400
+# 5. organization_id=None — superadmin bypass, not a guard
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestMissingOrgIdGuard:
+class TestSuperadminBypass:
+
+    def test_execute_job_org_id_none_uses_session_get_path(self):
+        """When organization_id=None (superadmin), execute_job uses session.get — no org filter."""
+        from app.services.analysis_service import AnalysisService
+        src = inspect.getsource(AnalysisService.execute_job)
+        # Superadmin path must exist and be reachable
+        assert "session.get(Project, project_id)" in src
+        assert "if organization_id is not None:" in src
+        # 400 guard must not exist for None case
+        assert "status_code=400" not in src
+
+    def test_retry_job_org_id_none_uses_session_get_path(self):
+        """When organization_id=None (superadmin), retry_job uses session.get — no org filter."""
+        from app.services.analysis_service import AnalysisService
+        src = inspect.getsource(AnalysisService.retry_job)
+        assert "session.get(Project, original.project_id)" in src
+        assert "if organization_id is not None:" in src
+        # 400 guard must not exist for None case
+        assert "status_code=400" not in src
+
+    def test_execute_job_logs_superadmin_bypass(self):
+        """execute_job logs when organization_id=None to keep bypass observable."""
+        from app.services.analysis_service import AnalysisService
+        src = inspect.getsource(AnalysisService.execute_job)
+        assert "superadmin_bypass" in src
+
+    def test_retry_job_logs_superadmin_bypass(self):
+        """retry_job logs when organization_id=None to keep bypass observable."""
+        from app.services.analysis_service import AnalysisService
+        src = inspect.getsource(AnalysisService.retry_job)
+        assert "superadmin_bypass" in src
 
     @pytest.mark.asyncio
-    async def test_execute_job_raises_400_when_org_id_missing(self):
-        """execute_job with organization_id=None marks job failed and raises HTTP 400."""
+    async def test_execute_job_without_org_id_proceeds_to_session_get(self):
+        """With organization_id=None, execute_job does not raise 400 — uses session.get path."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
         from app.repositories.photo_repository import PhotoRepository
 
         job = _make_job("job_1", "prj_A")
         session = AsyncMock()
+        # session.get returns None → project not found → job fails with 403
+        session.get = AsyncMock(return_value=None)
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
         mock_repo.get_analysis_job = AsyncMock(return_value=job)
@@ -338,27 +371,31 @@ class TestMissingOrgIdGuard:
                     photo_repository=AsyncMock(spec=PhotoRepository),
                     provider_key="mock",
                 )
-
+                # Must raise 403 (project not found), NOT 400 (missing org guard)
                 with pytest.raises(HTTPException) as exc_info:
                     await service.execute_job("job_1", "prj_A", organization_id=None)
 
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 403  # project not found, not 400 guard
         assert job.status == "failed"
 
     @pytest.mark.asyncio
-    async def test_retry_job_raises_400_when_org_id_missing(self):
-        """retry_job with organization_id=None raises HTTP 400 immediately."""
+    async def test_retry_job_without_org_id_proceeds_to_job_lookup(self):
+        """With organization_id=None, retry_job does not raise 400 — fetches original job."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
         from app.repositories.photo_repository import PhotoRepository
 
+        mock_repo = AsyncMock(spec=AnalysisRepository)
+        # Job not found → 404 (not 400 guard)
+        mock_repo.get_analysis_job = AsyncMock(return_value=None)
+
         service = AnalysisService(
-            repository=AsyncMock(spec=AnalysisRepository),
+            repository=mock_repo,
             photo_repository=AsyncMock(spec=PhotoRepository),
             provider_key="mock",
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await service.retry_job("job_old", organization_id=None)
+            await service.retry_job("job_nonexistent", organization_id=None)
 
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 404  # job not found, not 400 guard

@@ -56,11 +56,28 @@ async def list_companies(
 async def create_company(
     payload: CompanyCreate,
     service: CompanyService = Depends(get_company_service),
-    _: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_superadmin),
 ) -> CompanyRead:
     if not payload.name.strip():
         raise HTTPException(status_code=400, detail="Company name is required.")
-    return await service.create_company(payload)
+    company = await service.create_company(payload)
+    try:
+        admin_obj = await service.session.get(User, current_user.id)
+        service.session.add(AuditLog(
+            id=uuid4().hex,
+            user_id=current_user.id,
+            user_email=admin_obj.email if admin_obj else None,
+            org_id=admin_obj.organization_id if admin_obj else None,
+            action="admin.company.create",
+            resource_type="company",
+            resource_id=company.id,
+            detail=json.dumps({"name": company.name}),
+            created_at=datetime.now(UTC),
+        ))
+        await service.session.commit()
+    except Exception:
+        pass
+    return company
 
 
 @router.get("/companies/{company_id}", response_model=CompanyRead)
@@ -80,11 +97,27 @@ async def patch_company(
     company_id: str,
     payload: CompanyPatch,
     service: CompanyService = Depends(get_company_service),
-    _: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_superadmin),
 ) -> CompanyRead:
     updated = await service.patch_company(company_id, payload)
     if not updated:
         raise HTTPException(status_code=404, detail="Company not found.")
+    try:
+        admin_obj = await service.session.get(User, current_user.id)
+        service.session.add(AuditLog(
+            id=uuid4().hex,
+            user_id=current_user.id,
+            user_email=admin_obj.email if admin_obj else None,
+            org_id=admin_obj.organization_id if admin_obj else None,
+            action="admin.company.patch",
+            resource_type="company",
+            resource_id=company_id,
+            detail=json.dumps({"changes": payload.model_dump(exclude_unset=True)}),
+            created_at=datetime.now(UTC),
+        ))
+        await service.session.commit()
+    except Exception:
+        pass
     return updated
 
 
@@ -104,7 +137,7 @@ async def list_users(
 async def create_user(
     payload: AdminUserCreate,
     service: CompanyService = Depends(get_company_service),
-    _: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_superadmin),
 ) -> AdminUserRead:
     if payload.password:
         try:
@@ -117,6 +150,22 @@ async def create_user(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not user:
         raise HTTPException(status_code=404, detail="Organization not found.")
+    try:
+        admin_obj = await service.session.get(User, current_user.id)
+        service.session.add(AuditLog(
+            id=uuid4().hex,
+            user_id=current_user.id,
+            user_email=admin_obj.email if admin_obj else None,
+            org_id=admin_obj.organization_id if admin_obj else None,
+            action="admin.user.create",
+            resource_type="user",
+            resource_id=user.id,
+            detail=json.dumps({"email": user.email, "role": user.role, "target_org": user.organizationId}),
+            created_at=datetime.now(UTC),
+        ))
+        await service.session.commit()
+    except Exception:
+        pass
     return user
 
 
@@ -137,11 +186,27 @@ async def patch_user(
     user_id: str,
     payload: AdminUserPatch,
     service: CompanyService = Depends(get_company_service),
-    _: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_superadmin),
 ) -> AdminUserRead:
     updated = await service.patch_user(user_id, payload)
     if not updated:
         raise HTTPException(status_code=404, detail="User not found.")
+    try:
+        admin_obj = await service.session.get(User, current_user.id)
+        service.session.add(AuditLog(
+            id=uuid4().hex,
+            user_id=current_user.id,
+            user_email=admin_obj.email if admin_obj else None,
+            org_id=admin_obj.organization_id if admin_obj else None,
+            action="admin.user.patch",
+            resource_type="user",
+            resource_id=user_id,
+            detail=json.dumps({"changes": payload.model_dump(exclude_unset=True, exclude={"password"})}),
+            created_at=datetime.now(UTC),
+        ))
+        await service.session.commit()
+    except Exception:
+        pass
     return updated
 
 
@@ -261,10 +326,9 @@ async def admin_retry_job(
     analysis_service: AnalysisService = Depends(get_analysis_service),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
-    new_job = await analysis_service.retry_job(job_id)
-    if not new_job:
-        raise HTTPException(status_code=404, detail="Analysis job not found.")
-    background_tasks.add_task(analysis_service.execute_job, new_job.id, new_job.project_id)
+    # organization_id=None is intentional: superadmin operates across all orgs
+    new_job = await analysis_service.retry_job(job_id, organization_id=None)
+    background_tasks.add_task(analysis_service.execute_job, new_job.id, new_job.project_id, None)
 
     # Write explicit audit log entry with retry context
     original = await session.get(AnalysisJob, job_id)

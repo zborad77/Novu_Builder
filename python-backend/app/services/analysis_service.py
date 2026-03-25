@@ -157,8 +157,8 @@ class AnalysisService:
                 await _fail_job_and_raise(job, session, message=f"Job {job_id} belongs to project {job.project_id}, not {project_id}.", status_code=403, detail="Job project mismatch.")
 
             if organization_id is None:
-                log.error("SECURITY_EVENT: missing_org_id", job_id=job_id, project_id=project_id)
-                await _fail_job_and_raise(job, session, message="organization_id required.", status_code=400, detail="organization_id required")
+                # Superadmin path — no org filter; observable via log
+                log.info("worker.superadmin_bypass", job_id=job_id, project_id=project_id)
 
             if organization_id is not None:
                 project = await repo.get_project_in_org(project_id, organization_id)
@@ -275,8 +275,8 @@ class AnalysisService:
         Raises HTTPException on missing org_id (400), org mismatch (403), or job not found (404).
         """
         if organization_id is None:
-            logger.error("SECURITY_EVENT: missing_org_id", job_id=job_id)
-            raise HTTPException(status_code=400, detail="organization_id required")
+            # Superadmin path — no org filter; observable via log
+            logger.info("worker.superadmin_bypass", job_id=job_id)
 
         original = await self.repository.get_analysis_job(job_id)
         if not original:
