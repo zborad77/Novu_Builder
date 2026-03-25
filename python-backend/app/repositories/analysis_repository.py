@@ -33,8 +33,26 @@ class AnalysisRepository:
     async def get_analysis_result(self, analysis_result_id: str) -> AnalysisResult | None:
         return await self.session.get(AnalysisResult, analysis_result_id)
 
+    async def get_analysis_result_in_org(self, result_id: str, organization_id: str) -> AnalysisResult | None:
+        """Fetch an AnalysisResult only if its parent project belongs to organization_id."""
+        result = await self.session.execute(
+            select(AnalysisResult)
+            .join(Project, Project.id == AnalysisResult.project_id)
+            .where(AnalysisResult.id == result_id, Project.organization_id == organization_id)
+        )
+        return result.scalar_one_or_none()
+
     async def get_analysis_job(self, job_id: str) -> AnalysisJob | None:
         return await self.session.get(AnalysisJob, job_id)
+
+    async def get_analysis_job_in_org(self, job_id: str, organization_id: str) -> AnalysisJob | None:
+        """Fetch an AnalysisJob only if its parent project belongs to organization_id."""
+        result = await self.session.execute(
+            select(AnalysisJob)
+            .join(Project, Project.id == AnalysisJob.project_id)
+            .where(AnalysisJob.id == job_id, Project.organization_id == organization_id)
+        )
+        return result.scalar_one_or_none()
 
     async def get_active_job_for_project(self, project_id: str) -> AnalysisJob | None:
         """Return the most recent queued or running job for this project, or None."""

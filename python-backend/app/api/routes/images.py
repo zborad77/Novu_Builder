@@ -1,8 +1,11 @@
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
 from app.api.deps import get_current_user, get_photo_service, get_project_service
 from app.schemas.auth import AuthUserRead
+
+logger = structlog.get_logger(__name__)
 from app.schemas.photo import (
     AnalysisReferencePhotoResponse,
     DeletePhotoResponse,
@@ -93,6 +96,12 @@ async def get_image_preview(
     org_id = None if current_user.isSuperAdmin else current_user.organizationId
     project = await project_service.get_project(photo.projectId, organization_id=org_id)
     if not project:
+        if not current_user.isSuperAdmin:
+            logger.warning(
+                "SECURITY_EVENT: cross_tenant_access_denied",
+                resource="image_preview", resource_id=image_id,
+                user_id=current_user.id, org_id=current_user.organizationId,
+            )
         raise HTTPException(status_code=404, detail="Image not found.")
     preview_url = photo.variants.preview.url or photo.url
     return RedirectResponse(url=preview_url)

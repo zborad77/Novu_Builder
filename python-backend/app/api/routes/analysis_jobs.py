@@ -1,3 +1,4 @@
+import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
 from app.api.deps import get_analysis_service, get_current_user, get_project_service, require_manager
@@ -5,6 +6,8 @@ from app.schemas.analysis import AnalysisTriggerResponse
 from app.schemas.auth import AuthUserRead
 from app.services.analysis_service import AnalysisService
 from app.services.project_service import ProjectService
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["analysis-jobs"])
 
@@ -54,13 +57,16 @@ async def get_analysis_job(
     analysis_service: AnalysisService = Depends(get_analysis_service),
     project_service: ProjectService = Depends(get_project_service),
 ) -> dict:
-    job = await analysis_service.get_job(job_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    job = await analysis_service.get_job(job_id, organization_id=org_id)
     if not job:
+        if not current_user.isSuperAdmin:
+            logger.warning(
+                "SECURITY_EVENT: cross_tenant_access_denied",
+                resource="analysis_job", resource_id=job_id,
+                user_id=current_user.id, org_id=current_user.organizationId,
+            )
         raise HTTPException(status_code=404, detail="Analysis job not found.")
-    if not current_user.isSuperAdmin:
-        project = await project_service.get_project(job["projectId"], organization_id=current_user.organizationId)
-        if not project:
-            raise HTTPException(status_code=404, detail="Analysis job not found.")
     return job
 
 
@@ -71,15 +77,15 @@ async def cancel_analysis_job(
     analysis_service: AnalysisService = Depends(get_analysis_service),
     project_service: ProjectService = Depends(get_project_service),
 ) -> dict:
-    job = await analysis_service.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Analysis job not found.")
-    if not current_user.isSuperAdmin:
-        project = await project_service.get_project(job["projectId"], organization_id=current_user.organizationId)
-        if not project:
-            raise HTTPException(status_code=404, detail="Analysis job not found.")
-    updated = await analysis_service.cancel_analysis_job(job_id)
+    org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    updated = await analysis_service.cancel_analysis_job(job_id, organization_id=org_id)
     if not updated:
+        if not current_user.isSuperAdmin:
+            logger.warning(
+                "SECURITY_EVENT: cross_tenant_access_denied",
+                resource="analysis_job_cancel", resource_id=job_id,
+                user_id=current_user.id, org_id=current_user.organizationId,
+            )
         raise HTTPException(status_code=404, detail="Analysis job not found.")
     return updated
 
@@ -97,8 +103,8 @@ async def patch_analysis_selection(
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
-    # Verify the result belongs to this project
-    analysis_result = await analysis_service.get_analysis_result_by_id(result_id)
+    # Verify the result belongs to this project and org (org check already done above via project)
+    analysis_result = await analysis_service.get_analysis_result_by_id(result_id, organization_id=org_id)
     if not analysis_result or analysis_result.projectId != case_id:
         raise HTTPException(status_code=404, detail="Analysis result not found.")
     changes: dict = {}
@@ -123,14 +129,16 @@ async def retry_analysis_job(
     analysis_service: AnalysisService = Depends(get_analysis_service),
     project_service: ProjectService = Depends(get_project_service),
 ) -> AnalysisTriggerResponse:
-    original_job = await analysis_service.get_job(job_id)
-    if not original_job:
-        raise HTTPException(status_code=404, detail="Analysis job not found.")
-    if not current_user.isSuperAdmin:
-        project = await project_service.get_project(original_job["projectId"], organization_id=current_user.organizationId)
-        if not project:
-            raise HTTPException(status_code=404, detail="Analysis job not found.")
     org_id = None if current_user.isSuperAdmin else current_user.organizationId
+    original_job = await analysis_service.get_job(job_id, organization_id=org_id)
+    if not original_job:
+        if not current_user.isSuperAdmin:
+            logger.warning(
+                "SECURITY_EVENT: cross_tenant_access_denied",
+                resource="analysis_job_retry", resource_id=job_id,
+                user_id=current_user.id, org_id=current_user.organizationId,
+            )
+        raise HTTPException(status_code=404, detail="Analysis job not found.")
     new_job = await analysis_service.retry_job(
         job_id,
         organization_id=org_id,

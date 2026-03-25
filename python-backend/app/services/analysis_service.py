@@ -108,16 +108,24 @@ class AnalysisService:
         result = await self.repository.get_latest_analysis_result(project_id)
         return to_read_model(result) if result else None
 
-    async def get_analysis_result_by_id(self, analysis_result_id: str) -> AnalysisResultRead | None:
-        result = await self.repository.get_analysis_result(analysis_result_id)
+    async def get_analysis_result_by_id(
+        self, analysis_result_id: str, *, organization_id: str | None = None
+    ) -> AnalysisResultRead | None:
+        if organization_id is not None:
+            result = await self.repository.get_analysis_result_in_org(analysis_result_id, organization_id)
+        else:
+            result = await self.repository.get_analysis_result(analysis_result_id)
         return to_read_model(result) if result else None
 
     async def list_jobs(self, project_id: str) -> list[dict]:
         jobs = await self.repository.list_analysis_jobs_by_project_id(project_id)
         return [to_job_read(job) for job in jobs]
 
-    async def get_job(self, job_id: str) -> dict | None:
-        job = await self.repository.get_analysis_job(job_id)
+    async def get_job(self, job_id: str, *, organization_id: str | None = None) -> dict | None:
+        if organization_id is not None:
+            job = await self.repository.get_analysis_job_in_org(job_id, organization_id)
+        else:
+            job = await self.repository.get_analysis_job(job_id)
         return to_job_read(job) if job else None
 
     async def create_job(self, project: Project, *, user_id: str | None = None,
@@ -349,8 +357,11 @@ class AnalysisService:
         )
         return new_job
 
-    async def cancel_analysis_job(self, job_id: str) -> dict | None:
-        job = await self.repository.get_analysis_job(job_id)
+    async def cancel_analysis_job(self, job_id: str, *, organization_id: str | None = None) -> dict | None:
+        if organization_id is not None:
+            job = await self.repository.get_analysis_job_in_org(job_id, organization_id)
+        else:
+            job = await self.repository.get_analysis_job(job_id)
         if not job:
             return None
         if job.status == "completed":
