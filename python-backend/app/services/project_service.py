@@ -283,23 +283,24 @@ class ProjectService:
             if duplicated_ai_key and source_photo.ai_input_storage_key:
                 copy_storage_file(source_storage_key=source_photo.ai_input_storage_key, target_storage_key=duplicated_ai_key)
 
-            # TODO: if build_duplicated_storage_key returns None, the photo record is persisted with
-            # storage_key="" — a ghost record with no backing file. Photo retrieval will 404.
-            # Fixing this properly requires redesigning the duplication flow (out of scope here).
-            dup_storage_key = duplicated_storage_key or ""
-            if not dup_storage_key and source_photo.storage_key:
+            if not duplicated_storage_key:
+                # Intentional fail-safe skip: if the target storage_key cannot be resolved,
+                # do not persist a photo record with storage_key="" — that would create a DB
+                # reference to a non-existent file and cause 404 errors on photo retrieval.
+                # Remaining valid photos continue to be duplicated normally.
                 logger.warning(
-                    "project.duplicate.photo_storage_key_empty",
+                    "photo.duplicate.storage_key_unresolvable",
                     source_photo_id=source_photo.id,
-                    source_storage_key=source_photo.storage_key,
+                    source_project_id=source_project.id,
                     duplicated_project_id=duplicated_project.id,
                 )
+                continue
 
             duplicated_photos.append(
                 ProjectPhoto(
                     id=duplicated_photo_id,
                     project_id=duplicated_project.id,
-                    storage_key=dup_storage_key,
+                    storage_key=duplicated_storage_key,
                     preview_storage_key=duplicated_preview_key,
                     ai_input_storage_key=duplicated_ai_key,
                     original_filename=source_photo.original_filename,
