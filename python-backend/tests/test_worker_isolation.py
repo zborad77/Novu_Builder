@@ -5,6 +5,7 @@ cannot access projects from a different organization.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, call
 import inspect
+from fastapi import HTTPException
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -299,3 +300,62 @@ class TestWorkerExplicitFail:
         from app.api.routes.analysis_jobs import retry_analysis_job
         src = inspect.getsource(retry_analysis_job)
         assert "retry_job(job_id, organization_id=org_id)" in src
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Missing organization_id at runtime — guard raises HTTP 400
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestMissingOrgIdGuard:
+
+    @pytest.mark.asyncio
+    async def test_execute_job_raises_400_when_org_id_missing(self):
+        """execute_job with organization_id=None marks job failed and raises HTTP 400."""
+        from app.services.analysis_service import AnalysisService
+        from app.repositories.analysis_repository import AnalysisRepository
+        from app.repositories.photo_repository import PhotoRepository
+
+        job = _make_job("job_1", "prj_A")
+        session = AsyncMock()
+
+        mock_repo = AsyncMock(spec=AnalysisRepository)
+        mock_repo.get_analysis_job = AsyncMock(return_value=job)
+
+        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory:
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=session)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_factory.return_value = mock_ctx
+
+            with patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo), \
+                 patch("app.services.analysis_service.PhotoRepository"):
+
+                service = AnalysisService(
+                    repository=AsyncMock(spec=AnalysisRepository),
+                    photo_repository=AsyncMock(spec=PhotoRepository),
+                    provider_key="mock",
+                )
+
+                with pytest.raises(HTTPException) as exc_info:
+                    await service.execute_job("job_1", "prj_A", organization_id=None)
+
+        assert exc_info.value.status_code == 400
+        assert job.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_retry_job_raises_400_when_org_id_missing(self):
+        """retry_job with organization_id=None raises HTTP 400 immediately."""
+        from app.services.analysis_service import AnalysisService
+        from app.repositories.analysis_repository import AnalysisRepository
+        from app.repositories.photo_repository import PhotoRepository
+
+        service = AnalysisService(
+            repository=AsyncMock(spec=AnalysisRepository),
+            photo_repository=AsyncMock(spec=PhotoRepository),
+            provider_key="mock",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await service.retry_job("job_old", organization_id=None)
+
+        assert exc_info.value.status_code == 400

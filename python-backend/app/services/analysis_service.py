@@ -4,6 +4,7 @@ import traceback
 from datetime import UTC, datetime
 
 import structlog
+from fastapi import HTTPException
 
 from app.ai import describe_analysis_provider, run_project_analysis
 from app.db.session import AsyncSessionFactory
@@ -140,7 +141,16 @@ class AnalysisService:
                 job.finished_at = datetime.now(UTC)
                 await session.commit()
                 log.error("worker.job_project_mismatch", job_project_id=job.project_id, expected_project_id=project_id)
+                log.warning("SECURITY_EVENT: job_project_mismatch", job_id=job_id, job_project_id=job.project_id, requested_project_id=project_id)
                 return
+
+            if organization_id is None:
+                job.status = "failed"
+                job.error_message = "organization_id required."
+                job.finished_at = datetime.now(UTC)
+                await session.commit()
+                log.error("SECURITY_EVENT: missing_org_id", job_id=job_id, project_id=project_id)
+                raise HTTPException(status_code=400, detail="organization_id required")
 
             if organization_id is not None:
                 project = await repo.get_project_in_org(project_id, organization_id)
@@ -153,6 +163,7 @@ class AnalysisService:
                 job.finished_at = datetime.now(UTC)
                 await session.commit()
                 log.error("worker.project_not_found", organization_id=organization_id)
+                log.warning("SECURITY_EVENT: org_mismatch", project_id=project_id, organization_id=organization_id)
                 return
 
             job.status = "running"
@@ -259,6 +270,10 @@ class AnalysisService:
         The caller (route) must schedule execute_job via BackgroundTasks.
         Returns the new job or None if original not found.
         """
+        if organization_id is None:
+            logger.error("SECURITY_EVENT: missing_org_id", job_id=job_id)
+            raise HTTPException(status_code=400, detail="organization_id required")
+
         original = await self.repository.get_analysis_job(job_id)
         if not original:
             return None
@@ -270,6 +285,7 @@ class AnalysisService:
             else:
                 project = await session.get(Project, original.project_id)
             if not project:
+                logger.warning("SECURITY_EVENT: org_mismatch", project_id=original.project_id, organization_id=organization_id)
                 return None
 
         new_retry_count = (original.retry_count or 0) + 1
