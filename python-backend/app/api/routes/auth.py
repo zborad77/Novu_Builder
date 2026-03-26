@@ -1,6 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.api.deps import get_auth_service, get_current_user
+from app.core.account_limiter import is_account_throttled, record_login_failure, reset_login_failures
 from app.core.config import get_settings
 from app.core.limiter import limiter
 from app.core.security import enforce_password_strength
@@ -27,9 +30,16 @@ async def login(
     payload: LoginRequest,
     service: AuthService = Depends(get_auth_service),
 ) -> LoginResponse:
+    settings = get_settings()
+    # R-08: per-account brute-force guard — checked before any DB work
+    if await is_account_throttled(payload.email, settings.redis_url):
+        raise HTTPException(status_code=429, detail="Too many failed attempts. Please try again later.")
     result = await service.login(email=payload.email, password=payload.password)
     if not result:
+        await record_login_failure(payload.email, settings.redis_url)
         raise HTTPException(status_code=401, detail="Invalid credentials.")
+    # Successful login — reset the per-account failure counter
+    await reset_login_failures(payload.email, settings.redis_url)
     access_token, refresh_token, user = result
     return LoginResponse(accessToken=access_token, refreshToken=refresh_token, user=user)
 
@@ -53,9 +63,12 @@ async def refresh(
 @router.post("/logout", response_model=LogoutResponse)
 async def logout(
     payload: LogoutRequest,
+    authorization: str | None = Header(None),
     service: AuthService = Depends(get_auth_service),
 ) -> LogoutResponse:
     await service.revoke_token(payload.refreshToken)
+    if authorization and authorization.startswith("Bearer "):
+        await service.revoke_token(authorization[7:])
     return LogoutResponse(message="Logged out.")
 
 
@@ -85,5 +98,8 @@ async def change_password(
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
     user.password_hash = hash_password(payload.newPassword)
+    # Truncate to seconds so tokens issued in the same second are not falsely rejected
+    # (JWT exp is integer-second precision; microseconds would cause off-by-one)
+    user.tokens_valid_after = datetime.now(UTC).replace(microsecond=0)
     await service.session.commit()
     return ChangePasswordResponse(message="Password changed.")

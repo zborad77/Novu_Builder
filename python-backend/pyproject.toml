@@ -1,0 +1,25 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+# F = pyflakes (unused imports, undefined names)
+# E = pycodestyle errors (import order, etc.)
+# W = pycodestyle warnings
+select = ["F", "E", "W"]
+# E501 = line too long (handled by formatter, not linter)
+ignore = ["E501"]
+
+[tool.mypy]
+# Pragmatic scope: check only security-critical core + auth route.
+# Pre-existing type errors in services/repositories are tracked separately.
+python_version = "3.12"
+ignore_missing_imports = true
+follow_imports = "silent"
+# Soft mode: catch obvious errors without strict null-safety requirements
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = ["app.core.*", "app.api.routes.auth"]
+# These modules are the R-28 mypy target — stricter checks here are welcome
+disallow_untyped_defs = false

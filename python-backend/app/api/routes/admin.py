@@ -3,12 +3,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_analysis_service, get_auth_service, require_admin_capability, require_superadmin
+from app.api.deps import get_analysis_service, get_job_queue, require_admin_capability, require_superadmin
+from app.worker.queue import enqueue_analysis_job
 from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.models.domain import AnalysisJob, AuditLog, Organization, Project, User
@@ -27,7 +28,6 @@ from app.core.limiter import limiter
 from app.core.security import enforce_password_strength
 from app.core.audit import write_audit_log
 from app.services.analysis_service import AnalysisService, to_job_read
-from app.services.auth_service import AuthService
 from app.services.company_service import CompanyService
 
 import structlog
@@ -386,17 +386,23 @@ async def get_admin_job(
 async def admin_retry_job(
     request: Request,
     job_id: str,
-    background_tasks: BackgroundTasks,
     current_user: AuthUserRead = Depends(require_admin_capability("admin:jobs")),
     analysis_service: AnalysisService = Depends(get_analysis_service),
     session: AsyncSession = Depends(get_db_session),
+    job_queue=Depends(get_job_queue),
 ) -> dict:
     # organization_id=None is intentional: superadmin operates across all orgs
     new_job = await analysis_service.retry_job(job_id, organization_id=None, is_superadmin_context=True)
-    background_tasks.add_task(
-        analysis_service.execute_job, new_job.id, new_job.project_id, None,
-        is_superadmin_context=True,
-    )
+    if job_queue is not None:
+        await enqueue_analysis_job(
+            job_queue,
+            job_id=new_job.id,
+            project_id=new_job.project_id,
+            organization_id=None,
+            is_superadmin_context=True,
+        )
+    else:
+        logger.warning("job_queue.unavailable", job_id=new_job.id, action="admin_retry_job")
 
     original = await session.get(AnalysisJob, job_id)
     await write_audit_log(

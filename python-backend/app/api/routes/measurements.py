@@ -4,11 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.deps import get_analysis_service, get_current_user, get_project_service, resolve_org_id
 from app.core.audit import log_cross_tenant_denied
 from app.schemas.auth import AuthUserRead
-
-logger = structlog.get_logger(__name__)
 from app.schemas.measurement import MeasurementRead, MeasurementUpsert
 from app.services.analysis_service import AnalysisService
 from app.services.project_service import ProjectService
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["measurements"])
 

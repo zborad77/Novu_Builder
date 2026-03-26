@@ -1,12 +1,13 @@
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.api.deps import get_analysis_service, get_current_user, get_project_service, require_manager, resolve_org_id
+from app.api.deps import get_analysis_service, get_current_user, get_job_queue, get_project_service, require_manager, resolve_org_id
 from app.core.audit import log_cross_tenant_denied
 from app.schemas.analysis import AnalysisTriggerResponse
 from app.schemas.auth import AuthUserRead
 from app.services.analysis_service import AnalysisService
 from app.services.project_service import ProjectService
+from app.worker.queue import enqueue_analysis_job
 
 logger = structlog.get_logger(__name__)
 
@@ -16,20 +17,27 @@ router = APIRouter(tags=["analysis-jobs"])
 @router.post("/cases/{case_id}/analysis-jobs", response_model=AnalysisTriggerResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_analysis_job(
     case_id: str,
-    background_tasks: BackgroundTasks,
+    request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
+    job_queue=Depends(get_job_queue),
 ) -> AnalysisTriggerResponse:
     org_id = resolve_org_id(current_user)
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
     job = await analysis_service.create_job(project, user_id=current_user.id)
-    background_tasks.add_task(
-        analysis_service.execute_job, job.id, case_id, org_id,
-        is_superadmin_context=current_user.isSuperAdmin,
-    )
+    if job_queue is not None:
+        await enqueue_analysis_job(
+            job_queue,
+            job_id=job.id,
+            project_id=case_id,
+            organization_id=org_id,
+            is_superadmin_context=current_user.isSuperAdmin,
+        )
+    else:
+        logger.warning("job_queue.unavailable", job_id=job.id, action="create_analysis_job")
     return AnalysisTriggerResponse(
         jobId=job.id,
         status=job.status,
@@ -125,10 +133,11 @@ async def patch_analysis_selection(
 @router.post("/analysis-jobs/{job_id}/retry", response_model=AnalysisTriggerResponse, status_code=status.HTTP_202_ACCEPTED)
 async def retry_analysis_job(
     job_id: str,
-    background_tasks: BackgroundTasks,
+    request: Request,
     current_user: AuthUserRead = Depends(require_manager),
     analysis_service: AnalysisService = Depends(get_analysis_service),
     project_service: ProjectService = Depends(get_project_service),
+    job_queue=Depends(get_job_queue),
 ) -> AnalysisTriggerResponse:
     org_id = resolve_org_id(current_user)
     original_job = await analysis_service.get_job(job_id, organization_id=org_id)
@@ -147,10 +156,16 @@ async def retry_analysis_job(
     )
     if not new_job:
         raise HTTPException(status_code=404, detail="Analysis job not found.")
-    background_tasks.add_task(
-        analysis_service.execute_job, new_job.id, new_job.project_id, org_id,
-        is_superadmin_context=current_user.isSuperAdmin,
-    )
+    if job_queue is not None:
+        await enqueue_analysis_job(
+            job_queue,
+            job_id=new_job.id,
+            project_id=new_job.project_id,
+            organization_id=org_id,
+            is_superadmin_context=current_user.isSuperAdmin,
+        )
+    else:
+        logger.warning("job_queue.unavailable", job_id=new_job.id, action="retry_analysis_job")
     return AnalysisTriggerResponse(
         jobId=new_job.id,
         status=new_job.status,

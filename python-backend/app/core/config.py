@@ -2,11 +2,12 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_JWT_SECRET = "change-me-in-production"
 
 def _env_files() -> list[Path]:
     """
@@ -35,7 +36,7 @@ class Settings(BaseSettings):
 
     app_name: str = Field(default="FotoNabidka API", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
-    app_debug: bool = Field(default=True, alias="APP_DEBUG")
+    app_debug: bool = Field(default=False, alias="APP_DEBUG")
     api_v1_prefix: str = Field(default="/api/v1", alias="API_V1_PREFIX")
     database_url: str = Field(default="sqlite+aiosqlite:///./python-backend.db", alias="DATABASE_URL")
     database_url_sync_override: str | None = Field(default=None, alias="DATABASE_URL_SYNC")
@@ -49,7 +50,8 @@ class Settings(BaseSettings):
     ai_analysis_provider: str = Field(default="mock", alias="AI_ANALYSIS_PROVIDER")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
-    jwt_secret: str = Field(default="change-me-in-production", alias="JWT_SECRET")
+    max_upload_size_mb: int = Field(default=20, alias="MAX_UPLOAD_SIZE_MB")
+    jwt_secret: str = Field(default=_DEFAULT_JWT_SECRET, alias="JWT_SECRET")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     jwt_access_token_expire_minutes: int = Field(default=60, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
     jwt_refresh_token_expire_days: int = Field(default=30, alias="JWT_REFRESH_TOKEN_EXPIRE_DAYS")
@@ -90,6 +92,24 @@ class Settings(BaseSettings):
             return self.database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
 
         return self.database_url
+
+    @model_validator(mode="after")
+    def _check_debug_in_production(self) -> "Settings":
+        if self.app_debug and self.app_env.lower() not in ("development", "test"):
+            raise ValueError(
+                f"APP_DEBUG=True is not allowed outside development. "
+                f"Set APP_DEBUG=False (current APP_ENV={self.app_env!r})."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_jwt_secret(self) -> "Settings":
+        if self.jwt_secret == _DEFAULT_JWT_SECRET and self.app_env.lower() != "development":
+            raise ValueError(
+                f"JWT_SECRET must be changed from the default value in non-development environments. "
+                f"Set a strong, unique JWT_SECRET (current APP_ENV={self.app_env!r})."
+            )
+        return self
 
     @property
     def is_development(self) -> bool:

@@ -40,8 +40,7 @@ class ProjectRepository:
         return result.scalars().all()
 
     async def get_project(self, project_id: str, *, organization_id: str | None = None) -> Project | None:
-        from app.models import AnalysisResult, QuoteVariant, QuoteItem
-        from sqlalchemy.orm import selectinload as sil
+        from app.models import QuoteVariant
         query = (
             select(Project)
             .options(

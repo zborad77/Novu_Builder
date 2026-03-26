@@ -14,7 +14,7 @@ import structlog
 
 from app.schemas.export import ExportRead
 from app.schemas.project import ProjectDetail, ProposalDraftField, ProposalDraftItem, ProposalDraftSection
-from app.storage.local_photo_storage import EXPORTS_ROOT, STORAGE_ROOT, sanitize_filename, write_storage_file
+from app.storage.local_photo_storage import EXPORTS_ROOT, STORAGE_ROOT, get_public_url, sanitize_filename, write_storage_file
 
 logger = structlog.get_logger(__name__)
 
@@ -63,7 +63,7 @@ def _export_from_file(export_id: str, file_path: Path) -> ExportRead:
         exportType=export_type,
         status="completed",
         fileName=file_name,
-        downloadUrl=f"/mock-storage/{relative_key}",
+        downloadUrl=get_public_url(relative_key),
         createdAt=mtime,
         completedAt=mtime,
     )
@@ -812,7 +812,7 @@ class ExportService:
             exportType=export_type,
             status="completed",
             fileName=f"{case_id}-{export_type}.pdf",
-            downloadUrl=f"/mock-storage/exports/{case_id}-{export_type}.pdf",
+            downloadUrl=get_public_url(f"exports/{case_id}-{export_type}.pdf"),
             createdAt=now,
             completedAt=now,
         )
@@ -840,7 +840,7 @@ class ExportService:
             exportType="quote-docx",
             status="completed",
             fileName=file_name,
-            downloadUrl=f"/mock-storage/{relative_storage_key.as_posix()}",
+            downloadUrl=get_public_url(relative_storage_key.as_posix()),
             createdAt=now,
             completedAt=now,
         )
@@ -868,7 +868,7 @@ class ExportService:
             exportType="proposal-docx",
             status="completed",
             fileName=file_name,
-            downloadUrl=f"/mock-storage/{relative_storage_key.as_posix()}",
+            downloadUrl=get_public_url(relative_storage_key.as_posix()),
             createdAt=now,
             completedAt=now,
         )
@@ -896,7 +896,7 @@ class ExportService:
             exportType="quote-pdf",
             status="completed",
             fileName=file_name,
-            downloadUrl=f"/mock-storage/{relative_storage_key.as_posix()}",
+            downloadUrl=get_public_url(relative_storage_key.as_posix()),
             createdAt=now,
             completedAt=now,
         )
@@ -926,7 +926,7 @@ class ExportService:
             exportType="case-zip",
             status="completed",
             fileName=file_name,
-            downloadUrl=f"/mock-storage/{relative_storage_key.as_posix()}",
+            downloadUrl=get_public_url(relative_storage_key.as_posix()),
             createdAt=now,
             completedAt=now,
         )

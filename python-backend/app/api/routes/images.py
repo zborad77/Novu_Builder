@@ -5,8 +5,6 @@ from fastapi.responses import RedirectResponse
 from app.api.deps import get_current_user, get_photo_service, get_project_service, resolve_org_id
 from app.core.audit import log_cross_tenant_denied
 from app.schemas.auth import AuthUserRead
-
-logger = structlog.get_logger(__name__)
 from app.schemas.photo import (
     AnalysisReferencePhotoResponse,
     DeletePhotoResponse,
@@ -15,10 +13,11 @@ from app.schemas.photo import (
     PhotoMoveRequest,
     PhotoUploadResponse,
     PrimaryPhotoResponse,
-    ProjectPhotoRead,
 )
 from app.services.photo_service import PhotoService
 from app.services.project_service import ProjectService
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["images"])
 
@@ -66,7 +65,10 @@ async def upload_case_images(
         if not upload_files:
             raise HTTPException(status_code=400, detail="files field is required.")
         for index, file in enumerate(upload_files):
-            uploaded.append(await photo_service.create_multipart_photo(project, file, is_primary=is_primary and index == 0))
+            try:
+                uploaded.append(await photo_service.create_multipart_photo(project, file, is_primary=is_primary and index == 0))
+            except ValueError as exc:
+                raise HTTPException(status_code=413, detail=str(exc)) from exc
     else:
         raise HTTPException(status_code=400, detail="This endpoint expects multipart/form-data files or a JSON body with a files array.")
 

@@ -290,13 +290,16 @@ class TestWorkerExplicitFail:
                 f"{name} has a default value — should be required"
 
     def test_routes_pass_org_id_to_execute_job(self):
-        """Both routes pass org_id explicitly to execute_job background task."""
+        """Both routes pass org_id explicitly to the job queue enqueue call (R-19)."""
         from app.api.routes.analysis_jobs import create_analysis_job, retry_analysis_job
         src_create = inspect.getsource(create_analysis_job)
-        assert "execute_job, job.id, case_id, org_id" in src_create
+        # R-19: org_id forwarded to enqueue_analysis_job, not BackgroundTasks
+        assert "enqueue_analysis_job" in src_create
+        assert "organization_id=org_id" in src_create
 
         src_retry = inspect.getsource(retry_analysis_job)
-        assert "execute_job, new_job.id, new_job.project_id, org_id" in src_retry
+        assert "enqueue_analysis_job" in src_retry
+        assert "organization_id=org_id" in src_retry
 
     def test_routes_pass_org_id_to_retry_job(self):
         """retry_analysis_job passes org_id to retry_job."""

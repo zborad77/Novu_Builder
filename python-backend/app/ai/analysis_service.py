@@ -4,7 +4,7 @@ from app.ai.providers.claude_vision_provider import ClaudeVisionProvider
 from app.ai.providers.mock_vision_provider import MockVisionProvider
 from app.ai.providers.openai_vision_provider import OpenAIVisionProvider
 from app.models import ProjectPhoto
-from app.storage.local_photo_storage import STORAGE_ROOT as _STORAGE_ROOT
+from app.storage.local_photo_storage import STORAGE_ROOT as _STORAGE_ROOT, get_public_url as _get_public_url
 
 
 PROVIDERS = {
@@ -59,7 +59,7 @@ def normalize_photo_inputs(photos: Sequence[ProjectPhoto], *, load_bytes: bool =
                 "lat": photo.exif_lat,
                 "lng": photo.exif_lng,
             },
-            "url": f"/mock-storage/{photo.storage_key}" if photo.storage_key else None,
+            "url": _get_public_url(photo.storage_key) if photo.storage_key else None,
         }
         if load_bytes:
             entry["_raw_bytes"] = _load_photo_bytes(photo)

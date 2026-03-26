@@ -106,8 +106,9 @@ class TestAdminRetryJobSuperadminBypass:
 
     def test_execute_job_scheduled_with_org_id_none(self):
         src = _source(admin_retry_job)
-        # Background task must also forward None so the worker takes superadmin path
-        assert "new_job.id, new_job.project_id, None" in src
+        # R-19: enqueue_analysis_job must forward organization_id=None (superadmin path)
+        assert "enqueue_analysis_job" in src
+        assert "organization_id=None" in src
 
     def test_no_400_guard_for_missing_org(self):
         src = _source(admin_retry_job)

@@ -140,7 +140,7 @@ def _classify(method: str, path: str) -> tuple[str, str | None, str | None]:
         if all(pp == p or pp.startswith("{") for pp, p in zip(pat_parts, parts)):
             # Extract resource id (second segment if it looks like an id)
             resource_type = pat_parts[0] if pat_parts else None
-            resource_id = parts[1] if len(parts) > 1 and not pat_parts[1].endswith("}") is False else None
+            resource_id = parts[1] if len(parts) > 1 and pat_parts[1].endswith("}") is not False else None
             # Simpler: just grab second part if it's not a keyword
             rid = None
             for i, (pp, p) in enumerate(zip(pat_parts, parts)):

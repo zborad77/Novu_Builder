@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
+from datetime import UTC, datetime
+
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
@@ -15,6 +17,11 @@ from app.core.audit import AuditMiddleware
 from app.core.config import get_settings
 from app.core.limiter import limiter
 from app.core.logging import configure_logging
+from app.core.metrics import (
+    HTTP_REQUEST_DURATION_SECONDS,
+    HTTP_REQUESTS_IN_PROGRESS,
+    HTTP_REQUESTS_TOTAL,
+)
 from app.db.base import Base
 from app.db.bootstrap import ensure_dev_seed
 from app.db.session import AsyncSessionFactory, engine
@@ -85,14 +92,33 @@ async def lifespan(app: FastAPI):
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
     else:
-        logger.info("db.schema_bootstrap", mode="alembic_upgrade_head", environment=settings.app_env)
+        # R-17: application startup must NOT run migrations.
+        # Run 'alembic upgrade head' (or use docker-entrypoint.sh) before starting the app.
+        # Here we only verify the DB is already at the expected head revision.
+        logger.info("db.schema_check", mode="version_guard", environment=settings.app_env)
         _BACKEND_ROOT = Path(__file__).resolve().parent.parent
         from alembic.config import Config as AlembicConfig
-        from alembic import command as alembic_command
+        from alembic.runtime.migration import MigrationContext
+        from alembic.script import ScriptDirectory
+
         alembic_cfg = AlembicConfig(str(_BACKEND_ROOT / "alembic.ini"))
         alembic_cfg.set_main_option("script_location", str(_BACKEND_ROOT / "alembic"))
-        alembic_command.upgrade(alembic_cfg, "head")
-        logger.info("db.migrations", status="head")
+
+        script_dir = ScriptDirectory.from_config(alembic_cfg)
+        expected_head = script_dir.get_current_head()
+
+        async with engine.connect() as connection:
+            current_rev = await connection.run_sync(
+                lambda sync_conn: MigrationContext.configure(sync_conn).get_current_revision()
+            )
+
+        if current_rev != expected_head:
+            raise RuntimeError(
+                f"Database schema is not at the expected revision. "
+                f"Current: {current_rev!r}, expected head: {expected_head!r}. "
+                f"Run 'alembic upgrade head' before starting the application."
+            )
+        logger.info("db.schema_check", status="ok", revision=current_rev)
 
     if settings.should_seed_on_startup:
         logger.info("db.seed_bootstrap", enabled=True, environment=settings.app_env)
@@ -115,6 +141,26 @@ async def lifespan(app: FastAPI):
         if deleted:
             logger.info("startup.revoked_tokens_cleanup", deleted=deleted)
 
+    # R-19: initialise Redis job queue — optional, fails open when Redis is absent
+    if settings.redis_url:
+        try:
+            from redis.asyncio import Redis as _Redis
+            _redis_client = _Redis.from_url(
+                settings.redis_url,
+                socket_connect_timeout=1.0,
+                socket_timeout=1.0,
+            )
+            await _redis_client.ping()  # type: ignore[misc]  # redis.asyncio stubs
+            app.state.job_queue = _redis_client
+            logger.info("job_queue.ready")
+        except Exception as exc:
+            logger.warning("job_queue.unavailable", error=str(exc))
+            app.state.job_queue = None
+    else:
+        app.state.job_queue = None
+        logger.info("job_queue.disabled", reason="REDIS_URL_not_set")
+
+    # R-36: recover stale running jobs — mark as failed so they don't block retries
     try:
         async with AsyncSessionFactory() as session:
             result = await session.execute(
@@ -122,8 +168,14 @@ async def lifespan(app: FastAPI):
             )
             stale_jobs = result.scalars().all()
             if stale_jobs:
+                now = datetime.now(UTC)
+                for job in stale_jobs:
+                    job.status = "failed"
+                    job.finished_at = job.finished_at or now
+                    job.error_message = "Server restart detected — job interrupted."
+                await session.commit()
                 logger.warning(
-                    "startup.stale_jobs_detected",
+                    "startup.stale_jobs_recovered",
                     count=len(stale_jobs),
                     job_ids=[job.id for job in stale_jobs],
                 )
@@ -133,6 +185,11 @@ async def lifespan(app: FastAPI):
         logger.warning("startup.stale_jobs_check_failed", error=str(exc))
 
     yield
+
+    # Teardown — close Redis connection pool
+    if getattr(app.state, "job_queue", None) is not None:
+        await app.state.job_queue.aclose()
+        logger.info("job_queue.closed")
 
 
 def create_app() -> FastAPI:
@@ -159,7 +216,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=settings.app_name,
-        version="0.1.0",
+        version="0.5.0",
         description="New target backend skeleton for FotoNabidka.",
         debug=settings.app_debug,
         docs_url=docs_url,
@@ -207,9 +264,29 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def log_requests(request: Request, call_next) -> Response:
         start = time.monotonic()
-        response = await call_next(request)
-        duration_ms = round((time.monotonic() - start) * 1000)
+        HTTP_REQUESTS_IN_PROGRESS.labels(method=request.method).inc()
+        try:
+            response = await call_next(request)
+        finally:
+            HTTP_REQUESTS_IN_PROGRESS.labels(method=request.method).dec()
+        elapsed = time.monotonic() - start
+        duration_ms = round(elapsed * 1000)
         if not request.url.path.startswith("/mock-storage"):
+            # R-38: use route path template (e.g. /api/v1/cases/{case_id}) to avoid
+            # label cardinality explosion from per-resource IDs.
+            route = request.scope.get("route")
+            path_template = route.path if route else request.url.path
+            status_str = str(response.status_code)
+            HTTP_REQUESTS_TOTAL.labels(
+                method=request.method,
+                path_template=path_template,
+                status_code=status_str,
+            ).inc()
+            HTTP_REQUEST_DURATION_SECONDS.labels(
+                method=request.method,
+                path_template=path_template,
+                status_code=status_str,
+            ).observe(elapsed)
             log = logger.error if response.status_code >= 500 else logger.info
             log(
                 "http.request",

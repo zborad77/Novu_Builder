@@ -41,9 +41,15 @@ async def create_case(
 ) -> ProjectCreateResponse:
     if not payload.title.strip():
         raise HTTPException(status_code=400, detail="Case title is required.")
+    org_id = resolve_org_id(current_user)
+    if org_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Super-admin must operate within a specific organization to create a case.",
+        )
     case = await service.create_project(
         payload,
-        organization_id=current_user.organizationId,
+        organization_id=org_id,
         created_by_user_id=current_user.id,
     )
     return ProjectCreateResponse(id=case.id, status=case.status)

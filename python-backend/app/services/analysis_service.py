@@ -182,6 +182,11 @@ class AnalysisService:
                 log.error("worker.job_not_found")
                 raise HTTPException(status_code=404, detail="Analysis job not found.")
 
+            # R-19: idempotency guard — skip if job was already picked up or cancelled
+            if job.status != "queued":
+                log.warning("worker.job_skipped", reason="not_queued", current_status=job.status)
+                return
+
             if job.project_id != project_id:
                 log.error("worker.job_project_mismatch", job_project_id=job.project_id, expected_project_id=project_id)
                 log.warning("SECURITY_EVENT: job_project_mismatch", job_id=job_id, job_project_id=job.project_id, requested_project_id=project_id)

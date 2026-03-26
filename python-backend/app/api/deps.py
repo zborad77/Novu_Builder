@@ -1,4 +1,4 @@
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -153,3 +153,18 @@ async def require_manager(
 
 def get_export_service() -> ExportService:
     return ExportService()
+
+
+def get_job_queue(request: Request):
+    """Return the Redis job queue from app state, or None if unavailable."""
+    return getattr(request.app.state, "job_queue", None)
+
+
+def get_redis(request: Request):
+    """Return the shared Redis client for caching (R-32), or None if unavailable.
+
+    Reuses the same connection as the job queue — key prefixes keep them isolated:
+      job queue: analysis:jobs
+      cache:     cache:*
+    """
+    return getattr(request.app.state, "job_queue", None)

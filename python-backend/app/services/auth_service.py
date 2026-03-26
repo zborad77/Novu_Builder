@@ -89,6 +89,14 @@ class AuthService:
         user = await self.session.get(User, payload["sub"])
         if not user or not user.is_active:
             return None
+        if user.tokens_valid_after:
+            ttl = timedelta(minutes=self._settings.jwt_access_token_expire_minutes)
+            issued_at = datetime.fromtimestamp(payload["exp"], tz=UTC) - ttl
+            tva = user.tokens_valid_after
+            if tva.tzinfo is None:
+                tva = tva.replace(tzinfo=UTC)
+            if issued_at < tva:
+                return None
         result = _user_to_read(user)
         impersonated_by = payload.get("impersonated_by")
         if impersonated_by:

@@ -1,13 +1,21 @@
-from datetime import datetime
+import asyncio
 from uuid import uuid4
 
 import structlog
 from fastapi import UploadFile
 
 from app.models import Project, ProjectPhoto
+from app.core.config import get_settings
 from app.repositories.photo_repository import PhotoRepository
 from app.schemas.photo import ProjectPhotoRead
-from app.storage.local_photo_storage import save_original_photo, write_storage_file
+from app.storage.local_photo_storage import (
+    delete_storage_file,
+    get_image_dimensions,
+    get_public_url,
+    resize_image_bytes,
+    save_original_photo,
+    write_storage_file,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -58,9 +66,9 @@ def _is_terminal_processing_status(status: str) -> bool:
 
 
 def to_read_model(photo: ProjectPhoto) -> ProjectPhotoRead:
-    original_url = f"/mock-storage/{photo.storage_key}"
-    preview_url = f"/mock-storage/{photo.preview_storage_key}" if photo.preview_storage_key else None
-    ai_input_url = f"/mock-storage/{photo.ai_input_storage_key}" if photo.ai_input_storage_key else None
+    original_url = get_public_url(photo.storage_key)
+    preview_url = get_public_url(photo.preview_storage_key) if photo.preview_storage_key else None
+    ai_input_url = get_public_url(photo.ai_input_storage_key) if photo.ai_input_storage_key else None
     return ProjectPhotoRead(
         id=photo.id,
         projectId=photo.project_id,
@@ -119,10 +127,13 @@ class PhotoService:
         await self._update_processing_status(photo, "processing")
 
         try:
+            # R-15: generate real resized variants instead of copying original bytes
             if photo.preview_storage_key:
-                write_storage_file(relative_storage_key=photo.preview_storage_key, content=content)
+                preview_content = await asyncio.to_thread(resize_image_bytes, content, 1600)
+                await write_storage_file(relative_storage_key=photo.preview_storage_key, content=preview_content)
             if photo.ai_input_storage_key:
-                write_storage_file(relative_storage_key=photo.ai_input_storage_key, content=content)
+                ai_content = await asyncio.to_thread(resize_image_bytes, content, 1280)
+                await write_storage_file(relative_storage_key=photo.ai_input_storage_key, content=ai_content)
         except Exception:
             return await self._update_processing_status(photo, "failed")
 
@@ -211,7 +222,15 @@ class PhotoService:
 
     async def create_multipart_photo(self, project: Project, file: UploadFile, *, is_primary: bool) -> ProjectPhotoRead:
         content = await file.read()
-        storage_key, _ = save_original_photo(project_id=project.id, original_filename=file.filename, content=content)
+        max_bytes = get_settings().max_upload_size_mb * 1024 * 1024
+        if len(content) > max_bytes:
+            raise ValueError(
+                f"File too large: {len(content)} bytes exceeds the "
+                f"{get_settings().max_upload_size_mb} MB upload limit."
+            )
+        # R-15: capture real image dimensions via Pillow before storing
+        actual_width, actual_height = await asyncio.to_thread(get_image_dimensions, content)
+        storage_key, _ = await save_original_photo(project_id=project.id, original_filename=file.filename, content=content)
         # intentional upload fallback — multipart filename is optional per HTTP spec
         filename = file.filename or f"upload-{uuid4().hex[:8]}.bin"
         if not file.filename:
@@ -224,8 +243,8 @@ class PhotoService:
             project.id,
             filename,
             original_size=len(content),
-            width=None,
-            height=None,
+            width=actual_width,
+            height=actual_height,
         )
         # intentional upload fallback — content_type may be None from some HTTP clients
         content_type = file.content_type or "application/octet-stream"
@@ -298,5 +317,9 @@ class PhotoService:
         photo = await self.repository.get_photo(project_id, photo_id)
         if not photo:
             return False
+        # R-14: delete physical files before removing the DB record
+        for storage_key in (photo.storage_key, photo.preview_storage_key, photo.ai_input_storage_key):
+            if storage_key:
+                await delete_storage_file(relative_storage_key=storage_key)
         await self.repository.remove_photo(photo)
         return True

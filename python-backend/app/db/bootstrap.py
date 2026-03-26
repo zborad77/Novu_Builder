@@ -1,6 +1,5 @@
 import base64
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.auth_service import hash_password

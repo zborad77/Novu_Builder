@@ -13,7 +13,8 @@ _TMP_STORAGE = pathlib.Path(tempfile.gettempdir()) / "novu_e2e_test_storage"
 _TMP_STORAGE.mkdir(parents=True, exist_ok=True)
 
 _TEST_DB_PATH = pathlib.Path(__file__).parent / "test_e2e_tenant.db"
-_TEST_DB_URL = f"sqlite+aiosqlite:///{_TEST_DB_PATH}"
+# R-27: allow CI to inject a PostgreSQL URL via TEST_DATABASE_URL; fall back to SQLite locally
+_TEST_DB_URL = os.environ.get("TEST_DATABASE_URL") or f"sqlite+aiosqlite:///{_TEST_DB_PATH}"
 
 os.environ["DATABASE_URL"] = _TEST_DB_URL
 os.environ["DB_SEED_ON_STARTUP"] = "false"

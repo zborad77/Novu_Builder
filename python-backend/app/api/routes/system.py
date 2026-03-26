@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import func, select, text
 
 from app.core.config import get_settings
@@ -8,6 +10,18 @@ from app.db.session import AsyncSessionFactory
 from app.models import AnalysisJob
 
 router = APIRouter()
+
+
+@router.get("/metrics", include_in_schema=False)
+async def metrics() -> Response:
+    """Prometheus metrics scrape endpoint (R-38).
+
+    Returns metrics in Prometheus text exposition format.
+    This endpoint is intentionally unauthenticated so Prometheus can scrape it
+    without a token.  In production it MUST be firewalled or restricted at the
+    nginx/proxy layer — do NOT expose it publicly.
+    """
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @router.get("/alive")
