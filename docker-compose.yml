@@ -19,10 +19,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -44,7 +47,7 @@ services:
       DATABASE_URL_SYNC: postgresql+psycopg://novu:${POSTGRES_PASSWORD}@db:5432/novu_builder
       DB_AUTO_CREATE_SCHEMA: "false"
       DB_SEED_ON_STARTUP: "false"
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       JWT_SECRET: ${JWT_SECRET}
       STORAGE_ROOT: /data/storage
       AI_ANALYSIS_PROVIDER: ${AI_ANALYSIS_PROVIDER:-mock}
@@ -81,6 +84,30 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  worker:
+    build:
+      context: ./python-backend
+    restart: unless-stopped
+    entrypoint: ["python", "-m", "app.worker.runner"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      DATABASE_URL: postgresql+asyncpg://novu:${POSTGRES_PASSWORD}@db:5432/novu_builder
+      DATABASE_URL_SYNC: postgresql+psycopg://novu:${POSTGRES_PASSWORD}@db:5432/novu_builder
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      STORAGE_ROOT: /data/storage
+      AI_ANALYSIS_PROVIDER: ${AI_ANALYSIS_PROVIDER:-mock}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LOG_LEVEL: INFO
+    volumes:
+      - storage_data:/data/storage
 
 volumes:
   postgres_data:

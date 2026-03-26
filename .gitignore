@@ -18,3 +18,4 @@ __pycache__/
 *.pyc
 .claude/
 backups/
+nginx/certs/*.pem

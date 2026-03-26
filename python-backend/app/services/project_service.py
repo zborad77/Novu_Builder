@@ -277,11 +277,11 @@ class ProjectService:
             duplicated_ai_key = build_duplicated_storage_key(source_photo.ai_input_storage_key, source_project.id, duplicated_project.id)
 
             if duplicated_storage_key and source_photo.storage_key:
-                copy_storage_file(source_storage_key=source_photo.storage_key, target_storage_key=duplicated_storage_key)
+                await copy_storage_file(source_storage_key=source_photo.storage_key, target_storage_key=duplicated_storage_key)
             if duplicated_preview_key and source_photo.preview_storage_key:
-                copy_storage_file(source_storage_key=source_photo.preview_storage_key, target_storage_key=duplicated_preview_key)
+                await copy_storage_file(source_storage_key=source_photo.preview_storage_key, target_storage_key=duplicated_preview_key)
             if duplicated_ai_key and source_photo.ai_input_storage_key:
-                copy_storage_file(source_storage_key=source_photo.ai_input_storage_key, target_storage_key=duplicated_ai_key)
+                await copy_storage_file(source_storage_key=source_photo.ai_input_storage_key, target_storage_key=duplicated_ai_key)
 
             if not duplicated_storage_key:
                 # Intentional fail-safe skip: if the target storage_key cannot be resolved,
