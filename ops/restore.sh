@@ -122,7 +122,7 @@ log "✓ Checksum OK"
 echo ""
 
 # ── Pre-restore verify ─────────────────────────────────────────────────────────
-VERIFY_SCRIPT="$PROJECT_DIR/python-backend/scripts/verify_restore.sh"
+VERIFY_SCRIPT="${VERIFY_SCRIPT_OVERRIDE:-$PROJECT_DIR/python-backend/scripts/verify_restore.sh}"
 if [[ "$SKIP_VERIFY" == "--skip-verify" ]]; then
   echo "WARNING: verify skipped — unsafe operation"
   sleep 2
