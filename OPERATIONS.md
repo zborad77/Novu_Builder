@@ -136,7 +136,7 @@ Superadmin (cross-tenant) views bypass the cache entirely.
 ### Running a backup
 
 ```bash
-# One-shot backup to ./backups/
+# One-shot backup to ./backups/  (produces db_TIMESTAMP.pgdump + storage_TIMESTAMP.tar.gz)
 BACKUP_DIR=/backups ./scripts/backup.sh
 
 # Or with custom retention
@@ -154,20 +154,11 @@ RETAIN_DAYS=14 BACKUP_DIR=/backups ./scripts/backup.sh
 #### 1. Database restore
 
 ```bash
-# Stop the backend (not DB) to avoid writes during restore
-docker compose stop backend
+# One-command restore (stops services, restores, runs migrations, restarts)
+./ops/restore.sh /backups/db_YYYYMMDD_HHMMSS.pgdump
 
-# Drop and recreate the database
-docker compose exec db psql -U novu -c "DROP DATABASE novu_builder;"
-docker compose exec db psql -U novu -c "CREATE DATABASE novu_builder;"
-
-# Restore from dump
-gunzip -c /backups/db_YYYYMMDD_HHMMSS.sql.gz \
-  | docker compose exec -T db psql -U novu novu_builder
-
-# Run any pending migrations, then restart
-docker compose run --rm backend alembic upgrade head
-docker compose start backend
+# Unattended (CI / automation)
+./ops/restore.sh /backups/db_YYYYMMDD_HHMMSS.pgdump --yes
 ```
 
 #### 2. Storage restore

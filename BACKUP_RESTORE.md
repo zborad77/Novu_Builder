@@ -10,9 +10,9 @@
 
 ---
 
-## Automatický zálohovací skript
+## Autoritativní zálohovací skript
 
-Repozitář obsahuje `scripts/backup.sh` — spouštěj ručně nebo z cronu.
+Repozitář obsahuje `scripts/backup.sh` jako **hlavní operátorský entrypoint** — spouštěj ručně nebo z cronu.
 
 ```bash
 # Jednorázové spuštění
@@ -25,8 +25,9 @@ RETAIN_DAYS=30 BACKUP_DIR=/backups ./scripts/backup.sh
 **Výstup zálohy:**
 ```
 /backups/
-  db_20260328_020000.sql.gz      ← pg_dump komprimovaný gzip
-  storage_20260328_020001.tar.gz ← tar archiv storage_data volume
+  db_20260328_020000.pgdump        ← pg_dump custom archive (AUTORITATIVNÍ formát)
+  db_20260328_020000.pgdump.sha256 ← SHA-256 checksum pro ověření integrity
+  storage_20260328_020001.tar.gz   ← tar archiv storage_data volume
 ```
 
 ### Cron job (denní záloha ve 2:00)
@@ -52,27 +53,29 @@ aws s3 sync /backups/ s3://novu-backups/$(hostname)/ --storage-class STANDARD_IA
 
 ## Přehled dostupných backup/restore skriptů
 
-Repozitář obsahuje **dvě nezávislé** zálohovací cesty. Každá má vlastní restore skript.
+Autoritativní DB formát je `.pgdump` (pg_dump custom archive). Všechny skripty níže pracují s tímto formátem.
 
 | Cesta | Backup skript | Formát výstupu | Restore skript | Verify skript |
 |-------|--------------|----------------|----------------|---------------|
-| **Docker Compose** (doporučeno pro produkci) | `scripts/backup.sh` nebo `ops/backup.sh` | `db_TIMESTAMP.sql.gz` | **`ops/restore.sh`** | manuálně dle sekce Validace |
-| **Přímý pg_dump** (vyžaduje pg_dump na hostu) | `python-backend/scripts/backup_db.sh` | `novu_TIMESTAMP.pgdump` + `.sha256` | `python-backend/scripts/restore_db.sh` | `python-backend/scripts/verify_restore.sh` |
+| **Docker Compose** (hlavní operátorský entrypoint) | **`scripts/backup.sh`** | `db_TIMESTAMP.pgdump` + `.sha256` | **`ops/restore.sh`** | `python-backend/scripts/verify_restore.sh` |
+| **Přímý pg_dump** (alternativa; vyžaduje pg_dump na hostu) | `python-backend/scripts/backup_db.sh` | `novu_TIMESTAMP.pgdump` + `.sha256` | `python-backend/scripts/restore_db.sh` | `python-backend/scripts/verify_restore.sh` |
+| ~~**LEGACY** (deprecated)~~ | ~~`ops/backup.sh`~~ | ~~`postgres_TIMESTAMP.sql.gz`~~ | ~~viz legacy sekce v `ops/restore.sh`~~ | ~~bez verify skriptu~~ |
 
-**Produkční doporučení:** Používej Docker Compose cestu — záloha i restore probíhají přes `docker compose exec`, nevyžadují pg_dump nainstalovaný na hostu.
+**Poznámka k Docker Compose cestě:** `scripts/backup.sh` volá `docker compose exec db pg_dump` — nevyžaduje pg_dump nainstalovaný na hostu. Pro restore přes `ops/restore.sh` se backup soubor zkopíruje do kontejneru přes `docker cp`, protože `pg_restore` (custom format) vyžaduje seekable soubor.
 
 ---
 
 ## Manuální záloha DB (těsně před migrací nebo deployem)
 
 ```bash
-# Záloha s časovým razítkem
+# Záloha s časovým razítkem (autoritativní formát .pgdump)
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-docker compose exec db pg_dump -U novu novu_builder \
-  | gzip > /backups/db_manual_${TIMESTAMP}.sql.gz
+docker compose exec -T db pg_dump -U novu novu_builder \
+  --format=custom --compress=9 --no-owner --no-privileges \
+  > /backups/db_manual_${TIMESTAMP}.pgdump
 
-echo "Záloha uložena: /backups/db_manual_${TIMESTAMP}.sql.gz"
-ls -lh /backups/db_manual_${TIMESTAMP}.sql.gz   # ověř velikost (nesmí být 0)
+echo "Záloha uložena: /backups/db_manual_${TIMESTAMP}.pgdump"
+ls -lh /backups/db_manual_${TIMESTAMP}.pgdump   # ověř velikost (nesmí být 0)
 ```
 
 ---
@@ -87,10 +90,10 @@ ls -lh /backups/db_manual_${TIMESTAMP}.sql.gz   # ověř velikost (nesmí být 0
 
 ```bash
 # Jednopříkazový restore — zastaví services, obnoví DB, spustí migrace, nastartuje
-./ops/restore.sh /backups/db_20260328_020000.sql.gz
+./ops/restore.sh /backups/db_20260328_020000.pgdump
 
 # Bez interaktivního potvrzení (pro automatizaci)
-./ops/restore.sh /backups/db_20260328_020000.sql.gz --yes
+./ops/restore.sh /backups/db_20260328_020000.pgdump --yes
 ```
 
 **Manuální způsob (krok po kroku):**
@@ -103,21 +106,25 @@ ls -lh /backups/db_manual_${TIMESTAMP}.sql.gz   # ověř velikost (nesmí být 0
 docker compose stop backend worker
 
 # 3. Ověř dostupnost zálohy
-ls -lh /backups/db_*.sql.gz
+ls -lh /backups/db_*.pgdump
 # Vyber správný soubor (nejnovější před incidentem)
-BACKUP_FILE="/backups/db_20260328_020000.sql.gz"
+BACKUP_FILE="/backups/db_20260328_020000.pgdump"
 
 # 4. Drop a recreate DB
-docker compose exec db psql -U novu -c "DROP DATABASE IF EXISTS novu_builder;"
-docker compose exec db psql -U novu -c "CREATE DATABASE novu_builder;"
+docker compose exec db psql -U novu postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='novu_builder' AND pid <> pg_backend_pid();"
+docker compose exec db psql -U novu postgres -c "DROP DATABASE IF EXISTS novu_builder;"
+docker compose exec db psql -U novu postgres -c "CREATE DATABASE novu_builder OWNER novu;"
 
-# 5. Restore
-gunzip -c $BACKUP_FILE | docker compose exec -T db psql -U novu novu_builder
+# 5. Restore (pg_restore vyžaduje seekable soubor — přes docker cp)
+CONTAINER_ID=$(docker compose ps -q db)
+docker cp "$BACKUP_FILE" "$CONTAINER_ID:/tmp/novu_restore.pgdump"
+docker compose exec -T db pg_restore -U novu -d novu_builder --no-password --jobs=4 /tmp/novu_restore.pgdump
+docker compose exec -T db rm -f /tmp/novu_restore.pgdump
 
 # 6. Ověř počet tabulek po restore
 docker compose exec db psql -U novu novu_builder \
   -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';"
-# Musí být 15+ tabulek
+# Musí být 10+ tabulek
 
 # 7. Aplikuj čekající migrace (pokud restore je ze starší zálohy)
 docker compose run --rm backend alembic upgrade head
@@ -253,4 +260,4 @@ Následující **NENÍ** implementováno a pro produkci je potřeba doplnit:
 
 ---
 
-*Poslední revize: 2026-03-28 | Platí pro v0.5.x | viz také: ops/restore.sh, python-backend/scripts/verify_restore.sh*
+*Poslední revize: 2026-03-28 (sjednocení na .pgdump jako autoritativní formát) | Platí pro v0.5.x | viz také: ops/restore.sh, python-backend/scripts/verify_restore.sh*

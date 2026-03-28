@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 # =============================================================================
-# backup.sh — lokální záloha PostgreSQL + storage souborů
+# [LEGACY — non-authoritative]
+# ops/backup.sh — lokální záloha PostgreSQL + storage souborů
+#
+# POZOR: Tento skript je LEGACY. Produkuje .sql.gz formát, který je
+# deprecated jako autoritativní DB backup formát (od 2026-03-28).
+#
+# Autoritativní DB backup: ./scripts/backup.sh  (produkuje .pgdump)
+# Autoritativní restore:   ./ops/restore.sh <db_TIMESTAMP.pgdump>
+#
+# Tento skript zůstává zachován pro:
+#   - existující .sql.gz zálohy (jejich obnovu viz legacy sekce v ops/restore.sh)
+#   - prostředí, kde není možné použít scripts/backup.sh
 #
 # Použití:
 #   ./ops/backup.sh                     # interaktivní
 #   BACKUP_DIR=/mnt/backups ./ops/backup.sh   # jiný cíl
-#
-# Cron (každou noc ve 2:00):
-#   0 2 * * * /path/to/project/ops/backup.sh >> /var/log/novu-backup.log 2>&1
 #
 # Zálohy jsou uchovány po dobu RETENTION_DAYS (výchozí: 14).
 # Starší zálohy jsou smazány automaticky.

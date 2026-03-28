@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Novu Builder — minimal backup script (R-40)
+# Novu Builder — operator backup entrypoint (R-40)
 #
 # Backs up:
-#   1. PostgreSQL database (pg_dump → gzip)
+#   1. PostgreSQL database (pg_dump custom archive → .pgdump)   ← AUTHORITATIVE FORMAT
 #   2. File storage volume (photos, exports)
 #
 # Usage:
@@ -19,6 +19,9 @@
 #
 # IMPORTANT: This script must be run from the project root (next to docker-compose.yml).
 # Secrets are read from the running containers — never hardcoded here.
+#
+# Restore: ./ops/restore.sh <db_TIMESTAMP.pgdump>
+# Verify:  python-backend/scripts/verify_restore.sh <db_TIMESTAMP.pgdump>
 
 set -euo pipefail
 
@@ -32,12 +35,26 @@ mkdir -p "$BACKUP_DIR"
 
 echo "[$(date -Iseconds)] Starting Novu Builder backup → $BACKUP_DIR"
 
-# ── 1. PostgreSQL dump ────────────────────────────────────────────────────────
-DB_FILE="$BACKUP_DIR/db_${TIMESTAMP}.sql.gz"
+# ── 1. PostgreSQL dump (custom archive format) ────────────────────────────────
+# Authoritative DB backup format: .pgdump (pg_dump custom archive)
+# Restores via: ops/restore.sh or python-backend/scripts/restore_db.sh
+DB_FILE="$BACKUP_DIR/db_${TIMESTAMP}.pgdump"
 echo "  → DB dump: $DB_FILE"
 docker compose exec -T db \
   pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" \
-  | gzip > "$DB_FILE"
+  --format=custom \
+  --compress=9 \
+  --no-owner \
+  --no-privileges \
+  > "$DB_FILE"
+
+# Checksum for integrity verification
+if command -v sha256sum &>/dev/null; then
+  sha256sum "$DB_FILE" > "${DB_FILE}.sha256"
+else
+  openssl dgst -sha256 "$DB_FILE" > "${DB_FILE}.sha256"
+fi
+echo "  → Checksum: ${DB_FILE}.sha256"
 
 # ── 2. File storage archive ───────────────────────────────────────────────────
 # Uses a temporary alpine container to tar the named volume directly,
@@ -52,7 +69,8 @@ docker run --rm \
 
 # ── 3. Prune old backups ──────────────────────────────────────────────────────
 echo "  → Pruning backups older than ${RETAIN_DAYS} days"
-find "$BACKUP_DIR" -maxdepth 1 -name "db_*.sql.gz"      -mtime +"$RETAIN_DAYS" -delete
+find "$BACKUP_DIR" -maxdepth 1 -name "db_*.pgdump"      -mtime +"$RETAIN_DAYS" -delete
+find "$BACKUP_DIR" -maxdepth 1 -name "db_*.pgdump.sha256" -mtime +"$RETAIN_DAYS" -delete
 find "$BACKUP_DIR" -maxdepth 1 -name "storage_*.tar.gz" -mtime +"$RETAIN_DAYS" -delete
 
 echo "[$(date -Iseconds)] Backup complete."
