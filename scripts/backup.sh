@@ -56,6 +56,26 @@ else
 fi
 echo "  → Checksum: ${DB_FILE}.sha256"
 
+# ── Manifest (supplemental artefact — does not affect .pgdump or .sha256) ────
+MANIFEST_FILE="$BACKUP_DIR/manifest_${TIMESTAMP}.json"
+ALEMBIC_HEAD=$(docker compose exec -T db psql -U "$POSTGRES_USER" "$POSTGRES_DB" \
+  --tuples-only --no-align \
+  --command="SELECT version_num FROM alembic_version;" 2>/dev/null \
+  | tr -d ' \r\n') || ALEMBIC_HEAD="unknown"
+[[ -n "$ALEMBIC_HEAD" ]] || ALEMBIC_HEAD="unknown"
+GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+cat > "$MANIFEST_FILE" <<EOF
+{
+  "timestamp": "${TIMESTAMP}",
+  "db_file": "db_${TIMESTAMP}.pgdump",
+  "checksum_file": "db_${TIMESTAMP}.pgdump.sha256",
+  "alembic_head": "${ALEMBIC_HEAD}",
+  "git_sha": "${GIT_SHA}",
+  "backup_version": "v2"
+}
+EOF
+echo "  → Manifest: $MANIFEST_FILE"
+
 # ── 2. File storage archive ───────────────────────────────────────────────────
 # Uses a temporary alpine container to tar the named volume directly,
 # avoiding any dependency on the backend container being stopped.
@@ -69,9 +89,10 @@ docker run --rm \
 
 # ── 3. Prune old backups ──────────────────────────────────────────────────────
 echo "  → Pruning backups older than ${RETAIN_DAYS} days"
-find "$BACKUP_DIR" -maxdepth 1 -name "db_*.pgdump"      -mtime +"$RETAIN_DAYS" -delete
+find "$BACKUP_DIR" -maxdepth 1 -name "db_*.pgdump"        -mtime +"$RETAIN_DAYS" -delete
 find "$BACKUP_DIR" -maxdepth 1 -name "db_*.pgdump.sha256" -mtime +"$RETAIN_DAYS" -delete
-find "$BACKUP_DIR" -maxdepth 1 -name "storage_*.tar.gz" -mtime +"$RETAIN_DAYS" -delete
+find "$BACKUP_DIR" -maxdepth 1 -name "manifest_*.json"    -mtime +"$RETAIN_DAYS" -delete
+find "$BACKUP_DIR" -maxdepth 1 -name "storage_*.tar.gz"   -mtime +"$RETAIN_DAYS" -delete
 
 echo "[$(date -Iseconds)] Backup complete."
 echo "  DB:      $DB_FILE  ($(du -sh "$DB_FILE" | cut -f1))"
