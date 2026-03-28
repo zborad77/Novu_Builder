@@ -38,6 +38,15 @@
 # =============================================================================
 set -euo pipefail
 
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "ERROR: required command not found: $1"
+    exit 1
+  }
+}
+require_cmd sha256sum
+require_cmd timeout
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 COMPOSE_FILE="$PROJECT_DIR/docker-compose.yml"

@@ -25,6 +25,16 @@
 
 set -euo pipefail
 
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "ERROR: required command not found: $1"
+    exit 1
+  }
+}
+require_cmd rsync
+require_cmd ssh
+require_cmd sha256sum
+
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
 POSTGRES_USER="${POSTGRES_USER:-novu}"
 POSTGRES_DB="${POSTGRES_DB:-novu_builder}"
