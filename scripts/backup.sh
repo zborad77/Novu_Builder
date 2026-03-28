@@ -115,9 +115,14 @@ echo "  Storage: $STORAGE_FILE  ($(du -sh "$STORAGE_FILE" | cut -f1))"
 # Failure does NOT affect the exit status of the local backup.
 if [[ -n "${BACKUP_REMOTE:-}" ]]; then
   echo "[$(date -Iseconds)] Syncing to remote: $BACKUP_REMOTE"
-  _SYNC_FILES=( "$DB_FILE" "${DB_FILE}.sha256" )
-  [[ -f "$MANIFEST_FILE" ]] && _SYNC_FILES+=( "$MANIFEST_FILE" )
-  if rsync -az "${_SYNC_FILES[@]}" "$BACKUP_REMOTE/"; then
+  SYNC_FILES=( "$DB_FILE" "${DB_FILE}.sha256" )
+  [[ -f "$MANIFEST_FILE" ]] && SYNC_FILES+=( "$MANIFEST_FILE" )
+  echo "Sync files:"
+  echo "${SYNC_FILES[@]}"
+  echo "Destination: $BACKUP_REMOTE/$TIMESTAMP"
+  if timeout 60 rsync -az --delete \
+    -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10" \
+    "${SYNC_FILES[@]}" "$BACKUP_REMOTE/$TIMESTAMP/"; then
     echo "  → Remote sync OK"
   else
     echo "  ⚠ WARNING: remote sync failed — local backup is intact"
