@@ -1,6 +1,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -8,6 +9,48 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_JWT_SECRET = "change-me-in-production"
+
+# ---------------------------------------------------------------------------
+# Insecure-placeholder detection
+# ---------------------------------------------------------------------------
+
+# Substring fragments that, when found in a secret/password value, indicate it
+# was never replaced from a template.  Checked case-insensitively.
+_PLACEHOLDER_FRAGMENTS: frozenset[str] = frozenset({
+    "change-me",
+    "changeme",
+    "change_me",
+    "placeholder",
+})
+
+# Short tokens that are insecure only when they are the *entire* value
+# (avoiding false positives inside legitimate longer strings like hostnames).
+_PLACEHOLDER_EXACT: frozenset[str] = frozenset({
+    "secret",
+    "password",
+    "default",
+})
+
+
+def _is_insecure_placeholder(value: str) -> bool:
+    """Return True if *value* is a well-known insecure placeholder string.
+
+    Designed for security-critical settings only.  Conservative by design:
+    flags obvious 'change-me' fragments or exact short placeholder tokens.
+    """
+    lower = value.strip().lower()
+    if lower in _PLACEHOLDER_EXACT:
+        return True
+    return any(frag in lower for frag in _PLACEHOLDER_FRAGMENTS)
+
+
+def _url_password(url: str) -> str | None:
+    """Extract the password component from a URL string, or None if absent."""
+    try:
+        return urlparse(url).password
+    except Exception:
+        return None
+
 
 def _env_files() -> list[Path]:
     """
@@ -130,10 +173,83 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_jwt_secret(self) -> "Settings":
-        if self.jwt_secret == _DEFAULT_JWT_SECRET and self.app_env.lower() != "development":
+        if self.app_env.lower() in ("development", "test"):
+            return self
+
+        errors: list[str] = []
+        if self.jwt_secret == _DEFAULT_JWT_SECRET:
+            errors.append(
+                "JWT_SECRET must be changed from the built-in default value. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        elif _is_insecure_placeholder(self.jwt_secret):
+            errors.append(
+                f"JWT_SECRET looks like an unfilled placeholder ({self.jwt_secret!r}). "
+                "Set a strong, unique secret."
+            )
+        elif len(self.jwt_secret) < 32:
+            errors.append(
+                f"JWT_SECRET is too short ({len(self.jwt_secret)} chars); "
+                "minimum 32 characters required in production."
+            )
+        if errors:
             raise ValueError(
-                f"JWT_SECRET must be changed from the default value in non-development environments. "
-                f"Set a strong, unique JWT_SECRET (current APP_ENV={self.app_env!r})."
+                f"Invalid JWT_SECRET for APP_ENV={self.app_env!r}: "
+                + "; ".join(errors)
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_metrics_auth_token(self) -> "Settings":
+        """Fail-fast in production when the metrics guard is on but has no valid token."""
+        if self.app_env.lower() in ("development", "test"):
+            return self
+        if not self.metrics_auth_enabled:
+            return self
+
+        if not self.metrics_auth_token:
+            raise ValueError(
+                f"METRICS_AUTH_TOKEN must be set when METRICS_AUTH_ENABLED=true "
+                f"in APP_ENV={self.app_env!r}. "
+                "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        if _is_insecure_placeholder(self.metrics_auth_token):
+            raise ValueError(
+                f"METRICS_AUTH_TOKEN contains an insecure placeholder value "
+                f"in APP_ENV={self.app_env!r}. Set a strong, unique token."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_redis_url(self) -> "Settings":
+        """Require an authenticated Redis URL in production."""
+        if self.app_env.lower() in ("development", "test"):
+            return self
+
+        password = _url_password(self.redis_url)
+        if password is None:
+            raise ValueError(
+                f"REDIS_URL must include a password in APP_ENV={self.app_env!r}. "
+                "Set REDIS_URL=redis://:yourpassword@host:port/db"
+            )
+        if _is_insecure_placeholder(password):
+            raise ValueError(
+                f"REDIS_URL contains an insecure placeholder password "
+                f"in APP_ENV={self.app_env!r}. Set a strong Redis password."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_database_url(self) -> "Settings":
+        """Reject placeholder passwords embedded in DATABASE_URL in production."""
+        if self.app_env.lower() in ("development", "test"):
+            return self
+
+        password = _url_password(self.database_url)
+        if password is not None and _is_insecure_placeholder(password):
+            raise ValueError(
+                f"DATABASE_URL contains an insecure placeholder password "
+                f"in APP_ENV={self.app_env!r}. Set real database credentials."
             )
         return self
 

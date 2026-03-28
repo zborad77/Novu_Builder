@@ -28,10 +28,30 @@ logger = structlog.get_logger(__name__)
 
 
 async def _process_one(payload: dict, settings) -> None:
-    job_id = payload["job_id"]
-    project_id = payload["project_id"]
+    # Validate required payload keys before any DB or service interaction.
+    # KeyError here would consume the queue item without failing the job in DB.
+    job_id = payload.get("job_id")
+    project_id = payload.get("project_id")
+
+    if not job_id or not isinstance(job_id, str):
+        logger.error(
+            "worker.invalid_payload",
+            reason="missing_or_invalid_job_id",
+            payload_keys=sorted(payload.keys()),
+        )
+        return
+
+    if not project_id or not isinstance(project_id, str):
+        logger.error(
+            "worker.invalid_payload",
+            reason="missing_or_invalid_project_id",
+            job_id=job_id,
+            payload_keys=sorted(payload.keys()),
+        )
+        return
+
     organization_id = payload.get("organization_id")
-    is_superadmin_context = payload.get("is_superadmin_context", False)
+    is_superadmin_context = bool(payload.get("is_superadmin_context", False))
 
     log = logger.bind(job_id=job_id, project_id=project_id)
     log.info("worker.dequeued", organization_id=organization_id)

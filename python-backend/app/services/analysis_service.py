@@ -16,6 +16,7 @@ from app.schemas.analysis import AnalysisResultRead, parse_json_field
 logger = structlog.get_logger(__name__)
 
 _JOB_TIMEOUT_SECONDS = 180  # 3 minutes — generous upper bound for vision API calls
+_MAX_JOB_RETRY_COUNT = 10  # Hard ceiling to prevent runaway cost from AI provider calls
 
 
 def to_read_model(result: AnalysisResult) -> AnalysisResultRead:
@@ -313,8 +314,9 @@ class AnalysisService:
     ) -> AnalysisJob | None:
         """
         Creates a new queued job that is a retry of the given job.
-        The caller (route) must schedule execute_job via BackgroundTasks.
-        Raises HTTPException on org mismatch (403) or job not found (404).
+        The caller (route) must enqueue the returned job.
+        Raises HTTPException on org mismatch (403), job not found (404),
+        or invalid state / retry limit exceeded (409).
 
         organization_id=None is the superadmin cross-tenant path. Callers MUST
         set is_superadmin_context=True when intentionally omitting organization_id.
@@ -337,6 +339,28 @@ class AnalysisService:
         if not original:
             raise HTTPException(status_code=404, detail="Analysis job not found.")
 
+        # Only terminal states can be retried — prevent two active jobs for the same project.
+        if original.status not in ("failed", "canceled"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cannot retry a job in '{original.status}' state. "
+                    "Only failed or canceled jobs can be retried."
+                ),
+            )
+
+        # Enforce a hard ceiling to prevent runaway AI provider cost.
+        if (original.retry_count or 0) >= _MAX_JOB_RETRY_COUNT:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Maximum retry count ({_MAX_JOB_RETRY_COUNT}) reached for job {job_id}. "
+                    "Contact an administrator to force-reset the job."
+                ),
+            )
+
+        # Single session for both the org-scope project fetch and new job creation,
+        # avoiding detached-instance access when project is used outside its session.
         async with AsyncSessionFactory() as session:
             repo_inner = AnalysisRepository(session)
             if organization_id is not None:
@@ -344,16 +368,21 @@ class AnalysisService:
             else:
                 project = await session.get(Project, original.project_id)
             if not project:
-                logger.warning("SECURITY_EVENT: org_mismatch", project_id=original.project_id, organization_id=organization_id)
+                logger.warning(
+                    "SECURITY_EVENT: org_mismatch",
+                    project_id=original.project_id,
+                    organization_id=organization_id,
+                )
                 raise HTTPException(status_code=403, detail="Project not found.")
 
-        new_retry_count = (original.retry_count or 0) + 1
-        new_job = await self.repository.create_queued_job(
-            project,
-            user_id=original.requested_by_user_id,
-            parent_job_id=original.id,
-            retry_count=new_retry_count,
-        )
+            new_retry_count = (original.retry_count or 0) + 1
+            new_job = await repo_inner.create_queued_job(
+                project,
+                user_id=original.requested_by_user_id,
+                parent_job_id=original.id,
+                retry_count=new_retry_count,
+            )
+
         logger.info(
             "worker.retry_queued",
             original_job_id=job_id,
