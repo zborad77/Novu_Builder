@@ -55,12 +55,10 @@ services:
       LOG_LEVEL: INFO
     volumes:
       - storage_data:/data/storage
-    ports:
-      - "8000:8000"
     healthcheck:
       # python:3.12-slim has no curl; use stdlib urllib instead
       test: ["CMD", "python", "-c",
-             "import urllib.request, sys; urllib.request.urlopen('http://localhost:8000/alive', timeout=5) or sys.exit(1)"]
+             "import urllib.request, sys; urllib.request.urlopen('http://localhost:8000/api/v1/alive', timeout=5) or sys.exit(1)"]
       interval: 15s
       timeout: 10s
       retries: 5
