@@ -1,3 +1,4 @@
+import secrets
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -58,8 +59,23 @@ async def metrics(request: Request) -> Response:
     """Prometheus metrics scrape endpoint (R-38).
 
     Returns metrics in Prometheus text exposition format.
-    Restricted to internal IPs at the nginx/proxy layer — do NOT expose publicly.
+    When METRICS_AUTH_ENABLED=true (default), requires:
+        Authorization: Bearer <METRICS_AUTH_TOKEN>
+    Set METRICS_AUTH_ENABLED=false to allow unauthenticated scraping (e.g. behind
+    a trusted internal network where nginx IP-whitelisting is the sole guard).
     """
+    settings = get_settings()
+    if settings.metrics_auth_enabled:
+        if not settings.metrics_auth_token:
+            # Token not configured — fail closed rather than exposing metrics.
+            raise HTTPException(status_code=401, detail="Metrics auth token not configured.")
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing Bearer token.")
+        provided = auth_header[len("Bearer "):]
+        if not secrets.compare_digest(provided, settings.metrics_auth_token):
+            raise HTTPException(status_code=401, detail="Invalid metrics token.")
+
     await _refresh_operational_metrics(request)
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 

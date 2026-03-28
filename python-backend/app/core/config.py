@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     s3_region: str = Field(default="us-east-1", alias="S3_REGION")
     s3_cdn_base_url: str = Field(default="", alias="S3_CDN_BASE_URL")  # CDN prefix, e.g. https://cdn.example.com
 
+    # Prometheus /metrics auth guard (R-SEC-01)
+    # Set METRICS_AUTH_ENABLED=true and a strong METRICS_AUTH_TOKEN in production.
+    # Configure Prometheus scrape_configs with bearer_token to match.
+    metrics_auth_enabled: bool = Field(default=True, alias="METRICS_AUTH_ENABLED")
+    metrics_auth_token: str | None = Field(default=None, alias="METRICS_AUTH_TOKEN")
+
     # Error monitoring — leave empty to disable Sentry (default: off)
     sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
 

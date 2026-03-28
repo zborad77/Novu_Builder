@@ -25,6 +25,7 @@ os.environ["STORAGE_ROOT"] = str(_TMP_STORAGE)
 os.environ["APP_DEBUG"] = "false"
 os.environ["RATE_LIMIT_LOGIN"] = "1000/minute"
 os.environ["RATE_LIMIT_ADMIN"] = "1000/minute"
+os.environ["METRICS_AUTH_ENABLED"] = "false"
 
 # Clear the lru_cache so Settings re-reads from the updated env vars.
 # app.db.session reads settings at module level — cache must be clear

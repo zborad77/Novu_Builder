@@ -4,7 +4,10 @@ Tests cover:
   - /metrics endpoint returns 200 with Prometheus text content type
   - HTTP request counter increments after a request
   - Metrics module defines the three expected metric names
+  - Bearer token auth guard (R-SEC-01): enabled/disabled/wrong token/no token
 """
+import os
+
 import pytest
 
 
@@ -105,3 +108,76 @@ class TestOperationalMetricsExported:
         assert resp.status_code == 200
         # The test DB is always available so novu_db_alive should be 1.0
         assert "novu_db_alive 1.0" in resp.text
+
+
+class TestMetricsAuthGuard:
+    """R-SEC-01: Bearer token guard on /metrics (METRICS_AUTH_ENABLED=true)."""
+
+    @pytest.mark.asyncio
+    async def test_no_token_returns_401_when_guard_enabled(self, app_client):
+        os.environ["METRICS_AUTH_ENABLED"] = "true"
+        os.environ["METRICS_AUTH_TOKEN"] = "test-scrape-secret"
+        from app.core.config import get_settings
+        get_settings.cache_clear()
+        try:
+            resp = await app_client.get(_METRICS_URL)
+            assert resp.status_code == 401
+        finally:
+            os.environ["METRICS_AUTH_ENABLED"] = "false"
+            os.environ.pop("METRICS_AUTH_TOKEN", None)
+            get_settings.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_wrong_token_returns_401(self, app_client):
+        os.environ["METRICS_AUTH_ENABLED"] = "true"
+        os.environ["METRICS_AUTH_TOKEN"] = "test-scrape-secret"
+        from app.core.config import get_settings
+        get_settings.cache_clear()
+        try:
+            resp = await app_client.get(_METRICS_URL, headers={"Authorization": "Bearer wrong-token"})
+            assert resp.status_code == 401
+        finally:
+            os.environ["METRICS_AUTH_ENABLED"] = "false"
+            os.environ.pop("METRICS_AUTH_TOKEN", None)
+            get_settings.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_correct_token_returns_200(self, app_client):
+        os.environ["METRICS_AUTH_ENABLED"] = "true"
+        os.environ["METRICS_AUTH_TOKEN"] = "test-scrape-secret"
+        from app.core.config import get_settings
+        get_settings.cache_clear()
+        try:
+            resp = await app_client.get(_METRICS_URL, headers={"Authorization": "Bearer test-scrape-secret"})
+            assert resp.status_code == 200
+            assert "text/plain" in resp.headers["content-type"]
+        finally:
+            os.environ["METRICS_AUTH_ENABLED"] = "false"
+            os.environ.pop("METRICS_AUTH_TOKEN", None)
+            get_settings.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_no_token_configured_returns_401(self, app_client):
+        """Guard enabled but no token set → fail closed (401)."""
+        os.environ["METRICS_AUTH_ENABLED"] = "true"
+        os.environ.pop("METRICS_AUTH_TOKEN", None)
+        from app.core.config import get_settings
+        get_settings.cache_clear()
+        try:
+            resp = await app_client.get(_METRICS_URL, headers={"Authorization": "Bearer anything"})
+            assert resp.status_code == 401
+        finally:
+            os.environ["METRICS_AUTH_ENABLED"] = "false"
+            get_settings.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_guard_disabled_allows_unauthenticated(self, app_client):
+        """METRICS_AUTH_ENABLED=false → public access (for internal-network-only setups)."""
+        os.environ["METRICS_AUTH_ENABLED"] = "false"
+        from app.core.config import get_settings
+        get_settings.cache_clear()
+        try:
+            resp = await app_client.get(_METRICS_URL)
+            assert resp.status_code == 200
+        finally:
+            get_settings.cache_clear()
