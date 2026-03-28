@@ -112,7 +112,48 @@ pg_restore \
 
 echo "✓ Restore complete"
 
-# ── Verify schema with alembic ────────────────────────────────────────────────
+# ── Verify critical tables and migration state ────────────────────────────────
+echo "→ Verifying restore integrity …"
+
+_check_table() {
+  local tbl="$1"
+  local exists
+  exists=$(PGPASSWORD="$DB_PASS" psql "${PG_CONN[@]}" --dbname="$DB_NAME" \
+    --tuples-only --no-align \
+    --command="SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='${tbl}');" \
+    2>/dev/null | tr -d ' ')
+  if [[ "$exists" == "t" ]]; then
+    echo "  ✓ ${tbl}"
+  else
+    echo "  ✗ table MISSING: ${tbl}" >&2
+    return 1
+  fi
+}
+
+RESTORE_FAILED=0
+_check_table "organizations" || RESTORE_FAILED=1
+_check_table "users"         || RESTORE_FAILED=1
+_check_table "projects"      || RESTORE_FAILED=1
+_check_table "audit_logs"    || RESTORE_FAILED=1
+_check_table "role_permissions" || RESTORE_FAILED=1
+
+ALEMBIC_REV=$(PGPASSWORD="$DB_PASS" psql "${PG_CONN[@]}" --dbname="$DB_NAME" \
+  --tuples-only --no-align \
+  --command="SELECT version_num FROM alembic_version;" 2>/dev/null | tr -d ' ')
+if [[ -z "$ALEMBIC_REV" ]]; then
+  echo "  ✗ alembic_version is empty — restore may be incomplete" >&2
+  RESTORE_FAILED=1
+else
+  echo "  ✓ alembic_version: $ALEMBIC_REV"
+fi
+
+if [[ $RESTORE_FAILED -ne 0 ]]; then
+  echo ""
+  echo "ERROR: Post-restore integrity checks failed. See above." >&2
+  exit 1
+fi
+
+# ── Alembic migration state ───────────────────────────────────────────────────
 echo "→ Verifying Alembic migration state …"
 cd "$BACKEND_DIR"
 if [[ -d ".venv" ]]; then

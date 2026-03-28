@@ -21,10 +21,15 @@
 #    3. Drops and recreates novu_builder database
 #    4. Copies backup into DB container (pg_restore requires seekable file)
 #    5. Restores data via pg_restore
-#    6. Verifies table count (must be >= 10)
+#    6. Verifies critical tables exist + alembic_version is set
 #    7. Applies any pending Alembic migrations (alembic upgrade head)
 #    8. Restarts backend + worker
 #    9. Polls health endpoint
+#
+#  RECOMMENDED before running this script (non-destructive pre-check):
+#    python-backend/scripts/verify_restore.sh <backup.pgdump>
+#  This restores the backup into a TEMP database and validates it without
+#  touching production. Run it first whenever possible.
 #
 #  Requirements: docker compose, curl
 #  Run from: project root (next to docker-compose.yml)
@@ -66,6 +71,10 @@ echo "=================================================="
 echo ""
 echo "⚠  This will DROP and RECREATE the novu_builder database."
 echo "   All existing data will be PERMANENTLY DELETED."
+echo ""
+
+echo "RECOMMENDED pre-check (non-destructive, uses temp DB):"
+echo "  python-backend/scripts/verify_restore.sh $(realpath "$BACKUP_FILE" 2>/dev/null || echo "$BACKUP_FILE")"
 echo ""
 
 if [[ "$AUTO_YES" != "--yes" ]]; then
@@ -134,17 +143,37 @@ docker compose -f "$COMPOSE_FILE" exec -T db rm -f /tmp/novu_restore.pgdump
 
 log "pg_restore complete."
 
-# ── 4. Verify table count ──────────────────────────────────────────────────────
-log "Verifying schema …"
-TABLE_COUNT=$(docker compose -f "$COMPOSE_FILE" exec -T db \
-  psql -U novu novu_builder --tuples-only --no-align \
-  --command="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" \
-  2>/dev/null | tr -d ' \r\n')
+# ── 4. Verify critical tables and migration state ─────────────────────────────
+# Check specific critical tables — concrete assertion, not a count heuristic.
+log "Verifying restore integrity …"
 
-log "Tables found: ${TABLE_COUNT}"
-if [[ "${TABLE_COUNT:-0}" -lt 10 ]]; then
-  die "Only ${TABLE_COUNT} tables found — restore likely failed. Expected 10+."
-fi
+_check_table() {
+  local tbl="$1"
+  local exists
+  exists=$(docker compose -f "$COMPOSE_FILE" exec -T db \
+    psql -U novu novu_builder --tuples-only --no-align \
+    --command="SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='${tbl}');" \
+    2>/dev/null | tr -d ' \r\n')
+  if [[ "$exists" == "t" ]]; then
+    log "  ✓ ${tbl}"
+  else
+    die "Critical table '${tbl}' is missing after restore — backup may be incomplete."
+  fi
+}
+
+_check_table "organizations"
+_check_table "users"
+_check_table "projects"
+_check_table "audit_logs"
+_check_table "role_permissions"
+
+# Verify alembic_version is populated (empty = migrations never ran or restore failed)
+ALEMBIC_REV=$(docker compose -f "$COMPOSE_FILE" exec -T db \
+  psql -U novu novu_builder --tuples-only --no-align \
+  --command="SELECT version_num FROM alembic_version;" \
+  2>/dev/null | tr -d ' \r\n')
+[[ -n "$ALEMBIC_REV" ]] || die "alembic_version table is empty — restore is incomplete."
+log "  ✓ alembic_version: $ALEMBIC_REV"
 
 # ── 5. Apply pending migrations ────────────────────────────────────────────────
 log "Applying pending Alembic migrations …"
