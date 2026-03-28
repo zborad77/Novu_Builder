@@ -23,8 +23,8 @@ _NUMERIC = sa.Numeric(14, 4)
 
 
 def upgrade() -> None:
-    # proposal_draft_items
-    with op.batch_alter_table("proposal_draft_items") as batch_op:
+    # project_proposal_drafts
+    with op.batch_alter_table("project_proposal_drafts") as batch_op:
         batch_op.alter_column("material_cost", type_=_NUMERIC, existing_type=sa.Float(), existing_nullable=True)
         batch_op.alter_column("labor_cost", type_=_NUMERIC, existing_type=sa.Float(), existing_nullable=True)
         batch_op.alter_column("transport_cost", type_=_NUMERIC, existing_type=sa.Float(), existing_nullable=True)
@@ -102,6 +102,6 @@ def downgrade() -> None:
     with op.batch_alter_table("project_final_proposals") as batch_op:
         batch_op.alter_column("total_price", type_=_FLOAT, existing_type=_NUMERIC, existing_nullable=True)
 
-    with op.batch_alter_table("proposal_draft_items") as batch_op:
+    with op.batch_alter_table("project_proposal_drafts") as batch_op:
         for col in ("material_cost", "labor_cost", "transport_cost", "amortization", "margin"):
             batch_op.alter_column(col, type_=_FLOAT, existing_type=_NUMERIC, existing_nullable=True)

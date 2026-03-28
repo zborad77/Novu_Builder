@@ -38,7 +38,11 @@ def _source(fn) -> str:
 
 def _has_admin_access_dep(endpoint) -> bool:
     """Return True if endpoint directly depends on require_superadmin OR
-    on any require_admin_capability dependency (which itself wraps require_superadmin).
+    on any require_admin_capability dependency.
+
+    C8: require_admin_capability no longer wraps require_superadmin; it performs
+    the superadmin check inline (isSuperAdmin) and falls back to a DB permission
+    lookup. We accept either pattern.
     """
     sig = inspect.signature(endpoint)
     for param in sig.parameters.values():
@@ -50,10 +54,10 @@ def _has_admin_access_dep(endpoint) -> bool:
         # require_admin_capability returns a closure whose name starts with require_admin_
         name = getattr(dep, "__name__", "")
         if name.startswith("require_admin_") or name.startswith("require_"):
-            # Verify it internally uses require_superadmin by inspecting its source
             try:
                 src = inspect.getsource(dep)
-                if "require_superadmin" in src:
+                # Accept old pattern (wraps require_superadmin) or C8 pattern (direct isSuperAdmin check)
+                if "require_superadmin" in src or "isSuperAdmin" in src:
                     return True
             except (TypeError, OSError):
                 pass

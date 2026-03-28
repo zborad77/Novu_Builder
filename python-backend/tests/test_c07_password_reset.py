@@ -114,20 +114,20 @@ class TestForgotPassword:
 
 
 class TestResetPassword:
+    """Uses reset_test_user (function-scoped throwaway user) for destructive tests
+    so that token_a / token_b session fixtures are never invalidated."""
 
-    async def test_valid_token_resets_password(self, app_client, test_tenants, db_session):
+    async def test_valid_token_resets_password(self, app_client, reset_test_user, db_session):
         """Valid token allows password reset and returns 200."""
         from sqlalchemy import select
-        from app.models import PasswordResetToken, User
+        from app.models import PasswordResetToken
 
-        email = test_tenants["user_a"]["email"]
+        email = reset_test_user["email"]
         with patch("app.api.routes.auth.send_password_reset_email", new_callable=AsyncMock):
             await app_client.post("/api/v1/auth/forgot-password", json={"email": email})
 
-        user_result = await db_session.execute(select(User).where(User.email == email))
-        user = user_result.scalar_one()
         token_result = await db_session.execute(
-            select(PasswordResetToken).where(PasswordResetToken.user_id == user.id)
+            select(PasswordResetToken).where(PasswordResetToken.user_id == reset_test_user["user_id"])
         )
         token = token_result.scalar_one()
 
@@ -137,28 +137,26 @@ class TestResetPassword:
         )
         assert resp.status_code == 200
 
-    async def test_used_token_rejected(self, app_client, test_tenants, db_session):
+    async def test_used_token_rejected(self, app_client, reset_test_user, db_session):
         """A token that has already been used returns 400."""
         from sqlalchemy import select
-        from app.models import PasswordResetToken, User
+        from app.models import PasswordResetToken
 
-        email = test_tenants["user_a"]["email"]
+        email = reset_test_user["email"]
         with patch("app.api.routes.auth.send_password_reset_email", new_callable=AsyncMock):
             await app_client.post("/api/v1/auth/forgot-password", json={"email": email})
 
-        user_result = await db_session.execute(select(User).where(User.email == email))
-        user = user_result.scalar_one()
         token_result = await db_session.execute(
-            select(PasswordResetToken).where(PasswordResetToken.user_id == user.id)
+            select(PasswordResetToken).where(PasswordResetToken.user_id == reset_test_user["user_id"])
         )
         token = token_result.scalar_one()
 
-        # Use the token
+        # Use the token once
         await app_client.post(
             "/api/v1/auth/reset-password",
             json={"token": token.token, "newPassword": "NewSecureP@ssw0rd!"},
         )
-        # Try to use it again
+        # Try to use it again — must be rejected
         resp = await app_client.post(
             "/api/v1/auth/reset-password",
             json={"token": token.token, "newPassword": "AnotherP@ssw0rd!"},
@@ -173,19 +171,17 @@ class TestResetPassword:
         )
         assert resp.status_code == 400
 
-    async def test_weak_password_rejected(self, app_client, test_tenants, db_session):
+    async def test_weak_password_rejected(self, app_client, reset_test_user, db_session):
         """Weak new password returns 400 before the token is consumed."""
         from sqlalchemy import select
-        from app.models import PasswordResetToken, User
+        from app.models import PasswordResetToken
 
-        email = test_tenants["user_a"]["email"]
+        email = reset_test_user["email"]
         with patch("app.api.routes.auth.send_password_reset_email", new_callable=AsyncMock):
             await app_client.post("/api/v1/auth/forgot-password", json={"email": email})
 
-        user_result = await db_session.execute(select(User).where(User.email == email))
-        user = user_result.scalar_one()
         token_result = await db_session.execute(
-            select(PasswordResetToken).where(PasswordResetToken.user_id == user.id)
+            select(PasswordResetToken).where(PasswordResetToken.user_id == reset_test_user["user_id"])
         )
         token = token_result.scalar_one()
 

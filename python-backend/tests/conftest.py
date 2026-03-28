@@ -184,6 +184,49 @@ async def test_tenants(_setup_test_db):
     }
 
 
+@pytest_asyncio.fixture
+async def db_session(_setup_test_db):
+    """Function-scoped async DB session for tests that need direct DB access.
+
+    Uses the same underlying SQLite file as the app, so HTTP-driven writes
+    are visible immediately after commit.
+    """
+    async with _TestSession() as session:
+        yield session
+
+
+@pytest_asyncio.fixture
+async def reset_test_user(_setup_test_db):
+    """Function-scoped throwaway user for C7 password-reset tests.
+
+    Each test that modifies passwords gets its own user so it cannot
+    contaminate session-scoped token_a / token_b fixtures.
+    Returns a dict with 'email' and 'user_id'.
+    """
+    import uuid
+    uid = f"usr_reset_{uuid.uuid4().hex[:8]}"
+    email = f"reset_{uid}@test.local"
+    async with _TestSession() as session:
+        session.add(User(
+            id=uid,
+            organization_id="org_e2e_a",
+            email=email,
+            password_hash=hash_password("OldResetP@ss1!"),
+            full_name="Reset Test User",
+            role="manager",
+            is_active=True,
+            is_superadmin=False,
+        ))
+        await session.commit()
+    yield {"email": email, "user_id": uid}
+    # Cleanup: remove the throwaway user (and cascade-delete any reset tokens)
+    async with _TestSession() as session:
+        user = await session.get(User, uid)
+        if user:
+            await session.delete(user)
+            await session.commit()
+
+
 @pytest_asyncio.fixture(scope="session")
 async def app_client(test_tenants):
     """Real FastAPI ASGI client against the test SQLite database.

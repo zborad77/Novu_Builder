@@ -116,10 +116,13 @@ class TestRBACFoundation:
         with pytest.raises(ValueError, match="Unknown admin capability"):
             require_admin_capability("admin:unknown")
 
-    def test_capability_dependency_wraps_require_superadmin(self):
+    def test_capability_dependency_enforces_superadmin_or_rbac(self):
+        """C8: require_admin_capability checks isSuperAdmin directly and falls back
+        to a DB role-permission lookup — it no longer wraps require_superadmin."""
         dep = require_admin_capability("admin:write")
         src = inspect.getsource(dep)
-        assert "require_superadmin" in src
+        # Either the old pattern (wraps require_superadmin) or the C8 pattern (inline check)
+        assert "require_superadmin" in src or "isSuperAdmin" in src
 
     @pytest.mark.asyncio
     async def test_capability_dep_allows_superadmin(self):
@@ -130,17 +133,16 @@ class TestRBACFoundation:
 
     @pytest.mark.asyncio
     async def test_capability_dep_blocks_impersonated_token(self):
-        """Impersonated tokens must be blocked: require_superadmin (called transitively)
-        raises 403. We verify via require_superadmin directly, since FastAPI DI is not
-        active in unit tests — the transitive call is verified by source inspection."""
-        # Source verification: _check depends on require_superadmin
+        """Impersonated tokens must be blocked at the capability-dependency level.
+        C8: the check is now inline in _check, not via require_superadmin transitively."""
         dep = require_admin_capability("admin:write")
         src = inspect.getsource(dep)
-        assert "require_superadmin" in src
-        # Functional: require_superadmin (the guard) blocks impersonated tokens
+        # Verify the impersonation check is present in the closure source
+        assert "impersonatedBy" in src
+        # Functional: calling _check directly with an impersonated superadmin raises 403
         user = _superadmin_user(impersonatedBy="other-admin-id")
         with pytest.raises(HTTPException) as exc_info:
-            await require_superadmin(current_user=user)
+            await dep(current_user=user)
         assert exc_info.value.status_code == 403
 
     def test_admin_jobs_route_uses_jobs_capability(self):

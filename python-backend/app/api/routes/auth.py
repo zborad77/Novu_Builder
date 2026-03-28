@@ -169,14 +169,12 @@ async def forgot_password(
         pass  # Do not reveal send errors to the caller
 
     await write_audit_log(
-        session=service.session,
+        service.session,
+        current_user_id=user.id,
         action="password_reset_requested",
-        user_id=user.id,
-        user_email=user.email,
-        org_id=user.organization_id,
         resource_type="user",
         resource_id=user.id,
-        ip=request.client.host if request.client else None,
+        detail={},
     )
     return _GENERIC_RESPONSE
 
@@ -216,13 +214,11 @@ async def reset_password(
     await service.session.commit()
 
     await write_audit_log(
-        session=service.session,
+        service.session,
+        current_user_id=user.id,
         action="password_reset",
-        user_id=user.id,
-        user_email=user.email,
-        org_id=user.organization_id,
         resource_type="user",
         resource_id=user.id,
-        ip=request.client.host if request.client else None,
+        detail={},
     )
     return ResetPasswordResponse(message="Password has been reset. Please log in with your new password.")
