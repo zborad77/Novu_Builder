@@ -5,8 +5,10 @@
 #  AUTHORITATIVE restore path for backups produced by scripts/backup.sh.
 #
 #  Usage:
-#    ./ops/restore.sh <db_backup.pgdump>         # interactive confirmation
-#    ./ops/restore.sh <db_backup.pgdump> --yes   # unattended (CI / recovery)
+#    ./ops/restore.sh <db_backup.pgdump>                    # interactive; verify runs first
+#    ./ops/restore.sh <db_backup.pgdump> --yes              # unattended (CI / recovery)
+#    ./ops/restore.sh <db_backup.pgdump> --skip-verify      # bypass verify (explicit)
+#    ./ops/restore.sh <db_backup.pgdump> --yes --skip-verify
 #
 #  This script works with backups produced by:
 #    scripts/backup.sh   → db_TIMESTAMP.pgdump     (AUTHORITATIVE)
@@ -16,6 +18,8 @@
 #  of this file.
 #
 #  What it does:
+#    0. Runs verify_restore.sh against the backup (temp DB, non-destructive)
+#       Skip with --skip-verify (prints WARNING + sleeps 2s)
 #    1. Verifies backup file is non-empty and checksum (if .sha256 exists)
 #    2. Stops backend + worker (DB must be idle)
 #    3. Drops and recreates novu_builder database
@@ -26,10 +30,8 @@
 #    8. Restarts backend + worker
 #    9. Polls health endpoint
 #
-#  RECOMMENDED before running this script (non-destructive pre-check):
-#    python-backend/scripts/verify_restore.sh <backup.pgdump>
-#  This restores the backup into a TEMP database and validates it without
-#  touching production. Run it first whenever possible.
+#  verify_restore.sh requires: psql, pg_restore on host + DATABASE_URL in
+#  python-backend/.env. Use --skip-verify if these are not available.
 #
 #  Requirements: docker compose, curl
 #  Run from: project root (next to docker-compose.yml)
@@ -41,14 +43,22 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 COMPOSE_FILE="$PROJECT_DIR/docker-compose.yml"
 
 BACKUP_FILE="${1:-}"
-AUTO_YES="${2:-}"
+AUTO_YES=""
+SKIP_VERIFY=""
+for _arg in "${@:2}"; do
+  case "$_arg" in
+    --yes)         AUTO_YES="--yes" ;;
+    --skip-verify) SKIP_VERIFY="--skip-verify" ;;
+    *) echo "Unknown argument: $_arg" >&2; exit 1 ;;
+  esac
+done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
 
 # ── Validate input ─────────────────────────────────────────────────────────────
 if [[ -z "$BACKUP_FILE" ]]; then
-  echo "Usage: $0 <db_backup.pgdump> [--yes]"
+  echo "Usage: $0 <db_backup.pgdump> [--yes] [--skip-verify]"
   echo ""
   echo "  For LEGACY .sql.gz backups see the comment at the bottom of this file."
   exit 1
@@ -73,8 +83,18 @@ echo "⚠  This will DROP and RECREATE the novu_builder database."
 echo "   All existing data will be PERMANENTLY DELETED."
 echo ""
 
-echo "RECOMMENDED pre-check (non-destructive, uses temp DB):"
-echo "  python-backend/scripts/verify_restore.sh $(realpath "$BACKUP_FILE" 2>/dev/null || echo "$BACKUP_FILE")"
+# ── Pre-restore verify ─────────────────────────────────────────────────────────
+VERIFY_SCRIPT="$PROJECT_DIR/python-backend/scripts/verify_restore.sh"
+if [[ "$SKIP_VERIFY" == "--skip-verify" ]]; then
+  echo "WARNING: verify skipped — unsafe operation"
+  sleep 2
+else
+  if ! bash "$VERIFY_SCRIPT" "$BACKUP_FILE"; then
+    echo "ERROR: verify_restore.sh FAILED — aborting restore"
+    exit 1
+  fi
+  echo "Verify OK — continuing restore"
+fi
 echo ""
 
 if [[ "$AUTO_YES" != "--yes" ]]; then
