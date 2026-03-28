@@ -64,7 +64,18 @@ ALEMBIC_HEAD=$(docker compose exec -T db psql -U "$POSTGRES_USER" "$POSTGRES_DB"
   | tr -d ' \r\n') || ALEMBIC_HEAD="unknown"
 [[ -n "$ALEMBIC_HEAD" ]] || ALEMBIC_HEAD="unknown"
 GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-cat > "$MANIFEST_FILE" <<EOF
+
+# KROK 1: warn if metadata could not be resolved
+[[ "$ALEMBIC_HEAD" == "unknown" ]] && echo "WARNING: alembic head unknown"
+[[ "$GIT_SHA"      == "unknown" ]] && echo "WARNING: git sha unknown"
+
+# KROK 2+3: manifest only if pg_dump + checksum both produced non-empty files
+[ -s "$DB_FILE" ]              || { echo "ERROR: DB file missing or empty — manifest not written"; exit 1; }
+[ -s "${DB_FILE}.sha256" ]     || { echo "ERROR: Checksum file missing or empty — manifest not written"; exit 1; }
+
+# KROK 4: atomic write (temp → mv prevents partial manifest on crash/interrupt)
+MANIFEST_TMP="${MANIFEST_FILE}.tmp"
+cat > "$MANIFEST_TMP" <<EOF
 {
   "timestamp": "${TIMESTAMP}",
   "db_file": "db_${TIMESTAMP}.pgdump",
@@ -74,6 +85,7 @@ cat > "$MANIFEST_FILE" <<EOF
   "backup_version": "v2"
 }
 EOF
+mv "$MANIFEST_TMP" "$MANIFEST_FILE"
 echo "  → Manifest: $MANIFEST_FILE"
 
 # ── 2. File storage archive ───────────────────────────────────────────────────
