@@ -97,3 +97,17 @@ find "$BACKUP_DIR" -maxdepth 1 -name "storage_*.tar.gz"   -mtime +"$RETAIN_DAYS"
 echo "[$(date -Iseconds)] Backup complete."
 echo "  DB:      $DB_FILE  ($(du -sh "$DB_FILE" | cut -f1))"
 echo "  Storage: $STORAGE_FILE  ($(du -sh "$STORAGE_FILE" | cut -f1))"
+
+# ── 4. Off-site sync (optional) ───────────────────────────────────────────────
+# Set BACKUP_REMOTE to enable: e.g. BACKUP_REMOTE=user@host:/remote/backups
+# Failure does NOT affect the exit status of the local backup.
+if [[ -n "${BACKUP_REMOTE:-}" ]]; then
+  echo "[$(date -Iseconds)] Syncing to remote: $BACKUP_REMOTE"
+  _SYNC_FILES=( "$DB_FILE" "${DB_FILE}.sha256" )
+  [[ -f "$MANIFEST_FILE" ]] && _SYNC_FILES+=( "$MANIFEST_FILE" )
+  if rsync -az "${_SYNC_FILES[@]}" "$BACKUP_REMOTE/"; then
+    echo "  → Remote sync OK"
+  else
+    echo "  ⚠ WARNING: remote sync failed — local backup is intact"
+  fi
+fi
