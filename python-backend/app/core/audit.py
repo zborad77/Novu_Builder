@@ -67,7 +67,12 @@ _PATH_ACTIONS: dict[tuple[str, str], str] = {
     ("POST", "/pricebooks"): "pricebook.create",
 }
 
-_SKIP_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc"}
+_SKIP_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc",
+               # These auth endpoints identify the user from a reset token, not from a JWT.
+               # Middleware would log user_id=None with a generic fallback action — useless.
+               # Explicit write_audit_log() calls inside the routes carry the real user_id
+               # and semantic action names (password_reset_requested / password_reset).
+               "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password"}
 # Admin routes have explicit write_audit_log() calls with richer detail (target_email,
 # target_org, etc.) — middleware logging would create duplicates with less context.
 _SKIP_PREFIXES = ("/mock-storage", "/api/v1/admin")

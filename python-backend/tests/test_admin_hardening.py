@@ -368,3 +368,27 @@ class TestAdminPasswordResetInvalidatesTokens:
             "tokens_valid_after must be a current timestamp"
         )
         mock_session.commit.assert_called()
+
+
+class TestAuditMiddlewareDedup:
+    """Middleware must not produce duplicate audit rows for routes that call write_audit_log() directly."""
+
+    def test_forgot_password_is_in_skip_paths(self):
+        from app.core.audit import _SKIP_PATHS
+        assert "/api/v1/auth/forgot-password" in _SKIP_PATHS, (
+            "forgot-password is unauthenticated — middleware would log user_id=None; "
+            "explicit write_audit_log() inside the route carries the real user_id"
+        )
+
+    def test_reset_password_is_in_skip_paths(self):
+        from app.core.audit import _SKIP_PATHS
+        assert "/api/v1/auth/reset-password" in _SKIP_PATHS, (
+            "reset-password is unauthenticated — middleware would log user_id=None; "
+            "explicit write_audit_log() inside the route carries the real user_id"
+        )
+
+    def test_admin_prefix_is_skipped(self):
+        from app.core.audit import _SKIP_PREFIXES
+        assert any(p == "/api/v1/admin" for p in _SKIP_PREFIXES), (
+            "admin routes use explicit write_audit_log() with business detail — middleware must not double-log"
+        )
