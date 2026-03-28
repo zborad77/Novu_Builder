@@ -38,7 +38,7 @@ Poznamka k aktualnimu stavu:
 - hlavni pracovni cast uz bezi nad backend API na `http://127.0.0.1:8000/api/v1`
 - cast navigace a nektere sekce jsou zatim jen pripraveny stub pro dalsi kroky
 
-React v `novu-react/` zustava jen jako referencni prototyp workflow a UI logiky.
+Slozka `novu-react/` je v repozitari ponechana bokem a neni soucasti aktualniho desktop workflow.
 
 ## Build
 

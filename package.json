@@ -3,10 +3,7 @@
   "version": "1.0.0",
   "description": "Root helper scripts for the FotoNabidka / NOVU Builder product.",
   "scripts": {
-    "api:dev": "python -m uvicorn app.main:app --app-dir python-backend --host 127.0.0.1 --port 8000",
-    "web:dev": "npm --prefix novu-react run dev",
-    "web:build": "npm --prefix novu-react run build",
-    "web:lint": "npm --prefix novu-react run lint"
+    "api:dev": "python -m uvicorn app.main:app --app-dir python-backend --host 127.0.0.1 --port 8000"
   },
   "keywords": [],
   "author": "",
