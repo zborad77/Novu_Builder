@@ -1,20 +1,33 @@
 # Novu Builder — Operations Guide
 
 Minimal single-host operations reference.
-Not a replacement for a full runbook — expands as the system grows.
+Pro detailní runbook, deployment postup a backup/restore viz:
+- [RUNBOOK.md](RUNBOOK.md) — incident response
+- [DEPLOY.md](DEPLOY.md) — deployment a rollback
+- [BACKUP_RESTORE.md](BACKUP_RESTORE.md) — zálohy a obnova
+- [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) — pre-deploy checklist
+- [PRODUCTION_VERDICT.md](PRODUCTION_VERDICT.md) — readiness verdict
 
 ---
 
 ## Prerequisites
 
 - Docker + Docker Compose v2
-- A `.env` file in the project root with at minimum:
+- A `.env.production` file in the project root — copy from `.env.production.example`:
 
 ```
-POSTGRES_PASSWORD=<strong-random>
-JWT_SECRET=<strong-random-32-chars-min>
-AI_ANALYSIS_PROVIDER=mock          # or anthropic / openai
-ANTHROPIC_API_KEY=                 # required when provider=anthropic
+POSTGRES_PASSWORD=<openssl rand -hex 32>
+REDIS_PASSWORD=<openssl rand -hex 32>
+JWT_SECRET=<openssl rand -hex 32>
+METRICS_AUTH_TOKEN=<openssl rand -hex 32>
+METRICS_AUTH_ENABLED=true
+AI_ANALYSIS_PROVIDER=mock          # or claude / openai
+ANTHROPIC_API_KEY=                 # required when provider=claude
+```
+
+Spouštěj jako:
+```bash
+docker compose --env-file .env.production up -d
 ```
 
 ---
@@ -60,21 +73,15 @@ docker compose run --rm backend alembic revision --autogenerate -m "describe cha
 
 ## Health & metrics
 
-| Endpoint      | Auth     | Purpose                                     |
-|---------------|----------|---------------------------------------------|
-| `GET /alive`  | none     | Liveness probe — process is up              |
-| `GET /health` | none     | Readiness + DB connectivity + job counts    |
-| `GET /metrics`| **none** | Prometheus scrape — **restrict at proxy** |
+| Endpoint                     | Auth                         | Purpose                                      |
+|------------------------------|------------------------------|----------------------------------------------|
+| `GET /api/v1/alive`          | none                         | Liveness probe — process is up               |
+| `GET /api/v1/health`         | none                         | Readiness + DB connectivity (public, minimal) |
+| `GET /api/v1/health/internal`| superadmin token + interní IP| Detailní stav: worker, joby, startup checks   |
+| `GET /api/v1/metrics`        | Bearer `METRICS_AUTH_TOKEN`  | Prometheus scrape — IP whitelist v nginx      |
 
-`/metrics` is intentionally unauthenticated for Prometheus scraping.
-In production, restrict it at the nginx layer:
-
-```nginx
-location /metrics {
-    allow 10.0.0.0/8;   # internal Prometheus scraper
-    deny all;
-}
-```
+`/api/v1/metrics` vyžaduje Bearer token (`METRICS_AUTH_ENABLED=true`, výchozí).
+nginx navíc povoluje přístup pouze z interní sítě (10.x, 172.x, 192.168.x, localhost).
 
 ### Key metrics exposed
 
@@ -83,15 +90,22 @@ location /metrics {
 | `http_requests_total` | Counter | Requests by method / path template / status |
 | `http_request_duration_seconds` | Histogram | Latency by method / path template / status |
 | `http_requests_in_progress` | Gauge | Concurrency by method |
+| `novu_db_alive` | Gauge | 1.0 = DB dostupná, 0.0 = výpadek |
+| `novu_worker_alive` | Gauge | 1.0 = worker aktivní (heartbeat < 90 s) |
+| `novu_jobs_queued` | Gauge | Počet jobů čekajících na zpracování |
+| `novu_jobs_running` | Gauge | Počet právě běžících jobů |
 
-Prometheus scrape config example:
+Prometheus scrape config:
 
 ```yaml
 scrape_configs:
   - job_name: novu-backend
     static_configs:
-      - targets: ["localhost:8000"]
-    metrics_path: /metrics
+      - targets: ["<host>:443"]
+    metrics_path: /api/v1/metrics
+    scheme: https
+    authorization:
+      credentials: "<METRICS_AUTH_TOKEN>"
 ```
 
 ---
@@ -182,23 +196,19 @@ docker compose start backend
 
 ## Worker process (R-19)
 
-The analysis job worker runs as a separate process consuming the Redis queue.
-Add it to docker-compose as a second backend service when needed:
+Worker je součástí `docker-compose.yml` jako samostatná služba `worker`.
+Spouští se automaticky s `docker compose up -d` a restartuje se při pádu (`restart: unless-stopped`).
 
-```yaml
-worker:
-  build:
-    context: ./python-backend
-  restart: unless-stopped
-  depends_on:
-    db:
-      condition: service_healthy
-    redis:
-      condition: service_healthy
-  environment:
-    <<: *backend-env    # share env with backend
-  command: ["python", "-m", "app.worker.runner"]
+```bash
+# Stav workeru
+docker compose ps worker
+docker compose logs -f worker
+
+# Worker heartbeat (obnovuje se každých 30 s, TTL = 120 s)
+docker compose exec redis redis-cli -a "$REDIS_PASSWORD" GET worker:heartbeat
 ```
+
+Pokud jsou joby zaseknuté ve stavu `queued`, worker nejspíš neběží — viz RUNBOOK.md INCIDENT-01.
 
 ---
 
