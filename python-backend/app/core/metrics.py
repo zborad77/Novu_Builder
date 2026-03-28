@@ -1,17 +1,60 @@
 """Application-level Prometheus metrics (R-38).
 
 Three metrics cover the minimum useful signal:
-  http_requests_total          — request count by method / path_template / status
-  http_request_duration_seconds — latency histogram (same labels)
-  http_requests_in_progress     — concurrency gauge by method
+  http_requests_total           request count by method / path_template / status
+  http_request_duration_seconds latency histogram (same labels)
+  http_requests_in_progress     concurrency gauge by method
 
 The log_requests middleware in app/main.py populates these.
 The /metrics endpoint in app/api/routes/system.py exposes them.
 
-Path template (e.g. /api/v1/cases/{case_id}) is used as the label, NOT the
-raw URL, to prevent label cardinality explosion from per-resource IDs.
+Path template (e.g. /api/v1/cases/{case_id}) is used as the label, not the raw
+URL, to prevent label cardinality explosion from per-resource IDs.
 """
-from prometheus_client import Counter, Gauge, Histogram
+
+from __future__ import annotations
+
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+try:
+    from prometheus_client import Counter, Gauge, Histogram
+
+    PROMETHEUS_CLIENT_AVAILABLE = True
+except ModuleNotFoundError as exc:
+    logger.warning(
+        "metrics.disabled",
+        reason="prometheus_client_not_installed",
+        error=str(exc),
+    )
+    PROMETHEUS_CLIENT_AVAILABLE = False
+
+    class _NoopMetric:
+        def labels(self, *args, **kwargs):
+            return self
+
+        def inc(self, *args, **kwargs) -> None:
+            return None
+
+        def dec(self, *args, **kwargs) -> None:
+            return None
+
+        def observe(self, *args, **kwargs) -> None:
+            return None
+
+        def set(self, *args, **kwargs) -> None:
+            return None
+
+    def Counter(*args, **kwargs):  # type: ignore[misc]
+        return _NoopMetric()
+
+    def Gauge(*args, **kwargs):  # type: ignore[misc]
+        return _NoopMetric()
+
+    def Histogram(*args, **kwargs):  # type: ignore[misc]
+        return _NoopMetric()
+
 
 HTTP_REQUESTS_TOTAL = Counter(
     "http_requests_total",
@@ -32,8 +75,8 @@ HTTP_REQUESTS_IN_PROGRESS = Gauge(
     ["method"],
 )
 
-# ── Operational health gauges (C5) ────────────────────────────────────────────
-# Refreshed on every /metrics scrape inside system.py::metrics()
+# Operational health gauges (C5)
+# Refreshed on every /metrics scrape inside system.py::metrics().
 
 DB_ALIVE = Gauge(
     "novu_db_alive",

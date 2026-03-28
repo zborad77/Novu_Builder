@@ -123,6 +123,9 @@ Poznamky:
 - `import_reference_cases.py` je pro dev/test workflow, ne pro produkci
 - pokud nechces testovaci reference, krok s importem muzes preskocit
 - bez lokalni `.env` kopie se projekt na novem PC nespusti predvidatelne
+- na Windows s Pythonem 3.14 se `--reload` v tomto repu automaticky prepne na
+  Uvicorn `StatReload` fallback, protoze `watchfiles` backend tu pada na
+  `Access is denied`
 
 Stejny backend setup jde z korene repozitare pripravit i automaticky:
 

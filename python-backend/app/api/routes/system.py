@@ -3,26 +3,38 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import func, select, text
+import structlog
 
 from app.api.deps import require_superadmin
 from app.core.config import get_settings
-from app.core.metrics import DB_ALIVE, JOBS_QUEUED, JOBS_RUNNING, WORKER_ALIVE
+from app.core.metrics import (
+    DB_ALIVE,
+    JOBS_QUEUED,
+    JOBS_RUNNING,
+    PROMETHEUS_CLIENT_AVAILABLE,
+    WORKER_ALIVE,
+)
 from app.db.session import AsyncSessionFactory
 from app.models import AnalysisJob
 from app.schemas.auth import AuthUserRead
 
 router = APIRouter()
+logger = structlog.get_logger(__name__)
+
+try:
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+except ModuleNotFoundError:
+    CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
+    generate_latest = None
 
 
 async def _refresh_operational_metrics(request: Request) -> None:
     """Refresh DB/worker/job gauges before each Prometheus scrape (C5).
 
-    Failures are silently swallowed — a missing gauge value is better than a
+    Failures are silently swallowed; a missing gauge value is better than a
     broken scrape endpoint.
     """
-    # DB alive + job counts
     try:
         async with AsyncSessionFactory() as session:
             await session.execute(text("SELECT 1"))
@@ -39,7 +51,6 @@ async def _refresh_operational_metrics(request: Request) -> None:
     except Exception:
         DB_ALIVE.set(0)
 
-    # Worker heartbeat
     try:
         redis = getattr(request.app.state, "job_queue", None)
         if redis is not None:
@@ -49,25 +60,23 @@ async def _refresh_operational_metrics(request: Request) -> None:
                 WORKER_ALIVE.set(1 if (datetime.now(UTC) - ts).total_seconds() < 90 else 0)
             else:
                 WORKER_ALIVE.set(0)
-        # If Redis is unavailable, leave WORKER_ALIVE unchanged (don't flip to 0 on transient error)
     except Exception:
         pass
 
 
 @router.get("/metrics", include_in_schema=False)
 async def metrics(request: Request) -> Response:
-    """Prometheus metrics scrape endpoint (R-38).
+    """Prometheus metrics scrape endpoint (R-38)."""
+    if not PROMETHEUS_CLIENT_AVAILABLE or generate_latest is None:
+        logger.warning("metrics.scrape_unavailable", reason="prometheus_client_not_installed")
+        raise HTTPException(
+            status_code=503,
+            detail="Prometheus metrics are unavailable because prometheus-client is not installed.",
+        )
 
-    Returns metrics in Prometheus text exposition format.
-    When METRICS_AUTH_ENABLED=true (default), requires:
-        Authorization: Bearer <METRICS_AUTH_TOKEN>
-    Set METRICS_AUTH_ENABLED=false to allow unauthenticated scraping (e.g. behind
-    a trusted internal network where nginx IP-whitelisting is the sole guard).
-    """
     settings = get_settings()
     if settings.metrics_auth_enabled:
         if not settings.metrics_auth_token:
-            # Token not configured — fail closed rather than exposing metrics.
             raise HTTPException(status_code=401, detail="Metrics auth token not configured.")
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
@@ -82,7 +91,7 @@ async def metrics(request: Request) -> Response:
 
 @router.get("/alive")
 async def alive() -> dict:
-    """Liveness probe — confirms the process is running. No DB, no latency."""
+    """Liveness probe; confirms the process is running."""
     return {"status": "alive"}
 
 
@@ -92,13 +101,13 @@ async def root() -> dict:
     return {
         "message": f"{settings.app_name} Python backend skeleton",
         "status": "ok",
-        "environment": settings.app_env
+        "environment": settings.app_env,
     }
 
 
 @router.get("/health")
 async def health(request: Request) -> dict:
-    """Public health check — minimal, safe for load balancer probes."""
+    """Public health check; minimal, safe for load balancer probes."""
     db_live = False
     try:
         async with AsyncSessionFactory() as session:
@@ -120,10 +129,7 @@ async def health_internal(
     request: Request,
     _: AuthUserRead = Depends(require_superadmin),
 ) -> dict:
-    """Detailed internal health check — DB stats, job counts, startup checks.
-
-    Requires superadmin token. Additionally restricted to internal IPs at nginx.
-    """
+    """Detailed internal health check; DB stats, job counts, startup checks."""
     settings = get_settings()
     ready = all(value == "ok" for value in request.app.state.startup_checks.values())
 
@@ -159,7 +165,6 @@ async def health_internal(
     except Exception:
         pass
 
-    # Worker heartbeat — set by app/worker/runner.py every 30 s with 120 s TTL
     worker_alive: bool | None = None
     worker_last_seen: str | None = None
     try:
@@ -173,7 +178,7 @@ async def health_internal(
             else:
                 worker_alive = False
     except Exception:
-        worker_alive = None  # Redis unavailable — cannot determine
+        worker_alive = None
 
     return {
         "status": "ok" if (ready and db_live) else "degraded",
