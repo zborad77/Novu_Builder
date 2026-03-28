@@ -89,6 +89,20 @@ echo "⚠  This will DROP and RECREATE the novu_builder database."
 echo "   All existing data will be PERMANENTLY DELETED."
 echo ""
 
+# ── Manifest validation ────────────────────────────────────────────────────────
+MANIFEST_FILE="${BACKUP_FILE%.pgdump}.json"
+if [ ! -f "$MANIFEST_FILE" ]; then
+  echo "ERROR: manifest file not found"
+  exit 1
+fi
+grep -q '"db_file"'        "$MANIFEST_FILE" || { echo "ERROR: manifest missing db_file";        exit 1; }
+grep -q '"checksum_file"'  "$MANIFEST_FILE" || { echo "ERROR: manifest missing checksum_file";  exit 1; }
+grep -q '"backup_version"' "$MANIFEST_FILE" || { echo "ERROR: manifest missing backup_version"; exit 1; }
+grep -q "\"$(basename "$BACKUP_FILE")\""          "$MANIFEST_FILE" || { echo "ERROR: manifest mismatch"; exit 1; }
+grep -q "\"$(basename "${BACKUP_FILE}.sha256")\"" "$MANIFEST_FILE" || { echo "ERROR: manifest mismatch"; exit 1; }
+log "✓ Manifest OK"
+echo ""
+
 # ── Checksum enforcement (mandatory) ──────────────────────────────────────────
 if [ ! -f "${BACKUP_FILE}.sha256" ]; then
   die "Checksum file not found: ${BACKUP_FILE}.sha256 — aborting (generate with: sha256sum \"$BACKUP_FILE\" > \"${BACKUP_FILE}.sha256\")"
