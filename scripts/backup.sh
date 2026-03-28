@@ -82,8 +82,10 @@ GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 # KROK 2+3: manifest only if pg_dump + checksum both produced non-empty files
 [ -s "$DB_FILE" ]              || { echo "ERROR: DB file missing or empty — manifest not written"; exit 1; }
 [ -s "${DB_FILE}.sha256" ]     || { echo "ERROR: Checksum file missing or empty — manifest not written"; exit 1; }
+[ "$(wc -c < "$DB_FILE")" -gt 1024 ] || { echo "ERROR: DB dump too small (<1KB) — may be corrupt"; exit 1; }
 
 # KROK 4: atomic write (temp → mv prevents partial manifest on crash/interrupt)
+trap 'rm -f "$MANIFEST_TMP"' EXIT
 MANIFEST_TMP="${MANIFEST_FILE}.tmp"
 cat > "$MANIFEST_TMP" <<EOF
 {
