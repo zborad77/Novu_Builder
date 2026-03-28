@@ -63,6 +63,8 @@ Autoritativní DB formát je `.pgdump` (pg_dump custom archive). Všechny skript
 
 **Poznámka k Docker Compose cestě:** `scripts/backup.sh` volá `docker compose exec db pg_dump` — nevyžaduje pg_dump nainstalovaný na hostu. Pro restore přes `ops/restore.sh` se backup soubor zkopíruje do kontejneru přes `docker cp`, protože `pg_restore` (custom format) vyžaduje seekable soubor.
 
+**Poznámka k verify_restore.sh:** Skript používá přímé pg připojení (čte `DATABASE_URL` z `python-backend/.env`). Na hostu musí být dostupné `psql` a `pg_restore`. Pokud je DB dostupná jen přes Docker, verify nelze spustit přímo z hostu — v takovém případě ověřuj zálohu po restore z `ops/restore.sh` (ten kontroluje kritické tabulky a alembic_version).
+
 ---
 
 ## Manuální záloha DB (těsně před migrací nebo deployem)
@@ -86,7 +88,19 @@ ls -lh /backups/db_manual_${TIMESTAMP}.pgdump   # ověř velikost (nesmí být 0
 
 ### Postup
 
-**Automatizovaný způsob (doporučeno):**
+**Krok 0 — Verify před restore (doporučeno; nedestruktivní)**
+
+Před spuštěním destructive restore ověř, že záloha je skutečně obnovitelná. Restore probíhá do dočasné DB a po sobě uklidí:
+
+```bash
+# Vyžaduje: psql, pg_restore na hostu + DATABASE_URL v python-backend/.env
+python-backend/scripts/verify_restore.sh /backups/db_20260328_020000.pgdump
+# Výstup: PASS nebo FAIL s výpisem per-tabulkových kontrol
+```
+
+Pokud `verify_restore.sh` nelze spustit (pg_restore není na hostu), přeskočte krok 0 — `ops/restore.sh` provede vlastní post-restore kontroly.
+
+**Krok 1 — Automatizovaný restore (doporučeno):**
 
 ```bash
 # Jednopříkazový restore — zastaví services, obnoví DB, spustí migrace, nastartuje
@@ -105,10 +119,13 @@ ls -lh /backups/db_manual_${TIMESTAMP}.pgdump   # ověř velikost (nesmí být 0
 # 2. Stop backend a worker — DB musí být volná pro zápis
 docker compose stop backend worker
 
-# 3. Ověř dostupnost zálohy
+# 3. Ověř dostupnost zálohy a checksum
 ls -lh /backups/db_*.pgdump
 # Vyber správný soubor (nejnovější před incidentem)
 BACKUP_FILE="/backups/db_20260328_020000.pgdump"
+
+# Ověř checksum (pokud existuje)
+sha256sum --check "${BACKUP_FILE}.sha256"
 
 # 4. Drop a recreate DB
 docker compose exec db psql -U novu postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='novu_builder' AND pid <> pg_backend_pid();"
@@ -121,10 +138,16 @@ docker cp "$BACKUP_FILE" "$CONTAINER_ID:/tmp/novu_restore.pgdump"
 docker compose exec -T db pg_restore -U novu -d novu_builder --no-password --jobs=4 /tmp/novu_restore.pgdump
 docker compose exec -T db rm -f /tmp/novu_restore.pgdump
 
-# 6. Ověř počet tabulek po restore
-docker compose exec db psql -U novu novu_builder \
-  -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';"
-# Musí být 10+ tabulek
+# 6. Ověř kritické tabulky a alembic_version
+# (neplať se COUNT(*) >= N — ověřuj konkrétní tabulky)
+for tbl in organizations users projects audit_logs role_permissions; do
+  docker compose exec -T db psql -U novu novu_builder --tuples-only --no-align \
+    -c "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='${tbl}');"
+  # Musí vypsat 't' pro každou tabulku
+done
+docker compose exec -T db psql -U novu novu_builder --tuples-only --no-align \
+  -c "SELECT version_num FROM alembic_version;"
+# Musí vypsat revision ID (neprázdné)
 
 # 7. Aplikuj čekající migrace (pokud restore je ze starší zálohy)
 docker compose run --rm backend alembic upgrade head
@@ -142,7 +165,7 @@ docker compose start backend worker
 **Kdy:** Ztracené soubory, corrupted volume, přesun na jiný host
 
 ```bash
-# 1. Stop backend a worker
+# 1. Stop backend a worker (worker také přistupuje ke storage)
 docker compose stop backend worker
 
 # 2. Vyber zálohu
@@ -204,9 +227,9 @@ docker compose exec db psql -U novu novu_builder \
 docker compose exec db psql -U novu novu_builder \
   -c "SELECT COUNT(*) as projects FROM projects;"
 
-# 3. Alembic je na HEAD
+# 3. Alembic je na HEAD (aktuální HEAD zjistíš z 'alembic history | head -1')
 docker compose run --rm backend alembic current
-# Musí: 20260326_0018 (head)
+# Musí vypsat revision označenou (head)
 
 # 4. Login funguje
 curl -X POST http://localhost:8000/api/v1/auth/login \
@@ -260,4 +283,4 @@ Následující **NENÍ** implementováno a pro produkci je potřeba doplnit:
 
 ---
 
-*Poslední revize: 2026-03-28 (sjednocení na .pgdump jako autoritativní formát) | Platí pro v0.5.x | viz také: ops/restore.sh, python-backend/scripts/verify_restore.sh*
+*Poslední revize: 2026-03-28 (sjednocení na .pgdump + verify workflow) | Platí pro v0.5.x | viz také: ops/restore.sh, python-backend/scripts/verify_restore.sh*

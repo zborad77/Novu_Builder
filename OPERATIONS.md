@@ -149,23 +149,34 @@ RETAIN_DAYS=14 BACKUP_DIR=/backups ./scripts/backup.sh
 0 2 * * * cd /opt/novu-builder && BACKUP_DIR=/backups ./scripts/backup.sh >> /var/log/novu-backup.log 2>&1
 ```
 
+### Verify before restore (recommended, non-destructive)
+
+```bash
+# Restore to TEMP DB, validate, clean up — does not touch production
+# Requires: psql, pg_restore on host + DATABASE_URL in python-backend/.env
+python-backend/scripts/verify_restore.sh /backups/db_YYYYMMDD_HHMMSS.pgdump
+```
+
 ### Restore procedure
 
 #### 1. Database restore
 
 ```bash
-# One-command restore (stops services, restores, runs migrations, restarts)
+# One-command restore (stops services, restores .pgdump, runs migrations, restarts)
 ./ops/restore.sh /backups/db_YYYYMMDD_HHMMSS.pgdump
 
 # Unattended (CI / automation)
 ./ops/restore.sh /backups/db_YYYYMMDD_HHMMSS.pgdump --yes
 ```
 
+ops/restore.sh performs post-restore integrity checks (specific critical tables +
+alembic_version populated) before restarting services.
+
 #### 2. Storage restore
 
 ```bash
-# Stop backend first
-docker compose stop backend
+# Stop backend and worker (both access storage)
+docker compose stop backend worker
 
 # Clear and restore the volume
 docker run --rm \
@@ -174,13 +185,14 @@ docker run --rm \
   alpine \
   sh -c "rm -rf /data/* && tar xzf /backup/storage_YYYYMMDD_HHMMSS.tar.gz -C /"
 
-docker compose start backend
+docker compose start backend worker
 ```
 
 ### What is NOT automated
 
 - Off-site / remote copy of backup files (use `rsync`, `rclone`, S3, etc.)
-- Backup verification (restore drill)
+- Backup verify to temp DB is automated via `python-backend/scripts/verify_restore.sh`
+- Full restore drill on clean environment (separate host) remains manual
 - Point-in-time recovery (needs WAL archiving or Barman — out of scope for single-host)
 
 ---

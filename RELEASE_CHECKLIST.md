@@ -88,7 +88,8 @@
 | 6.1 | Zálohovací skript `scripts/backup.sh` je funkční | `BACKUP_DIR=/tmp/test-backup ./scripts/backup.sh` — vzniknou soubory `.pgdump`, `.pgdump.sha256` a `.tar.gz` | ☐ |
 | 6.2 | Cron job pro denní zálohu je nastaven | `crontab -l | grep backup.sh` | ☐ |
 | 6.3 | Zálohy se kopírují na vzdálené úložiště (off-site) | Rsync/S3/jiný mechanismus aktivní | ☐ |
-| 6.4 | Postup restore byl ověřen na jiném prostředí (restore drill) | Viz BACKUP_RESTORE.md | ☐ |
+| 6.4 | Verify zálohy prošel (PASS) | `python-backend/scripts/verify_restore.sh <nejnovější .pgdump>` — výstup PASS | ☐ |
+| 6.5 | Postup restore byl ověřen na jiném prostředí (restore drill) | Viz BACKUP_RESTORE.md | ☐ |
 
 ---
 

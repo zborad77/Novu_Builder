@@ -15,37 +15,62 @@ alembic current
 alembic history --verbose
 ```
 
+---
+
 ## Záloha
 
+**Autoritativní backup entrypoint** pro produkci je `scripts/backup.sh` v kořeni projektu
+(produkuje `.pgdump` + `.sha256`, používá `docker compose exec db` — nevyžaduje pg_dump na hostu).
+
+Skripty níže jsou **alternativní cesta** pro případy, kdy je potřeba přímé pg připojení
+(bez Docker Compose), nebo pro lokální vývoj.
+
 ```bash
-# Záloha dev DB
+# Záloha přes přímé pg připojení (vyžaduje pg_dump nainstalovaný na hostu)
+# Zálohy se ukládají do python-backend/backups/ — JINÝ adresář než scripts/backup.sh
 ./scripts/backup_db.sh
 
-# Záloha produkce
+# S explicitním env (produkce)
 APP_ENV=production ./scripts/backup_db.sh
 
-# Zálohy se ukládají do python-backend/backups/
-# Starší než 14 kusů se automaticky mažou (BACKUP_KEEP=14)
+# Zálohy starší než 14 kusů se automaticky mažou (BACKUP_KEEP=14)
 ```
+
+Výstup: `python-backend/backups/novu_TIMESTAMP.pgdump` + `.sha256`
+
+---
 
 ## Restore
 
 ```bash
 # POZOR: smaže a přepíše celou DB
+# Pro Docker Compose produkci použij raději: ./ops/restore.sh <backup.pgdump>
 ./scripts/restore_db.sh backups/novu_20260324_120000.pgdump
 
 # Bez potvrzovacího promptu (pro CI/automatizaci)
 ./scripts/restore_db.sh backups/novu_20260324_120000.pgdump --yes
 ```
 
+---
+
 ## Ověření zálohy (bez rizika)
 
 ```bash
-# Obnoví zálohu do dočasné DB, ověří integritu a schema, pak DB zahodí
+# Obnoví zálohu do dočasné DB, ověří strukturu a schema, pak DB zahodí
+# Vyžaduje: psql, pg_restore na hostu + DATABASE_URL v python-backend/.env
 ./scripts/verify_restore.sh backups/novu_20260324_120000.pgdump
 ```
 
-## Cron záloha (příklad)
+Viz také: `BACKUP_RESTORE.md` pro celkový přehled workflow.
+
+---
+
+## Cron záloha
+
+> Pokud používáš Docker Compose produkci, preferuj cron přes `scripts/backup.sh`
+> (kořen projektu) — nevyžaduje pg_dump na hostu.
+
+Alternativní cron přes přímé pg připojení:
 
 ```cron
 # Každý den ve 2:00 — flock zabrání spuštění duplicitního jobu
