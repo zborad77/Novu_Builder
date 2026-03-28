@@ -50,6 +50,19 @@ aws s3 sync /backups/ s3://novu-backups/$(hostname)/ --storage-class STANDARD_IA
 
 ---
 
+## Přehled dostupných backup/restore skriptů
+
+Repozitář obsahuje **dvě nezávislé** zálohovací cesty. Každá má vlastní restore skript.
+
+| Cesta | Backup skript | Formát výstupu | Restore skript | Verify skript |
+|-------|--------------|----------------|----------------|---------------|
+| **Docker Compose** (doporučeno pro produkci) | `scripts/backup.sh` nebo `ops/backup.sh` | `db_TIMESTAMP.sql.gz` | **`ops/restore.sh`** | manuálně dle sekce Validace |
+| **Přímý pg_dump** (vyžaduje pg_dump na hostu) | `python-backend/scripts/backup_db.sh` | `novu_TIMESTAMP.pgdump` + `.sha256` | `python-backend/scripts/restore_db.sh` | `python-backend/scripts/verify_restore.sh` |
+
+**Produkční doporučení:** Používej Docker Compose cestu — záloha i restore probíhají přes `docker compose exec`, nevyžadují pg_dump nainstalovaný na hostu.
+
+---
+
 ## Manuální záloha DB (těsně před migrací nebo deployem)
 
 ```bash
@@ -69,6 +82,18 @@ ls -lh /backups/db_manual_${TIMESTAMP}.sql.gz   # ověř velikost (nesmí být 0
 **Kdy:** Korumpovaná data, selhání migrace, havárie disku
 
 ### Postup
+
+**Automatizovaný způsob (doporučeno):**
+
+```bash
+# Jednopříkazový restore — zastaví services, obnoví DB, spustí migrace, nastartuje
+./ops/restore.sh /backups/db_20260328_020000.sql.gz
+
+# Bez interaktivního potvrzení (pro automatizaci)
+./ops/restore.sh /backups/db_20260328_020000.sql.gz --yes
+```
+
+**Manuální způsob (krok po kroku):**
 
 ```bash
 # 1. ZAPIŠ: datum, čas, záloha, ze které se obnovuje, důvod
@@ -228,4 +253,4 @@ Následující **NENÍ** implementováno a pro produkci je potřeba doplnit:
 
 ---
 
-*Poslední revize: 2026-03-28 | Platí pro v0.5.x*
+*Poslední revize: 2026-03-28 | Platí pro v0.5.x | viz také: ops/restore.sh, python-backend/scripts/verify_restore.sh*

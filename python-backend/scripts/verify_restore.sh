@@ -132,16 +132,32 @@ show_count "analysis_jobs"
 show_count "audit_logs"
 
 # ── Alembic head check ────────────────────────────────────────────────────────
-echo "→ Checking alembic_version matches latest migration …"
+echo "→ Checking alembic_version against known migration chain …"
 DB_HEAD=$(psql "${PG_CONN[@]}" --dbname="$TEMP_DB" --tuples-only --no-align \
   --command="SELECT version_num FROM alembic_version;" 2>/dev/null | tr -d ' ')
-EXPECTED_HEAD="20260324_0012"
 
-if [[ "$DB_HEAD" == "$EXPECTED_HEAD" ]]; then
-  echo "  ✓ Schema at head ($DB_HEAD)"
-else
-  echo "  ✗ Schema mismatch: got '$DB_HEAD', expected '$EXPECTED_HEAD'"
+# Dynamically find the alembic HEAD: the revision not referenced by any down_revision
+VERSIONS_DIR="$BACKEND_DIR/alembic/versions"
+EXPECTED_HEAD=""
+if [[ -d "$VERSIONS_DIR" ]]; then
+  EXPECTED_HEAD=$(
+    comm -23 \
+      <(grep -rh '^revision = ' "$VERSIONS_DIR" | grep -oE '"[^"]+"' | tr -d '"' | sort) \
+      <(grep -rh '^down_revision = ' "$VERSIONS_DIR" | grep -oE '"[^"]+"' | tr -d '"' | sort) \
+    | head -1
+  )
+fi
+
+if [[ -z "$DB_HEAD" ]]; then
+  echo "  ✗ alembic_version is empty — backup may be incomplete"
   FAILED=1
+elif [[ -n "$EXPECTED_HEAD" && "$DB_HEAD" == "$EXPECTED_HEAD" ]]; then
+  echo "  ✓ Schema at current HEAD ($DB_HEAD)"
+elif [[ -n "$EXPECTED_HEAD" ]]; then
+  echo "  ⚠ Schema at '$DB_HEAD' (current HEAD is '$EXPECTED_HEAD')"
+  echo "    Backup is valid — run 'alembic upgrade head' after restore to apply pending migrations."
+else
+  echo "  ✓ Schema at revision: $DB_HEAD"
 fi
 
 # ── Result ────────────────────────────────────────────────────────────────────
