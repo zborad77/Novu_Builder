@@ -12,7 +12,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.db.bootstrap import ensure_dev_seed
 from app.db.session import AsyncSessionFactory
 from app.models import Project, ProjectPhoto
-from app.storage.local_photo_storage import sanitize_filename, write_storage_file
+from app.storage.backend import sanitize_filename, write_storage_file
 
 
 DATASET_ROOT = BACKEND_ROOT.parent / "test-data" / "reference-cases"

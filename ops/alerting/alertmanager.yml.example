@@ -1,0 +1,64 @@
+global:
+  resolve_timeout: 5m
+  # smtp_smarthost: 'smtp.example.com:587'
+  # smtp_from: 'alerts@example.com'
+  # smtp_auth_username: 'alerts@example.com'
+  # smtp_auth_password: 'SMTP_PASSWORD'
+
+route:
+  group_by: ['alertname', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'default'
+
+  routes:
+    # Critical alerts — page immediately
+    - match:
+        severity: critical
+      receiver: pagerduty
+      continue: true
+
+    # All alerts — also send to Slack
+    - match_re:
+        severity: warning|critical
+      receiver: slack
+
+receivers:
+  - name: 'default'
+    # Catch-all — no-op (critical/warning handled above)
+
+  - name: pagerduty
+    pagerduty_configs:
+      - service_key: 'YOUR_PAGERDUTY_INTEGRATION_KEY'
+        description: '{{ .CommonAnnotations.summary }}'
+        details:
+          description: '{{ .CommonAnnotations.description }}'
+          severity: '{{ .CommonLabels.severity }}'
+
+  - name: slack
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#alerts-novu'
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+
+  # Uncomment for email alerts:
+  # - name: email
+  #   email_configs:
+  #     - to: 'oncall@example.com'
+  #       send_resolved: true
+
+inhibit_rules:
+  # Suppress warnings when the service is completely down
+  - source_match:
+      severity: critical
+      alertname: BackendDown
+    target_match:
+      severity: warning
+    equal: ['job']

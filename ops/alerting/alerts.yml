@@ -1,0 +1,101 @@
+groups:
+  - name: novu_backend
+    rules:
+
+      # ── Availability ────────────────────────────────────────────────────────
+
+      - alert: BackendDown
+        expr: up{job="novu-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Novu backend is down"
+          description: "The Python backend has been unreachable for more than 1 minute."
+
+      - alert: WorkerDown
+        expr: novu_worker_alive == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Novu worker process is not running"
+          description: "No worker heartbeat detected for 3+ minutes. Analysis jobs will queue up."
+
+      # ── Error rates ─────────────────────────────────────────────────────────
+
+      - alert: High5xxRate
+        expr: |
+          rate(http_requests_total{status=~"5..", job="novu-backend"}[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx error rate"
+          description: "More than 5% of requests are returning 5xx errors."
+
+      - alert: High429Rate
+        expr: |
+          rate(http_requests_total{status="429", job="novu-backend"}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate-limit (429) responses"
+          description: "Possible brute-force or misconfigured client. Check account_limiter logs."
+
+      # ── Latency ─────────────────────────────────────────────────────────────
+
+      - alert: SlowResponses
+        expr: |
+          histogram_quantile(0.95,
+            rate(http_request_duration_seconds_bucket{job="novu-backend"}[5m])
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P95 response latency > 2s"
+          description: "95th percentile response time has exceeded 2 seconds for 5 minutes."
+
+      # ── Database ────────────────────────────────────────────────────────────
+
+      - alert: DatabaseUnreachable
+        expr: novu_db_alive == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database unreachable"
+          description: "The /health/internal endpoint reports db=error."
+
+      - alert: JobQueueBacklog
+        expr: novu_jobs_queued > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Large analysis job backlog"
+          description: "More than 50 analysis jobs have been queued for 10+ minutes."
+
+      - alert: StuckRunningJobs
+        expr: novu_jobs_running > 10
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Many jobs stuck in running state"
+          description: "More than 10 jobs have been in 'running' state for 15+ minutes — possible worker crash."
+
+      # ── Disk / storage ──────────────────────────────────────────────────────
+
+      - alert: DiskSpaceLow
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/"} /
+           node_filesystem_size_bytes{mountpoint="/"}) < 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk space below 10%"
+          description: "Less than 10% free disk space on the root filesystem."

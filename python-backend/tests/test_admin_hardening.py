@@ -281,3 +281,86 @@ class TestSuperadminBypassExplicitFlag:
         src = inspect.getsource(AnalysisService.execute_job)
         assert "organization_id is None and not is_superadmin_context" in src
         assert "status_code=403" in src
+
+
+# ── 7. Admin password reset invalidates existing tokens (R-SEC-08) ──────────────
+
+class TestAdminPasswordResetInvalidatesTokens:
+    """After an admin-forced password reset, all pre-existing tokens must be rejected."""
+
+    def test_reset_password_sets_tokens_valid_after_in_source(self):
+        """reset_user_password must set tokens_valid_after on the target user."""
+        from app.api.routes.admin import reset_user_password
+        src = inspect.getsource(reset_user_password)
+        assert "tokens_valid_after" in src, (
+            "reset_user_password must set tokens_valid_after to invalidate pre-existing tokens"
+        )
+
+    def test_reset_password_commits_after_invalidation(self):
+        """The invalidation commit must follow the tokens_valid_after assignment."""
+        from app.api.routes.admin import reset_user_password
+        src = inspect.getsource(reset_user_password)
+        tva_pos = src.find("tokens_valid_after")
+        commit_pos = src.find("session.commit()", tva_pos)
+        assert tva_pos != -1 and commit_pos != -1, (
+            "session.commit() must appear after tokens_valid_after assignment"
+        )
+
+    @pytest.mark.asyncio
+    async def test_reset_password_writes_tokens_valid_after_on_user(self):
+        """Functional: reset_user_password sets tokens_valid_after on the target User object."""
+        from datetime import UTC, datetime
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from fastapi import Request
+
+        from app.api.routes.admin import ResetPasswordPayload, reset_user_password
+        from app.schemas.auth import AuthUserRead
+
+        # Minimal User mock with a mutable tokens_valid_after attribute
+        mock_user = MagicMock()
+        mock_user.email = "user@test.com"
+        mock_user.organization_id = "org-1"
+        mock_user.tokens_valid_after = None
+
+        mock_session = MagicMock()
+        mock_session.get = AsyncMock(return_value=mock_user)
+        mock_session.commit = AsyncMock()
+
+        mock_service = MagicMock()
+        mock_service.patch_user = AsyncMock(return_value=mock_user)
+
+        mock_current_user = AuthUserRead(
+            id="sa-1", email="sa@test.com", fullName="SA", role="superadmin",
+            isActive=True, organizationId="org-1", isSuperAdmin=True, impersonatedBy=None,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.state = MagicMock()
+
+        # Strip microseconds to match .replace(microsecond=0) in the implementation
+        before = datetime.now(UTC).replace(microsecond=0)
+
+        with patch("app.api.routes.admin.write_audit_log", new_callable=AsyncMock):
+            with patch("app.api.routes.admin.logger"):
+                await reset_user_password(
+                    request=mock_request,
+                    user_id="user-1",
+                    payload=ResetPasswordPayload(password="NewSecure@Pass1"),
+                    current_user=mock_current_user,
+                    service=mock_service,
+                    session=mock_session,
+                )
+
+        after = datetime.now(UTC).replace(microsecond=0)
+
+        assert mock_user.tokens_valid_after is not None, (
+            "tokens_valid_after must be set after admin password reset"
+        )
+        assert mock_user.tokens_valid_after.microsecond == 0, (
+            "tokens_valid_after must have microseconds stripped (consistent DB precision)"
+        )
+        assert before <= mock_user.tokens_valid_after <= after, (
+            "tokens_valid_after must be a current timestamp"
+        )
+        mock_session.commit.assert_called()

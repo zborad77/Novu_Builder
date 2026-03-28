@@ -8,7 +8,7 @@ from app.models import Project, ProjectPhoto
 from app.core.config import get_settings
 from app.repositories.photo_repository import PhotoRepository
 from app.schemas.photo import ProjectPhotoRead
-from app.storage.local_photo_storage import (
+from app.storage.backend import (
     delete_storage_file,
     get_image_dimensions,
     get_public_url,

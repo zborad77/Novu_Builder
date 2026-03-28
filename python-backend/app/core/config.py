@@ -72,6 +72,26 @@ class Settings(BaseSettings):
     rate_limit_admin: str = Field(default="60/minute", alias="RATE_LIMIT_ADMIN")
     rate_limit_admin_write: str = Field(default="10/minute", alias="RATE_LIMIT_ADMIN_WRITE")
     rate_limit_admin_sensitive: str = Field(default="5/minute", alias="RATE_LIMIT_ADMIN_SENSITIVE")
+    rate_limit_upload: str = Field(default="30/minute", alias="RATE_LIMIT_UPLOAD")
+
+    # Email — password reset and transactional emails (C7)
+    smtp_host: str = Field(default="", alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, alias="SMTP_PORT")
+    smtp_user: str = Field(default="", alias="SMTP_USER")
+    smtp_password: str = Field(default="", alias="SMTP_PASSWORD")
+    smtp_from_email: str = Field(default="noreply@example.com", alias="SMTP_FROM_EMAIL")
+    smtp_use_tls: bool = Field(default=True, alias="SMTP_USE_TLS")
+    password_reset_expire_minutes: int = Field(default=60, alias="PASSWORD_RESET_EXPIRE_MINUTES")
+    app_base_url: str = Field(default="http://localhost:5173", alias="APP_BASE_URL")
+
+    # Storage backend — "local" (default) or "s3"
+    storage_backend: str = Field(default="local", alias="STORAGE_BACKEND")
+    s3_bucket: str = Field(default="", alias="S3_BUCKET")
+    s3_endpoint_url: str = Field(default="", alias="S3_ENDPOINT_URL")  # leave empty for AWS S3
+    s3_access_key_id: str = Field(default="", alias="S3_ACCESS_KEY_ID")
+    s3_secret_access_key: str = Field(default="", alias="S3_SECRET_ACCESS_KEY")
+    s3_region: str = Field(default="us-east-1", alias="S3_REGION")
+    s3_cdn_base_url: str = Field(default="", alias="S3_CDN_BASE_URL")  # CDN prefix, e.g. https://cdn.example.com
 
     # Error monitoring — leave empty to disable Sentry (default: off)
     sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")

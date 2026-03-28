@@ -103,6 +103,22 @@ async def health_internal(
     except Exception:
         pass
 
+    # Worker heartbeat — set by app/worker/runner.py every 30 s with 120 s TTL
+    worker_alive: bool | None = None
+    worker_last_seen: str | None = None
+    try:
+        redis = getattr(request.app.state, "job_queue", None)
+        if redis is not None:
+            raw = await redis.get("worker:heartbeat")
+            if raw is not None:
+                worker_last_seen = raw.decode()
+                ts = datetime.fromisoformat(worker_last_seen)
+                worker_alive = (datetime.now(UTC) - ts).total_seconds() < 90
+            else:
+                worker_alive = False
+    except Exception:
+        worker_alive = None  # Redis unavailable — cannot determine
+
     return {
         "status": "ok" if (ready and db_live) else "degraded",
         "service": "python-backend",
@@ -114,6 +130,10 @@ async def health_internal(
             "running": jobs_running,
             "queued": jobs_queued,
             "lastCompletedAt": last_completed_at,
+        },
+        "worker": {
+            "alive": worker_alive,
+            "lastSeenAt": worker_last_seen,
         },
         "timestamp": datetime.now(UTC).isoformat(),
     }

@@ -7,6 +7,11 @@ unavailable — the existing per-IP slowapi limit remains the last-resort guard.
 Limits:
   _MAX_FAILED_ATTEMPTS consecutive failures within _WINDOW_SECONDS → 429.
   Counter is cleared on any successful login.
+
+Pass ``redis_client`` (the app's shared Redis instance from app.state.job_queue)
+to reuse the existing connection pool instead of opening a new connection per
+call. When ``redis_client`` is None the fallback creates a short-lived connection
+from ``redis_url`` (original behaviour, preserves backward compatibility).
 """
 import structlog
 from redis.asyncio import Redis
@@ -27,7 +32,7 @@ def _key(email: str) -> str:
 
 
 async def _get_client(redis_url: str) -> Redis | None:
-    """Return a connected Redis client, or None if Redis is unavailable."""
+    """Return a new short-lived Redis client, or None if Redis is unavailable."""
     try:
         client = Redis.from_url(
             redis_url,
@@ -41,9 +46,15 @@ async def _get_client(redis_url: str) -> Redis | None:
         return None
 
 
-async def is_account_throttled(email: str, redis_url: str) -> bool:
+async def is_account_throttled(
+    email: str,
+    redis_url: str,
+    *,
+    redis_client: Redis | None = None,
+) -> bool:
     """Return True when the account has exceeded the failed-attempt threshold."""
-    client = await _get_client(redis_url)
+    owned = redis_client is None
+    client = redis_client or await _get_client(redis_url)
     if client is None:
         return False  # fail open — per-IP limit still applies
     try:
@@ -53,12 +64,19 @@ async def is_account_throttled(email: str, redis_url: str) -> bool:
         logger.warning("account_limiter.check_error", email_domain=email.split("@")[-1])
         return False
     finally:
-        await client.aclose()
+        if owned:
+            await client.aclose()
 
 
-async def record_login_failure(email: str, redis_url: str) -> None:
+async def record_login_failure(
+    email: str,
+    redis_url: str,
+    *,
+    redis_client: Redis | None = None,
+) -> None:
     """Increment the failure counter and refresh the sliding TTL."""
-    client = await _get_client(redis_url)
+    owned = redis_client is None
+    client = redis_client or await _get_client(redis_url)
     if client is None:
         return
     try:
@@ -70,12 +88,19 @@ async def record_login_failure(email: str, redis_url: str) -> None:
     except Exception:
         logger.warning("account_limiter.record_error", email_domain=email.split("@")[-1])
     finally:
-        await client.aclose()
+        if owned:
+            await client.aclose()
 
 
-async def reset_login_failures(email: str, redis_url: str) -> None:
+async def reset_login_failures(
+    email: str,
+    redis_url: str,
+    *,
+    redis_client: Redis | None = None,
+) -> None:
     """Clear the failure counter after a successful login."""
-    client = await _get_client(redis_url)
+    owned = redis_client is None
+    client = redis_client or await _get_client(redis_url)
     if client is None:
         return
     try:
@@ -83,4 +108,5 @@ async def reset_login_failures(email: str, redis_url: str) -> None:
     except Exception:
         logger.warning("account_limiter.reset_error", email_domain=email.split("@")[-1])
     finally:
-        await client.aclose()
+        if owned:
+            await client.aclose()

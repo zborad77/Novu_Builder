@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+import secrets
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
@@ -11,13 +12,19 @@ from app.schemas.auth import (
     AuthUserRead,
     ChangePasswordRequest,
     ChangePasswordResponse,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     LoginRequest,
     LoginResponse,
     LogoutRequest,
     LogoutResponse,
     RefreshRequest,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
 )
-from app.models import User
+from app.core.audit import write_audit_log
+from app.core.email import send_password_reset_email
+from app.models import PasswordResetToken, User
 from app.services.auth_service import AuthService, hash_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -31,15 +38,18 @@ async def login(
     service: AuthService = Depends(get_auth_service),
 ) -> LoginResponse:
     settings = get_settings()
+    # Reuse the shared Redis client from app state (avoids new connection per login).
+    # Falls back to creating its own connection if app state has no Redis client.
+    shared_redis = getattr(request.app.state, "job_queue", None)
     # R-08: per-account brute-force guard — checked before any DB work
-    if await is_account_throttled(payload.email, settings.redis_url):
+    if await is_account_throttled(payload.email, settings.redis_url, redis_client=shared_redis):
         raise HTTPException(status_code=429, detail="Too many failed attempts. Please try again later.")
     result = await service.login(email=payload.email, password=payload.password)
     if not result:
-        await record_login_failure(payload.email, settings.redis_url)
+        await record_login_failure(payload.email, settings.redis_url, redis_client=shared_redis)
         raise HTTPException(status_code=401, detail="Invalid credentials.")
     # Successful login — reset the per-account failure counter
-    await reset_login_failures(payload.email, settings.redis_url)
+    await reset_login_failures(payload.email, settings.redis_url, redis_client=shared_redis)
     access_token, refresh_token, user = result
     return LoginResponse(accessToken=access_token, refreshToken=refresh_token, user=user)
 
@@ -103,3 +113,116 @@ async def change_password(
     user.tokens_valid_after = datetime.now(UTC).replace(microsecond=0)
     await service.session.commit()
     return ChangePasswordResponse(message="Password changed.")
+
+
+_RESET_RATE = "5/hour"
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+@limiter.limit(_RESET_RATE)
+async def forgot_password(
+    request: Request,
+    payload: ForgotPasswordRequest,
+    service: AuthService = Depends(get_auth_service),
+) -> ForgotPasswordResponse:
+    """Initiate the password reset flow.
+
+    Always returns 200 — never reveals whether the email is registered.
+    """
+    settings = get_settings()
+    _GENERIC_RESPONSE = ForgotPasswordResponse(
+        message="If that email is registered you will receive a reset link shortly."
+    )
+
+    from sqlalchemy import select as sa_select
+    result = await service.session.execute(
+        sa_select(User).where(User.email == payload.email.lower().strip(), User.is_active == True)  # noqa: E712
+    )
+    user = result.scalar_one_or_none()
+    if user is None:
+        return _GENERIC_RESPONSE
+
+    # Delete any existing unexpired tokens for this user before creating a new one
+    existing = await service.session.execute(
+        sa_select(PasswordResetToken).where(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+        )
+    )
+    for old_token in existing.scalars().all():
+        await service.session.delete(old_token)
+
+    token_str = secrets.token_urlsafe(48)
+    expires_at = datetime.now(UTC) + timedelta(minutes=settings.password_reset_expire_minutes)
+    reset_token = PasswordResetToken(token=token_str, user_id=user.id, expires_at=expires_at)
+    service.session.add(reset_token)
+    await service.session.commit()
+
+    reset_url = f"{settings.app_base_url}/reset-password?token={token_str}"
+    try:
+        await send_password_reset_email(
+            to=user.email,
+            reset_url=reset_url,
+            expires_minutes=settings.password_reset_expire_minutes,
+        )
+    except Exception:
+        pass  # Do not reveal send errors to the caller
+
+    await write_audit_log(
+        session=service.session,
+        action="password_reset_requested",
+        user_id=user.id,
+        user_email=user.email,
+        org_id=user.organization_id,
+        resource_type="user",
+        resource_id=user.id,
+        ip=request.client.host if request.client else None,
+    )
+    return _GENERIC_RESPONSE
+
+
+@router.post("/reset-password", response_model=ResetPasswordResponse)
+@limiter.limit(_RESET_RATE)
+async def reset_password(
+    request: Request,
+    payload: ResetPasswordRequest,
+    service: AuthService = Depends(get_auth_service),
+) -> ResetPasswordResponse:
+    """Consume a password reset token and update the user's password."""
+    from sqlalchemy import select as sa_select
+
+    try:
+        enforce_password_strength(payload.newPassword)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    result = await service.session.execute(
+        sa_select(PasswordResetToken).where(PasswordResetToken.token == payload.token)
+    )
+    reset_token = result.scalar_one_or_none()
+
+    if reset_token is None or reset_token.used_at is not None:
+        raise HTTPException(status_code=400, detail="Invalid or already used reset token.")
+    if reset_token.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
+        raise HTTPException(status_code=400, detail="Reset token has expired.")
+
+    user = await service.session.get(User, reset_token.user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=400, detail="Invalid reset token.")
+
+    user.password_hash = hash_password(payload.newPassword)
+    user.tokens_valid_after = datetime.now(UTC).replace(microsecond=0)
+    reset_token.used_at = datetime.now(UTC)
+    await service.session.commit()
+
+    await write_audit_log(
+        session=service.session,
+        action="password_reset",
+        user_id=user.id,
+        user_email=user.email,
+        org_id=user.organization_id,
+        resource_type="user",
+        resource_id=user.id,
+        ip=request.client.host if request.client else None,
+    )
+    return ResetPasswordResponse(message="Password has been reset. Please log in with your new password.")

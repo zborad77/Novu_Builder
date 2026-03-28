@@ -213,6 +213,11 @@ async def reset_user_password(
     if not updated:
         raise HTTPException(status_code=404, detail="User not found.")
 
+    # Invalidate all existing tokens for the target user (R-SEC-08).
+    # Without this, stolen tokens remain valid until natural expiry (up to 60 min).
+    target.tokens_valid_after = datetime.now(UTC).replace(microsecond=0)
+    await session.commit()
+
     logger.warning(
         "admin.user.reset_password",
         admin_id=current_user.id,

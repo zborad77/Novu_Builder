@@ -68,7 +68,9 @@ _PATH_ACTIONS: dict[tuple[str, str], str] = {
 }
 
 _SKIP_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc"}
-_SKIP_PREFIXES = ("/mock-storage",)
+# Admin routes have explicit write_audit_log() calls with richer detail (target_email,
+# target_org, etc.) — middleware logging would create duplicates with less context.
+_SKIP_PREFIXES = ("/mock-storage", "/api/v1/admin")
 
 # ── Cross-tenant denial rate limiter ────────────────────────────────────────
 # Prevents log flooding when a single user probes resources in a tight loop.

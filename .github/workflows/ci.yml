@@ -27,13 +27,17 @@ jobs:
         working-directory: python-backend
         run: ruff check app/
 
-      - name: Mypy (type check — core + auth scope)
+      - name: Mypy (type check — full app/)
         working-directory: python-backend
-        run: mypy app/core/ app/api/routes/auth.py --ignore-missing-imports --follow-imports=silent
+        run: mypy app/
 
       - name: Bandit (SAST — medium severity and above)
         working-directory: python-backend
         run: bandit -r app/ -ll -ii
+
+      - name: pip-audit (known CVE scan on production dependencies)
+        working-directory: python-backend
+        run: pip-audit -r requirements.txt --progress-spinner=off
 
   test:
     runs-on: ubuntu-latest
@@ -84,9 +88,12 @@ jobs:
       - name: Environment check
         run: python scripts/test-env.py
 
+      - name: Install dev tools (for coverage)
+        run: pip install pytest-cov
+
       - name: Pytest
         working-directory: python-backend
-        run: python -m pytest tests/ -v
+        run: python -m pytest tests/ -v --cov=app --cov-report=term-missing --cov-fail-under=0
 
       # --- Start backend ---
 

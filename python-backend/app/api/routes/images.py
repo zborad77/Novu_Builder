@@ -4,6 +4,8 @@ from fastapi.responses import RedirectResponse
 
 from app.api.deps import get_current_user, get_photo_service, get_project_service, resolve_org_id
 from app.core.audit import log_cross_tenant_denied
+from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.schemas.auth import AuthUserRead
 from app.schemas.photo import (
     AnalysisReferencePhotoResponse,
@@ -38,6 +40,7 @@ async def list_case_images(
 
 
 @router.post("/cases/{case_id}/images", response_model=PhotoUploadResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(get_settings().rate_limit_upload)
 async def upload_case_images(
     request: Request,
     case_id: str,

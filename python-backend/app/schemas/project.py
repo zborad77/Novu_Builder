@@ -175,6 +175,7 @@ class ProjectDetail(BaseModel):
 class ProjectListResponse(BaseModel):
     items: list[ProjectSummary]
     total: int
+    next_cursor: str | None = None
 
 
 class ProjectCreate(BaseModel):

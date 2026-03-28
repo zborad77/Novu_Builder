@@ -107,17 +107,38 @@ ADMIN_CAPABILITIES: frozenset[str] = frozenset({
 def require_admin_capability(capability: str):
     """Return a FastAPI dependency that enforces the given admin capability.
 
-    Current behaviour: superadmin → allowed, everyone else → 403.
-    Future: swap in per-user capability lookup inside _check() without touching routes.
+    C8: checks the role_permissions table so non-superadmin roles (e.g. manager)
+    can be granted specific capabilities without becoming full superadmin.
+
+    Superadmin always has all capabilities (enforced before the DB lookup).
+    Impersonated tokens are never allowed on admin routes.
     """
     if capability not in ADMIN_CAPABILITIES:
         raise ValueError(f"Unknown admin capability: {capability!r}")
 
     async def _check(
-        current_user: AuthUserRead = Depends(require_superadmin),
+        current_user: AuthUserRead = Depends(get_current_user),
+        session: AsyncSession = Depends(get_db_session),
     ) -> AuthUserRead:
-        # Hook for future per-capability checks. require_superadmin already
-        # handles auth + impersonation blocking for now.
+        if current_user.impersonatedBy:
+            raise HTTPException(status_code=403, detail="Impersonated tokens cannot access admin routes.")
+
+        # Superadmin always has all capabilities
+        if current_user.isSuperAdmin:
+            return current_user
+
+        # Check DB-backed role permission
+        from sqlalchemy import select as _select
+        from app.models import RolePermission
+        result = await session.execute(
+            _select(RolePermission).where(
+                RolePermission.role == current_user.role,
+                RolePermission.capability == capability,
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=403, detail=f"Permission denied: {capability!r} required.")
+
         return current_user
 
     _check.__name__ = f"require_{capability.replace(':', '_')}"

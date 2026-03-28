@@ -1,6 +1,8 @@
+import base64
 from collections.abc import Sequence
+from datetime import datetime
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,11 +19,15 @@ class ProjectRepository:
         organization_id: str | None = None,
         status: str | None = None,
         search: str | None = None,
+        limit: int = 200,
+        cursor: str | None = None,
     ) -> Sequence[Project]:
+        # Stable sort: created_at DESC, id DESC. Enables reliable cursor-based pagination
+        # because created_at never changes (unlike updated_at).
         query: Select[tuple[Project]] = (
             select(Project)
             .options(selectinload(Project.photos), selectinload(Project.proposal_draft), selectinload(Project.final_proposals), selectinload(Project.created_by_user))
-            .order_by(Project.updated_at.desc(), Project.created_at.desc())
+            .order_by(Project.created_at.desc(), Project.id.desc())
         )
 
         if organization_id:
@@ -36,6 +42,22 @@ class ProjectRepository:
                 (Project.title.ilike(like_value)) | (Project.description.ilike(like_value))
             )
 
+        if cursor:
+            try:
+                decoded = base64.b64decode(cursor.encode()).decode()
+                ts_str, cur_id = decoded.rsplit(":", 1)
+                cursor_ts = datetime.fromisoformat(ts_str)
+                query = query.where(
+                    or_(
+                        Project.created_at < cursor_ts,
+                        and_(Project.created_at == cursor_ts, Project.id < cur_id),
+                    )
+                )
+            except Exception:
+                pass  # invalid cursor → return from start
+
+        # Fetch limit+1 to detect whether a next page exists
+        query = query.limit(limit + 1)
         result = await self.session.execute(query)
         return result.scalars().all()
 
@@ -57,6 +79,13 @@ class ProjectRepository:
             query = query.where(Project.organization_id == organization_id)
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
+
+    async def client_belongs_to_org(self, client_id: str, organization_id: str) -> bool:
+        """Return True if the client exists and belongs to the given org."""
+        result = await self.session.execute(
+            select(Client.id).where(Client.id == client_id, Client.organization_id == organization_id)
+        )
+        return result.scalar_one_or_none() is not None
 
     async def create_project(
         self,

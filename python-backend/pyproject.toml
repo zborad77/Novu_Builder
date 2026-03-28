@@ -11,15 +11,18 @@ select = ["F", "E", "W"]
 ignore = ["E501"]
 
 [tool.mypy]
-# Pragmatic scope: check only security-critical core + auth route.
-# Pre-existing type errors in services/repositories are tracked separately.
+# C6: full app/ coverage with lenient settings — catches obvious errors without
+# requiring strict null-safety or full annotation coverage.
 python_version = "3.12"
 ignore_missing_imports = true
 follow_imports = "silent"
-# Soft mode: catch obvious errors without strict null-safety requirements
 warn_unused_ignores = false
+# Do not require type annotations on every function (too invasive for existing code)
+disallow_untyped_defs = false
+# Allow Any where types can't be inferred
+disallow_any_generics = false
 
 [[tool.mypy.overrides]]
 module = ["app.core.*", "app.api.routes.auth"]
-# These modules are the R-28 mypy target — stricter checks here are welcome
+# Security-critical modules — stricter checks encouraged here
 disallow_untyped_defs = false

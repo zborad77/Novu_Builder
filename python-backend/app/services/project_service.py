@@ -1,3 +1,4 @@
+import base64
 import json
 from uuid import uuid4
 
@@ -22,7 +23,7 @@ from app.services.proposal_draft_service import (
     build_project_proposal_draft,
     normalize_proposal_patch_payload,
 )
-from app.storage.local_photo_storage import copy_storage_file
+from app.storage.backend import copy_storage_file
 
 logger = structlog.get_logger(__name__)
 
@@ -336,9 +337,24 @@ class ProjectService:
         organization_id: str | None = None,
         status: str | None = None,
         search: str | None = None,
-    ) -> list[ProjectSummary]:
-        projects = await self.repository.list_projects(organization_id=organization_id, status=status, search=search)
-        return [build_project_summary(project) for project in projects]
+        limit: int = 200,
+        cursor: str | None = None,
+    ) -> tuple[list[ProjectSummary], str | None]:
+        rows = await self.repository.list_projects(
+            organization_id=organization_id,
+            status=status,
+            search=search,
+            limit=limit,
+            cursor=cursor,
+        )
+        has_more = len(rows) > limit
+        page = list(rows[:limit])
+        next_cursor: str | None = None
+        if has_more and page:
+            last = page[-1]
+            raw = f"{last.created_at.isoformat()}:{last.id}"
+            next_cursor = base64.b64encode(raw.encode()).decode()
+        return [build_project_summary(p) for p in page], next_cursor
 
     async def get_project_detail(self, project_id: str, *, organization_id: str | None = None) -> ProjectDetail | None:
         project = await self.repository.get_project(project_id, organization_id=organization_id)
@@ -347,6 +363,11 @@ class ProjectService:
         return build_project_detail(project)
 
     async def create_project(self, payload: ProjectCreate, *, organization_id: str, created_by_user_id: str) -> Project:
+        if payload.clientId is not None:
+            valid = await self.repository.client_belongs_to_org(payload.clientId, organization_id)
+            if not valid:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=400, detail="Client does not belong to this organization.")
         project_id = f"prj_{uuid4().hex[:8]}"
         return await self.repository.create_project(
             project_id=project_id,

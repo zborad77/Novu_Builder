@@ -107,6 +107,64 @@ class TestAccountLimiterUnit:
             await limiter_mod.reset_login_failures("user@example.com", "redis://localhost")
 
 
+# ── B6: shared Redis client path ─────────────────────────────────────────────
+
+class TestAccountLimiterSharedClient:
+    """B6: When a shared Redis client is passed, _get_client is bypassed and
+    the shared client is NOT closed (the caller owns it)."""
+
+    @pytest.mark.asyncio
+    async def test_shared_client_bypasses_get_client(self):
+        """is_account_throttled uses redis_client directly without calling _get_client."""
+        shared = AsyncMock()
+        shared.get.return_value = b"3"
+        shared.aclose = AsyncMock()
+
+        with patch.object(limiter_mod, "_get_client") as mock_get:
+            await limiter_mod.is_account_throttled(
+                "user@example.com", "redis://localhost", redis_client=shared
+            )
+            mock_get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_shared_client_not_closed(self):
+        """aclose() must NOT be called on a shared (externally owned) client."""
+        shared = AsyncMock()
+        shared.get.return_value = b"0"
+        shared.aclose = AsyncMock()
+
+        await limiter_mod.is_account_throttled(
+            "user@example.com", "redis://localhost", redis_client=shared
+        )
+        shared.aclose.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_record_failure_shared_client_not_closed(self):
+        """record_login_failure must not close the shared client."""
+        mock_pipe = MagicMock()
+        mock_pipe.execute = AsyncMock(return_value=[1, True])
+
+        shared = AsyncMock()
+        shared.pipeline = MagicMock(return_value=mock_pipe)
+        shared.aclose = AsyncMock()
+
+        await limiter_mod.record_login_failure(
+            "user@example.com", "redis://localhost", redis_client=shared
+        )
+        shared.aclose.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reset_shared_client_not_closed(self):
+        """reset_login_failures must not close the shared client."""
+        shared = AsyncMock()
+        shared.aclose = AsyncMock()
+
+        await limiter_mod.reset_login_failures(
+            "user@example.com", "redis://localhost", redis_client=shared
+        )
+        shared.aclose.assert_not_called()
+
+
 # ── Integration tests: login endpoint + throttle ─────────────────────────────
 
 class TestLoginEndpointThrottling:

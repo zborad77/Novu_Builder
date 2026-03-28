@@ -21,16 +21,23 @@ async def list_cases(
     status_filter: str | None = Query(default=None, alias="status"),
     updated_from: str | None = Query(default=None),
     updated_to: str | None = Query(default=None),
-    page: int | None = Query(default=None),
     search: str | None = Query(default=None),
     org_id: str | None = Query(default=None, description="Super-admin only: filter by organization"),
+    limit: int = Query(default=200, ge=1, le=500),
+    cursor: str | None = Query(default=None, description="Opaque cursor for next-page navigation"),
     service: ProjectService = Depends(get_project_service),
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> ProjectListResponse:
-    del updated_from, updated_to, page
+    del updated_from, updated_to
     effective_org_id = (org_id if org_id else None) if current_user.isSuperAdmin else current_user.organizationId
-    items = await service.list_projects(organization_id=effective_org_id, status=status_filter, search=search)
-    return ProjectListResponse(items=items, total=len(items))
+    items, next_cursor = await service.list_projects(
+        organization_id=effective_org_id,
+        status=status_filter,
+        search=search,
+        limit=limit,
+        cursor=cursor,
+    )
+    return ProjectListResponse(items=items, total=len(items), next_cursor=next_cursor)
 
 
 @router.post("", response_model=ProjectCreateResponse, status_code=status.HTTP_201_CREATED)

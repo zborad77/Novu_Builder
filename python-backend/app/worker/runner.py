@@ -8,9 +8,14 @@ AnalysisService.execute_job(), which creates its own DB session.  A restart of
 either the web server or this worker is safe: unprocessed queue items survive in
 Redis; interrupted jobs are marked 'failed' by the web server's startup stale-job
 recovery (R-36).
+
+Heartbeat: the worker writes worker:heartbeat every 30 s with a 120 s TTL.
+The /health/internal endpoint reads this key to detect "worker down".
 """
 import asyncio
 import sys
+import time
+from datetime import UTC, datetime
 
 import structlog
 
@@ -47,6 +52,11 @@ async def _process_one(payload: dict, settings) -> None:
     log.info("worker.job_done")
 
 
+_HEARTBEAT_KEY = "worker:heartbeat"
+_HEARTBEAT_INTERVAL = 30   # write at most once every 30 s
+_HEARTBEAT_TTL = 120       # key expires after 120 s (2× interval) if worker dies
+
+
 async def run(redis_url: str | None = None) -> None:
     """Main worker loop. Runs until cancelled."""
     settings = get_settings()
@@ -56,9 +66,20 @@ async def run(redis_url: str | None = None) -> None:
     redis = Redis.from_url(url)
 
     logger.info("worker.started", provider=settings.ai_analysis_provider)
+    last_heartbeat: float = 0.0
     try:
         while True:
             try:
+                # Write heartbeat to Redis at most once per _HEARTBEAT_INTERVAL seconds.
+                now = time.monotonic()
+                if now - last_heartbeat >= _HEARTBEAT_INTERVAL:
+                    await redis.set(
+                        _HEARTBEAT_KEY,
+                        datetime.now(UTC).isoformat(),
+                        ex=_HEARTBEAT_TTL,
+                    )
+                    last_heartbeat = now
+
                 payload = await dequeue_analysis_job(redis)
                 if payload is None:
                     continue

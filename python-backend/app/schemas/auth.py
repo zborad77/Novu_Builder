@@ -44,3 +44,20 @@ class ChangePasswordRequest(BaseModel):
 
 class ChangePasswordResponse(BaseModel):
     message: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ForgotPasswordResponse(BaseModel):
+    message: str  # always the same — never reveal whether the email exists
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    newPassword: str
+
+
+class ResetPasswordResponse(BaseModel):
+    message: str

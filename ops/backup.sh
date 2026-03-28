@@ -60,3 +60,23 @@ find "${BACKUP_DIR}" -maxdepth 1 -type d -mtime "+${RETENTION_DAYS}" -exec rm -r
 # ── 4. Souhrn ────────────────────────────────────────────────────────────────────
 BACKUP_SIZE="$(du -sh "${BACKUP_PATH}" 2>/dev/null | cut -f1)"
 log "Záloha dokončena. Velikost: ${BACKUP_SIZE}. Cesta: ${BACKUP_PATH}"
+
+# =============================================================================
+# RESTORE — pokyny (nespouštět automaticky, pouze manuálně)
+#
+# 1. Obnova PostgreSQL ze zálohy:
+#   gunzip -c backups/TIMESTAMP/postgres_TIMESTAMP.sql.gz \
+#     | docker compose exec -T db psql -U novu novu_builder
+#
+# 2. Obnova storage souborů (bind-mount varianta):
+#   tar -xzf backups/TIMESTAMP/storage_TIMESTAMP.tar.gz -C storage/
+#
+# 3. Obnova storage souborů (Docker volume varianta):
+#   docker run --rm \
+#     -v novu_builder_storage_data:/data \
+#     -v $(pwd)/backups/TIMESTAMP:/backup \
+#     alpine tar xzf /backup/storage_TIMESTAMP.tar.gz -C /data
+#
+# Po obnově restartuj backend a worker:
+#   docker compose restart backend worker
+# =============================================================================
