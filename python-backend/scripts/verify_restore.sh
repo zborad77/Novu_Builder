@@ -33,6 +33,22 @@ if [[ -z "$BACKUP_FILE" || ! -f "$BACKUP_FILE" ]]; then
   exit 1
 fi
 
+# ── Host tools guard ──────────────────────────────────────────────────────────
+# psql and pg_restore must be available on the host for full verify.
+# If missing, attempt a lightweight docker smoke check — but do NOT proceed
+# with full verify and do NOT return PASS.
+if ! command -v psql &>/dev/null || ! command -v pg_restore &>/dev/null; then
+  echo "Host tools missing, attempting docker-based verify..."
+  _PROJECT_DIR="$(dirname "$BACKEND_DIR")"
+  _COMPOSE_FILE="$_PROJECT_DIR/docker-compose.yml"
+  if ! docker compose -f "$_COMPOSE_FILE" exec -T db pg_restore --version > /dev/null 2>&1; then
+    echo "ERROR: docker verify failed"
+    exit 1
+  fi
+  echo "Docker verify fallback not fully implemented — please install psql locally"
+  exit 1
+fi
+
 # ── Load env ──────────────────────────────────────────────────────────────────
 load_env() {
   local env_file="$BACKEND_DIR/.env"
