@@ -53,6 +53,12 @@ for _arg in "${@:2}"; do
   esac
 done
 
+# ── Production safety guard ────────────────────────────────────────────────────
+if [ "${ENV:-}" = "production" ] && [ "$SKIP_VERIFY" = "--skip-verify" ]; then
+  echo "ERROR: skip-verify not allowed in production"
+  exit 1
+fi
+
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
 
@@ -83,14 +89,24 @@ echo "⚠  This will DROP and RECREATE the novu_builder database."
 echo "   All existing data will be PERMANENTLY DELETED."
 echo ""
 
+# ── Checksum enforcement (mandatory) ──────────────────────────────────────────
+if [ ! -f "${BACKUP_FILE}.sha256" ]; then
+  die "Checksum file not found: ${BACKUP_FILE}.sha256 — aborting (generate with: sha256sum \"$BACKUP_FILE\" > \"${BACKUP_FILE}.sha256\")"
+fi
+log "Verifying checksum …"
+sha256sum -c "${BACKUP_FILE}.sha256" || die "Checksum mismatch — backup may be corrupt."
+log "✓ Checksum OK"
+echo ""
+
 # ── Pre-restore verify ─────────────────────────────────────────────────────────
 VERIFY_SCRIPT="$PROJECT_DIR/python-backend/scripts/verify_restore.sh"
 if [[ "$SKIP_VERIFY" == "--skip-verify" ]]; then
   echo "WARNING: verify skipped — unsafe operation"
   sleep 2
 else
-  if ! bash "$VERIFY_SCRIPT" "$BACKUP_FILE"; then
-    echo "ERROR: verify_restore.sh FAILED — aborting restore"
+  [ -x "$VERIFY_SCRIPT" ] || { echo "ERROR: verify script missing or not executable: $VERIFY_SCRIPT"; exit 1; }
+  if ! timeout 60 bash "$VERIFY_SCRIPT" "$BACKUP_FILE"; then
+    echo "ERROR: verify_restore.sh FAILED or timed out (>60s) — aborting restore"
     exit 1
   fi
   echo "Verify OK — continuing restore"
@@ -103,20 +119,6 @@ if [[ "$AUTO_YES" != "--yes" ]]; then
 fi
 
 cd "$PROJECT_DIR"
-
-# ── 0. Verify checksum (if present) ────────────────────────────────────────────
-CHECKSUM_FILE="${BACKUP_FILE}.sha256"
-if [[ -f "$CHECKSUM_FILE" ]]; then
-  log "Verifying checksum …"
-  if command -v sha256sum &>/dev/null; then
-    sha256sum --check "$CHECKSUM_FILE" || die "Checksum mismatch — backup may be corrupt."
-  else
-    openssl dgst -sha256 "$BACKUP_FILE" | diff - "$CHECKSUM_FILE" || die "Checksum mismatch."
-  fi
-  log "✓ Checksum OK"
-else
-  log "⚠ No checksum file found — skipping integrity check"
-fi
 
 # ── 1. Stop backend + worker ───────────────────────────────────────────────────
 log "Stopping backend and worker …"
