@@ -120,7 +120,11 @@ if [[ -n "${BACKUP_REMOTE:-}" ]]; then
   echo "Sync files:"
   echo "${SYNC_FILES[@]}"
   echo "Destination: $BACKUP_REMOTE/$TIMESTAMP"
-  if timeout 60 rsync -az --delete \
+  [ -z "${BACKUP_REMOTE:-}" ] && { echo "ERROR: BACKUP_REMOTE not set"; exit 1; }
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "$BACKUP_REMOTE" "mkdir -p $BACKUP_REMOTE_PATH/$TIMESTAMP" || {
+    echo "WARNING: failed to create remote directory"
+  }
+  if timeout 60 rsync -az \
     -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10" \
     "${SYNC_FILES[@]}" "$BACKUP_REMOTE/$TIMESTAMP/"; then
     echo "  → Remote sync OK"
