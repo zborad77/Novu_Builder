@@ -7,6 +7,7 @@ from sqlalchemy import func, select, text
 
 from app.api.deps import require_superadmin
 from app.core.config import get_settings
+from app.core.metrics import DB_ALIVE, JOBS_QUEUED, JOBS_RUNNING, WORKER_ALIVE
 from app.db.session import AsyncSessionFactory
 from app.models import AnalysisJob
 from app.schemas.auth import AuthUserRead
@@ -14,13 +15,52 @@ from app.schemas.auth import AuthUserRead
 router = APIRouter()
 
 
+async def _refresh_operational_metrics(request: Request) -> None:
+    """Refresh DB/worker/job gauges before each Prometheus scrape (C5).
+
+    Failures are silently swallowed — a missing gauge value is better than a
+    broken scrape endpoint.
+    """
+    # DB alive + job counts
+    try:
+        async with AsyncSessionFactory() as session:
+            await session.execute(text("SELECT 1"))
+            DB_ALIVE.set(1)
+
+            running_row = await session.execute(
+                select(func.count()).where(AnalysisJob.status == "running")
+            )
+            queued_row = await session.execute(
+                select(func.count()).where(AnalysisJob.status == "queued")
+            )
+            JOBS_RUNNING.set(running_row.scalar_one() or 0)
+            JOBS_QUEUED.set(queued_row.scalar_one() or 0)
+    except Exception:
+        DB_ALIVE.set(0)
+
+    # Worker heartbeat
+    try:
+        redis = getattr(request.app.state, "job_queue", None)
+        if redis is not None:
+            raw = await redis.get("worker:heartbeat")
+            if raw is not None:
+                ts = datetime.fromisoformat(raw.decode())
+                WORKER_ALIVE.set(1 if (datetime.now(UTC) - ts).total_seconds() < 90 else 0)
+            else:
+                WORKER_ALIVE.set(0)
+        # If Redis is unavailable, leave WORKER_ALIVE unchanged (don't flip to 0 on transient error)
+    except Exception:
+        pass
+
+
 @router.get("/metrics", include_in_schema=False)
-async def metrics() -> Response:
+async def metrics(request: Request) -> Response:
     """Prometheus metrics scrape endpoint (R-38).
 
     Returns metrics in Prometheus text exposition format.
     Restricted to internal IPs at the nginx/proxy layer — do NOT expose publicly.
     """
+    await _refresh_operational_metrics(request)
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 

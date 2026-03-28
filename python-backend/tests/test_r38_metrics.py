@@ -71,3 +71,37 @@ class TestMetricsModule:
     def test_gauge_has_method_label(self):
         from app.core.metrics import HTTP_REQUESTS_IN_PROGRESS
         assert "method" in HTTP_REQUESTS_IN_PROGRESS._labelnames
+
+    def test_operational_gauges_defined(self):
+        from app.core.metrics import DB_ALIVE, JOBS_QUEUED, JOBS_RUNNING, WORKER_ALIVE
+        assert DB_ALIVE is not None
+        assert WORKER_ALIVE is not None
+        assert JOBS_QUEUED is not None
+        assert JOBS_RUNNING is not None
+
+    def test_operational_gauge_names(self):
+        from app.core.metrics import DB_ALIVE, JOBS_QUEUED, JOBS_RUNNING, WORKER_ALIVE
+        assert DB_ALIVE._name == "novu_db_alive"
+        assert WORKER_ALIVE._name == "novu_worker_alive"
+        assert JOBS_QUEUED._name == "novu_jobs_queued"
+        assert JOBS_RUNNING._name == "novu_jobs_running"
+
+
+class TestOperationalMetricsExported:
+
+    @pytest.mark.asyncio
+    async def test_metrics_body_contains_operational_gauge_names(self, app_client):
+        resp = await app_client.get(_METRICS_URL)
+        body = resp.text
+        assert "novu_db_alive" in body
+        assert "novu_worker_alive" in body
+        assert "novu_jobs_queued" in body
+        assert "novu_jobs_running" in body
+
+    @pytest.mark.asyncio
+    async def test_db_alive_gauge_is_1_after_scrape(self, app_client):
+        """After a successful scrape the DB gauge must reflect a live DB."""
+        resp = await app_client.get(_METRICS_URL)
+        assert resp.status_code == 200
+        # The test DB is always available so novu_db_alive should be 1.0
+        assert "novu_db_alive 1.0" in resp.text

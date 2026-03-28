@@ -31,3 +31,26 @@ HTTP_REQUESTS_IN_PROGRESS = Gauge(
     "HTTP requests currently being processed",
     ["method"],
 )
+
+# ── Operational health gauges (C5) ────────────────────────────────────────────
+# Refreshed on every /metrics scrape inside system.py::metrics()
+
+DB_ALIVE = Gauge(
+    "novu_db_alive",
+    "1 if the database is reachable, 0 otherwise",
+)
+
+WORKER_ALIVE = Gauge(
+    "novu_worker_alive",
+    "1 if the worker heartbeat was received within 90 s, 0 if stale or absent",
+)
+
+JOBS_QUEUED = Gauge(
+    "novu_jobs_queued",
+    "Number of analysis jobs in queued state",
+)
+
+JOBS_RUNNING = Gauge(
+    "novu_jobs_running",
+    "Number of analysis jobs in running state",
+)
