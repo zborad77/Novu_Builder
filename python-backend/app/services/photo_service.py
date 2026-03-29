@@ -231,6 +231,21 @@ class PhotoService:
         return to_read_model(await self.repository.add_photo(photo))
 
     async def create_multipart_photo(self, project: Project, file: UploadFile, *, is_primary: bool) -> ProjectPhotoRead:
+        # Path traversal guard: reject filenames that attempt directory escape
+        if file.filename and ".." in file.filename:
+            raise ValueError("Invalid filename: path traversal sequences are not allowed.")
+
+        # Extension whitelist: checked before reading bytes to fail fast
+        _ALLOWED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
+        if file.filename:
+            from pathlib import Path as _Path
+            _ext = _Path(file.filename).suffix.lower()
+            if _ext and _ext not in _ALLOWED_EXTENSIONS:
+                raise ValueError(
+                    f"Unsupported file extension '{_ext}': "
+                    "only JPEG, PNG, and WEBP files are accepted."
+                )
+
         max_bytes = get_settings().max_upload_size_mb * 1024 * 1024
         # Content-Length guard: reject before loading bytes when the declared per-part size
         # already exceeds the limit. file.size is set by Starlette from the multipart
