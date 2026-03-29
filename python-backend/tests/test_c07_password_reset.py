@@ -31,15 +31,15 @@ class TestPasswordResetSource:
         from app.api.routes.auth import reset_password
         assert callable(reset_password)
 
-    def test_forgot_password_uses_generic_response(self):
-        """forgot_password must not reveal whether an email exists."""
+    def test_forgot_password_disabled(self):
+        """forgot_password must be marked as disabled."""
         src = inspect.getsource(__import__("app.api.routes.auth", fromlist=["forgot_password"]).forgot_password)
-        assert "_GENERIC_RESPONSE" in src or "If that email" in src
+        assert "disabled" in src.lower()
 
-    def test_reset_password_sets_tokens_valid_after(self):
-        """reset_password must set tokens_valid_after to invalidate old JWTs."""
+    def test_reset_password_disabled(self):
+        """reset_password must be marked as disabled."""
         src = inspect.getsource(__import__("app.api.routes.auth", fromlist=["reset_password"]).reset_password)
-        assert "tokens_valid_after" in src
+        assert "disabled" in src.lower()
 
     def test_reset_token_model_has_used_at(self):
         """PasswordResetToken must have a used_at field to track consumption."""
@@ -56,140 +56,64 @@ class TestPasswordResetSource:
 
 class TestForgotPassword:
 
-    async def test_unknown_email_returns_200(self, app_client):
-        """POST /auth/forgot-password returns 200 even for unknown emails."""
+    async def test_forgot_password_returns_501(self, app_client):
+        """POST /auth/forgot-password returns 501 — feature is disabled."""
         resp = await app_client.post(
             "/api/v1/auth/forgot-password",
             json={"email": "nobody@example.com"},
         )
-        assert resp.status_code == 200
-        assert "If that email" in resp.json()["message"] or resp.json()["message"]
+        assert resp.status_code == 501
+        assert "disabled" in resp.json()["detail"].lower()
 
-    async def test_known_email_returns_200(self, app_client, test_tenants):
-        """POST /auth/forgot-password returns 200 for a known email."""
+    async def test_forgot_password_returns_501_for_known_email(self, app_client, test_tenants):
+        """POST /auth/forgot-password returns 501 even for a known email."""
         email = test_tenants["user_a"]["email"]
-        with patch("app.api.routes.auth.send_password_reset_email", new_callable=AsyncMock):
-            resp = await app_client.post(
-                "/api/v1/auth/forgot-password",
-                json={"email": email},
-            )
-        assert resp.status_code == 200
+        resp = await app_client.post(
+            "/api/v1/auth/forgot-password",
+            json={"email": email},
+        )
+        assert resp.status_code == 501
 
     async def test_both_responses_identical(self, app_client, test_tenants):
-        """Response for known and unknown email must be identical (no oracle)."""
+        """Both known and unknown email get the same 501 response."""
         email = test_tenants["user_a"]["email"]
-        with patch("app.api.routes.auth.send_password_reset_email", new_callable=AsyncMock):
-            resp_known = await app_client.post(
-                "/api/v1/auth/forgot-password",
-                json={"email": email},
-            )
-            resp_unknown = await app_client.post(
-                "/api/v1/auth/forgot-password",
-                json={"email": "nobody@example.com"},
-            )
+        resp_known = await app_client.post(
+            "/api/v1/auth/forgot-password",
+            json={"email": email},
+        )
+        resp_unknown = await app_client.post(
+            "/api/v1/auth/forgot-password",
+            json={"email": "nobody@example.com"},
+        )
         assert resp_known.status_code == resp_unknown.status_code
-        assert resp_known.json()["message"] == resp_unknown.json()["message"]
+        assert resp_known.json()["detail"] == resp_unknown.json()["detail"]
 
-    async def test_token_created_for_known_email(self, app_client, test_tenants, db_session):
-        """A PasswordResetToken row must be inserted for a known email."""
+    async def test_no_token_created_when_disabled(self, app_client, test_tenants, db_session):
+        """No PasswordResetToken row must be created when the endpoint is disabled."""
         from sqlalchemy import select
         from app.models import PasswordResetToken, User
         email = test_tenants["user_a"]["email"]
 
-        with patch("app.api.routes.auth.send_password_reset_email", new_callable=AsyncMock):
-            await app_client.post("/api/v1/auth/forgot-password", json={"email": email})
+        await app_client.post("/api/v1/auth/forgot-password", json={"email": email})
 
-        result = await db_session.execute(
-            select(User).where(User.email == email)
-        )
+        result = await db_session.execute(select(User).where(User.email == email))
         user = result.scalar_one_or_none()
         assert user is not None
 
         token_result = await db_session.execute(
             select(PasswordResetToken).where(PasswordResetToken.user_id == user.id)
         )
-        token = token_result.scalar_one_or_none()
-        assert token is not None
-        assert token.used_at is None
+        assert token_result.scalar_one_or_none() is None
 
 
 class TestResetPassword:
-    """Uses reset_test_user (function-scoped throwaway user) for destructive tests
-    so that token_a / token_b session fixtures are never invalidated."""
+    """reset-password endpoint is disabled — all requests return 501."""
 
-    async def test_valid_token_resets_password(self, app_client, reset_test_user, db_session):
-        """Valid token allows password reset and returns 200."""
-        from sqlalchemy import select
-        from app.models import PasswordResetToken
-
-        email = reset_test_user["email"]
-        with patch("app.api.routes.auth.send_password_reset_email", new_callable=AsyncMock):
-            await app_client.post("/api/v1/auth/forgot-password", json={"email": email})
-
-        token_result = await db_session.execute(
-            select(PasswordResetToken).where(PasswordResetToken.user_id == reset_test_user["user_id"])
-        )
-        token = token_result.scalar_one()
-
+    async def test_reset_password_returns_501(self, app_client):
+        """Any reset-password request returns 501 — feature is disabled."""
         resp = await app_client.post(
             "/api/v1/auth/reset-password",
-            json={"token": token.token, "newPassword": "NewSecureP@ssw0rd!"},
+            json={"token": "any-token", "newPassword": "ValidP@ssw0rd1"},
         )
-        assert resp.status_code == 200
-
-    async def test_used_token_rejected(self, app_client, reset_test_user, db_session):
-        """A token that has already been used returns 400."""
-        from sqlalchemy import select
-        from app.models import PasswordResetToken
-
-        email = reset_test_user["email"]
-        with patch("app.api.routes.auth.send_password_reset_email", new_callable=AsyncMock):
-            await app_client.post("/api/v1/auth/forgot-password", json={"email": email})
-
-        token_result = await db_session.execute(
-            select(PasswordResetToken).where(PasswordResetToken.user_id == reset_test_user["user_id"])
-        )
-        token = token_result.scalar_one()
-
-        # Use the token once
-        await app_client.post(
-            "/api/v1/auth/reset-password",
-            json={"token": token.token, "newPassword": "NewSecureP@ssw0rd!"},
-        )
-        # Try to use it again — must be rejected
-        resp = await app_client.post(
-            "/api/v1/auth/reset-password",
-            json={"token": token.token, "newPassword": "AnotherP@ssw0rd!"},
-        )
-        assert resp.status_code == 400
-
-    async def test_nonexistent_token_returns_400(self, app_client):
-        """A made-up token returns 400."""
-        resp = await app_client.post(
-            "/api/v1/auth/reset-password",
-            json={"token": "totally-fake-token", "newPassword": "ValidP@ssw0rd1"},
-        )
-        assert resp.status_code == 400
-
-    async def test_weak_password_rejected(self, app_client, reset_test_user, db_session):
-        """Weak new password returns 400 before the token is consumed."""
-        from sqlalchemy import select
-        from app.models import PasswordResetToken
-
-        email = reset_test_user["email"]
-        with patch("app.api.routes.auth.send_password_reset_email", new_callable=AsyncMock):
-            await app_client.post("/api/v1/auth/forgot-password", json={"email": email})
-
-        token_result = await db_session.execute(
-            select(PasswordResetToken).where(PasswordResetToken.user_id == reset_test_user["user_id"])
-        )
-        token = token_result.scalar_one()
-
-        resp = await app_client.post(
-            "/api/v1/auth/reset-password",
-            json={"token": token.token, "newPassword": "weak"},
-        )
-        assert resp.status_code == 400
-        # Token must still be unused
-        await db_session.refresh(token)
-        assert token.used_at is None
+        assert resp.status_code == 501
+        assert "disabled" in resp.json()["detail"].lower()

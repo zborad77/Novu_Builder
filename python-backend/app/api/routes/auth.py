@@ -117,6 +117,9 @@ async def change_password(
 
 _RESET_RATE = "5/hour"
 
+# Self-service reset temporarily disabled (no web client implemented)
+_RESET_DISABLED_DETAIL = "Self-service password reset is currently disabled"
+
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
 @limiter.limit(_RESET_RATE)
@@ -125,58 +128,8 @@ async def forgot_password(
     payload: ForgotPasswordRequest,
     service: AuthService = Depends(get_auth_service),
 ) -> ForgotPasswordResponse:
-    """Initiate the password reset flow.
-
-    Always returns 200 — never reveals whether the email is registered.
-    """
-    settings = get_settings()
-    _GENERIC_RESPONSE = ForgotPasswordResponse(
-        message="If that email is registered you will receive a reset link shortly."
-    )
-
-    from sqlalchemy import select as sa_select
-    result = await service.session.execute(
-        sa_select(User).where(User.email == payload.email.lower().strip(), User.is_active == True)  # noqa: E712
-    )
-    user = result.scalar_one_or_none()
-    if user is None:
-        return _GENERIC_RESPONSE
-
-    # Delete any existing unexpired tokens for this user before creating a new one
-    existing = await service.session.execute(
-        sa_select(PasswordResetToken).where(
-            PasswordResetToken.user_id == user.id,
-            PasswordResetToken.used_at.is_(None),
-        )
-    )
-    for old_token in existing.scalars().all():
-        await service.session.delete(old_token)
-
-    token_str = secrets.token_urlsafe(48)
-    expires_at = datetime.now(UTC) + timedelta(minutes=settings.password_reset_expire_minutes)
-    reset_token = PasswordResetToken(token=token_str, user_id=user.id, expires_at=expires_at)
-    service.session.add(reset_token)
-    await service.session.commit()
-
-    reset_url = f"{settings.app_base_url}/reset-password?token={token_str}"
-    try:
-        await send_password_reset_email(
-            to=user.email,
-            reset_url=reset_url,
-            expires_minutes=settings.password_reset_expire_minutes,
-        )
-    except Exception:
-        pass  # Do not reveal send errors to the caller
-
-    await write_audit_log(
-        service.session,
-        current_user_id=user.id,
-        action="password_reset_requested",
-        resource_type="user",
-        resource_id=user.id,
-        detail={},
-    )
-    return _GENERIC_RESPONSE
+    """Self-service password reset temporarily disabled (no web client implemented)."""
+    raise HTTPException(status_code=501, detail=_RESET_DISABLED_DETAIL)
 
 
 @router.post("/reset-password", response_model=ResetPasswordResponse)
@@ -186,39 +139,5 @@ async def reset_password(
     payload: ResetPasswordRequest,
     service: AuthService = Depends(get_auth_service),
 ) -> ResetPasswordResponse:
-    """Consume a password reset token and update the user's password."""
-    from sqlalchemy import select as sa_select
-
-    try:
-        enforce_password_strength(payload.newPassword)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    result = await service.session.execute(
-        sa_select(PasswordResetToken).where(PasswordResetToken.token == payload.token)
-    )
-    reset_token = result.scalar_one_or_none()
-
-    if reset_token is None or reset_token.used_at is not None:
-        raise HTTPException(status_code=400, detail="Invalid or already used reset token.")
-    if reset_token.expires_at.replace(tzinfo=UTC) < datetime.now(UTC):
-        raise HTTPException(status_code=400, detail="Reset token has expired.")
-
-    user = await service.session.get(User, reset_token.user_id)
-    if user is None or not user.is_active:
-        raise HTTPException(status_code=400, detail="Invalid reset token.")
-
-    user.password_hash = hash_password(payload.newPassword)
-    user.tokens_valid_after = datetime.now(UTC).replace(microsecond=0)
-    reset_token.used_at = datetime.now(UTC)
-    await service.session.commit()
-
-    await write_audit_log(
-        service.session,
-        current_user_id=user.id,
-        action="password_reset",
-        resource_type="user",
-        resource_id=user.id,
-        detail={},
-    )
-    return ResetPasswordResponse(message="Password has been reset. Please log in with your new password.")
+    """Self-service password reset temporarily disabled (no web client implemented)."""
+    raise HTTPException(status_code=501, detail=_RESET_DISABLED_DETAIL)
