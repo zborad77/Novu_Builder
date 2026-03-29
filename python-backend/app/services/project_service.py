@@ -465,7 +465,9 @@ class ProjectService:
         return detail
 
     async def update_project(self, project_id: str, payload: dict, *, organization_id: str | None = None) -> ProjectDetail | None:
-        project = await self.repository.get_project(project_id, organization_id=organization_id)
+        # Lean fetch: only existence/org guard needed here.
+        # repository.update_project() re-fetches the full detail graph internally.
+        project = await self.repository.get_project_lean(project_id, organization_id=organization_id)
         if not project:
             return None
 

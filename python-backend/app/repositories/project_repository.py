@@ -61,7 +61,28 @@ class ProjectRepository:
         result = await self.session.execute(query)
         return result.scalars().all()
 
+    async def get_project_lean(self, project_id: str, *, organization_id: str | None = None) -> Project | None:
+        """Fetch only the Project row (no selectinload).
+
+        Use when the caller only needs to verify existence/org membership or
+        pass the ORM object to update_project() (which re-fetches with full
+        graph internally).  Saves 5 extra SELECT queries compared to
+        get_project().
+        """
+        query = select(Project).where(Project.id == project_id)
+        if organization_id is not None:
+            query = query.where(Project.organization_id == organization_id)
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
     async def get_project(self, project_id: str, *, organization_id: str | None = None) -> Project | None:
+        # HEAVY FETCH: loads client, photos, proposal_draft, final_proposals,
+        # analysis_results, and quote_variants (with items) in separate SELECT
+        # queries via selectinload. Use get_project_lean() instead when the
+        # caller only needs existence/org guard or will mutate via
+        # update_project() (which re-fetches with full graph internally).
+        # Known remaining over-fetches: mark_project_sent (needs final_proposals
+        # only), update_proposal_draft (uses full graph in build_project_detail).
         from app.models import QuoteVariant
         query = (
             select(Project)

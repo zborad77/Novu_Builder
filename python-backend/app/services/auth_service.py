@@ -113,6 +113,16 @@ class AuthService:
         user = await self.session.get(User, payload["sub"])
         if not user or not user.is_active:
             return None
+        # tokens_valid_after guard: reject refresh tokens issued before the last
+        # password change / admin reset (mirrors the same check in get_user_by_token)
+        if user.tokens_valid_after:
+            ttl = timedelta(days=self._settings.jwt_refresh_token_expire_days)
+            issued_at = datetime.fromtimestamp(payload["exp"], tz=UTC) - ttl
+            tva = user.tokens_valid_after
+            if tva.tzinfo is None:
+                tva = tva.replace(tzinfo=UTC)
+            if issued_at < tva:
+                return None
         # Rotate: revoke old refresh token, issue new pair
         if jti:
             exp = datetime.fromtimestamp(payload["exp"], tz=UTC)

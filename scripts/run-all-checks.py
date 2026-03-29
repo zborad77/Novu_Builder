@@ -1,56 +1,61 @@
 """
-Runner — executes backend check scripts in order and prints a summary.
+Runner for backend checks.
 
-Checks (in order):
-  1. test-env.py              — required environment variables
-  2. test-db-connection.py    — database TCP connectivity
-  3. test-redis-connection.py — Redis TCP connectivity (SKIP if REDIS_URL not set)
-  4. test-backend-startup.py  — HTTP health endpoint + JSON validation
-  5. test-api-contracts.py    — HTTP contract smoke test
-  6. test-auth-validation.py  — auth (401/403) and validation (422) contracts
-  7. test-import-startup.py   — backend import + create_app() check
+Modes:
+  1. Default live checks against a running backend URL.
+  2. Local backend stability checks driven by existing pytest/script commands.
 
-Optional (not included in default run):
-  8. test-business-flow.py    — full case + analysis job lifecycle (needs credentials)
-     Enabled with: --include-flow
-     Credentials: NOVU_TEST_EMAIL / NOVU_TEST_PASSWORD  or  --email / --password
+Live checks (default mode):
+  1. test-env.py
+  2. test-db-connection.py
+  3. test-redis-connection.py
+  4. test-backend-startup.py
+  5. test-api-contracts.py
+  6. test-auth-validation.py
+  7. test-import-startup.py
+  8. test-business-flow.py (optional via --include-flow)
 
-Exit code:
-  0 — all checks passed or skipped
-  1 — one or more checks failed
-
-Usage:
-    python scripts/run-all-checks.py
-    python scripts/run-all-checks.py --url http://localhost:8000
-    python scripts/run-all-checks.py --include-flow --email u@e.com --password secret
+Local backend stability checks (--backend-stability):
+  1. import/startup smoke via scripts/test-import-startup.py
+  2. backend smoke pytest suite
+  3. Alembic chain consistency pytest suite
+  4. OpenAPI contract pytest suite
+  5. optional ruff / mypy via existing backend toolchain
 """
 
-import sys
-import re
-import json
+from __future__ import annotations
+
 import argparse
+import json
+import re
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
-CHECK_TIMEOUT = 15   # seconds per check (default)
-FLOW_TIMEOUT  = 180  # seconds for the business-flow check (long-running)
+CHECK_TIMEOUT = 15
+FLOW_TIMEOUT = 180
+PYTEST_TIMEOUT = 120
+STATIC_TIMEOUT = 180
 
 RETRY_SCRIPTS = {"test-db-connection.py", "test-redis-connection.py"}
-RETRY_MAX = 3        # total attempts (1 initial + 2 retries)
-RETRY_DELAY = 1      # seconds between attempts
+RETRY_MAX = 3
+RETRY_DELAY = 1
 
-SCRIPTS_DIR = Path(__file__).parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+BACKEND_ROOT = REPO_ROOT / "python-backend"
 
-# Scripts that accept --url; others receive no extra args.
-URL_SCRIPTS = {"test-backend-startup.py", "test-api-contracts.py", "test-auth-validation.py",
-               "test-business-flow.py"}
-
-# Scripts that additionally accept --email / --password
+URL_SCRIPTS = {
+    "test-backend-startup.py",
+    "test-api-contracts.py",
+    "test-auth-validation.py",
+    "test-business-flow.py",
+}
 CRED_SCRIPTS = {"test-business-flow.py"}
 
-CHECKS = [
+LIVE_CHECKS = [
     "test-env.py",
     "test-db-connection.py",
     "test-redis-connection.py",
@@ -58,43 +63,44 @@ CHECKS = [
     "test-api-contracts.py",
     "test-auth-validation.py",
     "test-import-startup.py",
-    # test-business-flow.py is NOT here — only added when --include-flow is passed
 ]
 
 
+def _backend_python() -> str:
+    candidates = [
+        BACKEND_ROOT / ".venv" / "Scripts" / "python.exe",
+        BACKEND_ROOT / ".venv" / "bin" / "python",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return sys.executable
+
+
 def _extract_reason(lines: list[str], status: str) -> str:
-    """Return a short human-readable reason from captured output lines."""
     if status == "SKIP":
         for line in lines:
             if line.upper().startswith("SKIP:"):
                 return line[5:].strip()
     elif status == "FAIL":
-        # Prefer the last "FAIL: <reason>" line (covers env/db/redis/backend-startup).
         for line in reversed(lines):
             if line.upper().startswith("FAIL:"):
                 return line[5:].strip()
-        # Fallback for api-contracts / import-startup: "X/Y passed" summary line.
         for line in reversed(lines):
             if re.search(r"\d+/\d+ passed", line):
                 return line.strip()
     return ""
 
 
-def run_check(script: Path, extra_args: list, timeout: int = CHECK_TIMEOUT) -> tuple[str, str]:
-    """
-    Run a single check script and return (status, detail).
-
-    Exit code convention:
-      0 → OK
-      1 → FAIL
-      2 → SKIP
-
-    detail: '' for normal results, 'timeout {N}s' on timeout.
-    Output is streamed to stdout in real time via a reader thread so that
-    proc.wait(timeout=...) can enforce the per-check deadline.
-    """
+def run_command(
+    command: list[str],
+    *,
+    cwd: Path,
+    timeout: int,
+) -> tuple[str, str]:
     proc = subprocess.Popen(
-        [sys.executable, str(script)] + extra_args,
+        command,
+        cwd=str(cwd),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -116,7 +122,7 @@ def run_check(script: Path, extra_args: list, timeout: int = CHECK_TIMEOUT) -> t
     except subprocess.TimeoutExpired:
         proc.kill()
         reader.join(timeout=2)
-        print(f"\n  [TIMEOUT: check exceeded {timeout}s — process killed]", flush=True)
+        print(f"\n  [TIMEOUT: check exceeded {timeout}s - process killed]", flush=True)
         return "FAIL", f"timeout {timeout}s"
 
     reader.join()
@@ -128,17 +134,16 @@ def run_check(script: Path, extra_args: list, timeout: int = CHECK_TIMEOUT) -> t
     return "OK", ""
 
 
-def run_check_with_retry(script: Path, extra_args: list, max_attempts: int) -> tuple[str, str]:
-    """
-    Wrap run_check with up to max_attempts total attempts.
-
-    Retry only on FAIL or timeout; SKIP stops immediately (no retry).
-    detail reflects attempt count when more than one attempt was needed.
-    """
+def run_command_with_retry(
+    command: list[str],
+    *,
+    cwd: Path,
+    timeout: int,
+    max_attempts: int,
+) -> tuple[str, str]:
     for attempt in range(1, max_attempts + 1):
-        status, detail = run_check(script, extra_args)
+        status, detail = run_command(command, cwd=cwd, timeout=timeout)
         if status != "FAIL":
-            # OK or SKIP — done, no retry needed
             if attempt > 1:
                 detail = f"ok on attempt {attempt}/{max_attempts}"
             return status, detail
@@ -146,47 +151,23 @@ def run_check_with_retry(script: Path, extra_args: list, max_attempts: int) -> t
             print(f"  [retry {attempt}/{max_attempts - 1}: waiting {RETRY_DELAY}s ...]", flush=True)
             time.sleep(RETRY_DELAY)
 
-    # All attempts exhausted
     detail_parts = [detail] if detail else []
     detail_parts.append(f"failed after {max_attempts} attempts")
     return "FAIL", ", ".join(detail_parts)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Run all backend health and diagnostic checks")
-    parser.add_argument(
-        "--url",
-        default="http://localhost:8000",
-        help="Backend base URL (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output results as JSON instead of human-readable text",
-    )
-    parser.add_argument(
-        "--include-flow",
-        action="store_true",
-        help="Also run test-business-flow.py (requires NOVU_TEST_EMAIL / NOVU_TEST_PASSWORD or --email/--password)",
-    )
-    parser.add_argument(
-        "--email",
-        default="",
-        help="Test user email for --include-flow (or set NOVU_TEST_EMAIL)",
-    )
-    parser.add_argument(
-        "--password",
-        default="",
-        help="Test user password for --include-flow (or set NOVU_TEST_PASSWORD)",
-    )
-    args = parser.parse_args()
+def _print_header(label: str) -> None:
+    print(f"\n{'-' * 42}", flush=True)
+    print(f"  CHECK  {label}", flush=True)
+    print(f"{'-' * 42}", flush=True)
 
-    checks = list(CHECKS)
+
+def _live_tasks(args: argparse.Namespace) -> list[dict[str, object]]:
+    checks = list(LIVE_CHECKS)
     if args.include_flow:
         checks.append("test-business-flow.py")
 
-    results: list[tuple[str, str]] = []
-
+    tasks: list[dict[str, object]] = []
     for script_name in checks:
         script = SCRIPTS_DIR / script_name
         extra_args = ["--url", args.url] if script_name in URL_SCRIPTS else []
@@ -196,23 +177,113 @@ def main() -> None:
             if args.password:
                 extra_args += ["--password", args.password]
 
-        label = script_name.replace("test-", "").replace(".py", "")
-        print(f"\n{'─' * 42}", flush=True)
-        print(f"  CHECK  {label}", flush=True)
-        print(f"{'─' * 42}", flush=True)
+        tasks.append(
+            {
+                "name": script_name.replace("test-", "").replace(".py", ""),
+                "command": [sys.executable, str(script), *extra_args],
+                "cwd": REPO_ROOT,
+                "timeout": FLOW_TIMEOUT if script_name == "test-business-flow.py" else CHECK_TIMEOUT,
+                "retry": script_name in RETRY_SCRIPTS,
+            }
+        )
+    return tasks
 
-        if script_name in RETRY_SCRIPTS:
-            status, detail = run_check_with_retry(script, extra_args, RETRY_MAX)
-        elif script_name == "test-business-flow.py":
-            status, detail = run_check(script, extra_args, timeout=FLOW_TIMEOUT)
+
+def _backend_stability_tasks(args: argparse.Namespace) -> list[dict[str, object]]:
+    backend_python = _backend_python()
+    tasks: list[dict[str, object]] = [
+        {
+            "name": "backend import-startup",
+            "command": [backend_python, str(SCRIPTS_DIR / "test-import-startup.py")],
+            "cwd": REPO_ROOT,
+            "timeout": CHECK_TIMEOUT,
+            "retry": False,
+        },
+        {
+            "name": "backend smoke",
+            "command": [
+                backend_python,
+                "-m",
+                "pytest",
+                "tests/test_backend_smoke_guards.py",
+                "tests/test_alembic_chain_consistency.py",
+                "-q",
+            ],
+            "cwd": BACKEND_ROOT,
+            "timeout": PYTEST_TIMEOUT,
+            "retry": False,
+        },
+        {
+            "name": "backend openapi-contract",
+            "command": [
+                backend_python,
+                "-m",
+                "pytest",
+                "tests/test_cases_openapi_contract.py",
+                "-q",
+            ],
+            "cwd": BACKEND_ROOT,
+            "timeout": PYTEST_TIMEOUT,
+            "retry": False,
+        },
+    ]
+
+    if args.include_ruff:
+        tasks.append(
+            {
+                "name": "backend ruff",
+                "command": [backend_python, "-m", "ruff", "check", "."],
+                "cwd": BACKEND_ROOT,
+                "timeout": STATIC_TIMEOUT,
+                "retry": False,
+            }
+        )
+
+    if args.include_mypy:
+        tasks.append(
+            {
+                "name": "backend mypy",
+                "command": [backend_python, "-m", "mypy", "app"],
+                "cwd": BACKEND_ROOT,
+                "timeout": STATIC_TIMEOUT,
+                "retry": False,
+            }
+        )
+
+    return tasks
+
+
+def _run_tasks(tasks: list[dict[str, object]]) -> list[tuple[str, str, str]]:
+    results: list[tuple[str, str, str]] = []
+
+    for task in tasks:
+        label = str(task["name"])
+        _print_header(label)
+
+        command = list(task["command"])
+        cwd = Path(task["cwd"])
+        timeout = int(task["timeout"])
+        retry = bool(task["retry"])
+
+        if retry:
+            status, detail = run_command_with_retry(
+                command,
+                cwd=cwd,
+                timeout=timeout,
+                max_attempts=RETRY_MAX,
+            )
         else:
-            status, detail = run_check(script, extra_args)
+            status, detail = run_command(command, cwd=cwd, timeout=timeout)
         results.append((label, status, detail))
 
+    return results
+
+
+def _print_summary(results: list[tuple[str, str, str]], as_json: bool) -> None:
     any_failed = any(status == "FAIL" for _, status, _ in results)
     overall = "FAIL" if any_failed else "OK"
 
-    if args.json:
+    if as_json:
         payload = {
             "result": overall,
             "checks": [
@@ -222,19 +293,67 @@ def main() -> None:
         }
         print(json.dumps(payload, indent=2))
     else:
-        # Default human-readable summary — unchanged
-        print(f"\n{'═' * 42}")
+        print(f"\n{'=' * 42}")
         print("  SUMMARY")
-        print(f"{'═' * 42}")
+        print(f"{'=' * 42}")
         for name, status, detail in results:
-            marker = "✓" if status == "OK" else ("~" if status == "SKIP" else "✗")
+            marker = "OK" if status == "OK" else ("SKIP" if status == "SKIP" else "FAIL")
             suffix = f"  [{detail}]" if detail else ""
-            print(f"  {marker}  {status:<4}  {name}{suffix}")
-        print(f"{'═' * 42}")
+            print(f"  {marker:<4}  {name}{suffix}")
+        print(f"{'=' * 42}")
         print(f"  RESULT: {overall}")
 
     if any_failed:
         sys.exit(1)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run backend live checks or local stability checks")
+    parser.add_argument(
+        "--url",
+        default="http://localhost:8000",
+        help="Backend base URL for live checks (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON",
+    )
+    parser.add_argument(
+        "--include-flow",
+        action="store_true",
+        help="Also run test-business-flow.py in live mode",
+    )
+    parser.add_argument(
+        "--email",
+        default="",
+        help="Test user email for --include-flow",
+    )
+    parser.add_argument(
+        "--password",
+        default="",
+        help="Test user password for --include-flow",
+    )
+    parser.add_argument(
+        "--backend-stability",
+        action="store_true",
+        help="Run local backend stabilization checks using existing pytest/script suites",
+    )
+    parser.add_argument(
+        "--include-ruff",
+        action="store_true",
+        help="In backend stability mode, also run ruff check from python-backend",
+    )
+    parser.add_argument(
+        "--include-mypy",
+        action="store_true",
+        help="In backend stability mode, also run mypy on python-backend/app",
+    )
+    args = parser.parse_args()
+
+    tasks = _backend_stability_tasks(args) if args.backend_stability else _live_tasks(args)
+    results = _run_tasks(tasks)
+    _print_summary(results, as_json=args.json)
 
 
 if __name__ == "__main__":
