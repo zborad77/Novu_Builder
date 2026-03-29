@@ -100,9 +100,9 @@ class Settings(BaseSettings):
     jwt_refresh_token_expire_days: int = Field(default=30, alias="JWT_REFRESH_TOKEN_EXPIRE_DAYS")
 
     # CORS — comma-separated list of allowed origins.
-    # Dev default allows Vite dev server; production must set this explicitly.
+    # Dev default allows local backend origin; production must set this explicitly.
     cors_allowed_origins: str = Field(
-        default="http://localhost:5173,http://127.0.0.1:5173",
+        default="http://localhost:8000,http://127.0.0.1:8000",
         alias="CORS_ALLOWED_ORIGINS",
     )
 
@@ -125,7 +125,9 @@ class Settings(BaseSettings):
     smtp_from_email: str = Field(default="noreply@example.com", alias="SMTP_FROM_EMAIL")
     smtp_use_tls: bool = Field(default=True, alias="SMTP_USE_TLS")
     password_reset_expire_minutes: int = Field(default=60, alias="PASSWORD_RESET_EXPIRE_MINUTES")
-    app_base_url: str = Field(default="http://localhost:5173", alias="APP_BASE_URL")
+    # Base URL of the web client that handles /reset-password?token=…
+    # Must be set to the deployed frontend URL in any environment where email reset is used.
+    app_base_url: str = Field(default="http://localhost:8000", alias="APP_BASE_URL")
 
     # Storage backend — "local" (default) or "s3"
     storage_backend: str = Field(default="local", alias="STORAGE_BACKEND")
