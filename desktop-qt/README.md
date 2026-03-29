@@ -38,8 +38,6 @@ Poznamka k aktualnimu stavu:
 - hlavni pracovni cast uz bezi nad backend API na `http://127.0.0.1:8000/api/v1`
 - cast navigace a nektere sekce jsou zatim jen pripraveny stub pro dalsi kroky
 
-Slozka `novu-react/` je v repozitari ponechana bokem a neni soucasti aktualniho desktop workflow.
-
 ## Build
 
 Pro lokalni Windows build pouzij:

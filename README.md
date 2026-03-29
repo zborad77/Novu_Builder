@@ -17,7 +17,6 @@ Reset do noveho ciloveho backend smeru je v [docs/final-architecture-reset.md](d
 Repo dnes obsahuje tyto hlavni slozky:
 
 - `desktop-qt` - novy cilovy desktop klient v C++/Qt6
-- `novu-react` - starsi React prototyp ponechany v repozitari mimo aktualni workflow
 - `python-backend` - novy cilovy backend smer (FastAPI)
 - `docs` - architektura, blueprint a provozni poznamky
 - `storage` - lokalni dev storage pro obrazky a exporty
@@ -166,7 +165,6 @@ powershell -ExecutionPolicy Bypass -File scripts\start-dev.ps1 -DryRun
 
 1. Rozvijet `desktop-qt` jako cilovy kancelarsky klient.
 2. Dovest Python backend ke stabilnimu produkcnimu API tvaru.
-3. Slozku `novu-react` ponechat mimo aktivni workflow, dokud nebude bezpecne odstranena.
 
 ## TODO: Auth cleanup (technical debt)
 
