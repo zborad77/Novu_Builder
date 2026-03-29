@@ -71,6 +71,13 @@ async def upload_case_images(
             try:
                 uploaded.append(await photo_service.create_multipart_photo(project, file, is_primary=is_primary and index == 0))
             except ValueError as exc:
+                logger.warning(
+                    "photo.upload_rejected",
+                    project_id=case_id,
+                    user_id=current_user.id,
+                    filename=getattr(file, "filename", None),
+                    reason=str(exc),
+                )
                 raise HTTPException(status_code=413, detail=str(exc)) from exc
     else:
         raise HTTPException(status_code=400, detail="This endpoint expects multipart/form-data files or a JSON body with a files array.")

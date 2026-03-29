@@ -26,7 +26,7 @@ class ProjectRepository:
         # because created_at never changes (unlike updated_at).
         query: Select[tuple[Project]] = (
             select(Project)
-            .options(selectinload(Project.photos), selectinload(Project.proposal_draft), selectinload(Project.final_proposals), selectinload(Project.created_by_user))
+            .options(selectinload(Project.photos), selectinload(Project.created_by_user))
             .order_by(Project.created_at.desc(), Project.id.desc())
         )
 

@@ -262,27 +262,15 @@ class Settings(BaseSettings):
     def _check_app_base_url(self) -> "Settings":
         """Guard APP_BASE_URL against localhost placeholders.
 
-        In production: fail-fast if the value is empty or points to localhost —
-        it must be the deployed client URL (needed if self-service reset is re-enabled).
-        In development: log a warning when still on the default localhost value.
+        In development/test: warn when still on the default localhost value.
+        In all other environments (production, staging, …): fail-fast if the
+        value is empty or points to localhost — it must be the deployed client
+        URL (needed if self-service reset is re-enabled).
         """
         _LOCAL_FRAGMENTS = ("localhost", "127.0.0.1")
         url = self.app_base_url.strip()
 
-        if self.app_env.lower() == "production":
-            if not url:
-                raise ValueError(
-                    "APP_BASE_URL must be set to the deployed client URL in production "
-                    "(e.g. https://app.example.com). Current value is empty."
-                )
-            lower = url.lower()
-            if any(frag in lower for frag in _LOCAL_FRAGMENTS):
-                raise ValueError(
-                    f"APP_BASE_URL={url!r} points to localhost, which is not allowed "
-                    "in production. Set it to the deployed client URL "
-                    "(e.g. https://app.example.com)."
-                )
-        elif self.app_env.lower() == "development":
+        if self.app_env.lower() in ("development", "test"):
             lower = url.lower()
             if not url or any(frag in lower for frag in _LOCAL_FRAGMENTS):
                 _logger.warning(
@@ -291,6 +279,54 @@ class Settings(BaseSettings):
                     "if re-enabled without a real client URL.",
                     url,
                 )
+            return self
+
+        # Non-dev/test environments (production, staging, …): strict fail.
+        # Consistent with _check_jwt_secret, _check_redis_url, and other guards.
+        if not url:
+            raise ValueError(
+                f"APP_BASE_URL must be set to the deployed client URL in "
+                f"APP_ENV={self.app_env!r} (e.g. https://app.example.com). "
+                "Current value is empty."
+            )
+        lower = url.lower()
+        if any(frag in lower for frag in _LOCAL_FRAGMENTS):
+            raise ValueError(
+                f"APP_BASE_URL={url!r} points to localhost, which is not allowed "
+                f"in APP_ENV={self.app_env!r}. Set it to the deployed client URL "
+                "(e.g. https://app.example.com)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_storage_backend(self) -> "Settings":
+        """Reject local file storage in non-development/test environments.
+
+        Local storage depends on a writable host path, is not replicated, and
+        is not served by a CDN.  In production (and staging) a production-safe
+        backend must be configured explicitly — 'local' must never be a silent
+        valid state outside development.
+        """
+        if self.app_env.lower() in ("development", "test"):
+            return self
+
+        backend = self.storage_backend.strip().lower()
+        _PRODUCTION_SAFE_BACKENDS = frozenset({"s3"})
+
+        if backend not in _PRODUCTION_SAFE_BACKENDS:
+            raise ValueError(
+                f"STORAGE_BACKEND={self.storage_backend!r} is not allowed in "
+                f"APP_ENV={self.app_env!r}. "
+                "Local file storage must not be used in production — "
+                "set STORAGE_BACKEND=s3 and configure S3_BUCKET."
+            )
+
+        if backend == "s3" and not self.s3_bucket.strip():
+            raise ValueError(
+                f"S3_BUCKET must be set when STORAGE_BACKEND='s3' "
+                f"in APP_ENV={self.app_env!r}."
+            )
+
         return self
 
     @property

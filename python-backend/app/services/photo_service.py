@@ -14,6 +14,7 @@ from app.storage.backend import (
     get_public_url,
     resize_image_bytes,
     save_original_photo,
+    validate_image_format,
     write_storage_file,
 )
 
@@ -134,7 +135,14 @@ class PhotoService:
             if photo.ai_input_storage_key:
                 ai_content = await asyncio.to_thread(resize_image_bytes, content, 1280)
                 await write_storage_file(relative_storage_key=photo.ai_input_storage_key, content=ai_content)
-        except Exception:
+        except Exception as exc:
+            logger.error(
+                "photo.variant_processing_failed",
+                photo_id=photo.id,
+                project_id=photo.project_id,
+                error=str(exc),
+                exc_info=True,
+            )
             return await self._update_processing_status(photo, "failed")
 
         return await self._update_processing_status(photo, "ready")
@@ -145,7 +153,9 @@ class PhotoService:
             return
 
         ready_photos = [photo for photo in photos if photo.processing_status == "ready"]
-        candidates = ready_photos or photos
+        if not ready_photos:
+            return
+        candidates = ready_photos
         primary_candidate = next((photo for photo in candidates if photo.is_primary), None)
         chosen_photo = primary_candidate or candidates[0]
 
@@ -221,13 +231,23 @@ class PhotoService:
         return to_read_model(await self.repository.add_photo(photo))
 
     async def create_multipart_photo(self, project: Project, file: UploadFile, *, is_primary: bool) -> ProjectPhotoRead:
-        content = await file.read()
         max_bytes = get_settings().max_upload_size_mb * 1024 * 1024
+        # Content-Length guard: reject before loading bytes when the declared per-part size
+        # already exceeds the limit. file.size is set by Starlette from the multipart
+        # part Content-Length header; it may be None for browser uploads that omit it.
+        _declared_size = getattr(file, "size", None)
+        if isinstance(_declared_size, int) and _declared_size > max_bytes:
+            raise ValueError(
+                f"File too large: Content-Length {_declared_size} bytes exceeds the "
+                f"{get_settings().max_upload_size_mb} MB upload limit."
+            )
+        content = await file.read()
         if len(content) > max_bytes:
             raise ValueError(
                 f"File too large: {len(content)} bytes exceeds the "
                 f"{get_settings().max_upload_size_mb} MB upload limit."
             )
+        validate_image_format(content)
         # R-15: capture real image dimensions via Pillow before storing
         actual_width, actual_height = await asyncio.to_thread(get_image_dimensions, content)
         storage_key, _ = await save_original_photo(project_id=project.id, original_filename=file.filename, content=content)

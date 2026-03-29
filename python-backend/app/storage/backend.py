@@ -41,4 +41,5 @@ from app.storage.local_photo_storage import (  # noqa: F401
     get_image_dimensions,
     resize_image_bytes,
     sanitize_filename,
+    validate_image_format,
 )

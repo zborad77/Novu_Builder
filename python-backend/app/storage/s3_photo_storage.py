@@ -20,7 +20,11 @@ from pathlib import Path
 from time import time_ns
 from uuid import uuid4
 
+import structlog
+
 from app.storage.local_photo_storage import sanitize_filename
+
+logger = structlog.get_logger(__name__)
 
 
 def _get_s3_client():
@@ -95,8 +99,13 @@ def _sync_delete_storage_file(*, relative_storage_key: str) -> None:
     try:
         client = _get_s3_client()
         client.delete_object(Bucket=_s3_bucket(), Key=relative_storage_key)
-    except Exception:
-        pass  # Silent on error (mirrors local backend behaviour)
+    except Exception as exc:
+        logger.warning(
+            "storage.delete_failed",
+            storage_key=relative_storage_key,
+            error=str(exc),
+            exc_info=True,
+        )
 
 
 # ── Async public API ──────────────────────────────────────────────────────────

@@ -18,6 +18,7 @@ import time
 from datetime import UTC, datetime
 
 import structlog
+from fastapi import HTTPException
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -63,13 +64,23 @@ async def _process_one(payload: dict, settings) -> None:
         photo_repository=None,  # type: ignore[arg-type]  — not used by execute_job
         provider_key=settings.ai_analysis_provider,
     )
-    await service.execute_job(
-        job_id,
-        project_id,
-        organization_id,
-        is_superadmin_context=is_superadmin_context,
-    )
-    log.info("worker.job_done")
+    try:
+        await service.execute_job(
+            job_id,
+            project_id,
+            organization_id,
+            is_superadmin_context=is_superadmin_context,
+        )
+        log.info("worker.job_done")
+    except HTTPException as exc:
+        # execute_job already marked the job as failed in DB before raising.
+        # Log as a policy rejection rather than an unexpected loop error so that
+        # monitoring can distinguish security check failures from infrastructure faults.
+        log.warning(
+            "worker.job_rejected_by_policy",
+            status_code=exc.status_code,
+            detail=exc.detail,
+        )
 
 
 _HEARTBEAT_KEY = "worker:heartbeat"
@@ -83,7 +94,13 @@ async def run(redis_url: str | None = None) -> None:
     url = redis_url or settings.redis_url
 
     from redis.asyncio import Redis
-    redis = Redis.from_url(url)
+    redis = Redis.from_url(
+        url,
+        socket_connect_timeout=5.0,
+        # socket_timeout intentionally omitted: BLPOP blocks for up to the
+        # dequeue timeout (5 s) before the server sends a nil response.
+        # Setting socket_timeout < BLPOP timeout would cause spurious errors.
+    )
 
     logger.info("worker.started", provider=settings.ai_analysis_provider)
     last_heartbeat: float = 0.0

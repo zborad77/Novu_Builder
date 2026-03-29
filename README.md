@@ -171,7 +171,7 @@ powershell -ExecutionPolicy Bypass -File scripts\start-dev.ps1 -DryRun
 Web klient neni soucasti aktualni architektury.
 Primarnim klientem je desktopova Qt aplikace (`desktop-qt`).
 Self-service reset hesla vyzaduje externi web klient dostupny pres `APP_BASE_URL` —
-dokud zadny takovy klient neexistuje, endpointy `/forgot-password` a `/reset-password` zustavaji vypnute (HTTP 501).
+dokud zadny takovy klient neexistuje, endpointy `/forgot-password` a `/reset-password` zustavaji vypnute (HTTP 410 Gone).
 
 ## TODO: Auth cleanup (technical debt)
 

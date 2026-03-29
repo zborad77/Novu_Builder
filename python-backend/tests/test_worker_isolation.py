@@ -631,3 +631,118 @@ class TestRetryJobGuards:
 
         # Reached org check (403), not count guard (409)
         assert exc_info.value.status_code == 403
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dead-letter / repeated-failure sentinel log
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestDeadLetterSentinelLog:
+    """execute_job must emit worker.job_repeated_failure when retry_count is high."""
+
+    def test_source_contains_repeated_failure_event(self):
+        """execute_job source must include the dead-letter sentinel log event."""
+        from app.services.analysis_service import AnalysisService
+        src = inspect.getsource(AnalysisService.execute_job)
+        assert "worker.job_repeated_failure" in src, (
+            "execute_job must emit a distinct 'worker.job_repeated_failure' log when "
+            "the same job has failed multiple times (for alerting / on-call targeting)."
+        )
+
+    def test_source_guards_on_retry_count_threshold(self):
+        """The dead-letter log must be conditional on retry_count so it is not emitted on first failure."""
+        from app.services.analysis_service import AnalysisService
+        src = inspect.getsource(AnalysisService.execute_job)
+        assert "retry_count >=" in src, (
+            "worker.job_repeated_failure must only be emitted when retry_count reaches "
+            "a threshold, not on every failure."
+        )
+
+    @pytest.mark.asyncio
+    async def test_repeated_failure_warning_emitted_at_threshold(self):
+        """worker.job_repeated_failure is logged when retry_count >= threshold."""
+        from app.services.analysis_service import AnalysisService
+        from app.repositories.analysis_repository import AnalysisRepository
+        from app.repositories.photo_repository import PhotoRepository
+
+        job = _make_job("job_repeat", "prj_1")
+        job.retry_count = 3  # at threshold
+        project = _make_project("prj_1", "org_1")
+
+        mock_inner_repo = AsyncMock(spec=AnalysisRepository)
+        mock_inner_repo.get_analysis_job = AsyncMock(return_value=job)
+        mock_photo_repo = AsyncMock(spec=PhotoRepository)
+        mock_photo_repo.list_photos_by_project_id = AsyncMock(return_value=[])
+
+        session = AsyncMock()
+        session.get = AsyncMock(return_value=project)
+        session.commit = AsyncMock()
+
+        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory, \
+             patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo), \
+             patch("app.services.analysis_service.PhotoRepository", return_value=mock_photo_repo), \
+             patch("app.services.analysis_service.run_project_analysis", side_effect=RuntimeError("provider error")), \
+             patch("app.services.analysis_service.logger") as mock_logger:
+
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=session)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_factory.return_value = mock_ctx
+
+            service = AnalysisService(
+                repository=AsyncMock(spec=AnalysisRepository),
+                photo_repository=AsyncMock(spec=PhotoRepository),
+                provider_key="mock",
+            )
+            await service.execute_job("job_repeat", "prj_1", None, is_superadmin_context=True)
+
+        # Collect all log events emitted via the bound logger
+        bound_logger = mock_logger.bind.return_value
+        all_warning_calls = [str(c) for c in bound_logger.warning.call_args_list]
+        assert any("worker.job_repeated_failure" in c for c in all_warning_calls), (
+            f"Expected 'worker.job_repeated_failure' warning; got: {all_warning_calls}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_repeated_failure_warning_not_emitted_on_first_failure(self):
+        """worker.job_repeated_failure is NOT logged when retry_count is below threshold."""
+        from app.services.analysis_service import AnalysisService
+        from app.repositories.analysis_repository import AnalysisRepository
+        from app.repositories.photo_repository import PhotoRepository
+
+        job = _make_job("job_first", "prj_1")
+        job.retry_count = 0  # first attempt — below threshold
+        project = _make_project("prj_1", "org_1")
+
+        mock_inner_repo = AsyncMock(spec=AnalysisRepository)
+        mock_inner_repo.get_analysis_job = AsyncMock(return_value=job)
+        mock_photo_repo = AsyncMock(spec=PhotoRepository)
+        mock_photo_repo.list_photos_by_project_id = AsyncMock(return_value=[])
+
+        session = AsyncMock()
+        session.get = AsyncMock(return_value=project)
+        session.commit = AsyncMock()
+
+        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory, \
+             patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo), \
+             patch("app.services.analysis_service.PhotoRepository", return_value=mock_photo_repo), \
+             patch("app.services.analysis_service.run_project_analysis", side_effect=RuntimeError("provider error")), \
+             patch("app.services.analysis_service.logger") as mock_logger:
+
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=session)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_factory.return_value = mock_ctx
+
+            service = AnalysisService(
+                repository=AsyncMock(spec=AnalysisRepository),
+                photo_repository=AsyncMock(spec=PhotoRepository),
+                provider_key="mock",
+            )
+            await service.execute_job("job_first", "prj_1", None, is_superadmin_context=True)
+
+        bound_logger = mock_logger.bind.return_value
+        all_warning_calls = [str(c) for c in bound_logger.warning.call_args_list]
+        assert not any("worker.job_repeated_failure" in c for c in all_warning_calls), (
+            "worker.job_repeated_failure must NOT be logged on the first failure attempt."
+        )

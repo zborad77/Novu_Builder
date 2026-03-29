@@ -143,3 +143,37 @@ class TestProcessOnePayloadValidation:
         _call_kwargs = mock_service.execute_job.call_args[1]
         assert isinstance(_call_kwargs["is_superadmin_context"], bool)
         assert _call_kwargs["is_superadmin_context"] is False
+
+
+# =============================================================================
+# Redis connection hardening — socket_connect_timeout
+# =============================================================================
+
+class TestWorkerRedisConnectionHardening:
+    """Worker must set socket_connect_timeout when creating the Redis client."""
+
+    def test_run_sets_socket_connect_timeout(self):
+        """run() must pass socket_connect_timeout to Redis.from_url()."""
+        import inspect
+        from app.worker import runner
+        src = inspect.getsource(runner.run)
+        assert "socket_connect_timeout" in src, (
+            "Worker Redis client must set socket_connect_timeout to avoid hanging "
+            "indefinitely when Redis is unreachable on startup or after a blip."
+        )
+
+    def test_run_does_not_set_socket_timeout(self):
+        """run() must NOT set socket_timeout — it would race with the BLPOP server-side timeout."""
+        import inspect
+        from app.worker import runner
+        src = inspect.getsource(runner.run)
+        # socket_connect_timeout is fine; a bare socket_timeout= would interfere with BLPOP
+        lines_with_socket_timeout = [
+            line for line in src.splitlines()
+            if "socket_timeout" in line and "socket_connect_timeout" not in line
+            and not line.strip().startswith("#")
+        ]
+        assert not lines_with_socket_timeout, (
+            "run() must not set socket_timeout — BLPOP blocks for up to 5 s before "
+            "the server responds; a short socket_timeout causes spurious errors."
+        )

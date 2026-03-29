@@ -1,6 +1,7 @@
 import secrets
 from datetime import UTC, datetime, timedelta
 
+import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.api.deps import get_auth_service, get_current_user
@@ -12,20 +13,20 @@ from app.schemas.auth import (
     AuthUserRead,
     ChangePasswordRequest,
     ChangePasswordResponse,
-    ForgotPasswordRequest,
     ForgotPasswordResponse,
     LoginRequest,
     LoginResponse,
     LogoutRequest,
     LogoutResponse,
     RefreshRequest,
-    ResetPasswordRequest,
     ResetPasswordResponse,
 )
 from app.core.audit import write_audit_log
 from app.core.email import send_password_reset_email
 from app.models import PasswordResetToken, User
 from app.services.auth_service import AuthService, hash_password
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -129,10 +130,13 @@ _RESET_RETIRED_DETAIL = (
 @limiter.limit(_RESET_RATE)
 async def forgot_password(
     request: Request,
-    payload: ForgotPasswordRequest,
-    service: AuthService = Depends(get_auth_service),
 ) -> ForgotPasswordResponse:
     """Self-service reset retired — no supported web client flow exists."""
+    logger.warning(
+        "auth.reset_retired_called",
+        endpoint="forgot-password",
+        client_ip=request.client.host if request.client else None,
+    )
     raise HTTPException(status_code=410, detail=_RESET_RETIRED_DETAIL)
 
 
@@ -140,8 +144,11 @@ async def forgot_password(
 @limiter.limit(_RESET_RATE)
 async def reset_password(
     request: Request,
-    payload: ResetPasswordRequest,
-    service: AuthService = Depends(get_auth_service),
 ) -> ResetPasswordResponse:
     """Self-service reset retired — no supported web client flow exists."""
+    logger.warning(
+        "auth.reset_retired_called",
+        endpoint="reset-password",
+        client_ip=request.client.host if request.client else None,
+    )
     raise HTTPException(status_code=410, detail=_RESET_RETIRED_DETAIL)

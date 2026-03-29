@@ -17,6 +17,7 @@ logger = structlog.get_logger(__name__)
 
 _JOB_TIMEOUT_SECONDS = 180  # 3 minutes — generous upper bound for vision API calls
 _MAX_JOB_RETRY_COUNT = 10  # Hard ceiling to prevent runaway cost from AI provider calls
+_REPEATED_FAILURE_THRESHOLD = 3  # Emit dead-letter sentinel after this many retries
 
 
 def to_read_model(result: AnalysisResult) -> AnalysisResultRead:
@@ -288,7 +289,14 @@ class AnalysisService:
                 job.error_message = f"Analysis timed out after {_JOB_TIMEOUT_SECONDS}s."
                 job.finished_at = datetime.now(UTC)
                 await session.commit()
-                log.error("worker.job_timeout", timeout_seconds=_JOB_TIMEOUT_SECONDS)
+                log.error("worker.job_timeout", timeout_seconds=_JOB_TIMEOUT_SECONDS, retry_count=job.retry_count)
+                if job.retry_count >= _REPEATED_FAILURE_THRESHOLD:
+                    log.warning(
+                        "worker.job_repeated_failure",
+                        retry_count=job.retry_count,
+                        max_retry_count=_MAX_JOB_RETRY_COUNT,
+                        error=job.error_message,
+                    )
 
             except Exception as exc:
                 tb = traceback.format_exc()
@@ -304,6 +312,16 @@ class AnalysisService:
                     retry_count=job.retry_count,
                     exc_info=True,
                 )
+                # Dead-letter sentinel: emit a distinct event when the same job
+                # has failed multiple times so on-call / alerting can target it
+                # without grepping retry_count out of worker.job_failed entries.
+                if job.retry_count >= _REPEATED_FAILURE_THRESHOLD:
+                    log.warning(
+                        "worker.job_repeated_failure",
+                        retry_count=job.retry_count,
+                        max_retry_count=_MAX_JOB_RETRY_COUNT,
+                        error=str(exc),
+                    )
 
     async def retry_job(
         self,
@@ -351,6 +369,13 @@ class AnalysisService:
 
         # Enforce a hard ceiling to prevent runaway AI provider cost.
         if (original.retry_count or 0) >= _MAX_JOB_RETRY_COUNT:
+            logger.warning(
+                "worker.job_dead_letter",
+                job_id=job_id,
+                project_id=original.project_id,
+                retry_count=original.retry_count,
+                max_retry_count=_MAX_JOB_RETRY_COUNT,
+            )
             raise HTTPException(
                 status_code=409,
                 detail=(

@@ -40,5 +40,8 @@ def test_debug_false_allowed_in_production(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", _STRONG_JWT)
     monkeypatch.setenv("REDIS_URL", _STRONG_REDIS)
     monkeypatch.setenv("METRICS_AUTH_TOKEN", _STRONG_METRICS)
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "my-production-bucket")
     s = Settings()
     assert s.app_debug is False

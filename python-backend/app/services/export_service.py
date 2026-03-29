@@ -14,7 +14,7 @@ import structlog
 
 from app.schemas.export import ExportRead
 from app.schemas.project import ProjectDetail, ProposalDraftField, ProposalDraftItem, ProposalDraftSection
-from app.storage.local_photo_storage import EXPORTS_ROOT, STORAGE_ROOT, get_public_url, sanitize_filename, write_storage_file
+from app.storage.local_photo_storage import EXPORTS_ROOT, STORAGE_ROOT, _sync_write_storage_file, get_public_url, sanitize_filename
 
 logger = structlog.get_logger(__name__)
 
@@ -829,7 +829,7 @@ class ExportService:
         base_name = sanitize_filename(case_detail.finalProposal.subject or case_detail.title or "nabidka")
         file_name = f"{base_name}.docx"
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        write_storage_file(
+        _sync_write_storage_file(
             relative_storage_key=relative_storage_key.as_posix(),
             content=_build_docx_bytes(case_detail),
         )
@@ -857,7 +857,7 @@ class ExportService:
         base_name = sanitize_filename(case_detail.proposalDraft.subject or case_detail.title or "pracovni-navrh")
         file_name = f"{base_name}.docx"
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        write_storage_file(
+        _sync_write_storage_file(
             relative_storage_key=relative_storage_key.as_posix(),
             content=_build_proposal_docx_bytes(case_detail),
         )
@@ -885,7 +885,7 @@ class ExportService:
         base_name = sanitize_filename(case_detail.finalProposal.subject or case_detail.title or "nabidka")
         file_name = f"{base_name}.pdf"
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        write_storage_file(
+        _sync_write_storage_file(
             relative_storage_key=relative_storage_key.as_posix(),
             content=_build_pdf_bytes(case_detail),
         )
@@ -916,7 +916,7 @@ class ExportService:
         base_name = sanitize_filename(case_detail.title or case_detail.id)
         file_name = f"{base_name}.zip"
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        write_storage_file(
+        _sync_write_storage_file(
             relative_storage_key=relative_storage_key.as_posix(),
             content=_build_case_zip_bytes(case_detail),
         )

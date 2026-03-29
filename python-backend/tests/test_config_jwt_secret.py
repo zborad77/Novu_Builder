@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from app.core.config import Settings, _DEFAULT_JWT_SECRET
 
 _CUSTOM_SECRET = "a-very-strong-and-unique-jwt-secret-for-testing-99!"
-# Minimum valid production companions (satisfy REDIS + METRICS validators)
+# Minimum valid production companions (satisfy all production validators)
 _STRONG_REDIS_URL = "redis://:a-strong-redis-password-xyz123@localhost:6379/0"
 _STRONG_METRICS_TOKEN = "a-strong-metrics-token-xyz-for-testing-123456789"
 
@@ -41,6 +41,9 @@ def test_custom_secret_allowed_in_production(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", _CUSTOM_SECRET)
     monkeypatch.setenv("REDIS_URL", _STRONG_REDIS_URL)
     monkeypatch.setenv("METRICS_AUTH_TOKEN", _STRONG_METRICS_TOKEN)
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "my-production-bucket")
     s = Settings()
     assert s.jwt_secret == _CUSTOM_SECRET
 
