@@ -1,7 +1,10 @@
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
+
+_logger = logging.getLogger(__name__)
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -253,6 +256,41 @@ class Settings(BaseSettings):
                 f"DATABASE_URL contains an insecure placeholder password "
                 f"in APP_ENV={self.app_env!r}. Set real database credentials."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_app_base_url(self) -> "Settings":
+        """Guard APP_BASE_URL against localhost placeholders.
+
+        In production: fail-fast if the value is empty or points to localhost —
+        it must be the deployed client URL (needed if self-service reset is re-enabled).
+        In development: log a warning when still on the default localhost value.
+        """
+        _LOCAL_FRAGMENTS = ("localhost", "127.0.0.1")
+        url = self.app_base_url.strip()
+
+        if self.app_env.lower() == "production":
+            if not url:
+                raise ValueError(
+                    "APP_BASE_URL must be set to the deployed client URL in production "
+                    "(e.g. https://app.example.com). Current value is empty."
+                )
+            lower = url.lower()
+            if any(frag in lower for frag in _LOCAL_FRAGMENTS):
+                raise ValueError(
+                    f"APP_BASE_URL={url!r} points to localhost, which is not allowed "
+                    "in production. Set it to the deployed client URL "
+                    "(e.g. https://app.example.com)."
+                )
+        elif self.app_env.lower() == "development":
+            lower = url.lower()
+            if not url or any(frag in lower for frag in _LOCAL_FRAGMENTS):
+                _logger.warning(
+                    "APP_BASE_URL is not configured for real client "
+                    "(current: %r). Self-service password reset will not work "
+                    "if re-enabled without a real client URL.",
+                    url,
+                )
         return self
 
     @property

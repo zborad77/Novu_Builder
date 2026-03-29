@@ -166,6 +166,13 @@ powershell -ExecutionPolicy Bypass -File scripts\start-dev.ps1 -DryRun
 1. Rozvijet `desktop-qt` jako cilovy kancelarsky klient.
 2. Dovest Python backend ke stabilnimu produkcnimu API tvaru.
 
+## Architektura klientu a APP_BASE_URL
+
+Web klient neni soucasti aktualni architektury.
+Primarnim klientem je desktopova Qt aplikace (`desktop-qt`).
+Self-service reset hesla vyzaduje externi web klient dostupny pres `APP_BASE_URL` —
+dokud zadny takovy klient neexistuje, endpointy `/forgot-password` a `/reset-password` zustavaji vypnute (HTTP 501).
+
 ## TODO: Auth cleanup (technical debt)
 
 POST /api/v1/auth/change-password aktuálně ověřuje staré heslo přes `AuthService.login()`.

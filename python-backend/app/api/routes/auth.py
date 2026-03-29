@@ -118,6 +118,7 @@ async def change_password(
 _RESET_RATE = "5/hour"
 
 # Self-service reset temporarily disabled (no web client implemented)
+# APP_BASE_URL must point to a real client if self-service reset is enabled
 _RESET_DISABLED_DETAIL = "Self-service password reset is currently disabled"
 
 
