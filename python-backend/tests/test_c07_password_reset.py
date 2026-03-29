@@ -1,14 +1,7 @@
-"""C7: Email-based password reset flow tests.
+"""C7: Self-service password reset — retired flow tests.
 
-Coverage:
-1. forgot-password always returns 200 regardless of whether email exists
-2. A reset token is created in DB for valid email
-3. reset-password with valid token updates the password
-4. reset-password with valid token invalidates old JWT tokens
-5. reset-password with expired token returns 400
-6. reset-password with already-used token returns 400
-7. reset-password with non-existent token returns 400
-8. Password strength is enforced on reset-password
+Self-service reset (forgot/reset via email) is not supported in the current architecture
+(no web client). Both endpoints return 410 Gone. Admin reset remains unaffected.
 """
 import inspect
 from datetime import UTC, datetime, timedelta
@@ -31,15 +24,15 @@ class TestPasswordResetSource:
         from app.api.routes.auth import reset_password
         assert callable(reset_password)
 
-    def test_forgot_password_disabled(self):
-        """forgot_password must be marked as disabled."""
+    def test_forgot_password_retired(self):
+        """forgot_password must be marked as retired."""
         src = inspect.getsource(__import__("app.api.routes.auth", fromlist=["forgot_password"]).forgot_password)
-        assert "disabled" in src.lower()
+        assert "retired" in src.lower()
 
-    def test_reset_password_disabled(self):
-        """reset_password must be marked as disabled."""
+    def test_reset_password_retired(self):
+        """reset_password must be marked as retired."""
         src = inspect.getsource(__import__("app.api.routes.auth", fromlist=["reset_password"]).reset_password)
-        assert "disabled" in src.lower()
+        assert "retired" in src.lower()
 
     def test_reset_token_model_has_used_at(self):
         """PasswordResetToken must have a used_at field to track consumption."""
@@ -56,26 +49,26 @@ class TestPasswordResetSource:
 
 class TestForgotPassword:
 
-    async def test_forgot_password_returns_501(self, app_client):
-        """POST /auth/forgot-password returns 501 — feature is disabled."""
+    async def test_forgot_password_returns_410(self, app_client):
+        """POST /auth/forgot-password returns 410 — feature is disabled."""
         resp = await app_client.post(
             "/api/v1/auth/forgot-password",
             json={"email": "nobody@example.com"},
         )
-        assert resp.status_code == 501
-        assert "disabled" in resp.json()["detail"].lower()
+        assert resp.status_code == 410
+        assert "not supported" in resp.json()["detail"].lower()
 
-    async def test_forgot_password_returns_501_for_known_email(self, app_client, test_tenants):
-        """POST /auth/forgot-password returns 501 even for a known email."""
+    async def test_forgot_password_returns_410_for_known_email(self, app_client, test_tenants):
+        """POST /auth/forgot-password returns 410 even for a known email."""
         email = test_tenants["user_a"]["email"]
         resp = await app_client.post(
             "/api/v1/auth/forgot-password",
             json={"email": email},
         )
-        assert resp.status_code == 501
+        assert resp.status_code == 410
 
     async def test_both_responses_identical(self, app_client, test_tenants):
-        """Both known and unknown email get the same 501 response."""
+        """Both known and unknown email get the same 410 response."""
         email = test_tenants["user_a"]["email"]
         resp_known = await app_client.post(
             "/api/v1/auth/forgot-password",
@@ -107,13 +100,13 @@ class TestForgotPassword:
 
 
 class TestResetPassword:
-    """reset-password endpoint is disabled — all requests return 501."""
+    """reset-password endpoint is disabled — all requests return 410."""
 
-    async def test_reset_password_returns_501(self, app_client):
-        """Any reset-password request returns 501 — feature is disabled."""
+    async def test_reset_password_returns_410(self, app_client):
+        """Any reset-password request returns 410 — feature is disabled."""
         resp = await app_client.post(
             "/api/v1/auth/reset-password",
             json={"token": "any-token", "newPassword": "ValidP@ssw0rd1"},
         )
-        assert resp.status_code == 501
-        assert "disabled" in resp.json()["detail"].lower()
+        assert resp.status_code == 410
+        assert "not supported" in resp.json()["detail"].lower()

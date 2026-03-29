@@ -117,9 +117,12 @@ async def change_password(
 
 _RESET_RATE = "5/hour"
 
-# Self-service reset temporarily disabled (no web client implemented)
-# APP_BASE_URL must point to a real client if self-service reset is enabled
-_RESET_DISABLED_DETAIL = "Self-service password reset is currently disabled"
+# Self-service reset was intentionally retired — current architecture has no supported web client flow.
+# Admin reset remains available at POST /api/v1/admin/users/{id}/reset-password.
+_RESET_RETIRED_DETAIL = (
+    "Self-service password reset is not supported in the current architecture. "
+    "Use admin reset workflow."
+)
 
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
@@ -129,8 +132,8 @@ async def forgot_password(
     payload: ForgotPasswordRequest,
     service: AuthService = Depends(get_auth_service),
 ) -> ForgotPasswordResponse:
-    """Self-service password reset temporarily disabled (no web client implemented)."""
-    raise HTTPException(status_code=501, detail=_RESET_DISABLED_DETAIL)
+    """Self-service reset retired — no supported web client flow exists."""
+    raise HTTPException(status_code=410, detail=_RESET_RETIRED_DETAIL)
 
 
 @router.post("/reset-password", response_model=ResetPasswordResponse)
@@ -140,5 +143,5 @@ async def reset_password(
     payload: ResetPasswordRequest,
     service: AuthService = Depends(get_auth_service),
 ) -> ResetPasswordResponse:
-    """Self-service password reset temporarily disabled (no web client implemented)."""
-    raise HTTPException(status_code=501, detail=_RESET_DISABLED_DETAIL)
+    """Self-service reset retired — no supported web client flow exists."""
+    raise HTTPException(status_code=410, detail=_RESET_RETIRED_DETAIL)
