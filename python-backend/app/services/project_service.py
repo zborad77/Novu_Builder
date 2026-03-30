@@ -464,7 +464,7 @@ class ProjectService:
         created_snapshot = await self.final_proposal_repository.create_for_project(project_id=project.id, payload=snapshot_payload)
         project.final_proposals = [*(project.final_proposals or []), created_snapshot]
         detail = build_project_detail(project)
-        self.export_service.create_final_proposal_exports(case_detail=detail)
+        await self.export_service.create_final_proposal_exports(case_detail=detail)
         return detail
 
     async def update_project(self, project_id: str, payload: dict, *, organization_id: str | None = None) -> ProjectDetail | None:

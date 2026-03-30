@@ -21,16 +21,24 @@ if _backend == "s3":
     from app.storage.s3_photo_storage import (  # noqa: F401
         copy_storage_file,
         delete_storage_file,
+        generate_presigned_url,
         get_public_url,
+        list_storage_keys,
+        read_storage_file,
         save_original_photo,
+        storage_key_exists,
         write_storage_file,
     )
 elif _backend == "local":
     from app.storage.local_photo_storage import (  # type: ignore[assignment]  # noqa: F401
         copy_storage_file,
         delete_storage_file,
+        generate_presigned_url,
         get_public_url,
+        list_storage_keys,
+        read_storage_file,
         save_original_photo,
+        storage_key_exists,
         write_storage_file,
     )
 else:

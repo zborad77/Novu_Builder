@@ -17,6 +17,7 @@ _STRONG_DB = "postgresql+asyncpg://novu:Str0ngP%40ssw0rd!@localhost:5432/novu_pr
 _STRONG_BASE_URL = "https://app.novu-builder.com"
 _STRONG_CORS = "https://app.novu-builder.com"
 _STRONG_S3_BUCKET = "my-production-bucket"
+_STRONG_S3_REGION = "eu-central-1"
 
 
 def _set_valid_prod_env(monkeypatch, **overrides):
@@ -32,6 +33,7 @@ def _set_valid_prod_env(monkeypatch, **overrides):
         "CORS_ALLOWED_ORIGINS": _STRONG_CORS,
         "STORAGE_BACKEND": "s3",
         "S3_BUCKET": _STRONG_S3_BUCKET,
+        "S3_REGION": _STRONG_S3_REGION,
     }
     env.update(overrides)
     for key, val in env.items():
@@ -240,7 +242,7 @@ def test_database_sync_override_async_driver_fails_in_production(monkeypatch):
 def test_storage_local_fails_in_production(monkeypatch):
     """STORAGE_BACKEND='local' must be rejected in production."""
     _set_valid_prod_env(monkeypatch, STORAGE_BACKEND="local", S3_BUCKET=None)
-    with pytest.raises(ValidationError, match="STORAGE_BACKEND"):
+    with pytest.raises(ValidationError, match="Local storage is not allowed in production"):
         Settings()
 
 
@@ -264,6 +266,19 @@ def test_storage_s3_with_bucket_passes_in_production(monkeypatch):
     s = Settings()
     assert s.storage_backend == "s3"
     assert s.s3_bucket == _STRONG_S3_BUCKET
+    assert s.storage_authoritative is True
+
+
+def test_storage_s3_without_region_fails_in_production(monkeypatch):
+    _set_valid_prod_env(monkeypatch, S3_REGION=None)
+    with pytest.raises(ValidationError, match="S3_REGION must be set"):
+        Settings()
+
+
+def test_storage_authoritative_false_fails_in_production(monkeypatch):
+    _set_valid_prod_env(monkeypatch, STORAGE_AUTHORITATIVE="false")
+    with pytest.raises(ValidationError, match="STORAGE_AUTHORITATIVE must remain true"):
+        Settings()
 
 
 def test_storage_local_allowed_in_development(monkeypatch):
@@ -293,7 +308,14 @@ def test_storage_unknown_backend_fails_in_development(monkeypatch):
 def test_storage_local_fails_in_staging(monkeypatch):
     """STORAGE_BACKEND='local' must also be rejected in staging (not only 'production')."""
     _set_valid_prod_env(monkeypatch, APP_ENV="staging", STORAGE_BACKEND="local", S3_BUCKET=None)
-    with pytest.raises(ValidationError, match="STORAGE_BACKEND"):
+    with pytest.raises(ValidationError, match="Local storage is not allowed in production"):
+        Settings()
+
+
+def test_storage_production_guard(monkeypatch):
+    """Production must fail fast when STORAGE_BACKEND falls back to local."""
+    _set_valid_prod_env(monkeypatch, STORAGE_BACKEND="local", S3_BUCKET=None)
+    with pytest.raises(ValidationError, match="Local storage is not allowed in production"):
         Settings()
 
 
@@ -309,6 +331,16 @@ def test_storage_partial_s3_credentials_fail(monkeypatch):
         Settings()
 
 
+def test_storage_placeholder_s3_access_key_fails(monkeypatch):
+    _set_valid_prod_env(
+        monkeypatch,
+        S3_ACCESS_KEY_ID="change-me-access-key",
+        S3_SECRET_ACCESS_KEY="a-real-secret-key-for-tests",
+    )
+    with pytest.raises(ValidationError, match="S3_ACCESS_KEY_ID"):
+        Settings()
+
+
 def test_storage_placeholder_s3_secret_fails(monkeypatch):
     _set_valid_prod_env(
         monkeypatch,
@@ -319,9 +351,80 @@ def test_storage_placeholder_s3_secret_fails(monkeypatch):
         Settings()
 
 
-def test_storage_placeholder_cdn_url_fails(monkeypatch):
+def test_storage_cdn_url_rejected_with_signed_url_policy(monkeypatch):
     _set_valid_prod_env(monkeypatch, S3_CDN_BASE_URL="https://cdn.example.com")
-    with pytest.raises(ValidationError, match="S3_CDN_BASE_URL looks like an unfilled placeholder"):
+    with pytest.raises(ValidationError, match="S3_CDN_BASE_URL is not supported with signed URL policy"):
+        Settings()
+
+
+def test_storage_signed_url_ttl_above_max_fails(monkeypatch):
+    _set_valid_prod_env(monkeypatch, STORAGE_SIGNED_URL_TTL_SECONDS="3601")
+    with pytest.raises(ValidationError, match="STORAGE_SIGNED_URL_TTL_SECONDS must be between 1 and 3600"):
+        Settings()
+
+
+def test_s3_connect_timeout_zero_fails(monkeypatch):
+    _set_valid_prod_env(monkeypatch, S3_CONNECT_TIMEOUT_SECONDS="0")
+    with pytest.raises(ValidationError, match="S3_CONNECT_TIMEOUT_SECONDS must be > 0"):
+        Settings()
+
+
+def test_s3_read_timeout_zero_fails(monkeypatch):
+    _set_valid_prod_env(monkeypatch, S3_READ_TIMEOUT_SECONDS="0")
+    with pytest.raises(ValidationError, match="S3_READ_TIMEOUT_SECONDS must be > 0"):
+        Settings()
+
+
+def test_s3_timeouts_valid_pass(monkeypatch):
+    _set_valid_prod_env(
+        monkeypatch,
+        S3_CONNECT_TIMEOUT_SECONDS="2.5",
+        S3_READ_TIMEOUT_SECONDS="8.0",
+    )
+    settings = Settings()
+    assert settings.s3_connect_timeout_seconds == 2.5
+    assert settings.s3_read_timeout_seconds == 8.0
+
+
+def test_storage_signed_url_ttl_zero_fails(monkeypatch):
+    _set_valid_prod_env(monkeypatch, STORAGE_SIGNED_URL_TTL_SECONDS="0")
+    with pytest.raises(ValidationError, match="STORAGE_SIGNED_URL_TTL_SECONDS must be between 1 and 3600"):
+        Settings()
+
+
+def test_storage_signed_url_ttl_valid_passes(monkeypatch):
+    _set_valid_prod_env(monkeypatch, STORAGE_SIGNED_URL_TTL_SECONDS="900")
+    settings = Settings()
+    assert settings.storage_signed_url_ttl_seconds == 900
+
+
+def test_storage_signed_url_ttl_defaults_to_one_hour(monkeypatch):
+    _set_valid_prod_env(monkeypatch)
+    settings = Settings()
+    assert settings.storage_signed_url_ttl_seconds == 3600
+
+
+def test_storage_signed_url_ttl_non_integer_fails(monkeypatch):
+    _set_valid_prod_env(monkeypatch, STORAGE_SIGNED_URL_TTL_SECONDS="abc")
+    with pytest.raises(ValidationError, match="Input should be a valid integer"):
+        Settings()
+
+
+def test_export_ttl_days_default_is_seven(monkeypatch):
+    _set_valid_prod_env(monkeypatch)
+    settings = Settings()
+    assert settings.export_ttl_days == 7
+
+
+def test_export_ttl_days_zero_fails(monkeypatch):
+    _set_valid_prod_env(monkeypatch, EXPORT_TTL_DAYS="0")
+    with pytest.raises(ValidationError, match="EXPORT_TTL_DAYS must be > 0"):
+        Settings()
+
+
+def test_export_ttl_days_non_integer_fails(monkeypatch):
+    _set_valid_prod_env(monkeypatch, EXPORT_TTL_DAYS="abc")
+    with pytest.raises(ValidationError, match="Input should be a valid integer"):
         Settings()
 
 

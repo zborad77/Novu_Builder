@@ -10,6 +10,7 @@ _STRONG_DB = "postgresql+asyncpg://novu:Str0ngP%40ssw0rd!@localhost:5432/novu_pr
 _STRONG_BASE_URL = "https://app.novu-builder.com"
 _STRONG_CORS = "https://app.novu-builder.com"
 _STRONG_S3_BUCKET = "my-production-bucket"
+_STRONG_S3_REGION = "eu-central-1"
 
 
 def _set_valid_prod_env(monkeypatch, **overrides):
@@ -24,6 +25,7 @@ def _set_valid_prod_env(monkeypatch, **overrides):
         "CORS_ALLOWED_ORIGINS": _STRONG_CORS,
         "STORAGE_BACKEND": "s3",
         "S3_BUCKET": _STRONG_S3_BUCKET,
+        "S3_REGION": _STRONG_S3_REGION,
     }
     env.update(overrides)
     for key, val in env.items():

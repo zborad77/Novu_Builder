@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -170,6 +171,16 @@ class TestWorkerRedisConnectionHardening:
             socket_timeout=None,
             client_name="novu-worker",
         )
+
+    def test_worker_source_has_no_local_storage_usage(self):
+        from app.worker import runner
+
+        source = inspect.getsource(runner)
+        assert "local_photo_storage" not in source
+        assert "STORAGE_ROOT" not in source
+        assert "read_bytes(" not in source
+        assert "write_bytes(" not in source
+        assert "app.storage.backend" not in source
 
     @pytest.mark.asyncio
     async def test_worker_startup_fails_fast_when_redis_is_unavailable_in_production(self):
@@ -477,3 +488,74 @@ class TestWorkerConcurrencyControl:
         assert task_started.is_set() is True
         assert task_cancelled.is_set() is True
         redis.aclose.assert_awaited_once()
+
+
+class TestWorkerExportCleanup:
+    @pytest.mark.asyncio
+    async def test_run_export_cleanup_if_due_uses_worker_session_factory(self):
+        from app.worker import runner
+
+        runtime = runner.WorkerRuntime(
+            settings=MagicMock(),
+            redis=AsyncMock(),
+            redis_url="redis://:secret@localhost:6379/0",
+            worker_instance_id="worker-a",
+            heartbeat_key="worker:heartbeat:worker-a",
+            job_executor=MagicMock(execute_payload=AsyncMock()),
+            worker_concurrency=1,
+            concurrency_limiter=asyncio.Semaphore(1),
+            inflight_tasks=set(),
+            last_heartbeat=time.monotonic(),
+            last_export_cleanup=0.0,
+        )
+
+        session = AsyncMock()
+        session_ctx = AsyncMock()
+        session_ctx.__aenter__.return_value = session
+        session_ctx.__aexit__.return_value = False
+        delete_expired_exports = AsyncMock(return_value=2)
+
+        with (
+            patch("app.worker.runner.WorkerAsyncSessionFactory", return_value=session_ctx) as session_factory,
+            patch("app.worker.runner.ExportService") as export_service_cls,
+        ):
+            export_service_cls.return_value.delete_expired_exports = delete_expired_exports
+            await runner._run_export_cleanup_if_due(
+                runtime,
+                now_monotonic=runner._EXPORT_CLEANUP_INTERVAL_SECONDS,
+            )
+
+        session_factory.assert_called_once_with()
+        export_service_cls.assert_called_once()
+        delete_expired_exports.assert_awaited_once_with()
+        assert runtime.last_export_cleanup == runner._EXPORT_CLEANUP_INTERVAL_SECONDS
+
+    @pytest.mark.asyncio
+    async def test_run_one_iteration_runs_export_cleanup_before_dequeue(self):
+        from app.worker import runner
+
+        runtime = runner.WorkerRuntime(
+            settings=MagicMock(),
+            redis=AsyncMock(),
+            redis_url="redis://:secret@localhost:6379/0",
+            worker_instance_id="worker-a",
+            heartbeat_key="worker:heartbeat:worker-a",
+            job_executor=MagicMock(execute_payload=AsyncMock()),
+            worker_concurrency=1,
+            concurrency_limiter=asyncio.Semaphore(1),
+            inflight_tasks=set(),
+            last_heartbeat=time.monotonic(),
+        )
+
+        with (
+            patch("app.worker.runner._run_export_cleanup_if_due", new=AsyncMock()) as cleanup,
+            patch("app.worker.runner._write_heartbeat_if_due", new=AsyncMock()) as heartbeat,
+            patch("app.worker.runner._drain_finished_tasks", new=AsyncMock()) as drain,
+            patch("app.worker.runner._acquire_job_slot", new=AsyncMock(return_value=False)) as acquire,
+        ):
+            await runner._run_one_iteration(runtime)
+
+        cleanup.assert_awaited_once_with(runtime)
+        heartbeat.assert_awaited_once_with(runtime)
+        drain.assert_awaited_once_with(runtime)
+        acquire.assert_awaited_once_with(runtime)

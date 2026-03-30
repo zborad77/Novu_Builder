@@ -148,6 +148,7 @@ def test_settings_reject_invalid_redis_tuning(monkeypatch, env_name, env_value, 
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.novu-builder.com")
     monkeypatch.setenv("STORAGE_BACKEND", "s3")
     monkeypatch.setenv("S3_BUCKET", "my-production-bucket")
+    monkeypatch.setenv("S3_REGION", "eu-central-1")
     monkeypatch.setenv(env_name, env_value)
 
     with pytest.raises(ValidationError, match=match):
@@ -165,6 +166,7 @@ def test_settings_reject_redis_backoff_cap_smaller_than_base(monkeypatch):
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.novu-builder.com")
     monkeypatch.setenv("STORAGE_BACKEND", "s3")
     monkeypatch.setenv("S3_BUCKET", "my-production-bucket")
+    monkeypatch.setenv("S3_REGION", "eu-central-1")
     monkeypatch.setenv("REDIS_RETRY_BACKOFF_BASE", str(REDIS_RETRY_BACKOFF_CAP))
     monkeypatch.setenv("REDIS_RETRY_BACKOFF_CAP", str(REDIS_RETRY_BACKOFF_BASE))
 

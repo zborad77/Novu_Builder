@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from app.api.deps import get_current_user, get_project_service, resolve_org_id
+from app.core.config import get_settings
 from app.schemas.auth import AuthUserRead
 from app.services.project_service import ProjectService
 from app.storage.local_photo_storage import STORAGE_ROOT
@@ -28,6 +29,10 @@ async def serve_storage_file(
     current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
 ):
+    settings = get_settings()
+    if settings.storage_backend != "local":
+        raise HTTPException(status_code=404, detail="File not found.")
+
     # Resolve and guard against path traversal
     absolute_path = (STORAGE_ROOT / file_path).resolve()
     try:

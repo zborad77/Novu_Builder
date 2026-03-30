@@ -2,6 +2,7 @@
 Upload validation tests — verify that photo uploads and preview access
 are scoped to the correct organization.
 """
+import importlib
 import inspect
 
 import pytest
@@ -93,6 +94,36 @@ class TestUploadRouteStructure:
         from app.services.photo_service import to_read_model
         src = inspect.getsource(to_read_model)
         assert "projectId=photo.project_id" in src
+
+    def test_upload_route_does_not_support_json_metadata_only_creation(self):
+        """Legacy JSON metadata-only uploads must not bypass real file validation/storage."""
+        from app.api.routes.images import upload_case_images
+        src = inspect.getsource(upload_case_images)
+        assert "JSON metadata-only uploads are not supported" in src
+        assert "create_json_photo" not in src
+
+
+def test_upload_goes_to_s3_only(monkeypatch):
+    """When STORAGE_BACKEND=s3, upload storage writes must resolve to S3 backend functions only."""
+    import app.storage.backend as backend_mod
+    import app.storage.local_photo_storage as local_storage_mod
+    import app.storage.s3_photo_storage as s3_storage_mod
+    import app.services.photo_service as photo_service_mod
+
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    reloaded_backend = importlib.reload(backend_mod)
+    try:
+        assert reloaded_backend.save_original_photo is s3_storage_mod.save_original_photo
+        assert reloaded_backend.write_storage_file is s3_storage_mod.write_storage_file
+        assert reloaded_backend.save_original_photo is not local_storage_mod.save_original_photo
+        assert reloaded_backend.write_storage_file is not local_storage_mod.write_storage_file
+
+        source = inspect.getsource(photo_service_mod)
+        assert "from app.storage.backend import (" in source
+        assert "local_photo_storage" not in source
+    finally:
+        monkeypatch.setenv("STORAGE_BACKEND", "local")
+        importlib.reload(backend_mod)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -187,6 +218,38 @@ class TestUploadForeignProject:
             )
 
         assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_upload_json_metadata_only_is_rejected_for_existing_project(self):
+        """Existing projects must still reject JSON uploads because they bypass byte validation."""
+        from app.api.routes.images import upload_case_images
+        from app.services.project_service import ProjectService
+        from app.services.photo_service import PhotoService
+
+        mock_request = MagicMock()
+        mock_request.headers = {"content-type": "application/json"}
+
+        mock_user = MagicMock()
+        mock_user.isSuperAdmin = False
+        mock_user.organizationId = "org_A"
+
+        project = _make_project("prj_A", "org_A")
+        mock_project_service = AsyncMock(spec=ProjectService)
+        mock_project_service.get_project_lean = AsyncMock(return_value=project)
+
+        mock_photo_service = AsyncMock(spec=PhotoService)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await upload_case_images(
+                request=mock_request,
+                case_id="prj_A",
+                current_user=mock_user,
+                project_service=mock_project_service,
+                photo_service=mock_photo_service,
+            )
+
+        assert exc_info.value.status_code == 415
+        assert "multipart/form-data" in exc_info.value.detail
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -367,6 +430,12 @@ class TestStorageRouteAuth:
         from app.api.routes.storage import _ALLOWED_PREFIXES
         assert "projects" in _ALLOWED_PREFIXES
         assert "exports" in _ALLOWED_PREFIXES
+
+    def test_storage_route_requires_local_backend(self):
+        """serve_storage_file must fail fast when local storage is not the active backend."""
+        from app.api.routes.storage import serve_storage_file
+        src = inspect.getsource(serve_storage_file)
+        assert 'settings.storage_backend != "local"' in src
 
     @pytest.mark.asyncio
     async def test_storage_blocks_cross_tenant_photo(self):

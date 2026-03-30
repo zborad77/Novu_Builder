@@ -10,8 +10,8 @@ from app.repositories.photo_repository import PhotoRepository
 from app.schemas.photo import ProjectPhotoRead
 from app.storage.backend import (
     delete_storage_file,
+    generate_presigned_url,
     get_image_dimensions,
-    get_public_url,
     resize_image_bytes,
     save_original_photo,
     validate_photo_upload,
@@ -67,9 +67,9 @@ def _is_terminal_processing_status(status: str) -> bool:
 
 
 def to_read_model(photo: ProjectPhoto) -> ProjectPhotoRead:
-    original_url = get_public_url(photo.storage_key)
-    preview_url = get_public_url(photo.preview_storage_key) if photo.preview_storage_key else None
-    ai_input_url = get_public_url(photo.ai_input_storage_key) if photo.ai_input_storage_key else None
+    original_url = generate_presigned_url(photo.storage_key)
+    preview_url = generate_presigned_url(photo.preview_storage_key) if photo.preview_storage_key else None
+    ai_input_url = generate_presigned_url(photo.ai_input_storage_key) if photo.ai_input_storage_key else None
     return ProjectPhotoRead(
         id=photo.id,
         projectId=photo.project_id,
@@ -214,49 +214,6 @@ class PhotoService:
         if not photo:
             return None
         return to_read_model(photo)
-
-    async def create_json_photo(self, project: Project, payload: dict) -> ProjectPhotoRead:
-        filename = payload.get("originalFilename") or f"photo-{uuid4().hex[:8]}.jpg"
-        photo_count = await self.repository.count_photos(project.id)
-        is_primary = bool(payload.get("isPrimary")) or photo_count == 0
-        if is_primary:
-            await self.repository.clear_primary(project.id)
-        variants = build_derived_variants(
-            project.id,
-            filename,
-            original_size=payload.get("fileSize", 0),
-            width=payload.get("width"),
-            height=payload.get("height"),
-        )
-        mime_type = payload.get("mimeType") or "image/jpeg"
-        if not payload.get("mimeType"):
-            logger.warning("photo.create_json.mime_type_missing", project_id=project.id, fallback=mime_type)
-        photo = ProjectPhoto(
-            id=f"pho_{uuid4().hex[:8]}",
-            project_id=project.id,
-            storage_key=f"projects/{project.id}/{filename}",
-            original_filename=filename,
-            mime_type=mime_type,
-            file_size=payload.get("fileSize", 0),
-            width=payload.get("width"),
-            height=payload.get("height"),
-            preview_storage_key=variants["preview_storage_key"],
-            preview_file_size=variants["preview_file_size"],
-            preview_width=variants["preview_width"],
-            preview_height=variants["preview_height"],
-            ai_input_storage_key=variants["ai_input_storage_key"],
-            ai_input_file_size=variants["ai_input_file_size"],
-            ai_input_width=variants["ai_input_width"],
-            ai_input_height=variants["ai_input_height"],
-            processing_status="ready",
-            taken_at=payload.get("takenAt"),
-            exif_lat=payload.get("exifLat"),
-            exif_lng=payload.get("exifLng"),
-            is_primary=is_primary,
-            is_analysis_reference=photo_count == 0,
-            sort_order=payload.get("sortOrder") or await self.repository.get_next_sort_order(project.id),
-        )
-        return to_read_model(await self.repository.add_photo(photo))
 
     async def create_multipart_photo(self, project: Project, file: UploadFile, *, is_primary: bool) -> ProjectPhotoRead:
         max_upload_size_mb = get_settings().max_upload_size_mb

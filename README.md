@@ -19,7 +19,7 @@ Repo dnes obsahuje tyto hlavni slozky:
 - `desktop-qt` - novy cilovy desktop klient v C++/Qt6
 - `python-backend` - novy cilovy backend smer (FastAPI)
 - `docs` - architektura, blueprint a provozni poznamky
-- `storage` - lokalni dev storage pro obrazky a exporty
+- `storage` - lokalni dev storage pro obrazky a exporty. Local storage is DEV ONLY.
 
 ## Doporucena architektura MVP
 
@@ -170,7 +170,26 @@ Production `docker compose` startup expects a filled root
 - `CORS_ALLOWED_ORIGINS`
 - `METRICS_AUTH_TOKEN`
 - `STORAGE_BACKEND=s3`
+- `STORAGE_AUTHORITATIVE=true`
+- `S3_CONNECT_TIMEOUT_SECONDS>0`
+- `S3_READ_TIMEOUT_SECONDS>0`
+- `STORAGE_SIGNED_URL_TTL_SECONDS<=3600`
+- `EXPORT_TTL_DAYS=7`
 - `S3_BUCKET`
+- `S3_REGION`
+
+V produkci se media i exporty cti a zapisuji pres storage key v aktivnim
+storage backendu. API vraci pouze casove omezené signed URL; zadny endpoint
+nesmi vracet raw public S3 URL. Local storage is DEV ONLY. Lokalni `storage_data` a `/mock-storage`
+zustavaji jen pro DEV/TEST.
+Upload flow je jednotny: `multipart/form-data` -> backend validace skutecnych
+bajtu souboru -> zapis do aktivniho storage backendu. Metadata-only JSON upload
+neni podporovan.
+Orphan management je dostupny pres `storage_consistency_service`: scan porovnava
+DB/photo a DB/export reference proti storage keyum, `cleanup_orphans()`
+bezi defaultne v safe mode a kazdou akci strukturovane loguje.
+Export metadata jsou authoritative v DB a kazdy export ma `expires_at`; worker
+prubezne maze expirovane export artefakty ze storage podle `EXPORT_TTL_DAYS`.
 
 Deployment details and the operator checklist are in [DEPLOY.md](DEPLOY.md).
 

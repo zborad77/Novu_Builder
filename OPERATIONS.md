@@ -144,21 +144,37 @@ Superadmin (cross-tenant) views bypass the cache entirely.
 
 | Data | Location | Method |
 |------|----------|--------|
-| PostgreSQL | `postgres_data` Docker volume | `pg_dump` |
-| File storage (photos, exports) | S3 bucket from `S3_BUCKET` | provider-native backup / versioning |
+| PostgreSQL | `postgres_data` Docker volume | `scripts/backup.sh` -> `.pgdump` + `.sha256` + manifest |
+| File storage (photos, exports) in production | S3 bucket from `S3_BUCKET` | external bucket controls outside repo scripts |
 
 When `STORAGE_BACKEND=s3` (required in production), the compatibility
 `storage_data` Docker volume is not the source of uploaded media.
+In that mode, repo backup/restore is DB-only and does not provide full production DR.
 
 ### Running a backup
 
 ```bash
-# One-shot backup to ./backups/  (produces db_TIMESTAMP.pgdump + storage_TIMESTAMP.tar.gz)
+# One-shot backup to ./backups/
 BACKUP_DIR=/backups ./scripts/backup.sh
 
 # Or with custom retention
 RETAIN_DAYS=14 BACKUP_DIR=/backups ./scripts/backup.sh
 ```
+
+Current semantics:
+
+- local/dev may also produce `storage_TIMESTAMP.tar.gz`
+- `production+s3` produces DB artifact set only
+- manifest may record Variant A foundation metadata:
+  - `dr_contract`
+  - `dr_recovery_point_model`
+  - `s3_bucket`
+  - `s3_region`
+  - `s3_recovery_point`
+  - `storage_snapshot_consistent`
+- `production+s3` manifest explicitly marks `production_dr_eligible=false`
+- even with foundation metadata present, repo scripts still do not claim full
+  DB + S3 disaster recovery
 
 ### Automated daily backup (cron)
 
@@ -179,37 +195,56 @@ python-backend/scripts/verify_restore.sh /backups/db_YYYYMMDD_HHMMSS.pgdump
 #### 1. Database restore
 
 ```bash
-# One-command restore (stops services, restores .pgdump, runs migrations, restarts)
+# One-command DB restore (stops services, restores .pgdump, runs migrations, restarts)
 ./ops/restore.sh /backups/db_YYYYMMDD_HHMMSS.pgdump
 
 # Unattended (CI / automation)
 ./ops/restore.sh /backups/db_YYYYMMDD_HHMMSS.pgdump --yes
 ```
 
-ops/restore.sh performs post-restore integrity checks (specific critical tables +
-alembic_version populated) before restarting services.
+`ops/restore.sh` validates:
 
-#### 2. Storage restore
+- manifest contract
+- checksum
+- production+s3 S3 protection prerequisites
+- production+s3 S3 pre-restore validation
+- DB restore
+- schema/head alignment
+- backend liveness
 
-```bash
-# Stop backend and worker (both access storage)
-docker compose stop backend worker
+`ops/restore.sh` does not validate:
 
-# Clear and restore the volume
-docker run --rm \
-  -v novu_builder_storage_data:/data \
-  -v /backups:/backup \
-  alpine \
-  sh -c "rm -rf /data/* && tar xzf /backup/storage_YYYYMMDD_HHMMSS.tar.gz -C /"
+- S3/object storage recovery
+- full production disaster recovery
+- full application readiness beyond dependency-free liveness
 
-docker compose start backend worker
-```
+Variant A foundation boundary:
+
+- restore reads the new S3 recovery-point metadata only as contract metadata
+- contradictory S3 DR metadata fails closed
+- full production DR is still not implemented or claimed
+
+#### 2. Production + S3 boundary
+
+For `APP_ENV=production` with `STORAGE_BACKEND=s3`:
+
+- repo scripts do not restore production object storage
+- S3 recovery must be performed outside repo scripts
+- do not treat DB restore success as full-state production restore
+- follow [BACKUP_RESTORE.md](BACKUP_RESTORE.md) for the authoritative production boundary
+
+#### 3. Local/dev compatibility only
+
+`storage_YYYYMMDD_HHMMSS.tar.gz` is a local/dev compatibility artifact.
+It is not an authoritative production recovery mechanism for `STORAGE_BACKEND=s3`.
 
 ### What is NOT automated
 
-- Off-site / remote copy of backup files (use `rsync`, `rclone`, S3, etc.)
+- Production S3 backup/recovery automation
+- Full production DR drill
+- Full-state production restore validation
+- Off-site / remote copy of backup files for S3 media
 - Backup verify to temp DB is automated via `python-backend/scripts/verify_restore.sh`
-- Full restore drill on clean environment (separate host) remains manual
 - Point-in-time recovery (needs WAL archiving or Barman — out of scope for single-host)
 
 ---

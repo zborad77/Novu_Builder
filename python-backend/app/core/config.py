@@ -276,7 +276,12 @@ class Settings(BaseSettings):
     s3_access_key_id: str = Field(default="", alias="S3_ACCESS_KEY_ID")
     s3_secret_access_key: str = Field(default="", alias="S3_SECRET_ACCESS_KEY")
     s3_region: str = Field(default="us-east-1", alias="S3_REGION")
-    s3_cdn_base_url: str = Field(default="", alias="S3_CDN_BASE_URL")  # CDN prefix, e.g. https://cdn.example.com
+    s3_cdn_base_url: str = Field(default="", alias="S3_CDN_BASE_URL")  # deprecated: incompatible with signed URL policy
+    s3_connect_timeout_seconds: float = Field(default=3.0, alias="S3_CONNECT_TIMEOUT_SECONDS")
+    s3_read_timeout_seconds: float = Field(default=10.0, alias="S3_READ_TIMEOUT_SECONDS")
+    storage_signed_url_ttl_seconds: int = Field(default=3600, alias="STORAGE_SIGNED_URL_TTL_SECONDS")
+    storage_authoritative: bool | None = Field(default=None, alias="STORAGE_AUTHORITATIVE")
+    export_ttl_days: int = Field(default=7, alias="EXPORT_TTL_DAYS")
 
     # Prometheus /metrics auth guard (R-SEC-01)
     # Set METRICS_AUTH_ENABLED=true and a strong METRICS_AUTH_TOKEN in production.
@@ -575,6 +580,14 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _check_export_ttl_days(self) -> "Settings":
+        if self.export_ttl_days <= 0:
+            raise ValueError(
+                "EXPORT_TTL_DAYS must be > 0 so expired exports have a deterministic cleanup window."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _check_worker_concurrency(self) -> "Settings":
         if self.worker_concurrency <= 0:
             raise ValueError(
@@ -673,18 +686,29 @@ class Settings(BaseSettings):
                 "Use one of: local, s3."
             )
 
-        if _is_strict_environment(self.app_env) and backend != "s3":
+        if self.storage_authoritative is None:
+            self.storage_authoritative = backend == "s3"
+
+        if backend == "local" and self.storage_authoritative:
             raise ValueError(
-                f"STORAGE_BACKEND={self.storage_backend!r} is not allowed in "
-                f"APP_ENV={self.app_env!r}. "
-                "Local file storage must not be used in production — "
-                "set STORAGE_BACKEND=s3 and configure S3_BUCKET."
+                "STORAGE_AUTHORITATIVE=true requires STORAGE_BACKEND='s3'. "
+                "Local storage is allowed only for development/test workflows."
+            )
+
+        if _is_strict_environment(self.app_env) and backend == "local":
+            raise ValueError(
+                "Local storage is not allowed in production. "
+                "Set STORAGE_BACKEND=s3."
             )
 
         if backend == "s3":
             bucket = self.s3_bucket.strip()
+            region = self.s3_region.strip()
             access_key = self.s3_access_key_id.strip()
             secret_key = self.s3_secret_access_key.strip()
+            signed_url_ttl = self.storage_signed_url_ttl_seconds
+            connect_timeout = self.s3_connect_timeout_seconds
+            read_timeout = self.s3_read_timeout_seconds
 
             if not bucket:
                 raise ValueError(
@@ -695,6 +719,16 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"S3_BUCKET looks like an unfilled placeholder in APP_ENV={self.app_env!r}. "
                     "Set the real bucket name."
+                )
+            if "s3_region" not in self.model_fields_set or not region:
+                raise ValueError(
+                    f"S3_REGION must be set when STORAGE_BACKEND='s3' "
+                    f"in APP_ENV={self.app_env!r}."
+                )
+            if _is_insecure_placeholder(region):
+                raise ValueError(
+                    f"S3_REGION looks like an unfilled placeholder in APP_ENV={self.app_env!r}. "
+                    "Set the real object-storage region."
                 )
             if bool(access_key) != bool(secret_key):
                 raise ValueError(
@@ -713,9 +747,28 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"S3_ENDPOINT_URL looks like an unfilled placeholder in APP_ENV={self.app_env!r}."
                 )
-            if self.s3_cdn_base_url.strip() and _looks_like_placeholder_url(self.s3_cdn_base_url):
+            if self.s3_cdn_base_url.strip():
                 raise ValueError(
-                    f"S3_CDN_BASE_URL looks like an unfilled placeholder in APP_ENV={self.app_env!r}."
+                    "S3_CDN_BASE_URL is not supported with signed URL policy. "
+                    "Remove S3_CDN_BASE_URL and use STORAGE_SIGNED_URL_TTL_SECONDS instead."
+                )
+            if connect_timeout <= 0:
+                raise ValueError(
+                    "S3_CONNECT_TIMEOUT_SECONDS must be > 0 so S3 connection attempts fail fast."
+                )
+            if read_timeout <= 0:
+                raise ValueError(
+                    "S3_READ_TIMEOUT_SECONDS must be > 0 so S3 reads/writes cannot hang indefinitely."
+                )
+            if signed_url_ttl < 1 or signed_url_ttl > 3600:
+                raise ValueError(
+                    "STORAGE_SIGNED_URL_TTL_SECONDS must be between 1 and 3600 seconds. "
+                    "Signed storage URLs may not exceed 1 hour."
+                )
+            if _is_strict_environment(self.app_env) and not self.storage_authoritative:
+                raise ValueError(
+                    f"STORAGE_AUTHORITATIVE must remain true in APP_ENV={self.app_env!r}. "
+                    "S3 is the authoritative production source of truth."
                 )
         return self
 
@@ -778,10 +831,10 @@ class Settings(BaseSettings):
         if not _is_strict_environment(self.app_env):
             lower = url.lower()
             if not url or any(frag in lower for frag in _LOCAL_FRAGMENTS):
-                _logger.warning(
-                    "APP_BASE_URL is not configured for real client "
-                    "(current: %r). Self-service password reset will not work "
-                    "if re-enabled without a real client URL.",
+                _logger.debug(
+                    "APP_BASE_URL remains on local/default value in %s "
+                    "(current: %r). Self-service reset is retired in the current architecture.",
+                    self.app_env,
                     url,
                 )
             return self

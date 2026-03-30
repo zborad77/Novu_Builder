@@ -20,7 +20,7 @@ async def create_report_pdf(
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
-    export = export_service.create_export(case_id=case_id, export_type="report-pdf")
+    export = await export_service.create_export(case_id=case_id, export_type="report-pdf")
     return ExportCreateResponse(exportId=export.id, status=export.status)
 
 
@@ -37,7 +37,7 @@ async def create_proposal_docx(
         raise HTTPException(status_code=404, detail="Case not found.")
     if detail.proposalDraft is None:
         raise HTTPException(status_code=409, detail="Proposal draft must exist before working DOCX export.")
-    export = export_service.create_proposal_docx_export(case_detail=detail)
+    export = await export_service.create_proposal_docx_export(case_detail=detail)
     return ExportCreateResponse(exportId=export.id, status=export.status)
 
 
@@ -55,7 +55,7 @@ async def create_quote_pdf(
     detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail or detail.finalProposal is None:
         raise HTTPException(status_code=409, detail="Final proposal must be created before PDF export.")
-    export = export_service.create_quote_pdf_export(case_detail=detail)
+    export = await export_service.create_quote_pdf_export(case_detail=detail)
     return ExportCreateResponse(exportId=export.id, status=export.status)
 
 
@@ -72,7 +72,7 @@ async def create_quote_docx(
         raise HTTPException(status_code=404, detail="Case not found.")
     if detail.finalProposal is None:
         raise HTTPException(status_code=409, detail="Final proposal must be created before DOCX export.")
-    export = export_service.create_quote_docx_export(case_detail=detail)
+    export = await export_service.create_quote_docx_export(case_detail=detail)
     return ExportCreateResponse(exportId=export.id, status=export.status)
 
 
@@ -87,7 +87,7 @@ async def create_case_zip(
     detail = await project_service.get_project_detail(case_id, organization_id=org_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Case not found.")
-    export = export_service.create_case_zip_export(case_detail=detail)
+    export = await export_service.create_case_zip_export(case_detail=detail)
     return ExportCreateResponse(exportId=export.id, status=export.status)
 
 
@@ -98,7 +98,7 @@ async def get_export(
     project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportRead:
-    export = export_service.get_export(export_id)
+    export = await export_service.get_export(export_id)
     if not export:
         raise HTTPException(status_code=404, detail="Export not found.")
     if not current_user.isSuperAdmin:

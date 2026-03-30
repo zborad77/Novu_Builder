@@ -1,308 +1,249 @@
-# Novu Builder — Backup & Restore
+# Novu Builder - Implemented Backup/Restore Contract
 
-> Autoritativní postup pro zálohu a obnovu databáze a souborového úložiště.
-> Všechny příkazy spouštěj z kořenového adresáře projektu (složka s `docker-compose.yml`).
+This document describes what the repository actually implements today.
+For the authoritative production operating boundary, see
+[../BACKUP_RESTORE.md](../BACKUP_RESTORE.md).
 
----
+## Scope
 
-## Obsah
+Implemented by repo scripts:
 
-1. [Přehled artefaktů](#1-přehled-artefaktů)
-2. [Jak vytvořit zálohu](#2-jak-vytvořit-zálohu)
-3. [Struktura zálohy](#3-struktura-zálohy)
-4. [Jak provést restore](#4-jak-provést-restore)
-5. [Co dělat při checksum fail](#5-co-dělat-při-checksum-fail)
-6. [Co dělat při verify fail](#6-co-dělat-při-verify-fail)
-7. [Legacy zálohy (.sql.gz)](#7-legacy-zálohy-sqlgz)
-8. [Offsite sync](#8-offsite-sync)
+- `scripts/backup.sh`
+- `ops/restore.sh`
+- `python-backend/scripts/verify_restore.sh`
+- `python-backend/scripts/restore_db.sh`
 
----
+This is a DB-only restore contract.
+It is not a full production disaster recovery solution for
+`APP_ENV=production` with `STORAGE_BACKEND=s3`.
 
-## 1. Přehled artefaktů
+## Artifact Contract
 
-| Soubor | Popis |
+Authoritative write contract produced by `scripts/backup.sh`:
+
+| Artifact | Meaning |
 |---|---|
-| `db_YYYYMMDD_HHMMSS.pgdump` | PostgreSQL custom-format dump (autoritativní) |
-| `db_YYYYMMDD_HHMMSS.pgdump.sha256` | SHA-256 checksum dump souboru |
-| `manifest_YYYYMMDD_HHMMSS.json` | Metadata zálohy (alembic head, git SHA, verze) |
-| `storage_YYYYMMDD_HHMMSS.tar.gz` | Archiv souborového úložiště (fotky, exporty) |
+| `db_YYYYMMDD_HHMMSS.pgdump` | PostgreSQL custom-format dump |
+| `db_YYYYMMDD_HHMMSS.pgdump.sha256` | Mandatory checksum |
+| `db_YYYYMMDD_HHMMSS.json` | Mandatory manifest |
 
-Zálohovací skript: `scripts/backup.sh`
-Restore skript: `ops/restore.sh`
+Required manifest semantics:
 
----
+- `backup_contract = "db-restore-v1"`
+- `dr_contract = "variant-a-foundation-v1"`
+- `dr_recovery_point_model = "db-artifact-paired-with-explicit-s3-recovery-point"`
+- `backup_scope = "db-only"`
+- `production_dr_eligible = false`
 
-## 2. Jak vytvořit zálohu
+Restore flow also expects:
 
-### Základní záloha
+- `db_file`
+- `checksum_file`
+- `backup_version`
 
-```bash
-# Spusť z kořenového adresáře projektu
-./scripts/backup.sh
-```
+Additional metadata may include:
 
-Záloha se uloží do `./backups/` (nebo do `$BACKUP_DIR`, pokud je nastavena).
+- `app_env`
+- `storage_backend`
+- `s3_bucket`
+- `s3_region`
+- `s3_recovery_point`
+- `storage_snapshot_consistent`
+- `storage_coverage`
+- `storage_archive_included`
+- `storage_archive_file`
+- `alembic_head`
+- `git_sha`
 
-### S vlastním cílovým adresářem
+Legacy read compatibility:
 
-```bash
-BACKUP_DIR=/mnt/nfs/novu-backups ./scripts/backup.sh
-```
+- restore scripts can still read old `manifest_YYYYMMDD_HHMMSS.json`
+- this is read-only compatibility with warning output
+- new writes must use `db_YYYYMMDD_HHMMSS.json`
 
-### Prostředí
+## Mode Semantics
 
-Skript načte konfiguraci z `.env` (a `.env.production` pro APP_ENV=production):
+### Local/Dev
 
-```bash
-# Volitelné proměnné prostředí
-BACKUP_DIR=./backups          # kam ukládat zálohy (default: ./backups)
-POSTGRES_USER=novu            # uživatel PostgreSQL (default: novu)
-POSTGRES_DB=novu_builder      # jméno databáze (default: novu_builder)
-RETAIN_DAYS=7                 # kolik dní záloh uchovat (default: 7)
-BACKUP_REMOTE=user@host:/path # offsite rsync cíl (volitelné)
-```
+Typical mode:
 
-### Cron (doporučené nastavení)
+- `APP_ENV=development`
+- `STORAGE_BACKEND=local`
 
-```cron
-# Denní záloha ve 02:00, log do souboru
-0 2 * * * cd /opt/novu-builder && BACKUP_DIR=/backups ./scripts/backup.sh >> /var/log/novu-backup.log 2>&1
-```
+Backup behavior:
 
-### Co skript provede
+- writes DB artifact set
+- writes `storage_YYYYMMDD_HHMMSS.tar.gz`
 
-1. Vytvoří `pg_dump --format=custom --compress=9` z běžící DB
-2. Vypočítá SHA-256 checksum a uloží do `.sha256` souboru
-3. Zapíše `manifest_*.json` s metadaty (atomicky přes tmp → mv)
-4. Vytvoří tar.gz archiv souborového úložiště (Docker volume)
-5. Ořízne zálohy starší než `RETAIN_DAYS` dní
-6. Volitelně synchronizuje na offsite přes rsync (jen při `BACKUP_REMOTE`)
+Meaning:
 
----
+- DB restore contract is authoritative for DB state
+- local storage archive is a compatibility artifact for local/dev workflows
+- this is not a production DR claim
 
-## 3. Struktura zálohy
+### Production + S3
 
-### Soubory po úspěšné záloze
+Typical mode:
 
-```
-backups/
-├── db_20260329_020001.pgdump           ← hlavní záloha DB
-├── db_20260329_020001.pgdump.sha256    ← checksum
-├── manifest_20260329_020001.json       ← metadata
-└── storage_20260329_020001.tar.gz      ← souborové úložiště
-```
+- `APP_ENV=production`
+- `STORAGE_BACKEND=s3`
 
-### Obsah manifest.json
+Backup behavior:
 
-```json
-{
-  "timestamp": "20260329_020001",
-  "db_file": "db_20260329_020001.pgdump",
-  "checksum_file": "db_20260329_020001.pgdump.sha256",
-  "alembic_head": "20260329_0021",
-  "git_sha": "a1b2c3d",
-  "backup_version": "v2"
-}
-```
+- writes DB artifact set
+- does not write `storage_*.tar.gz`
+- manifest declares:
+  - `backup_scope = "db-only"`
+  - `production_dr_eligible = false`
+  - `storage_coverage = "authoritative-s3-not-covered-by-this-backup"`
 
-| Pole | Popis |
-|---|---|
-| `timestamp` | Čas vytvoření zálohy (YYYYMMDD_HHMMSS) |
-| `db_file` | Jméno dump souboru (bez cesty) |
-| `checksum_file` | Jméno checksum souboru (bez cesty) |
-| `alembic_head` | Aktuální Alembic revize v DB v době zálohy |
-| `git_sha` | Git commit, ze kterého backend běžel |
-| `backup_version` | Verze formátu zálohy (`v2` = pgdump, current) |
+Meaning:
 
-### Formát .sha256
+- backup covers database state only
+- authoritative production object storage is not backed up by repo scripts
+- repo scripts do not implement full production DR for S3 media
+- manifest may carry Variant A foundation metadata for a future DB + S3 pairing,
+  but that metadata does not change the current DB-only claim
 
-```
-aabbccdd1234...  db_20260329_020001.pgdump
-```
+### Variant A Foundation Metadata
 
-Ověření: `sha256sum -c db_20260329_020001.pgdump.sha256`
+The manifest can carry the future full-DR pairing inputs without claiming that
+full DR exists today.
 
----
+Field purpose:
 
-## 4. Jak provést restore
+- `dr_contract` version-marks the Variant A foundation semantics
+- `dr_recovery_point_model` states that the pair is `DB artifact + explicit S3 recovery point`
+- `s3_bucket` and `s3_region` identify the authoritative bucket
+- `s3_recovery_point` records the operator-declared storage recovery reference
+- `storage_snapshot_consistent` records whether that declared storage point is
+  explicitly intended to match the DB artifact
 
-> **VAROVÁNÍ:** Restore trvale přepíše existující databázi. Vždy mej k dispozici čerstvou zálohu stávajícího stavu.
+Minimum future pairing metadata:
 
-### Interaktivní restore (doporučeno pro produkci)
+- `storage_backend = "s3"`
+- `s3_bucket`
+- `s3_region`
+- `s3_recovery_point`
+- `storage_snapshot_consistent = true`
 
-```bash
-./ops/restore.sh backups/db_YYYYMMDD_HHMMSS.pgdump
-```
+Current boundary:
 
-Skript se zeptá `Type 'yes' to continue:` před destruktivní akcí.
+- repo scripts still do not restore S3/object storage
+- repo scripts still do not validate full DB + S3 recovery
+- `production_dr_eligible` therefore remains fail-closed and false
 
-### Unattended restore (CI / automatizace)
+## Backup Procedure
+
+Run from repository root:
 
 ```bash
-./ops/restore.sh backups/db_YYYYMMDD_HHMMSS.pgdump --yes
+BACKUP_DIR=/backups ./scripts/backup.sh
 ```
 
-### Restore bez verify (jen v nouzi, explicitní obejití)
+What the script guarantees:
+
+1. creates `.pgdump`
+2. creates `.sha256`
+3. writes manifest only after DB dump and checksum exist
+4. enforces retention for DB artifacts
+5. optionally syncs DB artifacts off-host when `BACKUP_REMOTE` is configured
+
+Important boundary:
+
+- in `production+s3`, remote sync still covers only DB artifact set
+- repo scripts do not provide S3 bucket backup coverage
+
+## Restore Procedure
+
+Primary operator entrypoint:
 
 ```bash
-./ops/restore.sh backups/db_YYYYMMDD_HHMMSS.pgdump --yes --skip-verify
+./ops/restore.sh /backups/db_YYYYMMDD_HHMMSS.pgdump
 ```
 
-> `--skip-verify` **není povoleno** v produkčním prostředí (`ENV=production`).
+What `ops/restore.sh` validates:
 
-### Průběh restore krok za krokem
+1. manifest exists and matches backup file
+2. checksum exists and matches
+3. `verify_restore.sh` passes, unless operator explicitly uses `--skip-verify`
+4. critical DB tables exist after restore
+5. `alembic_version` is populated
+6. schema matches repository HEAD after migration step
+7. backend liveness probe responds
 
-| Krok | Akce | Destruktivní? |
-|---|---|---|
-| 0 | Ověření manifest souboru (přítomnost + konzistence klíčů) | Ne |
-| 1 | Ověření checksum (`sha256sum -c`) | Ne |
-| 2 | Spuštění `verify_restore.sh` v temp DB | Ne |
-| 3 | Potvrzení operátora (přeskočeno s `--yes`) | — |
-| 4 | Zastavení `backend` + `worker` | Ne |
-| 5 | Terminace aktivních spojení na DB | Ne |
-| 6 | `DROP DATABASE novu_builder` | **ANO** |
-| 7 | `CREATE DATABASE novu_builder OWNER novu` | Ne |
-| 8 | Kopírování dump souboru do DB kontejneru | Ne |
-| 9 | `pg_restore` do nové DB | Ne |
-| 10 | Ověření kritických tabulek + `alembic_version` | Ne |
-| 11 | `alembic upgrade head` (pending migrace) | Ne |
-| 12 | Spuštění `backend` + `worker` | Ne |
-| 13 | Poll health endpointu (max 60 s) | Ne |
+What `ops/restore.sh` does not claim:
 
-### Manuální ověření po restore
+- full production disaster recovery
+- S3/object storage recovery
+- full application readiness beyond dependency-free liveness
+
+Restore output semantics:
+
+- `DB restore contract: PASSED` means DB restore checks passed
+- `Schema/head alignment: PASSED` means DB revision matches repo HEAD
+- `Backend liveness probe: PASSED` means process liveness only
+- `Production DR: NOT VERIFIED` is always explicit
+- for `production+s3`, output also states:
+  - `S3 protection prerequisites: PASSED|FAILED`
+  - `S3 pre-restore validation: PASSED|FAILED|NOT EXECUTED`
+  - `Authoritative S3/object storage recovery: NOT VERIFIED / OUT OF SCOPE`
+
+Fail-closed behavior:
+
+- missing or mismatched manifest fails
+- checksum missing or mismatched fails
+- contradictory `production+s3` manifest fails
+- `storage_snapshot_consistent = true` without complete S3 recovery point metadata fails
+- S3 DR metadata on a non-S3 backend fails
+- missing production S3 bucket/region/credentials/versioning prerequisites fail
+- failed S3 bucket reachability or object/version listing checks fail
+- failed verify fails
+- failed `pg_restore` fails
+- failed liveness ends with `Restore handoff status: INCOMPLETE`
+
+## Verify Helper
+
+Non-destructive check:
 
 ```bash
-# Počet organizací
-docker compose exec db psql -U novu novu_builder \
-  -c "SELECT COUNT(*) FROM organizations;"
-
-# Počet aktivních uživatelů
-docker compose exec db psql -U novu novu_builder \
-  -c "SELECT COUNT(*) FROM users WHERE is_active=true;"
-
-# Aktuální Alembic revize
-docker compose run --rm backend alembic current
-
-# Smoke check
-python scripts/smoke_check_live.py http://localhost <email> <password>
+python-backend/scripts/verify_restore.sh /backups/db_YYYYMMDD_HHMMSS.pgdump
 ```
 
----
+What it proves:
 
-## 5. Co dělat při checksum fail
+- backup can be restored into a temporary DB
+- critical tables exist
+- key operational tables contain rows
+- `alembic_version` matches repository HEAD
 
-Chyba: `Checksum mismatch — backup may be corrupt.`
+What it does not prove:
 
-```bash
-# 1. Ověř ručně
-sha256sum backups/db_YYYYMMDD_HHMMSS.pgdump
-cat backups/db_YYYYMMDD_HHMMSS.pgdump.sha256
-# Pokud se hodnoty liší → soubor je poškozen
+- runtime startup
+- production S3 availability
+- full production DR
 
-# 2. Zkontroluj velikost souboru
-ls -lh backups/db_YYYYMMDD_HHMMSS.pgdump
-# Nulový nebo nápadně malý soubor = přerušený dump
+## Local Storage Archive
 
-# 3. Zkus předchozí zálohu
-ls -lth backups/*.pgdump | head -5
-# Vezmi druhý nejnovější soubor a ověř jeho checksum
+`storage_YYYYMMDD_HHMMSS.tar.gz` is:
 
-# 4. Pokud nemáš žádnou validní zálohu — použ offsite kopii
-rsync -az user@backup-host:/remote/backups/ ./backups/
-```
+- local/dev compatibility only
+- not part of the authoritative production model
+- not produced in `production+s3`
 
-**Nikdy nerestaruji z dump souboru s neplatným checksumem.** Checksum failure = záloha je poškozena nebo přenesena nekompletně.
+Do not use it as evidence of production DR coverage.
 
----
+## Operator Rule
 
-## 6. Co dělat při verify fail
+In `APP_ENV=production` with `STORAGE_BACKEND=s3`:
 
-Chyba: `ERROR: verify_restore.sh FAILED or timed out (>60s) — aborting restore`
+- use repo scripts for DB backup/restore only
+- treat S3 protection and recovery as external controls outside this repo
+- do not say "restore complete" as a full-state production claim based only on
+  repo scripts
 
-`verify_restore.sh` provádí non-destruktivní kontrolu v dočasné DB **před** tím, než dojde k jakékoli změně produkčních dat.
+## Legacy
 
-```bash
-# 1. Spusť verify ručně pro více detailů
-bash python-backend/scripts/verify_restore.sh backups/db_YYYYMMDD_HHMMSS.pgdump
-
-# 2. Typické příčiny selhání verify:
-#    - pg_restore nahlásí chyby (poškozený dump, nekompatibilní verze PG)
-#    - Kritická tabulka chybí v dump souboru
-#    - Alembic revize v dump neodpovídá očekávané verzi
-#    - Timeout >60 s (příliš velká DB nebo pomalé I/O)
-
-# 3. Pokud verify selže na verzi PG:
-docker compose exec db psql -U novu -c "SELECT version();"
-pg_restore --version
-# Verze pg_restore musí být >= verzi serveru v kontejneru
-
-# 4. Pokud verify selže na timeout a DB je velká (>1 GB):
-# Zvyš timeout v ops/restore.sh (řádek: timeout 60 bash "$VERIFY_SCRIPT")
-# nebo použi --skip-verify s explicitním vědomím rizika
-
-# 5. Pokud je dump konzistentní ale verify script má bug:
-# Použi --skip-verify a proveď manuální kontrolu po restore (krok 4 výše)
-```
-
-**Důležité:** `--skip-verify` není povoleno v produkci. Pokud ho potřebuješ na produkci, musíš přechodně odebrat `ENV=production` z prostředí, obnovit data a vrátit nastavení.
-
----
-
-## 7. Legacy zálohy (.sql.gz)
-
-Zálohy vytvořené před 2026-03-28 (starý `scripts/backup.sh` nebo `ops/backup.sh`) jsou ve formátu `.sql.gz`. `ops/restore.sh` je odmítne — musíš použít manuální postup:
-
-```bash
-# 1. Zastavení backendu a workeru
-docker compose stop backend worker
-
-# 2. Terminace aktivních spojení
-docker compose exec db psql -U novu postgres \
-  -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='novu_builder' AND pid <> pg_backend_pid();"
-
-# 3. Drop + create
-docker compose exec db psql -U novu postgres \
-  -c "DROP DATABASE IF EXISTS novu_builder;"
-docker compose exec db psql -U novu postgres \
-  -c "CREATE DATABASE novu_builder OWNER novu;"
-
-# 4. Restore z SQL dump
-gunzip -c /path/to/db_TIMESTAMP.sql.gz \
-  | docker compose exec -T db psql -U novu novu_builder
-
-# 5. Migrace
-docker compose run --rm backend alembic upgrade head
-
-# 6. Start
-docker compose start backend worker
-```
-
-> Legacy `.sql.gz` zálohy nemají `verify_restore.sh` podporu ani manifest.
-> Co nejdříve přejdi na aktuální `scripts/backup.sh` (formát `.pgdump`).
-
----
-
-## 8. Offsite sync
-
-Nastav `BACKUP_REMOTE` pro automatický rsync po každé záloze:
-
-```bash
-# V .env nebo při spuštění
-BACKUP_REMOTE=user@backup-server:/remote/backups ./scripts/backup.sh
-```
-
-Skript synchronizuje `.pgdump`, `.sha256` a `manifest.json` (bez storage archivu, který je příliš velký). Selhání rsync **neovlivní výstupní kód zálohy** — lokální záloha je vždy dokončena nejdříve.
-
-**SSH požadavky:**
-- Bezpodmínečná autentifikace (SSH klíč bez passphrase pro cron)
-- `BatchMode=yes` je nastaveno — interaktivní prompt nefunguje
-- Cílový adresář na remote hostu musí existovat nebo musí být vytvořen přes SSH
-
-```bash
-# Ruční test offsite sync
-ssh -o BatchMode=yes user@backup-server "ls /remote/backups/"
-```
-
----
-
-*Poslední aktualizace: 2026-03-29*
+Older `.sql.gz` backups and older `manifest_*.json` names are legacy inputs.
+They are supported only as compatibility paths where explicitly documented by
+scripts. They are not the current write contract.

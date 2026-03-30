@@ -14,7 +14,7 @@ every 30 s with a 120 s TTL. /health/internal treats the worker layer as alive
 when at least one fresh heartbeat exists.
 """
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import sys
 import time
@@ -26,7 +26,10 @@ from fastapi import HTTPException
 from app.core.config import get_settings, startup_failure_message
 from app.core.logging import configure_logging
 from app.core.redis_client import build_redis_client_from_settings
+from app.db.session import WorkerAsyncSessionFactory
+from app.repositories.export_repository import ExportRepository
 from app.services.analysis_service import AnalysisService
+from app.services.export_service import ExportService
 from app.worker.heartbeat import (
     clear_worker_heartbeat,
     WORKER_HEARTBEAT_INTERVAL,
@@ -88,6 +91,7 @@ class WorkerRuntime:
     concurrency_limiter: asyncio.Semaphore
     inflight_tasks: set[asyncio.Task[None]]
     last_heartbeat: float = 0.0
+    last_export_cleanup: float = field(default_factory=time.monotonic)
 
 
 def _extract_payload_keys(payload: object) -> list[str] | None:
@@ -208,6 +212,7 @@ _HEARTBEAT_LEGACY_KEY = WORKER_HEARTBEAT_LEGACY_KEY
 _HEARTBEAT_INTERVAL = WORKER_HEARTBEAT_INTERVAL
 _HEARTBEAT_TTL = WORKER_HEARTBEAT_TTL
 _DEQUEUE_TIMEOUT_SECONDS = 5
+_EXPORT_CLEANUP_INTERVAL_SECONDS = 300
 
 
 def _is_strict_worker_environment(settings) -> bool:
@@ -268,6 +273,18 @@ async def _write_heartbeat_if_due(runtime: WorkerRuntime, *, now_monotonic: floa
         now=datetime.now(UTC),
     )
     runtime.last_heartbeat = current
+
+
+async def _run_export_cleanup_if_due(runtime: WorkerRuntime, *, now_monotonic: float | None = None) -> None:
+    current = time.monotonic() if now_monotonic is None else now_monotonic
+    if current - runtime.last_export_cleanup < _EXPORT_CLEANUP_INTERVAL_SECONDS:
+        return
+
+    async with WorkerAsyncSessionFactory() as session:
+        deleted_count = await ExportService(ExportRepository(session)).delete_expired_exports()
+
+    runtime.last_export_cleanup = current
+    logger.info("worker.export_cleanup_completed", deleted_count=deleted_count)
 
 
 def _seconds_until_next_heartbeat(runtime: WorkerRuntime, *, now_monotonic: float | None = None) -> float:
@@ -360,6 +377,7 @@ async def _cancel_inflight_tasks(runtime: WorkerRuntime) -> None:
 
 
 async def _run_one_iteration(runtime: WorkerRuntime) -> None:
+    await _run_export_cleanup_if_due(runtime)
     await _write_heartbeat_if_due(runtime)
     await _drain_finished_tasks(runtime)
     acquired_slot = await _acquire_job_slot(runtime)

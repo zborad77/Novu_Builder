@@ -4,7 +4,7 @@ from app.ai.providers.claude_vision_provider import ClaudeVisionProvider
 from app.ai.providers.mock_vision_provider import MockVisionProvider
 from app.ai.providers.openai_vision_provider import OpenAIVisionProvider
 from app.models import ProjectPhoto
-from app.storage.local_photo_storage import STORAGE_ROOT as _STORAGE_ROOT, get_public_url as _get_public_url
+from app.storage.backend import generate_presigned_url as _generate_presigned_url, read_storage_file
 
 
 PROVIDERS = {
@@ -24,17 +24,17 @@ def get_analysis_provider(provider_key: str):
     return provider
 
 
-def _load_photo_bytes(photo: ProjectPhoto) -> bytes | None:
-    """Načte bajty fotky z lokálního storage. Preferuje ai_input variantu (menší)."""
+async def _load_photo_bytes(photo: ProjectPhoto) -> bytes | None:
+    """Load photo bytes via the active storage backend, preferring the AI input variant."""
     for key in (photo.ai_input_storage_key, photo.storage_key):
         if key:
-            path = _STORAGE_ROOT / key
-            if path.is_file():
-                return path.read_bytes()
+            content = await read_storage_file(relative_storage_key=key)
+            if content is not None:
+                return content
     return None
 
 
-def normalize_photo_inputs(photos: Sequence[ProjectPhoto], *, load_bytes: bool = False) -> list[dict]:
+async def normalize_photo_inputs(photos: Sequence[ProjectPhoto], *, load_bytes: bool = False) -> list[dict]:
     normalized_inputs = []
     for photo in photos:
         width = photo.width if isinstance(photo.width, int) else None
@@ -59,19 +59,18 @@ def normalize_photo_inputs(photos: Sequence[ProjectPhoto], *, load_bytes: bool =
                 "lat": photo.exif_lat,
                 "lng": photo.exif_lng,
             },
-            "url": _get_public_url(photo.storage_key) if photo.storage_key else None,
+            "url": _generate_presigned_url(photo.storage_key) if photo.storage_key else None,
         }
         if load_bytes:
-            entry["_raw_bytes"] = _load_photo_bytes(photo)
+            entry["_raw_bytes"] = await _load_photo_bytes(photo)
         normalized_inputs.append(entry)
     return normalized_inputs
 
 
 async def run_project_analysis(*, provider_key: str, project: dict, photos: Sequence[ProjectPhoto]) -> dict:
     provider = get_analysis_provider(provider_key)
-    # Claude provider potřebuje reálné bajty fotek ze storage
     load_bytes = provider_key == "claude"
-    normalized_photos = normalize_photo_inputs(photos, load_bytes=load_bytes)
+    normalized_photos = await normalize_photo_inputs(photos, load_bytes=load_bytes)
     result = await provider.analyze_project(project=project, photos=normalized_photos)
     return {
         "providerKey": result.get("providerKey", provider.key),

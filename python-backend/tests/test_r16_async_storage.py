@@ -21,6 +21,15 @@ class TestStorageFunctionsAreAsync:
     def test_delete_storage_file_is_coroutine(self):
         assert inspect.iscoroutinefunction(storage_mod.delete_storage_file)
 
+    def test_read_storage_file_is_coroutine(self):
+        assert inspect.iscoroutinefunction(storage_mod.read_storage_file)
+
+    def test_storage_key_exists_is_coroutine(self):
+        assert inspect.iscoroutinefunction(storage_mod.storage_key_exists)
+
+    def test_list_storage_keys_is_coroutine(self):
+        assert inspect.iscoroutinefunction(storage_mod.list_storage_keys)
+
 
 class TestStorageFunctionalBehaviour:
 
@@ -34,6 +43,60 @@ class TestStorageFunctionalBehaviour:
             content = b"hello storage"
             await storage_mod.write_storage_file(relative_storage_key=key, content=content)
             assert (tmp_path / key).read_bytes() == content
+            assert await storage_mod.read_storage_file(relative_storage_key=key) == content
+        finally:
+            storage_mod.STORAGE_ROOT = orig_root
+
+    @pytest.mark.asyncio
+    async def test_read_storage_file_returns_none_for_missing_key(self, tmp_path):
+        orig_root = storage_mod.STORAGE_ROOT
+        storage_mod.STORAGE_ROOT = tmp_path
+        try:
+            assert await storage_mod.read_storage_file(
+                relative_storage_key="projects/test_proj/missing.bin"
+            ) is None
+        finally:
+            storage_mod.STORAGE_ROOT = orig_root
+
+    @pytest.mark.asyncio
+    async def test_storage_key_exists_reports_presence(self, tmp_path):
+        orig_root = storage_mod.STORAGE_ROOT
+        storage_mod.STORAGE_ROOT = tmp_path
+        try:
+            key = "projects/test_proj/existing.bin"
+            await storage_mod.write_storage_file(relative_storage_key=key, content=b"exists")
+            assert await storage_mod.storage_key_exists(relative_storage_key=key) is True
+            assert await storage_mod.storage_key_exists(
+                relative_storage_key="projects/test_proj/missing.bin"
+            ) is False
+        finally:
+            storage_mod.STORAGE_ROOT = orig_root
+
+    @pytest.mark.asyncio
+    async def test_list_storage_keys_returns_sorted_keys(self, tmp_path):
+        orig_root = storage_mod.STORAGE_ROOT
+        storage_mod.STORAGE_ROOT = tmp_path
+        try:
+            await storage_mod.write_storage_file(
+                relative_storage_key="projects/test_proj/b.bin",
+                content=b"b",
+            )
+            await storage_mod.write_storage_file(
+                relative_storage_key="projects/test_proj/a.bin",
+                content=b"a",
+            )
+            await storage_mod.write_storage_file(
+                relative_storage_key="exports/test_proj/report.pdf",
+                content=b"pdf",
+            )
+
+            assert await storage_mod.list_storage_keys(prefix="projects") == [
+                "projects/test_proj/a.bin",
+                "projects/test_proj/b.bin",
+            ]
+            assert await storage_mod.list_storage_keys(prefix="exports") == [
+                "exports/test_proj/report.pdf",
+            ]
         finally:
             storage_mod.STORAGE_ROOT = orig_root
 

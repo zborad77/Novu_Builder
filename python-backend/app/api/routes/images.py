@@ -11,7 +11,6 @@ from app.schemas.auth import AuthUserRead
 from app.schemas.photo import (
     AnalysisReferencePhotoResponse,
     DeletePhotoResponse,
-    PhotoJsonUploadRequest,
     PhotoListResponse,
     PhotoMoveRequest,
     PhotoUploadResponse,
@@ -95,11 +94,13 @@ async def upload_case_images(
     content_type = request.headers.get("content-type", "")
     uploaded = []
     if "application/json" in content_type:
-        payload = PhotoJsonUploadRequest.model_validate(await request.json())
-        if not payload.files:
-            raise HTTPException(status_code=400, detail="files array is required.")
-        for item in payload.files:
-            uploaded.append(await photo_service.create_json_photo(project, item.model_dump()))
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=(
+                "JSON metadata-only uploads are not supported. "
+                "Use multipart/form-data with real image file bytes."
+            ),
+        )
     elif "multipart/form-data" in content_type:
         form = await request.form()
         upload_files = [value for key, value in form.multi_items() if key == "files" and hasattr(value, "read")]
@@ -126,7 +127,10 @@ async def upload_case_images(
                 )
                 raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     else:
-        raise HTTPException(status_code=400, detail="This endpoint expects multipart/form-data files or a JSON body with a files array.")
+        raise HTTPException(
+            status_code=400,
+            detail="This endpoint expects multipart/form-data with one or more files fields.",
+        )
 
     return PhotoUploadResponse(
         uploaded=[

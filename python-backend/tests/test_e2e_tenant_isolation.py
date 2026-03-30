@@ -37,8 +37,8 @@ Scenarios NOT covered (infra gap — described at bottom of file)
 ---------------------------------------------------------------
 - Measurement confirm / patch (requires a completed analysis job with results)
 - Quote-variant cross-tenant access (requires completed analysis + pricing flow)
-- Export file download isolation (ExportService returns in-memory JSON; no
-  file is written to disk in the mock path, so there is nothing to steal)
+- Export file download isolation after TTL expiry (needs a deterministic
+  expired export fixture plus worker cleanup timing control)
 """
 
 import pytest

@@ -47,5 +47,6 @@ def test_debug_false_allowed_in_production(monkeypatch):
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.novu-builder.com")
     monkeypatch.setenv("STORAGE_BACKEND", "s3")
     monkeypatch.setenv("S3_BUCKET", "my-production-bucket")
+    monkeypatch.setenv("S3_REGION", "eu-central-1")
     s = Settings()
     assert s.app_debug is False

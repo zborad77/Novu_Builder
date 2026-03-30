@@ -9,9 +9,11 @@ class ExportRead(BaseModel):
     exportType: str
     status: str
     fileName: str
+    storageKey: str | None = None
     downloadUrl: str | None = None
     createdAt: datetime
     completedAt: datetime | None = None
+    expiresAt: datetime | None = None
 
 
 class ExportCreateResponse(BaseModel):

@@ -147,6 +147,12 @@ curl http://localhost:8000/api/v1/health | python -m json.tool
 
 ---
 
+> Production note:
+> For `APP_ENV=production` with `STORAGE_BACKEND=s3`, this repo does not
+> implement production media restore. Any references below to local storage
+> files or `storage_data` volume apply to local/dev compatibility only.
+> The authoritative production boundary is defined in [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
+
 ## INCIDENT-04: Storage Failure (foto/exporty)
 
 ### Příznaky

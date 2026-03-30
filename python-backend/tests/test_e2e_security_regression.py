@@ -10,6 +10,8 @@
 # =============================================================================
 import pytest
 import pytest_asyncio
+from PIL import Image
+from io import BytesIO
 
 
 # ---------------------------------------------------------------------------
@@ -99,20 +101,12 @@ class TestExportDirectById:
 
 @pytest_asyncio.fixture(scope="session")
 async def image_a_id(app_client, token_a, case_a_id):
-    """Upload a minimal JSON photo to Tenant A's case; return the photo ID."""
+    """Upload a minimal multipart photo to Tenant A's case; return the photo ID."""
+    buffer = BytesIO()
+    Image.new("RGB", (2, 2), (0, 128, 0)).save(buffer, format="JPEG")
     resp = await app_client.post(
         f"/api/v1/cases/{case_a_id}/images",
-        json={
-            "files": [
-                {
-                    "filename": "regression_test.jpg",
-                    "storageKey": "test/regression_test.jpg",
-                    "mimeType": "image/jpeg",
-                    "sizeBytes": 1024,
-                    "url": "http://mock-storage/regression_test.jpg",
-                }
-            ]
-        },
+        files={"files": ("regression_test.jpg", buffer.getvalue(), "image/jpeg")},
         headers={"Authorization": f"Bearer {token_a}"},
     )
     assert resp.status_code == 201, f"Upload image A failed: {resp.text}"

@@ -24,13 +24,17 @@ def _resolve_storage_root() -> Path:
 
 STORAGE_ROOT = _resolve_storage_root()
 
-# R-22 / R-44: single place for public URL generation.
-# Local/dev storage maps storage keys to the /mock-storage/ dev route.
-# Replace this function (or swap the module) for production CDN/S3 URLs
-# without touching any service-layer code.
-def get_public_url(storage_key: str) -> str:
-    """Return the public URL for a given relative storage key."""
+# Local/dev storage maps storage keys to the authenticated /mock-storage route.
+def generate_presigned_url(storage_key: str, expires: int = 3600) -> str:
+    """Return a deterministic local DEV/TEST URL for the given storage key."""
+    if expires < 1 or expires > 3600:
+        raise ValueError("Signed storage URL expiry must be between 1 and 3600 seconds.")
     return f"/mock-storage/{storage_key}"
+
+
+def get_public_url(storage_key: str) -> str:
+    """Backward-compatible alias for signed storage URLs."""
+    return generate_presigned_url(storage_key)
 
 
 # Canonical subdirectories — all persistent data lives here
@@ -475,6 +479,76 @@ async def copy_storage_file(*, source_storage_key: str, target_storage_key: str)
         _sync_copy_storage_file,
         source_storage_key=source_storage_key,
         target_storage_key=target_storage_key,
+    )
+
+
+def _sync_read_storage_file(*, relative_storage_key: str) -> bytes | None:
+    _, absolute_path = _resolve_storage_path(relative_storage_key)
+    if not absolute_path.is_file():
+        return None
+    try:
+        return absolute_path.read_bytes()
+    except OSError as exc:
+        logger.error(
+            "storage.read_failed",
+            storage_key=relative_storage_key,
+            error=str(exc),
+            exc_info=True,
+        )
+        raise
+
+
+async def read_storage_file(*, relative_storage_key: str) -> bytes | None:
+    return await asyncio.to_thread(
+        _sync_read_storage_file,
+        relative_storage_key=relative_storage_key,
+    )
+
+
+def _sync_storage_key_exists(*, relative_storage_key: str) -> bool:
+    _, absolute_path = _resolve_storage_path(relative_storage_key)
+    return absolute_path.is_file()
+
+
+async def storage_key_exists(*, relative_storage_key: str) -> bool:
+    return await asyncio.to_thread(
+        _sync_storage_key_exists,
+        relative_storage_key=relative_storage_key,
+    )
+
+
+def _sync_list_storage_keys(*, prefix: str | None = None) -> list[str]:
+    normalized_prefix = None
+    root = _storage_root_resolved()
+    if prefix is not None:
+        normalized_prefix = _normalize_relative_storage_key(prefix)
+        target_root = (root / normalized_prefix).resolve()
+        if not target_root.exists():
+            return []
+        try:
+            target_root.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("Invalid storage key: resolved path escapes STORAGE_ROOT.") from exc
+    else:
+        target_root = root
+
+    keys: list[str] = []
+    if not target_root.exists():
+        return keys
+
+    for path in target_root.rglob("*"):
+        if not path.is_file():
+            continue
+        relative_key = path.relative_to(root).as_posix()
+        keys.append(relative_key)
+    keys.sort()
+    return keys
+
+
+async def list_storage_keys(*, prefix: str | None = None) -> list[str]:
+    return await asyncio.to_thread(
+        _sync_list_storage_keys,
+        prefix=prefix,
     )
 
 

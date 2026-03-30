@@ -13,7 +13,6 @@ from app.schemas.project import (
 from app.schemas.photo import (
     AnalysisReferencePhotoResponse,
     DeletePhotoResponse,
-    PhotoJsonUploadRequest,
     PhotoListMeta,
     PhotoListResponse,
     PhotoUploadResponse,
@@ -27,7 +26,6 @@ from app.schemas.photo import (
 __all__ = [
     "DeletePhotoResponse",
     "AnalysisReferencePhotoResponse",
-    "PhotoJsonUploadRequest",
     "PhotoListMeta",
     "PhotoListResponse",
     "PhotoUploadResponse",

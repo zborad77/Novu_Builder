@@ -98,6 +98,10 @@ class Project(TimestampMixin, Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    exports: Mapped[list["ProjectExport"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
     final_proposals: Mapped[list["ProjectFinalProposal"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
@@ -177,6 +181,26 @@ class ProjectFinalProposal(TimestampMixin, Base):
     snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="final_proposals")
+
+
+class ProjectExport(Base):
+    __tablename__ = "project_exports"
+    __table_args__ = (
+        Index("idx_project_exports_project_id", "project_id"),
+        Index("idx_project_exports_expires_at", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    export_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    storage_key: Mapped[str | None] = mapped_column(String(512))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="exports")
 
 
 class AnalysisJob(Base):

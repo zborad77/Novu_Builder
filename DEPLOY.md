@@ -34,17 +34,33 @@ Production values that must be filled before `docker compose up`:
 - `METRICS_AUTH_ENABLED=true`
 - `METRICS_AUTH_TOKEN` - strong bearer token for `/api/v1/metrics`
 - `STORAGE_BACKEND=s3`
+- `STORAGE_AUTHORITATIVE=true`
+- `S3_CONNECT_TIMEOUT_SECONDS` - fail-fast S3 connect timeout in seconds, must stay `> 0`
+- `S3_READ_TIMEOUT_SECONDS` - fail-fast S3 read/write timeout in seconds, must stay `> 0`
+- `STORAGE_SIGNED_URL_TTL_SECONDS` - signed download TTL in seconds, must stay `<= 3600`
+- `EXPORT_TTL_DAYS=7` - export artifact retention window; worker deletes expired exports from S3
 - `S3_BUCKET` - real object-storage bucket/container name
-- `S3_REGION` - set explicitly when not using the default
+- `S3_REGION` - set explicitly; production startup treats S3 as the only source of truth
 
 Optional S3 wiring:
 
 - `S3_ENDPOINT_URL` for S3-compatible providers
 - `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` together, or leave both unset for IAM/instance-role auth
-- `S3_CDN_BASE_URL` when public media should resolve through a CDN
 
 Note: `docker-compose.yml` still mounts `storage_data` for compatibility, but
-when `STORAGE_BACKEND=s3` it is not the production source of uploaded media.
+in production `storage_data` is DEV/TEST compatibility only. S3 remains the
+single authoritative source of uploaded media.
+Export artifacts are persisted via storage keys in the active storage backend,
+while authoritative export metadata (including `expires_at`) live in DB;
+production flows must not depend on local filesystem reads.
+All media and export URLs exposed by the API are signed and time-limited; no
+endpoint returns a raw public S3 URL.
+Photo uploads use a single supported flow: `multipart/form-data` is validated
+by backend magic-byte and size checks, then written to the active storage
+backend. Metadata-only JSON uploads are intentionally rejected.
+Orphan cleanup must go through `storage_consistency_service`: `scan_db_vs_s3()`
+reports missing storage references and orphan keys, while `cleanup_orphans()`
+defaults to safe mode and writes structured logs with `org_id`, `key`, and `action`.
 
 ### 2. SSL certifikáty
 

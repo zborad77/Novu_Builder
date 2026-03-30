@@ -7,6 +7,7 @@ from app.core.config import get_settings
 from app.repositories.analysis_repository import AnalysisRepository
 from app.db.session import get_db_session
 from app.schemas.auth import AuthUserRead
+from app.repositories.export_repository import ExportRepository
 from app.repositories.final_proposal_repository import FinalProposalRepository
 from app.repositories.material_catalog_repository import MaterialCatalogRepository
 from app.repositories.photo_repository import PhotoRepository
@@ -14,6 +15,7 @@ from app.repositories.pricebook_repository import PricebookRepository
 from app.repositories.proposal_draft_repository import ProposalDraftRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.quote_variant_repository import QuoteVariantRepository
+from app.repositories.storage_consistency_repository import StorageConsistencyRepository
 from app.repositories.supplier_repository import SupplierRepository
 from app.services.analysis_service import AnalysisService
 from app.services.auth_service import AuthService
@@ -23,6 +25,7 @@ from app.services.photo_service import PhotoService
 from app.services.pricebook_service import PricebookService
 from app.services.project_service import ProjectService
 from app.services.quote_variant_service import QuoteVariantService
+from app.services.storage_consistency_service import StorageConsistencyService
 from app.services.supplier_service import SupplierService
 
 logger = structlog.get_logger(__name__)
@@ -33,7 +36,7 @@ def get_project_service(session: AsyncSession = Depends(get_db_session)) -> Proj
         ProjectRepository(session),
         ProposalDraftRepository(session),
         FinalProposalRepository(session),
-        ExportService(),
+        ExportService(ExportRepository(session)),
     )
 
 
@@ -65,6 +68,12 @@ def get_material_catalog_service(session: AsyncSession = Depends(get_db_session)
 
 def get_supplier_service(session: AsyncSession = Depends(get_db_session)) -> SupplierService:
     return SupplierService(SupplierRepository(session))
+
+
+def get_storage_consistency_service(
+    session: AsyncSession = Depends(get_db_session),
+) -> StorageConsistencyService:
+    return StorageConsistencyService(StorageConsistencyRepository(session))
 
 
 def get_auth_service(session: AsyncSession = Depends(get_db_session)) -> AuthService:
@@ -214,8 +223,8 @@ async def require_manager(
     return current_user
 
 
-def get_export_service() -> ExportService:
-    return ExportService()
+def get_export_service(session: AsyncSession = Depends(get_db_session)) -> ExportService:
+    return ExportService(ExportRepository(session))
 
 
 def get_job_queue(request: Request):

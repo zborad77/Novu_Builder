@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import json
-import os
 import unicodedata
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
@@ -12,60 +11,47 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import structlog
 
+from app.core.config import get_settings
+from app.models import ProjectExport
+from app.repositories.export_repository import ExportRepository
 from app.schemas.export import ExportRead
 from app.schemas.project import ProjectDetail, ProposalDraftField, ProposalDraftItem, ProposalDraftSection
-from app.storage.local_photo_storage import EXPORTS_ROOT, STORAGE_ROOT, _sync_write_storage_file, get_public_url, sanitize_filename
+from app.storage.backend import (
+    delete_storage_file,
+    generate_presigned_url,
+    read_storage_file,
+    sanitize_filename,
+    write_storage_file,
+)
 
 logger = structlog.get_logger(__name__)
 
-# In-memory cache — populated on first access and rebuilt from disk after restart
-_EXPORT_STORE: dict[str, ExportRead] = {}
+# Export metadata is authoritative in the database; storage holds only artifacts.
+def _default_export_expires_at(created_at: datetime) -> datetime:
+    settings = get_settings()
+    return created_at + timedelta(days=settings.export_ttl_days)
 
 
-def _save_export_meta(export: ExportRead) -> None:
-    """Persist export metadata to disk atomically (write tmp → rename)."""
-    EXPORTS_ROOT.mkdir(parents=True, exist_ok=True)
-    meta_path = EXPORTS_ROOT / f"{export.id}.json"
-    tmp_path = meta_path.with_suffix(".json.tmp")
-    tmp_path.write_text(export.model_dump_json(), encoding="utf-8")
-    os.replace(tmp_path, meta_path)  # atomic on POSIX; best-effort on Windows
-
-
-def _load_export_meta(export_id: str) -> ExportRead | None:
-    """Load export metadata from disk sidecar."""
-    meta_path = EXPORTS_ROOT / f"{export_id}.json"
-    if not meta_path.is_file():
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
         return None
-    try:
-        return ExportRead.model_validate_json(meta_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logger.warning("export.meta_load_failed", export_id=export_id, error=str(exc))
-        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
-
-def _find_export_file(export_id: str) -> Path | None:
-    """Scan disk for the export file when the sidecar is missing."""
-    matches = list(EXPORTS_ROOT.glob(f"*/{export_id}-*"))
-    return matches[0] if matches else None
-
-
-def _export_from_file(export_id: str, file_path: Path) -> ExportRead:
-    """Reconstruct a minimal ExportRead from a file on disk (no sidecar)."""
-    case_id = file_path.parent.name
-    file_name = file_path.name[len(export_id) + 1:]  # strip "{export_id}-" prefix
-    ext = file_path.suffix.lower()
-    export_type = {"pdf": "quote-pdf", "docx": "quote-docx", "zip": "case-zip"}.get(ext.lstrip("."), "unknown")
-    relative_key = f"exports/{case_id}/{file_path.name}"
-    mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=UTC)
+def _to_export_read(export: ProjectExport) -> ExportRead:
+    """Render API export metadata from the authoritative DB export record."""
     return ExportRead(
-        id=export_id,
-        caseId=case_id,
-        exportType=export_type,
-        status="completed",
-        fileName=file_name,
-        downloadUrl=get_public_url(relative_key),
-        createdAt=mtime,
-        completedAt=mtime,
+        id=export.id,
+        caseId=export.project_id,
+        exportType=export.export_type,
+        status=export.status,
+        fileName=export.file_name,
+        storageKey=export.storage_key,
+        downloadUrl=generate_presigned_url(export.storage_key) if export.storage_key else None,
+        createdAt=_as_utc(export.created_at),
+        completedAt=_as_utc(export.completed_at),
+        expiresAt=_as_utc(export.expires_at),
     )
 
 
@@ -773,7 +759,7 @@ def _build_pdf_bytes(case_detail: ProjectDetail) -> bytes:
     return pdf.getvalue()
 
 
-def _build_case_zip_bytes(case_detail: ProjectDetail) -> bytes:
+async def _build_case_zip_bytes(case_detail: ProjectDetail) -> bytes:
     """Sestaví ZIP archiv zakázky: project.json + analysis.json + photos/."""
     buffer = BytesIO()
     with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
@@ -793,34 +779,37 @@ def _build_case_zip_bytes(case_detail: ProjectDetail) -> bytes:
             storage_key = photo.get("storageKey") if isinstance(photo, dict) else getattr(photo, "storageKey", None)
             if not storage_key:
                 continue
-            photo_path = STORAGE_ROOT / storage_key
-            if not photo_path.is_file():
+            photo_bytes = await read_storage_file(relative_storage_key=storage_key)
+            if photo_bytes is None:
                 continue
-            archive_name = f"photos/{photo_path.name}"
-            archive.writestr(archive_name, photo_path.read_bytes())
+            archive_name = f"photos/{Path(storage_key).name}"
+            archive.writestr(archive_name, photo_bytes)
 
     return buffer.getvalue()
 
 
 class ExportService:
-    def create_export(self, *, case_id: str, export_type: str) -> ExportRead:
+    def __init__(self, repository: ExportRepository):
+        self.repository = repository
+
+    async def create_export(self, *, case_id: str, export_type: str) -> ExportRead:
         export_id = f"exp_{uuid4().hex[:8]}"
         now = datetime.now(UTC)
-        export = ExportRead(
-            id=export_id,
-            caseId=case_id,
-            exportType=export_type,
+        storage_key = f"exports/{case_id}/{export_id}-{case_id}-{export_type}.pdf"
+        export = await self.repository.create(
+            export_id=export_id,
+            project_id=case_id,
+            export_type=export_type,
             status="completed",
-            fileName=f"{case_id}-{export_type}.pdf",
-            downloadUrl=get_public_url(f"exports/{case_id}-{export_type}.pdf"),
-            createdAt=now,
-            completedAt=now,
+            file_name=f"{case_id}-{export_type}.pdf",
+            storage_key=storage_key,
+            created_at=now,
+            completed_at=now,
+            expires_at=_default_export_expires_at(now),
         )
-        _EXPORT_STORE[export_id] = export
-        _save_export_meta(export)
-        return export
+        return _to_export_read(export)
 
-    def create_quote_docx_export(self, *, case_detail: ProjectDetail) -> ExportRead:
+    async def create_quote_docx_export(self, *, case_detail: ProjectDetail) -> ExportRead:
         if case_detail.finalProposal is None:
             raise ValueError("Final proposal is required for DOCX export.")
 
@@ -829,26 +818,24 @@ class ExportService:
         base_name = sanitize_filename(case_detail.finalProposal.subject or case_detail.title or "nabidka")
         file_name = f"{base_name}.docx"
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        _sync_write_storage_file(
+        await write_storage_file(
             relative_storage_key=relative_storage_key.as_posix(),
             content=_build_docx_bytes(case_detail),
         )
-
-        export = ExportRead(
-            id=export_id,
-            caseId=case_detail.id,
-            exportType="quote-docx",
+        export = await self.repository.create(
+            export_id=export_id,
+            project_id=case_detail.id,
+            export_type="quote-docx",
             status="completed",
-            fileName=file_name,
-            downloadUrl=get_public_url(relative_storage_key.as_posix()),
-            createdAt=now,
-            completedAt=now,
+            file_name=file_name,
+            storage_key=relative_storage_key.as_posix(),
+            created_at=now,
+            completed_at=now,
+            expires_at=_default_export_expires_at(now),
         )
-        _EXPORT_STORE[export_id] = export
-        _save_export_meta(export)
-        return export
+        return _to_export_read(export)
 
-    def create_proposal_docx_export(self, *, case_detail: ProjectDetail) -> ExportRead:
+    async def create_proposal_docx_export(self, *, case_detail: ProjectDetail) -> ExportRead:
         if case_detail.proposalDraft is None:
             raise ValueError("Proposal draft is required for proposal DOCX export.")
 
@@ -857,26 +844,24 @@ class ExportService:
         base_name = sanitize_filename(case_detail.proposalDraft.subject or case_detail.title or "pracovni-navrh")
         file_name = f"{base_name}.docx"
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        _sync_write_storage_file(
+        await write_storage_file(
             relative_storage_key=relative_storage_key.as_posix(),
             content=_build_proposal_docx_bytes(case_detail),
         )
-
-        export = ExportRead(
-            id=export_id,
-            caseId=case_detail.id,
-            exportType="proposal-docx",
+        export = await self.repository.create(
+            export_id=export_id,
+            project_id=case_detail.id,
+            export_type="proposal-docx",
             status="completed",
-            fileName=file_name,
-            downloadUrl=get_public_url(relative_storage_key.as_posix()),
-            createdAt=now,
-            completedAt=now,
+            file_name=file_name,
+            storage_key=relative_storage_key.as_posix(),
+            created_at=now,
+            completed_at=now,
+            expires_at=_default_export_expires_at(now),
         )
-        _EXPORT_STORE[export_id] = export
-        _save_export_meta(export)
-        return export
+        return _to_export_read(export)
 
-    def create_quote_pdf_export(self, *, case_detail: ProjectDetail) -> ExportRead:
+    async def create_quote_pdf_export(self, *, case_detail: ProjectDetail) -> ExportRead:
         if case_detail.finalProposal is None:
             raise ValueError("Final proposal is required for PDF export.")
 
@@ -885,73 +870,92 @@ class ExportService:
         base_name = sanitize_filename(case_detail.finalProposal.subject or case_detail.title or "nabidka")
         file_name = f"{base_name}.pdf"
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        _sync_write_storage_file(
+        await write_storage_file(
             relative_storage_key=relative_storage_key.as_posix(),
             content=_build_pdf_bytes(case_detail),
         )
-
-        export = ExportRead(
-            id=export_id,
-            caseId=case_detail.id,
-            exportType="quote-pdf",
+        export = await self.repository.create(
+            export_id=export_id,
+            project_id=case_detail.id,
+            export_type="quote-pdf",
             status="completed",
-            fileName=file_name,
-            downloadUrl=get_public_url(relative_storage_key.as_posix()),
-            createdAt=now,
-            completedAt=now,
+            file_name=file_name,
+            storage_key=relative_storage_key.as_posix(),
+            created_at=now,
+            completed_at=now,
+            expires_at=_default_export_expires_at(now),
         )
-        _EXPORT_STORE[export_id] = export
-        _save_export_meta(export)
-        return export
+        return _to_export_read(export)
 
-    def create_final_proposal_exports(self, *, case_detail: ProjectDetail) -> list[ExportRead]:
+    async def create_final_proposal_exports(self, *, case_detail: ProjectDetail) -> list[ExportRead]:
         return [
-            self.create_quote_docx_export(case_detail=case_detail),
-            self.create_quote_pdf_export(case_detail=case_detail),
+            await self.create_quote_docx_export(case_detail=case_detail),
+            await self.create_quote_pdf_export(case_detail=case_detail),
         ]
 
-    def create_case_zip_export(self, *, case_detail: ProjectDetail) -> ExportRead:
+    async def create_case_zip_export(self, *, case_detail: ProjectDetail) -> ExportRead:
         export_id = f"exp_{uuid4().hex[:8]}"
         now = datetime.now(UTC)
         base_name = sanitize_filename(case_detail.title or case_detail.id)
         file_name = f"{base_name}.zip"
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        _sync_write_storage_file(
+        await write_storage_file(
             relative_storage_key=relative_storage_key.as_posix(),
-            content=_build_case_zip_bytes(case_detail),
+            content=await _build_case_zip_bytes(case_detail),
         )
-        export = ExportRead(
-            id=export_id,
-            caseId=case_detail.id,
-            exportType="case-zip",
+        export = await self.repository.create(
+            export_id=export_id,
+            project_id=case_detail.id,
+            export_type="case-zip",
             status="completed",
-            fileName=file_name,
-            downloadUrl=get_public_url(relative_storage_key.as_posix()),
-            createdAt=now,
-            completedAt=now,
+            file_name=file_name,
+            storage_key=relative_storage_key.as_posix(),
+            created_at=now,
+            completed_at=now,
+            expires_at=_default_export_expires_at(now),
         )
-        _EXPORT_STORE[export_id] = export
-        _save_export_meta(export)
-        return export
+        return _to_export_read(export)
 
-    def get_export(self, export_id: str) -> ExportRead | None:
-        # 1. In-memory cache
-        if export_id in _EXPORT_STORE:
-            return _EXPORT_STORE[export_id]
+    async def get_export(self, export_id: str) -> ExportRead | None:
+        export = await self.repository.get_by_id(export_id)
+        if export is None:
+            return None
+        expires_at = _as_utc(export.expires_at)
+        assert expires_at is not None
+        if expires_at <= datetime.now(UTC):
+            logger.info(
+                "export.expired_access_rejected",
+                export_id=export.id,
+                project_id=export.project_id,
+                expires_at=expires_at.isoformat(),
+            )
+            return None
+        return _to_export_read(export)
 
-        # 2. JSON sidecar on disk
-        export = _load_export_meta(export_id)
-        if export is not None:
-            _EXPORT_STORE[export_id] = export
-            return export
+    async def delete_expired_exports(self, *, now: datetime | None = None) -> int:
+        current_time = now or datetime.now(UTC)
+        expired_exports = await self.repository.list_expired(now=current_time)
+        if not expired_exports:
+            return 0
 
-        # 3. Sidecar missing or corrupt — check if export file physically exists
-        file_path = _find_export_file(export_id)
-        if file_path is not None:
-            logger.warning("export.meta_missing_reconstructed", export_id=export_id, path=str(file_path))
-            export = _export_from_file(export_id, file_path)
-            _EXPORT_STORE[export_id] = export
-            return export
+        export_ids: list[str] = []
+        for export in expired_exports:
+            if export.storage_key:
+                await delete_storage_file(relative_storage_key=export.storage_key)
+            logger.info(
+                "export.cleanup.deleted",
+                org_id=export.organization_id,
+                key=export.storage_key,
+                action="delete_expired_export",
+                export_id=export.export_id,
+                project_id=export.project_id,
+                expires_at=_as_utc(export.expires_at).isoformat(),
+            )
+            export_ids.append(export.export_id)
 
-        # 4. Nothing found → caller returns 404
-        return None
+        deleted_rows = await self.repository.delete_by_ids(export_ids)
+        if deleted_rows != len(export_ids):
+            raise RuntimeError(
+                f"Expired export cleanup deleted {deleted_rows} DB rows, expected {len(export_ids)}."
+            )
+        return deleted_rows

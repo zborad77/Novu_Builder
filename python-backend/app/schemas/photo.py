@@ -51,23 +51,6 @@ class PhotoListResponse(BaseModel):
     meta: PhotoListMeta
 
 
-class PhotoJsonUploadItem(BaseModel):
-    originalFilename: str | None = None
-    mimeType: str = "image/jpeg"
-    fileSize: int = 0
-    width: int | None = None
-    height: int | None = None
-    takenAt: datetime | None = None
-    exifLat: float | None = None
-    exifLng: float | None = None
-    isPrimary: bool = False
-    sortOrder: int | None = None
-
-
-class PhotoJsonUploadRequest(BaseModel):
-    files: list[PhotoJsonUploadItem]
-
-
 class UploadedPhotoPayload(BaseModel):
     id: str
     storageKey: str
