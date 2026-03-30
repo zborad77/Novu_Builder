@@ -13,6 +13,7 @@ from app.api.routes.measurements import router as measurements_router
 from app.api.routes.pricebooks import router as pricebooks_router
 from app.api.routes.suppliers import router as suppliers_router
 from app.api.routes.system import router as system_router
+from app.api.routes.work_catalog import router as work_catalog_router
 
 # Canonical API uses /cases/* prefix (matches desktop Qt client).
 # The following routers exist as files but are not registered — they duplicate
@@ -35,4 +36,5 @@ api_router.include_router(pricebooks_router, **_protected)
 api_router.include_router(exports_router, **_protected)
 api_router.include_router(material_catalog_router, **_protected)
 api_router.include_router(suppliers_router, **_protected)
+api_router.include_router(work_catalog_router, **_protected)
 api_router.include_router(admin_router, **_protected)

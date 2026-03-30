@@ -13,6 +13,20 @@ Current release snapshot of the repository state prepared for GitHub versioning.
 - Added queue depth limits, per-tenant active job limits, and configurable worker concurrency.
 - Expanded duplicate execution, stale job recovery, and concurrency test coverage.
 
+### Work Catalog Core Subsystem
+
+- Added a new `work_catalog` core domain module with explicit global catalog, tenant override, runtime work item, and vision detection boundaries.
+- Introduced first-class entities for work categories, work types, typed parameters with options, analysis profiles, catalog pricing profiles, tenant work type settings, tenant work type parameter overrides, project work items, project work item values, and vision detections.
+- Designed tenant override layer as a sparse delta model — tenant rows are only created when a setting differs from the global default, avoiding per-tenant catalog duplication at any scale.
+- Added effective resolution logic, tenant-safe APIs, and cache-aware hot read paths for effective work type catalog access with explicit cache invalidation on settings write.
+- Added centralized typed value validation in `work_catalog/domain.py` to eliminate `if/elif` work-type branching from routes and services.
+- Added two Alembic migrations: `20260330_0028` for the core subsystem tables and `20260330_0029` for tenant parameter overrides and scaling indexes.
+- Expanded the catalog into a full parametric schema system for all 43 seeded work types, with realistic per-type parameters across `dimensions`, `materials`, `condition_or_damage`, `access_and_complexity`, `quantity_scope`, and `optional_notes`.
+- Added grouped `parameterSections` API output plus richer parameter metadata including bounds, enum options, vision extractability, and manual override flags for API/UI/mobile/vision/pricing/operator consumers.
+- Added import-time guards for schema section coverage, parameter definition integrity, and enum completeness, plus DB-level integrity constraints for parameter defaults and runtime typed-value shape in `20260330_0031`.
+- Made global catalog seeding canonical and idempotent by upserting source-of-truth catalog rows instead of inserting only missing definitions.
+- Added subsystem integration tests and architecture documentation for long-term maintainability.
+
 ### Observability And Operations
 
 - Added Prometheus job metrics for queue depth, processing load, duration, fail rate, reaper requeues, and prevented duplicates.

@@ -17,6 +17,7 @@ from app.repositories.project_repository import ProjectRepository
 from app.repositories.quote_variant_repository import QuoteVariantRepository
 from app.repositories.storage_consistency_repository import StorageConsistencyRepository
 from app.repositories.supplier_repository import SupplierRepository
+from app.repositories.work_catalog_repository import WorkCatalogRepository
 from app.services.analysis_service import AnalysisService
 from app.services.auth_service import AuthService
 from app.services.export_service import ExportService
@@ -27,6 +28,7 @@ from app.services.project_service import ProjectService
 from app.services.quote_variant_service import QuoteVariantService
 from app.services.storage_consistency_service import StorageConsistencyService
 from app.services.supplier_service import SupplierService
+from app.services.work_catalog_service import WorkCatalogService
 
 logger = structlog.get_logger(__name__)
 
@@ -74,6 +76,10 @@ def get_storage_consistency_service(
     session: AsyncSession = Depends(get_db_session),
 ) -> StorageConsistencyService:
     return StorageConsistencyService(StorageConsistencyRepository(session))
+
+
+def get_work_catalog_service(session: AsyncSession = Depends(get_db_session)) -> WorkCatalogService:
+    return WorkCatalogService(WorkCatalogRepository(session))
 
 
 def get_auth_service(session: AsyncSession = Depends(get_db_session)) -> AuthService:

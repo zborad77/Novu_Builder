@@ -26,6 +26,11 @@ That means:
 - Repository -> DB access
 - ORM -> persistence model
 
+Core domain note:
+
+- work catalog is a first-class subsystem with explicit boundaries:
+  global catalog -> tenant work type settings -> project work items -> vision detections
+
 ## Worker
 
 - worker follows the same storage rules as backend services

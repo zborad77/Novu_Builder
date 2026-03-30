@@ -6,19 +6,31 @@ from app.services.auth_service import hash_password
 from app.models import (
     AnalysisJob,
     AnalysisResult,
+    AnalysisProfile,
+    CatalogPricingProfile,
     Client,
     MaterialCatalog,
     Organization,
     PricingProfile,
+    ProjectWorkItem,
+    ProjectWorkItemValue,
     Project,
     ProjectPhoto,
     QuoteItem,
     QuoteVariant,
     Supplier,
     SupplierMaterialPrice,
+    TenantWorkTypeParameterOverride,
+    TenantWorkTypeSetting,
     User,
+    VisionDetection,
+    WorkCategory,
+    WorkType,
+    WorkTypeParameter,
+    WorkTypeParameterOption,
 )
 from app.storage.local_photo_storage import STORAGE_ROOT, ensure_directory
+from app.work_catalog.seeds import GLOBAL_WORK_CATALOG_SEED
 
 
 _SEED_PHOTO_BYTES = {
@@ -55,6 +67,34 @@ def _ensure_seed_photo_files(seeded_photos: list[dict]) -> None:
         _ensure_seed_file(photo_data.get("storage_key"), content)
         _ensure_seed_file(photo_data.get("preview_storage_key"), content)
         _ensure_seed_file(photo_data.get("ai_input_storage_key"), content)
+
+
+async def _seed_global_work_catalog(session: AsyncSession) -> None:
+    async def _upsert_seed_row(model, row: dict) -> None:
+        existing = await session.get(model, row["id"])
+        if existing is None:
+            session.add(model(**row))
+            return
+        for key, value in row.items():
+            setattr(existing, key, value)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["categories"]:
+        await _upsert_seed_row(WorkCategory, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profiles"]:
+        await _upsert_seed_row(AnalysisProfile, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["catalog_pricing_profiles"]:
+        await _upsert_seed_row(CatalogPricingProfile, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["work_types"]:
+        await _upsert_seed_row(WorkType, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["parameters"]:
+        await _upsert_seed_row(WorkTypeParameter, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["parameter_options"]:
+        await _upsert_seed_row(WorkTypeParameterOption, row)
 
 
 async def ensure_dev_seed(session: AsyncSession) -> None:
@@ -164,6 +204,16 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
                 is_default=True,
             )
         )
+
+    await _seed_global_work_catalog(session)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["tenant_settings"]:
+        if await session.get(TenantWorkTypeSetting, row["id"]) is None:
+            session.add(TenantWorkTypeSetting(**row))
+
+    for row in GLOBAL_WORK_CATALOG_SEED["tenant_parameter_overrides"]:
+        if await session.get(TenantWorkTypeParameterOverride, row["id"]) is None:
+            session.add(TenantWorkTypeParameterOverride(**row))
 
     suppliers = [
         {
@@ -418,6 +468,100 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
                 workflow_suggestion_json='["Vizualni kontrola povrchu","Ocisteni a priprava podkladu","Lokalni oprava a finalni vrstva"]',
                 model_name="mock-vision",
                 model_version="0.2",
+            )
+        )
+
+    seeded_work_item = await session.get(ProjectWorkItem, "pwi_1")
+    if seeded_work_item is None:
+        session.add(
+            ProjectWorkItem(
+                id="pwi_1",
+                project_id="prj_1",
+                organization_id="org_1",
+                work_type_id="wt_roof_repair",
+                tenant_work_type_setting_id="twts_org_1_roof_repair",
+                analysis_profile_id="ap_surface_damage_v1",
+                catalog_pricing_profile_id="cpp_surface_repair_standard_v1",
+                tenant_pricing_profile_id="price_default",
+                title="Oprava strechy",
+                status="resolved",
+                source_type="vision",
+                item_sequence=1,
+                resolved_display_name="Oprava strechy",
+                resolved_work_type_code="roof-repair",
+                resolved_category_code="roofing",
+                resolved_unit="m2",
+                resolved_catalog_version=1,
+                resolved_setting_version=1,
+                measured_quantity=18.5,
+                measured_unit="m2",
+                notes="Seeded runtime item projected from demo analysis.",
+                created_by_user_id="usr_1",
+            )
+        )
+
+    seeded_value_area = await session.get(ProjectWorkItemValue, "pwiv_1")
+    if seeded_value_area is None:
+        session.add(
+            ProjectWorkItemValue(
+                id="pwiv_1",
+                project_work_item_id="pwi_1",
+                work_type_parameter_id="wtp_roof_repair_area",
+                source_type="vision",
+                resolved_parameter_code="work-area-sqm",
+                resolved_parameter_name="Work Area",
+                resolved_data_type="number",
+                resolved_unit="m2",
+                value_number=18.5,
+            )
+        )
+
+    seeded_value_severity = await session.get(ProjectWorkItemValue, "pwiv_2")
+    if seeded_value_severity is None:
+        session.add(
+            ProjectWorkItemValue(
+                id="pwiv_2",
+                project_work_item_id="pwi_1",
+                work_type_parameter_id="wtp_roof_repair_severity",
+                source_type="vision",
+                resolved_parameter_code="severity-band",
+                resolved_parameter_name="Severity Band",
+                resolved_data_type="option",
+                resolved_unit=None,
+                value_option_code="moderate",
+            )
+        )
+
+    seeded_detection = await session.get(VisionDetection, "vd_1")
+    if seeded_detection is None:
+        session.add(
+            VisionDetection(
+                id="vd_1",
+                project_id="prj_1",
+                organization_id="org_1",
+                project_work_item_id="pwi_1",
+                analysis_job_id="job_1",
+                work_type_id="wt_roof_repair",
+                analysis_profile_id="ap_surface_damage_v1",
+                reference_photo_id="pho_1",
+                detection_key="roof-repair-pho-1-001",
+                status="linked",
+                confidence_score=0.88,
+                raw_label="Roof damage cluster",
+                raw_value="moderate",
+                detected_quantity=18.5,
+                detected_unit="m2",
+                geometry_type="polygon",
+                bbox_left=0.18,
+                bbox_top=0.22,
+                bbox_right=0.58,
+                bbox_bottom=0.70,
+                geometry_json='[{"x":0.18,"y":0.22},{"x":0.58,"y":0.24},{"x":0.56,"y":0.68},{"x":0.2,"y":0.7}]',
+                resolved_work_type_code="roof-repair",
+                source_provider="mock-vision",
+                source_model="mock-vision",
+                source_model_version="0.2",
+                created_by_user_id="usr_1",
             )
         )
 
