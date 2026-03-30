@@ -1,3 +1,7 @@
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from app.main import create_app
 
 
@@ -10,6 +14,18 @@ async def test_create_app_lifespan_startup_smoke():
             "schema": "ok",
             "storage": "ok",
         }
+
+
+async def test_create_app_lifespan_fails_fast_when_storage_validation_fails_in_production():
+    app = create_app()
+
+    with (
+        patch("app.main.verify_storage_health", new=AsyncMock(side_effect=RuntimeError("s3 down"))),
+        patch("app.main._is_strict_startup_environment", return_value=True),
+    ):
+        with pytest.raises(RuntimeError, match="storage"):
+            async with app.router.lifespan_context(app):
+                pass
 
 
 async def test_openapi_smoke_exposes_key_runtime_paths(app_client):

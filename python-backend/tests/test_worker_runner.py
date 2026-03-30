@@ -5,7 +5,32 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.worker.queue import InvalidAnalysisJobPayloadError
+from app.worker.queue import InvalidAnalysisJobPayloadError, LeasedAnalysisJob
+
+
+def _lease(
+    *,
+    job_id: str = "job_abc123",
+    project_id: str = "proj-1",
+    organization_id: str | None = "org-1",
+    is_superadmin_context: bool = False,
+    worker_id: str = "worker-a",
+    token: str = "lease-1",
+) -> LeasedAnalysisJob:
+    return LeasedAnalysisJob(
+        token=token,
+        payload={
+            "job_id": job_id,
+            "project_id": project_id,
+            "organization_id": organization_id,
+            "is_superadmin_context": is_superadmin_context,
+        },
+        raw_payload="{}",
+        worker_id=worker_id,
+        leased_at_ms=1_700_000_000_000,
+        lease_timeout_ms=600_000,
+        expires_at_ms=1_700_000_600_000,
+    )
 
 
 class TestProcessOnePayloadValidation:
@@ -263,12 +288,7 @@ class TestWorkerRedisConnectionHardening:
         redis.set = AsyncMock()
         redis.aclose = AsyncMock()
 
-        valid_payload = {
-            "job_id": "job_abc123",
-            "project_id": "proj-1",
-            "organization_id": "org-1",
-            "is_superadmin_context": False,
-        }
+        valid_payload = _lease()
 
         with (
             patch("app.worker.runner.get_settings", return_value=settings),
@@ -282,7 +302,8 @@ class TestWorkerRedisConnectionHardening:
                     asyncio.CancelledError(),
                 ],
             ),
-            patch("app.worker.runner.WorkerJobExecutor.execute_payload", new=AsyncMock()) as execute_payload,
+            patch("app.worker.runner.ack_analysis_job", new=AsyncMock(return_value=True)),
+            patch("app.worker.runner.WorkerJobExecutor.execute_lease", new=AsyncMock()) as execute_payload,
         ):
             await runner.run()
 
@@ -302,12 +323,7 @@ class TestWorkerRedisConnectionHardening:
         redis.set = AsyncMock()
         redis.aclose = AsyncMock()
 
-        valid_payload = {
-            "job_id": "job_abc123",
-            "project_id": "proj-1",
-            "organization_id": "org-1",
-            "is_superadmin_context": False,
-        }
+        valid_payload = _lease()
         job_error = runner.WorkerJobExecutionError(
             job_id="job_abc123",
             project_id="proj-1",
@@ -324,7 +340,7 @@ class TestWorkerRedisConnectionHardening:
                 side_effect=[valid_payload, asyncio.CancelledError()],
             ),
             patch(
-                "app.worker.runner.WorkerJobExecutor.execute_payload",
+                "app.worker.runner.WorkerJobExecutor.execute_lease",
                 new=AsyncMock(side_effect=[job_error, asyncio.CancelledError()]),
             ),
             patch("app.worker.runner.asyncio.sleep", new=AsyncMock()) as sleep_mock,
@@ -348,18 +364,8 @@ class TestWorkerConcurrencyControl:
     async def test_run_one_iteration_spawns_background_jobs_up_to_configured_limit(self):
         from app.worker import runner
 
-        payload_one = {
-            "job_id": "job_1",
-            "project_id": "proj-1",
-            "organization_id": "org-1",
-            "is_superadmin_context": False,
-        }
-        payload_two = {
-            "job_id": "job_2",
-            "project_id": "proj-2",
-            "organization_id": "org-1",
-            "is_superadmin_context": False,
-        }
+        payload_one = _lease(job_id="job_1", token="lease-1")
+        payload_two = _lease(job_id="job_2", project_id="proj-2", token="lease-2")
         started = asyncio.Event()
         release = asyncio.Event()
         started_jobs = 0
@@ -377,16 +383,21 @@ class TestWorkerConcurrencyControl:
             redis_url="redis://:secret@localhost:6379/0",
             worker_instance_id="worker-a",
             heartbeat_key="worker:heartbeat:worker-a",
-            job_executor=MagicMock(execute_payload=AsyncMock(side_effect=_execute_payload)),
+            job_executor=MagicMock(execute_lease=AsyncMock(side_effect=_execute_payload)),
             worker_concurrency=2,
+            job_lease_timeout_seconds=600,
+            lease_reap_interval_seconds=30,
             concurrency_limiter=asyncio.Semaphore(2),
             inflight_tasks=set(),
             last_heartbeat=time.monotonic(),
         )
 
-        with patch(
-            "app.worker.runner.dequeue_analysis_job",
-            new=AsyncMock(side_effect=[payload_one, payload_two]),
+        with (
+            patch(
+                "app.worker.runner.dequeue_analysis_job",
+                new=AsyncMock(side_effect=[payload_one, payload_two]),
+            ),
+            patch("app.worker.runner.ack_analysis_job", new=AsyncMock(return_value=True)),
         ):
             await runner._run_one_iteration(runtime)
             await runner._run_one_iteration(runtime)
@@ -413,8 +424,10 @@ class TestWorkerConcurrencyControl:
             redis_url="redis://:secret@localhost:6379/0",
             worker_instance_id="worker-a",
             heartbeat_key="worker:heartbeat:worker-a",
-            job_executor=MagicMock(execute_payload=AsyncMock()),
+            job_executor=MagicMock(execute_lease=AsyncMock()),
             worker_concurrency=1,
+            job_lease_timeout_seconds=600,
+            lease_reap_interval_seconds=30,
             concurrency_limiter=asyncio.Semaphore(1),
             inflight_tasks={pending_task},
             last_heartbeat=time.monotonic(),
@@ -444,12 +457,7 @@ class TestWorkerConcurrencyControl:
         redis.set = AsyncMock()
         redis.aclose = AsyncMock()
 
-        valid_payload = {
-            "job_id": "job_abc123",
-            "project_id": "proj-1",
-            "organization_id": "org-1",
-            "is_superadmin_context": False,
-        }
+        valid_payload = _lease()
         task_started = asyncio.Event()
         task_cancelled = asyncio.Event()
         dequeue_calls = 0
@@ -478,8 +486,9 @@ class TestWorkerConcurrencyControl:
                 "app.worker.runner.dequeue_analysis_job",
                 new=AsyncMock(side_effect=_dequeue_payload),
             ),
+            patch("app.worker.runner.ack_analysis_job", new=AsyncMock(return_value=True)),
             patch(
-                "app.worker.runner.WorkerJobExecutor.execute_payload",
+                "app.worker.runner.WorkerJobExecutor.execute_lease",
                 new=AsyncMock(side_effect=_execute_payload),
             ),
         ):
@@ -501,8 +510,10 @@ class TestWorkerExportCleanup:
             redis_url="redis://:secret@localhost:6379/0",
             worker_instance_id="worker-a",
             heartbeat_key="worker:heartbeat:worker-a",
-            job_executor=MagicMock(execute_payload=AsyncMock()),
+            job_executor=MagicMock(execute_lease=AsyncMock()),
             worker_concurrency=1,
+            job_lease_timeout_seconds=600,
+            lease_reap_interval_seconds=30,
             concurrency_limiter=asyncio.Semaphore(1),
             inflight_tasks=set(),
             last_heartbeat=time.monotonic(),
@@ -531,6 +542,48 @@ class TestWorkerExportCleanup:
         assert runtime.last_export_cleanup == runner._EXPORT_CLEANUP_INTERVAL_SECONDS
 
     @pytest.mark.asyncio
+    async def test_run_photo_cleanup_if_due_uses_worker_session_factory(self):
+        from app.worker import runner
+
+        runtime = runner.WorkerRuntime(
+            settings=MagicMock(),
+            redis=AsyncMock(),
+            redis_url="redis://:secret@localhost:6379/0",
+            worker_instance_id="worker-a",
+            heartbeat_key="worker:heartbeat:worker-a",
+            job_executor=MagicMock(execute_lease=AsyncMock()),
+            worker_concurrency=1,
+            job_lease_timeout_seconds=600,
+            lease_reap_interval_seconds=30,
+            concurrency_limiter=asyncio.Semaphore(1),
+            inflight_tasks=set(),
+            last_heartbeat=time.monotonic(),
+            last_photo_cleanup=0.0,
+        )
+
+        session = AsyncMock()
+        session_ctx = AsyncMock()
+        session_ctx.__aenter__.return_value = session
+        session_ctx.__aexit__.return_value = False
+        cleanup_pending_deletes = AsyncMock(return_value=2)
+
+        with (
+            patch("app.worker.runner.WorkerAsyncSessionFactory", return_value=session_ctx) as session_factory,
+            patch("app.worker.runner.PhotoService") as photo_service_cls,
+            patch("app.worker.runner.PhotoRepository"),
+        ):
+            photo_service_cls.return_value.cleanup_pending_deletes = cleanup_pending_deletes
+            await runner._run_photo_cleanup_if_due(
+                runtime,
+                now_monotonic=runner._PHOTO_DELETE_CLEANUP_INTERVAL_SECONDS,
+            )
+
+        session_factory.assert_called_once_with()
+        photo_service_cls.assert_called_once()
+        cleanup_pending_deletes.assert_awaited_once_with()
+        assert runtime.last_photo_cleanup == runner._PHOTO_DELETE_CLEANUP_INTERVAL_SECONDS
+
+    @pytest.mark.asyncio
     async def test_run_one_iteration_runs_export_cleanup_before_dequeue(self):
         from app.worker import runner
 
@@ -540,8 +593,10 @@ class TestWorkerExportCleanup:
             redis_url="redis://:secret@localhost:6379/0",
             worker_instance_id="worker-a",
             heartbeat_key="worker:heartbeat:worker-a",
-            job_executor=MagicMock(execute_payload=AsyncMock()),
+            job_executor=MagicMock(execute_lease=AsyncMock()),
             worker_concurrency=1,
+            job_lease_timeout_seconds=600,
+            lease_reap_interval_seconds=30,
             concurrency_limiter=asyncio.Semaphore(1),
             inflight_tasks=set(),
             last_heartbeat=time.monotonic(),
@@ -549,6 +604,7 @@ class TestWorkerExportCleanup:
 
         with (
             patch("app.worker.runner._run_export_cleanup_if_due", new=AsyncMock()) as cleanup,
+            patch("app.worker.runner._run_photo_cleanup_if_due", new=AsyncMock()) as photo_cleanup,
             patch("app.worker.runner._write_heartbeat_if_due", new=AsyncMock()) as heartbeat,
             patch("app.worker.runner._drain_finished_tasks", new=AsyncMock()) as drain,
             patch("app.worker.runner._acquire_job_slot", new=AsyncMock(return_value=False)) as acquire,
@@ -556,6 +612,7 @@ class TestWorkerExportCleanup:
             await runner._run_one_iteration(runtime)
 
         cleanup.assert_awaited_once_with(runtime)
+        photo_cleanup.assert_awaited_once_with(runtime)
         heartbeat.assert_awaited_once_with(runtime)
         drain.assert_awaited_once_with(runtime)
         acquire.assert_awaited_once_with(runtime)

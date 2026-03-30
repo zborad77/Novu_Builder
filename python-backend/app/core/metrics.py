@@ -15,6 +15,9 @@ URL, to prevent label cardinality explosion from per-resource IDs.
 
 from __future__ import annotations
 
+from collections import deque
+from threading import Lock
+
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -105,6 +108,16 @@ WORKER_MONITORING_AVAILABLE = Gauge(
     "1 if worker heartbeat monitoring can read Redis, 0 if worker status is currently unknown",
 )
 
+QUEUE_LENGTH = Gauge(
+    "novu_queue_length",
+    "Current durable analysis queue length in Redis",
+)
+
+PROCESSING_JOBS = Gauge(
+    "novu_processing_jobs",
+    "Current number of leased analysis jobs in Redis processing",
+)
+
 JOBS_QUEUED = Gauge(
     "novu_jobs_queued",
     "Number of analysis jobs in queued state",
@@ -113,6 +126,50 @@ JOBS_QUEUED = Gauge(
 JOBS_RUNNING = Gauge(
     "novu_jobs_running",
     "Number of analysis jobs in running state",
+)
+
+JOB_STUCK_MAX_AGE_SECONDS = Gauge(
+    "novu_job_stuck_max_age_seconds",
+    "Age in seconds of the oldest running analysis job",
+)
+
+JOB_DURATION_SECONDS = Histogram(
+    "novu_job_duration_seconds",
+    "Analysis job duration in seconds by terminal status",
+    ["status"],
+    buckets=[0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 180.0, 300.0, 600.0],
+)
+
+JOB_DURATION_SECONDS_AVG = Gauge(
+    "novu_job_duration_seconds_avg",
+    "Average analysis job duration in seconds over the in-process rolling window",
+)
+
+JOB_DURATION_SECONDS_P95 = Gauge(
+    "novu_job_duration_seconds_p95",
+    "P95 analysis job duration in seconds over the in-process rolling window",
+)
+
+JOB_OUTCOMES_TOTAL = Counter(
+    "novu_job_outcomes_total",
+    "Total completed analysis jobs by terminal status",
+    ["status"],
+)
+
+JOB_FAIL_RATE = Gauge(
+    "novu_job_fail_rate",
+    "Failure ratio across in-process observed terminal analysis jobs",
+)
+
+REAPER_REQUEUES_TOTAL = Counter(
+    "novu_reaper_requeues_total",
+    "Total analysis jobs requeued by the lease reaper",
+)
+
+DUPLICATE_PREVENTED_COUNT = Counter(
+    "novu_duplicate_prevented_count",
+    "Total duplicate job submissions or executions prevented",
+    ["reason"],
 )
 
 # Audit trail health (R-AUD-01)
@@ -134,3 +191,69 @@ UPLOAD_REJECTIONS_TOTAL = Counter(
     "Total rejected uploads by coarse-grained reason and HTTP status",
     ["reason", "status_code"],
 )
+
+_JOB_DURATION_WINDOW = deque(maxlen=200)
+_JOB_DURATION_LOCK = Lock()
+_JOB_OUTCOME_COUNTS: dict[str, int] = {"completed": 0, "failed": 0}
+_JOB_FAIL_RATE_CURRENT = 0.0
+_JOB_DURATION_AVG_CURRENT = 0.0
+_JOB_DURATION_P95_CURRENT = 0.0
+
+
+def _percentile(sorted_values: list[float], quantile: float) -> float:
+    if not sorted_values:
+        return 0.0
+    index = max(0, min(len(sorted_values) - 1, int(round((len(sorted_values) - 1) * quantile))))
+    return float(sorted_values[index])
+
+
+def observe_job_outcome(*, status: str, duration_seconds: float | None) -> None:
+    """Record terminal job outcome metrics and refresh rolling duration gauges."""
+    global _JOB_FAIL_RATE_CURRENT, _JOB_DURATION_AVG_CURRENT, _JOB_DURATION_P95_CURRENT
+    normalized_status = status.strip().lower() or "unknown"
+    JOB_OUTCOMES_TOTAL.labels(status=normalized_status).inc()
+    with _JOB_DURATION_LOCK:
+        if normalized_status in _JOB_OUTCOME_COUNTS:
+            _JOB_OUTCOME_COUNTS[normalized_status] += 1
+
+        total_terminal = sum(_JOB_OUTCOME_COUNTS.values())
+        fail_rate = (
+            _JOB_OUTCOME_COUNTS["failed"] / total_terminal
+            if total_terminal > 0
+            else 0.0
+        )
+        _JOB_FAIL_RATE_CURRENT = fail_rate
+        JOB_FAIL_RATE.set(fail_rate)
+
+        if duration_seconds is None:
+            return
+
+        duration = max(0.0, float(duration_seconds))
+        JOB_DURATION_SECONDS.labels(status=normalized_status).observe(duration)
+        _JOB_DURATION_WINDOW.append(duration)
+        samples = sorted(_JOB_DURATION_WINDOW)
+        _JOB_DURATION_AVG_CURRENT = sum(samples) / len(samples)
+        _JOB_DURATION_P95_CURRENT = _percentile(samples, 0.95)
+        JOB_DURATION_SECONDS_AVG.set(_JOB_DURATION_AVG_CURRENT)
+        JOB_DURATION_SECONDS_P95.set(_JOB_DURATION_P95_CURRENT)
+
+
+def record_reaper_requeues(count: int = 1) -> None:
+    if count > 0:
+        REAPER_REQUEUES_TOTAL.inc(count)
+
+
+def record_duplicate_prevented(reason: str) -> None:
+    normalized_reason = reason.strip().lower() or "unknown"
+    DUPLICATE_PREVENTED_COUNT.labels(reason=normalized_reason).inc()
+
+
+def refresh_job_observability_gauges() -> None:
+    """Expose current in-process aggregate job gauges during every scrape."""
+    JOB_DURATION_SECONDS.labels(status="completed")
+    JOB_DURATION_SECONDS.labels(status="failed")
+    JOB_OUTCOMES_TOTAL.labels(status="completed").inc(0)
+    JOB_OUTCOMES_TOTAL.labels(status="failed").inc(0)
+    JOB_FAIL_RATE.set(_JOB_FAIL_RATE_CURRENT)
+    JOB_DURATION_SECONDS_AVG.set(_JOB_DURATION_AVG_CURRENT)
+    JOB_DURATION_SECONDS_P95.set(_JOB_DURATION_P95_CURRENT)

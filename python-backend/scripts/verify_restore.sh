@@ -139,6 +139,13 @@ SIGNED_URL_VALIDATION_STATUS="NOT EXECUTED"
 SIGNED_URL_VALIDATION_REASON="signed URL/access path validation has not been checked"
 APP_MEDIA_SMOKE_STATUS="NOT EXECUTED"
 APP_MEDIA_SMOKE_REASON="application media smoke validation has not been checked"
+# Full bi-directional storage consistency check is NOT run by verify_restore.sh.
+# verify_restore.sh covers sampled DB-to-storage reference validation only.
+# For a post-restore full consistency check run:
+#   python scripts/check_storage_consistency.py --database-url "$DATABASE_URL"
+# Exit 0 = clean or warnings-only; exit 1 = blocker (hard fail); exit 2 = scan error.
+FULL_CONSISTENCY_CHECK_STATUS="NOT EXECUTED"
+FULL_CONSISTENCY_CHECK_REASON="full DB<->S3 consistency check is out of scope for verify_restore.sh; run check_storage_consistency.py post-restore"
 
 emit_post_restore_step() {
   local name="$1"
@@ -625,6 +632,10 @@ if [[ $FAILED -eq 0 ]]; then
   echo "Signed URL / storage access path detail: $SIGNED_URL_VALIDATION_REASON"
   echo "Application media smoke validation: $APP_MEDIA_SMOKE_STATUS"
   echo "Application media smoke detail: $APP_MEDIA_SMOKE_REASON"
+  echo "Full DB<->S3 consistency check: $FULL_CONSISTENCY_CHECK_STATUS"
+  echo "Full DB<->S3 consistency detail: $FULL_CONSISTENCY_CHECK_REASON"
+  echo "production_dr_eligible: false"
+  echo "Full-state restore claim: NOT VERIFIED"
   echo "Production DR: NOT VERIFIED"
   echo "This verifies the DB-only restore contract plus only the explicit sampled media checks emitted above."
   echo "It does NOT validate runtime startup, service liveness, full media restore, or full S3/object storage recovery."

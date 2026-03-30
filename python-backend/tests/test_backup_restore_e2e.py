@@ -24,8 +24,10 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import stat
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 from typing import Optional
@@ -35,6 +37,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BACKUP_SH  = REPO_ROOT / "scripts" / "backup.sh"
 RESTORE_SH = REPO_ROOT / "ops" / "restore.sh"
+VALIDATE_RESTORED_MEDIA = REPO_ROOT / "python-backend" / "scripts" / "validate_restored_media.py"
 
 _TS = "20260101_120000"  # fixed timestamp for artifacts
 
@@ -103,6 +106,7 @@ class Env:
         alembic_head: str = REPO_ALEMBIC_HEAD,
         pg_dump_fail: bool = False,
         pg_restore_exit_code: int = 0,
+        consistency_check_exit_code: int = 0,
     ) -> None:
         pg_body = (
             "exit 1"
@@ -119,6 +123,14 @@ class Env:
                 *"ps -q"*)             echo "fake_container_id" ;;
                 *" cp "*)              true ;;
                 *" rm "*)              true ;;
+                *"check_storage_consistency.py"*)
+                    if [[ {consistency_check_exit_code} -eq 0 ]]; then
+                      echo "STORAGE_CONSISTENCY_SCAN_STATUS|scan_complete|db_to_s3=complete s3_to_db=complete"
+                      exit 0
+                    else
+                      echo "STORAGE_CONSISTENCY_SCAN_STATUS|fail|db_to_s3=complete blockers=1 s3_to_db=complete"
+                      exit {consistency_check_exit_code}
+                    fi ;;
                 *pg_restore*)          {pg_restore_body} ;;
                 *"run --rm backend"*)  true ;;
                 *"start backend"*)     true ;;
@@ -190,6 +202,33 @@ class Env:
         """Write a standalone fake verify_restore.sh; returns its path."""
         p = self.tmp / "fake_verify.sh"
         _exe(p, f"#!/usr/bin/env bash\nexit {exit_code}\n")
+        return p
+
+    def verify_script_with_steps(
+        self,
+        *,
+        reference_sample_status: str = "PASSED",
+        reference_sample_detail: str = "validated sampled DB-to-storage references",
+        signed_url_status: str = "PASSED",
+        signed_url_detail: str = "url check ok",
+        app_smoke_status: str = "PASSED",
+        app_smoke_detail: str = "smoke ok",
+        exit_code: int = 0,
+    ) -> Path:
+        """
+        Fake verify that emits structured POST_RESTORE_VALIDATION_STEP lines.
+        Used to test that restore.sh captures and acts on verify substep statuses.
+        """
+        p = self.tmp / "fake_verify_steps.sh"
+        _exe(p, textwrap.dedent(f"""\
+            #!/usr/bin/env bash
+            echo "POST_RESTORE_VALIDATION_STEP|db_query_usability|PASSED|critical tables exist and operational queries ok"
+            echo "POST_RESTORE_VALIDATION_STEP|schema_head_alignment|PASSED|schema revision matches repository HEAD"
+            echo "POST_RESTORE_VALIDATION_STEP|reference_sample_validation|{reference_sample_status}|{reference_sample_detail}"
+            echo "POST_RESTORE_VALIDATION_STEP|signed_url_validation|{signed_url_status}|{signed_url_detail}"
+            echo "POST_RESTORE_VALIDATION_STEP|app_media_smoke|{app_smoke_status}|{app_smoke_detail}"
+            exit {exit_code}
+        """))
         return p
 
     def docker_logging(self) -> Path:
@@ -346,6 +385,199 @@ class Env:
             cwd=str(REPO_ROOT),
         )
 
+    def make_media_validation_fixture(
+        self,
+        *,
+        include_photo: bool = True,
+        include_export: bool = True,
+        missing_storage_keys: tuple[str, ...] = (),
+    ) -> tuple[str, Path]:
+        db_path = self.tmp / "restore_validation.sqlite3"
+        storage_root = self.tmp / "storage"
+        storage_root.mkdir(exist_ok=True)
+
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE organizations (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                default_currency TEXT NOT NULL DEFAULT 'CZK',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                email TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                full_name TEXT NOT NULL,
+                role TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                is_superadmin INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE projects (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                created_by_user_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'mobile',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE project_photos (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                storage_key TEXT NOT NULL,
+                preview_storage_key TEXT,
+                ai_input_storage_key TEXT,
+                original_filename TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                width INTEGER,
+                height INTEGER,
+                preview_file_size INTEGER,
+                preview_width INTEGER,
+                preview_height INTEGER,
+                ai_input_file_size INTEGER,
+                ai_input_width INTEGER,
+                ai_input_height INTEGER,
+                processing_status TEXT NOT NULL,
+                taken_at TEXT,
+                exif_lat REAL,
+                exif_lng REAL,
+                is_primary INTEGER NOT NULL,
+                is_analysis_reference INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE project_exports (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                export_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                storage_key TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                completed_at TEXT,
+                expires_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO organizations (id, name) VALUES (?, ?)",
+            ("org_1", "NOVU"),
+        )
+        conn.execute(
+            "INSERT INTO users (id, organization_id, email, password_hash, full_name, role) VALUES (?, ?, ?, ?, ?, ?)",
+            ("usr_1", "org_1", "restore@example.com", "hashed", "Restore User", "admin"),
+        )
+        conn.execute(
+            "INSERT INTO projects (id, organization_id, created_by_user_id, title, status) VALUES (?, ?, ?, ?, ?)",
+            ("prj_1", "org_1", "usr_1", "Restored project", "ready"),
+        )
+
+        if include_photo:
+            conn.execute(
+                """
+                INSERT INTO project_photos (
+                    id, project_id, status, storage_key, preview_storage_key, ai_input_storage_key,
+                    original_filename, mime_type, file_size, width, height,
+                    preview_file_size, preview_width, preview_height,
+                    ai_input_file_size, ai_input_width, ai_input_height,
+                    processing_status, taken_at, exif_lat, exif_lng,
+                    is_primary, is_analysis_reference, sort_order
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "pho_1",
+                    "prj_1",
+                    "active",
+                    "projects/prj_1/original.jpg",
+                    "projects/prj_1/preview.jpg",
+                    None,
+                    "original.jpg",
+                    "image/jpeg",
+                    12345,
+                    1600,
+                    1200,
+                    3456,
+                    800,
+                    600,
+                    None,
+                    None,
+                    None,
+                    "ready",
+                    "2026-03-30 00:00:00",
+                    None,
+                    None,
+                    1,
+                    1,
+                    1,
+                ),
+            )
+
+        if include_export:
+            conn.execute(
+                """
+                INSERT INTO project_exports (
+                    id, project_id, export_type, status, file_name, storage_key, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "exp_1",
+                    "prj_1",
+                    "pdf",
+                    "completed",
+                    "report.pdf",
+                    "exports/prj_1/report.pdf",
+                    "2026-04-06 00:00:00",
+                ),
+            )
+
+        conn.commit()
+        conn.close()
+
+        for storage_key in (
+            "projects/prj_1/original.jpg",
+            "projects/prj_1/preview.jpg",
+            "exports/prj_1/report.pdf",
+        ):
+            if storage_key in missing_storage_keys:
+                continue
+            target = storage_root / storage_key
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"fixture")
+
+        return f"sqlite:///{db_path.resolve().as_posix()}", storage_root
+
+    def run_media_validation(
+        self,
+        *,
+        database_url: str,
+        sample_size: int = 3,
+        **env: str,
+    ) -> subprocess.CompletedProcess:
+        cmd = [
+            sys.executable,
+            str(VALIDATE_RESTORED_MEDIA),
+            "--database-url",
+            database_url,
+            "--sample-size",
+            str(sample_size),
+        ]
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=self._base_env(**env),
+            cwd=str(REPO_ROOT),
+        )
+
 
 @pytest.fixture
 def fx(tmp_path: Path) -> Env:
@@ -355,6 +587,53 @@ def fx(tmp_path: Path) -> Env:
 # ═══════════════════════════════════════════════════════════════════════════════
 # B1 — valid backup run
 # ═══════════════════════════════════════════════════════════════════════════════
+
+class TestRestoreMediaValidationHelper:
+    def test_sampled_db_to_storage_validation_passes_for_existing_media(self, fx: Env) -> None:
+        database_url, storage_root = fx.make_media_validation_fixture()
+        r = fx.run_media_validation(
+            database_url=database_url,
+            STORAGE_BACKEND="local",
+            STORAGE_ROOT=str(storage_root),
+        )
+        combined = r.stdout + r.stderr
+        assert r.returncode == 0, combined
+        assert "POST_RESTORE_VALIDATION_STEP|reference_sample_validation|PASSED|" in combined
+        assert "POST_RESTORE_VALIDATION_STEP|signed_url_validation|PASSED|" in combined
+        assert "POST_RESTORE_VALIDATION_STEP|app_media_smoke|PASSED|" in combined
+
+    def test_missing_db_referenced_object_is_a_hard_fail(self, fx: Env) -> None:
+        database_url, storage_root = fx.make_media_validation_fixture(
+            missing_storage_keys=("projects/prj_1/original.jpg",),
+        )
+        r = fx.run_media_validation(
+            database_url=database_url,
+            STORAGE_BACKEND="local",
+            STORAGE_ROOT=str(storage_root),
+        )
+        combined = r.stdout + r.stderr
+        assert r.returncode != 0, combined
+        assert "POST_RESTORE_VALIDATION_STEP|reference_sample_validation|FAILED|" in combined
+        assert "missing DB-referenced object" in combined
+        assert "POST_RESTORE_VALIDATION_STEP|signed_url_validation|NOT EXECUTED|" in combined
+        assert "POST_RESTORE_VALIDATION_STEP|app_media_smoke|NOT EXECUTED|" in combined
+
+    def test_no_storage_references_is_out_of_scope_not_success_claim(self, fx: Env) -> None:
+        database_url, storage_root = fx.make_media_validation_fixture(
+            include_photo=False,
+            include_export=False,
+        )
+        r = fx.run_media_validation(
+            database_url=database_url,
+            STORAGE_BACKEND="local",
+            STORAGE_ROOT=str(storage_root),
+        )
+        combined = r.stdout + r.stderr
+        assert r.returncode == 0, combined
+        assert "POST_RESTORE_VALIDATION_STEP|reference_sample_validation|OUT OF SCOPE|" in combined
+        assert "POST_RESTORE_VALIDATION_STEP|signed_url_validation|OUT OF SCOPE|" in combined
+        assert "POST_RESTORE_VALIDATION_STEP|app_media_smoke|OUT OF SCOPE|" in combined
+
 
 class TestBackupValidRun:
     def test_exits_zero(self, fx: Env) -> None:
@@ -468,8 +747,6 @@ class TestBackupProductionS3DbOnlySemantics:
     def test_records_variant_a_foundation_metadata_without_claiming_full_dr(self, fx: Env) -> None:
         fx.run_backup(
             **self._s3_env,
-            S3_BUCKET="novu-prod-bucket",
-            S3_REGION="us-east-1",
             S3_RECOVERY_POINT="versioned-bucket@2026-03-30T01:15:00Z",
             STORAGE_SNAPSHOT_CONSISTENT="true",
         )
@@ -515,7 +792,7 @@ class TestBackupProductionS3DbOnlySemantics:
         assert "S3 protection prerequisites: PASSED" in combined
         assert "S3 pre-restore validation: PASSED" in combined
         assert "Variant A storage-readiness: FAILED" in combined
-        assert "Release readiness decision: PASSED (DB handoff ready only; Production DR remains NOT VERIFIED)" in combined
+        assert "Release readiness decision: PASSED (DB handoff ready with validated DB<->storage consistency; Production DR remains NOT VERIFIED)" in combined
         assert "Authoritative S3/object storage recovery: NOT VERIFIED / OUT OF SCOPE" in combined
 
 
@@ -1083,3 +1360,287 @@ class TestRestoreVerifyTimeout:
         fx.run_restore(dump, skip_verify=False, verify_script_path=verify)
         calls = log.read_text() if log.exists() else ""
         assert "stop backend" not in calls
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DR Claim Gating — explicit production_dr_eligible and RELEASE_READINESS gates
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestDrClaimGating:
+    """
+    Tests for the explicit DR claim gating model.
+
+    Verifies that:
+      - production_dr_eligible is always false in backup manifests
+      - RELEASE_READINESS_DECISION is gated on all required conditions
+      - verify substep statuses are captured and fed into the decision gate
+      - Production DR is never claimed as VERIFIED on any code path
+      - The DR claim decision block is present and correctly labelled
+    """
+
+    # ── backup manifest ───────────────────────────────────────────────────────
+
+    def test_production_dr_eligible_is_always_false_in_backup_manifest(self, fx: Env) -> None:
+        """production_dr_eligible must be hardcoded false in every backup manifest."""
+        fx.run_backup()
+        manifest = json.loads(next(fx.bdir.glob("db_*.json")).read_text())
+        assert manifest["production_dr_eligible"] is False
+
+    def test_production_dr_eligible_false_in_s3_production_manifest(self, fx: Env) -> None:
+        """production_dr_eligible must be false even when all Variant A metadata is present."""
+        fx.run_backup(
+            APP_ENV="production",
+            STORAGE_BACKEND="s3",
+            S3_BUCKET="novu-prod-bucket",
+            S3_REGION="us-east-1",
+            S3_RECOVERY_POINT="versioned-bucket@2026-03-30T01:15:00Z",
+            STORAGE_SNAPSHOT_CONSISTENT="true",
+        )
+        manifest = json.loads(next(fx.bdir.glob("db_*.json")).read_text())
+        assert manifest["production_dr_eligible"] is False
+
+    # ── DR claim decision block ───────────────────────────────────────────────
+
+    def test_dr_claim_decision_block_present_in_restore_output(self, fx: Env) -> None:
+        """The DR claim decision block must appear in the restore output."""
+        dump, _, _ = fx.make_artifacts()
+        r = fx.run_restore(dump)
+        combined = r.stdout + r.stderr
+        assert r.returncode == 0, combined
+        assert "DR Claim Decision" in combined
+
+    def test_dr_claim_decision_block_shows_production_dr_not_verified(self, fx: Env) -> None:
+        """The decision block must show Production DR verified: NOT VERIFIED."""
+        dump, _, _ = fx.make_artifacts()
+        r = fx.run_restore(dump)
+        combined = r.stdout + r.stderr
+        assert "Production DR verified:      NOT VERIFIED" in combined
+
+    def test_dr_claim_decision_block_shows_production_dr_eligible_false(self, fx: Env) -> None:
+        """The decision block must show production_dr_eligible: false."""
+        dump, _, _ = fx.make_artifacts()
+        r = fx.run_restore(dump)
+        combined = r.stdout + r.stderr
+        assert "production_dr_eligible:      false" in combined
+
+    def test_dr_claim_decision_block_lists_unmet_conditions(self, fx: Env) -> None:
+        """The decision block must enumerate each condition that is not met."""
+        dump, _, _ = fx.make_artifacts()
+        r = fx.run_restore(dump)
+        combined = r.stdout + r.stderr
+        assert "Backup set validation:" in combined
+        assert "DB restore:" in combined
+        assert "Schema/head alignment:" in combined
+        assert "Post-restore validation:" in combined
+        assert "DB-referenced objects:" in combined
+        assert "Storage consistency gate:" in combined
+
+    def test_dr_claim_decision_block_shows_full_state_restore_not_verified(self, fx: Env) -> None:
+        """The decision block must show the full-state restore claim as NOT VERIFIED."""
+        dump, _, _ = fx.make_artifacts()
+        r = fx.run_restore(dump)
+        combined = r.stdout + r.stderr
+        assert "Full-state restore claim:    NOT VERIFIED" in combined
+
+    # ── Production DR never verified ──────────────────────────────────────────
+
+    def test_production_dr_never_verified_on_happy_path(self, fx: Env) -> None:
+        """Even when all restore steps pass, Production DR must remain NOT VERIFIED."""
+        dump, _, _ = fx.make_artifacts()
+        r = fx.run_restore(dump)
+        combined = r.stdout + r.stderr
+        assert r.returncode == 0, combined
+        assert "Production DR status: NOT VERIFIED" in combined
+        assert "Production DR: NOT VERIFIED" in combined
+        assert "Production DR remains NOT VERIFIED" in combined
+
+    def test_production_dr_not_verified_when_s3_and_liveness_pass(self, fx: Env) -> None:
+        """Production DR must not be claimed verified even when S3 and liveness all pass."""
+        dump, _, _ = fx.make_artifacts(
+            app_env="production",
+            storage_backend="s3",
+            storage_coverage="authoritative-s3-not-covered-by-this-backup",
+            storage_archive_included=False,
+            s3_bucket="novu-prod-bucket",
+            s3_region="us-east-1",
+            s3_recovery_point="versioned-bucket@2026-03-30T01:15:00Z",
+            storage_snapshot_consistent=True,
+        )
+        r = fx.run_restore(
+            dump,
+            APP_ENV="production",
+            STORAGE_BACKEND="s3",
+            S3_BUCKET="novu-prod-bucket",
+            S3_REGION="us-east-1",
+            AWS_ACCESS_KEY_ID="test-access-key",
+            AWS_SECRET_ACCESS_KEY="test-secret-key",
+        )
+        combined = r.stdout + r.stderr
+        assert r.returncode == 0, combined
+        assert "Production DR status: NOT VERIFIED" in combined
+        assert "Production DR: NOT VERIFIED" in combined
+        assert "Production DR: VERIFIED" not in combined
+        assert "Production DR status: VERIFIED" not in combined
+        assert "production_dr_eligible: false" in combined
+        assert "Full-state restore claim: NOT VERIFIED" in combined
+
+    def test_no_dr_verified_wording_in_any_restore_output(self, fx: Env) -> None:
+        """No form of 'DR: VERIFIED' or 'DR status: VERIFIED' may appear in restore output."""
+        dump, _, _ = fx.make_artifacts()
+        r = fx.run_restore(dump)
+        combined = r.stdout + r.stderr
+        assert "DR: VERIFIED" not in combined
+        assert "DR status: VERIFIED" not in combined
+
+    # ── verify substep capture and gating ────────────────────────────────────
+
+    def test_verify_substep_statuses_appear_in_restore_summary(self, fx: Env) -> None:
+        """When verify emits step lines, they must appear in the restore orchestration summary."""
+        dump, _, _ = fx.make_artifacts()
+        verify = fx.verify_script_with_steps(
+            reference_sample_status="PASSED",
+            reference_sample_detail="validated 3 sampled DB-to-storage references",
+        )
+        r = fx.run_restore(dump, skip_verify=False, verify_script_path=verify)
+        combined = r.stdout + r.stderr
+        assert r.returncode == 0, combined
+        assert "Verified DB -> storage sampled references: PASSED" in combined
+
+    def test_verify_reference_failure_blocks_release_readiness(self, fx: Env) -> None:
+        """
+        If verify exits 0 but emits FAILED for reference_sample_validation, the restore
+        must block RELEASE_READINESS_DECISION — fail-closed gate on verify substeps.
+        """
+        dump, _, _ = fx.make_artifacts()
+        verify = fx.verify_script_with_steps(
+            reference_sample_status="FAILED",
+            reference_sample_detail="missing DB-referenced object key=projects/p1/photo.jpg",
+            exit_code=0,  # verify exits 0 — substep gate must still block
+        )
+        r = fx.run_restore(dump, skip_verify=False, verify_script_path=verify)
+        combined = r.stdout + r.stderr
+        assert r.returncode != 0, (
+            "restore must exit non-zero when DB-referenced objects validation FAILED, "
+            "even if verify itself exited 0"
+        )
+        assert "Verified DB -> storage sampled references: FAILED" in combined
+        assert "11. Release readiness decision: FAILED" in combined
+        assert "DB restore contract: PASSED" in combined
+        assert "production_dr_eligible:      false" in combined
+        assert "Production DR verified:      NOT VERIFIED" in combined
+
+    def test_verify_reference_failure_does_not_misreport_db_restore_as_failed(self, fx: Env) -> None:
+        """
+        A failed reference validation blocks RELEASE_READINESS_DECISION
+        but must not misreport the DB restore step itself as failed.
+        """
+        dump, _, _ = fx.make_artifacts()
+        verify = fx.verify_script_with_steps(
+            reference_sample_status="FAILED",
+            reference_sample_detail="missing key=projects/p1/photo.jpg",
+            exit_code=0,
+        )
+        r = fx.run_restore(dump, skip_verify=False, verify_script_path=verify)
+        combined = r.stdout + r.stderr
+        assert r.returncode != 0, combined
+        assert "DB restore contract: PASSED" in combined
+        assert "11. Release readiness decision: FAILED" in combined
+
+    def test_verify_signed_url_failure_blocks_release_readiness_and_claim(self, fx: Env) -> None:
+        """Signed URL/access path failure must keep production DR explicitly NOT VERIFIED."""
+        dump, _, _ = fx.make_artifacts()
+        verify = fx.verify_script_with_steps(
+            signed_url_status="FAILED",
+            signed_url_detail="signed URL generation failed for sampled storage key",
+        )
+        r = fx.run_restore(dump, skip_verify=False, verify_script_path=verify)
+        combined = r.stdout + r.stderr
+        assert r.returncode != 0, combined
+        assert "Verified signed URL / storage access path: FAILED" in combined
+        assert "11. Release readiness decision: FAILED" in combined
+        assert "production_dr_eligible:      false" in combined
+        assert "Production DR verified:      NOT VERIFIED" in combined
+
+    def test_verify_app_media_smoke_failure_blocks_release_readiness_and_claim(self, fx: Env) -> None:
+        """Application media smoke failure must keep production DR explicitly NOT VERIFIED."""
+        dump, _, _ = fx.make_artifacts()
+        verify = fx.verify_script_with_steps(
+            app_smoke_status="FAILED",
+            app_smoke_detail="photo read-model smoke failed for sampled media reference",
+        )
+        r = fx.run_restore(dump, skip_verify=False, verify_script_path=verify)
+        combined = r.stdout + r.stderr
+        assert r.returncode != 0, combined
+        assert "Verified application media smoke: FAILED" in combined
+        assert "11. Release readiness decision: FAILED" in combined
+        assert "production_dr_eligible:      false" in combined
+        assert "Production DR verified:      NOT VERIFIED" in combined
+
+    def test_verify_substep_failure_reason_explicit_in_output(self, fx: Env) -> None:
+        """The failure reason must reference the blocking condition explicitly."""
+        dump, _, _ = fx.make_artifacts()
+        verify = fx.verify_script_with_steps(
+            reference_sample_status="FAILED",
+            reference_sample_detail="missing key=projects/p1/photo.jpg",
+            exit_code=0,
+        )
+        r = fx.run_restore(dump, skip_verify=False, verify_script_path=verify)
+        combined = r.stdout + r.stderr
+        assert r.returncode != 0, combined
+        assert "DB-referenced storage objects validation" in combined
+
+    def test_full_storage_consistency_failure_blocks_release(self, fx: Env) -> None:
+        dump, _, _ = fx.make_artifacts()
+        fx.docker(consistency_check_exit_code=1)
+
+        r = fx.run_restore(dump)
+        combined = r.stdout + r.stderr
+
+        assert r.returncode != 0, combined
+        assert "12. Storage consistency check (DB<->S3): FAILED" in combined
+        assert "11. Release readiness decision: FAILED" in combined
+        assert "Full DB<->storage consistency validation: FAILED" in combined
+
+    # ── separated claims ──────────────────────────────────────────────────────
+
+    def test_db_restore_liveness_and_dr_are_reported_as_distinct_claims(self, fx: Env) -> None:
+        """DB restore success, backend liveness, and Production DR must be separate claims."""
+        dump, _, _ = fx.make_artifacts()
+        r = fx.run_restore(dump)
+        combined = r.stdout + r.stderr
+        assert r.returncode == 0, combined
+        assert "DB restore contract: PASSED" in combined
+        assert "Backend liveness probe: PASSED" in combined
+        assert "Production DR: NOT VERIFIED" in combined
+
+    def test_restore_rejects_manifest_with_production_dr_eligible_true(self, fx: Env) -> None:
+        """
+        ops/restore.sh must reject any manifest declaring production_dr_eligible=true.
+        No code path may produce production_dr_eligible=true legitimately.
+        """
+        dump, _, _ = fx.make_artifacts()
+        bad_manifest = fx.bdir / f"db_{_TS}.json"
+        bad_manifest.write_text(json.dumps({
+            "timestamp": _TS,
+            "app_env": "development",
+            "backup_contract": "db-restore-v1",
+            "backup_scope": "db-only",
+            "production_dr_eligible": True,
+            "storage_backend": "local",
+            "s3_bucket": None,
+            "s3_region": None,
+            "s3_recovery_point": None,
+            "storage_snapshot_consistent": None,
+            "storage_coverage": "local-volume-archive-compatibility-only",
+            "storage_archive_included": True,
+            "storage_archive_file": f"storage_{_TS}.tar.gz",
+            "db_file": f"db_{_TS}.pgdump",
+            "checksum_file": f"db_{_TS}.pgdump.sha256",
+            "backup_version": "v4",
+            "alembic_head": REPO_ALEMBIC_HEAD,
+            "git_sha": "abc1234",
+        }) + "\n")
+        r = fx.run_restore(dump)
+        combined = r.stdout + r.stderr
+        assert r.returncode != 0, "restore must reject manifest with production_dr_eligible=true"
+        assert "production_dr_eligible" in combined.lower()

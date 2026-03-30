@@ -3,11 +3,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.deps import get_analysis_service, get_current_user, get_job_queue, get_project_service, require_manager, resolve_org_id
 from app.core.audit import log_cross_tenant_denied
+from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.schemas.analysis import AnalysisTriggerResponse
 from app.schemas.auth import AuthUserRead
 from app.services.analysis_service import AnalysisService
 from app.services.project_service import ProjectService
-from app.worker.queue import enqueue_analysis_job
+from app.worker.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
 
 logger = structlog.get_logger(__name__)
 
@@ -15,6 +17,7 @@ router = APIRouter(tags=["analysis-jobs"])
 
 
 @router.post("/cases/{case_id}/analysis-jobs", response_model=AnalysisTriggerResponse, status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit(get_settings().rate_limit_analysis_jobs)
 async def create_analysis_job(
     case_id: str,
     request: Request,
@@ -27,15 +30,28 @@ async def create_analysis_job(
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
-    job = await analysis_service.create_job(project, user_id=current_user.id)
-    if job_queue is not None:
-        await enqueue_analysis_job(
-            job_queue,
-            job_id=job.id,
-            project_id=case_id,
-            organization_id=org_id,
-            is_superadmin_context=current_user.isSuperAdmin,
-        )
+    settings = get_settings()
+    create_result = await analysis_service.create_job(
+        project,
+        user_id=current_user.id,
+        job_queue=job_queue,
+    )
+    job = create_result.job
+    if job_queue is not None and create_result.created_new:
+        try:
+            await enqueue_analysis_job(
+                job_queue,
+                job_id=job.id,
+                project_id=case_id,
+                organization_id=org_id,
+                is_superadmin_context=current_user.isSuperAdmin,
+                max_depth=settings.analysis_queue_max_depth,
+            )
+        except AnalysisJobQueueCapacityExceededError:
+            await analysis_service.cancel_analysis_job(job.id, organization_id=org_id)
+            raise HTTPException(status_code=429, detail="Analysis queue is full. Please retry later.")
+    elif job_queue is not None:
+        logger.info("job_queue.skip_duplicate_enqueue", job_id=job.id, action="create_analysis_job")
     else:
         logger.warning("job_queue.unavailable", job_id=job.id, action="create_analysis_job")
     return AnalysisTriggerResponse(
@@ -135,6 +151,7 @@ async def patch_analysis_selection(
 
 
 @router.post("/analysis-jobs/{job_id}/retry", response_model=AnalysisTriggerResponse, status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit(get_settings().rate_limit_analysis_jobs)
 async def retry_analysis_job(
     job_id: str,
     request: Request,
@@ -153,21 +170,28 @@ async def retry_analysis_job(
                 user_id=current_user.id, org_id=current_user.organizationId,
             )
         raise HTTPException(status_code=404, detail="Analysis job not found.")
+    settings = get_settings()
     new_job = await analysis_service.retry_job(
         job_id,
         organization_id=org_id,
         is_superadmin_context=current_user.isSuperAdmin,
+        job_queue=job_queue,
     )
     if not new_job:
         raise HTTPException(status_code=404, detail="Analysis job not found.")
     if job_queue is not None:
-        await enqueue_analysis_job(
-            job_queue,
-            job_id=new_job.id,
-            project_id=new_job.project_id,
-            organization_id=org_id,
-            is_superadmin_context=current_user.isSuperAdmin,
-        )
+        try:
+            await enqueue_analysis_job(
+                job_queue,
+                job_id=new_job.id,
+                project_id=new_job.project_id,
+                organization_id=org_id,
+                is_superadmin_context=current_user.isSuperAdmin,
+                max_depth=settings.analysis_queue_max_depth,
+            )
+        except AnalysisJobQueueCapacityExceededError:
+            await analysis_service.cancel_analysis_job(new_job.id, organization_id=org_id)
+            raise HTTPException(status_code=429, detail="Analysis queue is full. Please retry later.")
     else:
         logger.warning("job_queue.unavailable", job_id=new_job.id, action="retry_analysis_job")
     return AnalysisTriggerResponse(

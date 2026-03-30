@@ -434,6 +434,8 @@ if grep -q '"app_env"[[:space:]]*:[[:space:]]*"production"' "$MANIFEST_FILE" \
   fi
 fi
 echo "  Runtime environment: NOT VERIFIED BY THIS SCRIPT"
+echo "  production_dr_eligible: false"
+echo "  Full-state restore claim: NOT VERIFIED"
 echo "  Production DR: NOT VERIFIED"
 echo ""
 echo "This validates the DB-only restore contract only."

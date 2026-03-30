@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_analysis_service, get_job_queue, require_admin_capability, require_superadmin
-from app.worker.queue import enqueue_analysis_job
+from app.worker.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
 from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.models.domain import AnalysisJob, AuditLog, Organization, Project, User
@@ -397,15 +397,26 @@ async def admin_retry_job(
     job_queue=Depends(get_job_queue),
 ) -> dict:
     # organization_id=None is intentional: superadmin operates across all orgs
-    new_job = await analysis_service.retry_job(job_id, organization_id=None, is_superadmin_context=True)
+    settings = get_settings()
+    new_job = await analysis_service.retry_job(
+        job_id,
+        organization_id=None,
+        is_superadmin_context=True,
+        job_queue=job_queue,
+    )
     if job_queue is not None:
-        await enqueue_analysis_job(
-            job_queue,
-            job_id=new_job.id,
-            project_id=new_job.project_id,
-            organization_id=None,
-            is_superadmin_context=True,
-        )
+        try:
+            await enqueue_analysis_job(
+                job_queue,
+                job_id=new_job.id,
+                project_id=new_job.project_id,
+                organization_id=None,
+                is_superadmin_context=True,
+                max_depth=settings.analysis_queue_max_depth,
+            )
+        except AnalysisJobQueueCapacityExceededError:
+            await analysis_service.cancel_analysis_job(new_job.id, organization_id=None)
+            raise HTTPException(status_code=429, detail="Analysis queue is full. Please retry later.")
     else:
         logger.warning("job_queue.unavailable", job_id=new_job.id, action="admin_retry_job")
 

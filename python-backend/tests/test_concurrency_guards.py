@@ -21,6 +21,7 @@
 # =============================================================================
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from fastapi import HTTPException
 
 from app.services.analysis_service import AnalysisService
 from app.services.photo_service import PhotoService
@@ -39,6 +40,7 @@ def _make_photo(*, is_reference=False, is_primary=False, status="ready"):
 def _make_analysis_service(*, active_job=None, new_job=None):
     mock_repo = AsyncMock()
     mock_repo.get_active_job_for_project = AsyncMock(return_value=active_job)
+    mock_repo.count_active_jobs_for_organization = AsyncMock(return_value=0)
     mock_repo.create_queued_job = AsyncMock(return_value=new_job)
     return AnalysisService(
         repository=mock_repo,
@@ -69,10 +71,11 @@ class TestCreateJobIdempotency:
         existing = MagicMock(id="job-existing", status="queued")
         service, repo = _make_analysis_service(active_job=existing)
 
-        project = MagicMock(id="proj-1")
+        project = MagicMock(id="proj-1", organization_id="org-1")
         result = await service.create_job(project, user_id="usr-1")
 
-        assert result is existing
+        assert result.job is existing
+        assert result.created_new is False
         repo.create_queued_job.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -81,10 +84,11 @@ class TestCreateJobIdempotency:
         existing = MagicMock(id="job-running", status="running")
         service, repo = _make_analysis_service(active_job=existing)
 
-        project = MagicMock(id="proj-1")
+        project = MagicMock(id="proj-1", organization_id="org-1")
         result = await service.create_job(project, user_id="usr-1")
 
-        assert result is existing
+        assert result.job is existing
+        assert result.created_new is False
         repo.create_queued_job.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -93,10 +97,11 @@ class TestCreateJobIdempotency:
         new_job = MagicMock(id="job-new")
         service, repo = _make_analysis_service(active_job=None, new_job=new_job)
 
-        project = MagicMock(id="proj-1")
+        project = MagicMock(id="proj-1", organization_id="org-1")
         result = await service.create_job(project, user_id="usr-1")
 
-        assert result is new_job
+        assert result.job is new_job
+        assert result.created_new is True
         repo.create_queued_job.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -105,11 +110,48 @@ class TestCreateJobIdempotency:
         new_job = MagicMock(id="job-new")
         service, repo = _make_analysis_service(active_job=None, new_job=new_job)
 
-        project = MagicMock(id="proj-1")
+        project = MagicMock(id="proj-1", organization_id="org-1")
         await service.create_job(project, user_id="usr-specific")
 
         _kwargs = repo.create_queued_job.call_args[1]
         assert _kwargs.get("user_id") == "usr-specific"
+
+    @pytest.mark.asyncio
+    async def test_rejects_new_job_when_tenant_active_limit_is_reached(self):
+        new_job = MagicMock(id="job-new")
+        service, repo = _make_analysis_service(active_job=None, new_job=new_job)
+        repo.count_active_jobs_for_organization = AsyncMock(return_value=10)
+
+        project = MagicMock(id="proj-1", organization_id="org-1")
+
+        with patch("app.services.analysis_service.get_settings") as get_settings:
+            get_settings.return_value.analysis_jobs_per_tenant_limit = 10
+            with pytest.raises(HTTPException) as exc_info:
+                await service.create_job(project, user_id="usr-1")
+
+        assert exc_info.value.status_code == 429
+        repo.create_queued_job.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rejects_new_job_when_queue_capacity_precheck_is_full(self):
+        new_job = MagicMock(id="job-new")
+        service, repo = _make_analysis_service(active_job=None, new_job=new_job)
+        project = MagicMock(id="proj-1", organization_id="org-1")
+
+        with (
+            patch("app.services.analysis_service.get_settings") as get_settings,
+            patch(
+                "app.services.analysis_service.get_analysis_job_queue_counts",
+                new=AsyncMock(return_value=(1000, 0)),
+            ),
+        ):
+            get_settings.return_value.analysis_jobs_per_tenant_limit = 10
+            get_settings.return_value.analysis_queue_max_depth = 1000
+            with pytest.raises(HTTPException) as exc_info:
+                await service.create_job(project, user_id="usr-1", job_queue=AsyncMock())
+
+        assert exc_info.value.status_code == 429
+        repo.create_queued_job.assert_not_awaited()
 
 
 # ── PhotoService._ensure_analysis_reference — idempotency ────────────────────

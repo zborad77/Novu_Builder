@@ -289,6 +289,27 @@ fi
 MANIFEST_FILE="$BACKUP_DIR/${BACKUP_BASENAME}.json"
 MANIFEST_TMP="${MANIFEST_FILE}.tmp"
 trap 'rm -f "$MANIFEST_TMP"' EXIT
+# ── production_dr_eligible gating conditions ──────────────────────────────────
+# production_dr_eligible=true requires ALL of the following conditions.
+# This script cannot satisfy any of them — the field is hardcoded to false.
+# ops/restore.sh enforces this: it rejects any manifest with production_dr_eligible=true.
+#
+# Required conditions (none currently implemented):
+#   (1) backup set validation PASSED
+#   (2) DB restore PASSED
+#   (3) schema/head alignment PASSED
+#   (4) S3 protection prerequisites PASSED
+#   (5) S3 pre-restore validation PASSED
+#   (6) post-restore validation PASSED
+#   (7) DB-referenced objects validation PASSED
+#   (8) signed URL / storage access path validation PASSED
+#   (9) application media smoke validation PASSED
+#   (10) media restore step PASSED
+#   (11) media validation step PASSED
+#   (12) no blocker consistency failure proven via an explicit consistency gate
+#
+# Until ALL conditions above are implemented and verified end-to-end, this field
+# must remain false.  Do not change it without implementing the conditions above.
 cat > "$MANIFEST_TMP" <<EOF
 {
   "timestamp": "${TIMESTAMP}",
@@ -327,9 +348,11 @@ find "$BACKUP_DIR" -maxdepth 1 -name "storage_*.tar.gz"   -mtime +"$RETAIN_DAYS"
 
 echo "[$(date -Iseconds)] Backup complete."
 echo "  DB:      $DB_FILE  ($(du -sh "$DB_FILE" | cut -f1))"
+echo "  production_dr_eligible: false"
 if [[ $INCLUDE_STORAGE_ARCHIVE -eq 1 ]]; then
   echo "  Storage: $STORAGE_FILE  ($(du -sh "$STORAGE_FILE" | cut -f1))"
   echo "  Meaning: DB restore contract + local compatibility storage archive only"
+  echo "  Production DR claim: NOT eligible"
 else
   echo "  Storage: skipped"
   echo "  Meaning: DB-only backup; authoritative S3/object storage is NOT covered"

@@ -17,7 +17,16 @@ from app.core.metrics import (
     DB_ALIVE,
     JOBS_QUEUED,
     JOBS_RUNNING,
+    JOB_FAIL_RATE,
+    JOB_STUCK_MAX_AGE_SECONDS,
+    JOB_DURATION_SECONDS_AVG,
+    JOB_DURATION_SECONDS_P95,
     PROMETHEUS_CLIENT_AVAILABLE,
+    PROCESSING_JOBS,
+    QUEUE_LENGTH,
+    DUPLICATE_PREVENTED_COUNT,
+    REAPER_REQUEUES_TOTAL,
+    refresh_job_observability_gauges,
     WORKER_ALIVE,
     WORKER_ALIVE_INSTANCES,
     WORKER_MONITORING_AVAILABLE,
@@ -26,12 +35,14 @@ from app.core.metrics import (
 from app.db.session import AsyncSessionFactory
 from app.models import AnalysisJob
 from app.schemas.auth import AuthUserRead
+from app.storage.backend import verify_storage_health
 from app.worker.heartbeat import (
     WORKER_HEARTBEAT_FRESHNESS_SECONDS,
     WORKER_HEARTBEAT_KEY_PATTERN,
     WORKER_HEARTBEAT_KEY_PREFIX,
     WORKER_HEARTBEAT_LEGACY_KEY,
 )
+from app.worker.queue import get_analysis_job_queue_counts
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -70,6 +81,18 @@ class _OperationalMetricsCache:
         return self.lock
 
 
+@dataclass
+class _ReadinessStorageCache:
+    ready: bool | None = None
+    expires_at_monotonic: float = 0.0
+    lock: asyncio.Lock | None = None
+
+    def get_lock(self) -> asyncio.Lock:
+        if self.lock is None:
+            self.lock = asyncio.Lock()
+        return self.lock
+
+
 @dataclass(frozen=True)
 class _WorkerHeartbeatSnapshot:
     alive: bool | None
@@ -83,6 +106,9 @@ class _OperationalMetricsSnapshot:
     db_alive: bool
     jobs_running: int
     jobs_queued: int
+    queue_length: int
+    processing_jobs: int
+    job_stuck_max_age_seconds: float
     worker: _WorkerHeartbeatSnapshot
 
 
@@ -96,6 +122,12 @@ async def _refresh_operational_metrics(request: Request) -> None:
     DB_ALIVE.set(1 if snapshot.db_alive else 0)
     JOBS_RUNNING.set(snapshot.jobs_running)
     JOBS_QUEUED.set(snapshot.jobs_queued)
+    QUEUE_LENGTH.set(snapshot.queue_length)
+    PROCESSING_JOBS.set(snapshot.processing_jobs)
+    JOB_STUCK_MAX_AGE_SECONDS.set(snapshot.job_stuck_max_age_seconds)
+    refresh_job_observability_gauges()
+    REAPER_REQUEUES_TOTAL.inc(0)
+    DUPLICATE_PREVENTED_COUNT.labels(reason="active_job_exists").inc(0)
 
     worker = snapshot.worker
     if worker.alive is None:
@@ -131,7 +163,7 @@ def _readiness_now() -> float:
 
 def _get_readiness_db_cache(request: Request) -> _ReadinessDbCache:
     cache = getattr(request.app.state, "readiness_db_cache", None)
-    if cache is None:
+    if not isinstance(cache, _ReadinessDbCache):
         cache = _ReadinessDbCache()
         request.app.state.readiness_db_cache = cache
     return cache
@@ -141,9 +173,21 @@ def _clear_readiness_db_cache(app) -> None:
     app.state.readiness_db_cache = _ReadinessDbCache()
 
 
+def _get_readiness_storage_cache(request: Request) -> _ReadinessStorageCache:
+    cache = getattr(request.app.state, "readiness_storage_cache", None)
+    if not isinstance(cache, _ReadinessStorageCache):
+        cache = _ReadinessStorageCache()
+        request.app.state.readiness_storage_cache = cache
+    return cache
+
+
+def _clear_readiness_storage_cache(app) -> None:
+    app.state.readiness_storage_cache = _ReadinessStorageCache()
+
+
 def _get_operational_metrics_cache(request: Request) -> _OperationalMetricsCache:
     cache = getattr(request.app.state, "operational_metrics_cache", None)
-    if cache is None:
+    if not isinstance(cache, _OperationalMetricsCache):
         cache = _OperationalMetricsCache()
         request.app.state.operational_metrics_cache = cache
     return cache
@@ -256,7 +300,7 @@ def _peek_operational_metrics_snapshot(
     return cache.snapshot
 
 
-async def _query_job_counts(session) -> tuple[int, int]:
+async def _query_job_counts(session) -> tuple[int, int, float]:
     counts_row = await session.execute(
         select(
             func.coalesce(
@@ -270,21 +314,48 @@ async def _query_job_counts(session) -> tuple[int, int]:
         )
     )
     jobs_running, jobs_queued = counts_row.one()
-    return int(jobs_running or 0), int(jobs_queued or 0)
+
+    oldest_running_started_at = await session.scalar(
+        select(func.min(AnalysisJob.started_at)).where(
+            AnalysisJob.status == "running",
+            AnalysisJob.started_at.is_not(None),
+        )
+    )
+    if oldest_running_started_at is None:
+        max_age_seconds = 0.0
+    else:
+        if oldest_running_started_at.tzinfo is None:
+            oldest_running_started_at = oldest_running_started_at.replace(tzinfo=UTC)
+        max_age_seconds = max(
+            0.0,
+            (datetime.now(UTC) - oldest_running_started_at.astimezone(UTC)).total_seconds(),
+        )
+    return int(jobs_running or 0), int(jobs_queued or 0), max_age_seconds
 
 
 async def _collect_operational_metrics_snapshot(request: Request) -> _OperationalMetricsSnapshot:
     db_alive = False
     jobs_running = 0
     jobs_queued = 0
+    queue_length = 0
+    processing_jobs = 0
+    job_stuck_max_age_seconds = 0.0
     try:
         async with AsyncSessionFactory() as session:
-            jobs_running, jobs_queued = await _query_job_counts(session)
+            jobs_running, jobs_queued, job_stuck_max_age_seconds = await _query_job_counts(session)
             db_alive = True
     except Exception:
         db_alive = False
 
     _store_readiness_db_cache(request, ready=db_alive)
+
+    try:
+        queue_length, processing_jobs = await get_analysis_job_queue_counts(
+            getattr(request.app.state, "job_queue", None)
+        )
+    except Exception:
+        queue_length = 0
+        processing_jobs = 0
 
     try:
         worker_snapshot = await _get_worker_heartbeat_snapshot(getattr(request.app.state, "job_queue", None))
@@ -300,6 +371,9 @@ async def _collect_operational_metrics_snapshot(request: Request) -> _Operationa
         db_alive=db_alive,
         jobs_running=jobs_running,
         jobs_queued=jobs_queued,
+        queue_length=queue_length,
+        processing_jobs=processing_jobs,
+        job_stuck_max_age_seconds=job_stuck_max_age_seconds,
         worker=worker_snapshot,
     )
 
@@ -347,8 +421,37 @@ async def _database_ready_cached(request: Request) -> bool:
         return ready
 
 
+async def _storage_ready() -> bool:
+    try:
+        await verify_storage_health()
+        return True
+    except Exception:
+        return False
+
+
+async def _storage_ready_cached(request: Request) -> bool:
+    cache = _get_readiness_storage_cache(request)
+    now = _readiness_now()
+    if cache.ready is not None and now < cache.expires_at_monotonic:
+        return cache.ready
+
+    async with cache.get_lock():
+        now = _readiness_now()
+        if cache.ready is not None and now < cache.expires_at_monotonic:
+            return cache.ready
+
+        ready = await _storage_ready()
+        cache.ready = ready
+        cache.expires_at_monotonic = now + _READINESS_DB_CACHE_TTL_SECONDS
+        return ready
+
+
 async def _is_ready(request: Request) -> bool:
-    return _startup_ready(request) and await _database_ready_cached(request)
+    return (
+        _startup_ready(request)
+        and await _database_ready_cached(request)
+        and await _storage_ready_cached(request)
+    )
 
 
 def _probe_payload(status_value: str) -> dict[str, str]:
@@ -439,8 +542,12 @@ async def health_internal(
     startup_ready = _startup_ready(request)
 
     db_live = False
+    storage_live = False
     jobs_running = 0
     jobs_queued = 0
+    processing_jobs = 0
+    queue_length = 0
+    max_running_age_seconds = 0.0
     last_completed_at: str | None = None
     try:
         async with AsyncSessionFactory() as session:
@@ -467,8 +574,28 @@ async def health_internal(
                 if last_ts.tzinfo is None:
                     last_ts = last_ts.replace(tzinfo=UTC)
                 last_completed_at = last_ts.isoformat()
+
+            oldest_started = await session.scalar(
+                select(func.min(AnalysisJob.started_at)).where(
+                    AnalysisJob.status == "running",
+                    AnalysisJob.started_at.is_not(None),
+                )
+            )
+            if oldest_started is not None:
+                if oldest_started.tzinfo is None:
+                    oldest_started = oldest_started.replace(tzinfo=UTC)
+                max_running_age_seconds = max(
+                    0.0,
+                    (datetime.now(UTC) - oldest_started.astimezone(UTC)).total_seconds(),
+                )
     except Exception:
         pass
+
+    try:
+        queue_length, processing_jobs = await get_analysis_job_queue_counts(getattr(request.app.state, "job_queue", None))
+    except Exception:
+        queue_length = 0
+        processing_jobs = 0
 
     worker_snapshot = _WorkerHeartbeatSnapshot(
         alive=None,
@@ -486,7 +613,8 @@ async def health_internal(
             seen_instances=None,
         )
 
-    ready = startup_ready and db_live
+    storage_live = await _storage_ready_cached(request)
+    ready = startup_ready and db_live and storage_live
     _set_readiness_status(response, ready=ready)
 
     return {
@@ -495,9 +623,13 @@ async def health_internal(
         "ready": ready,
         "startupChecks": request.app.state.startup_checks,
         "db": "ok" if db_live else "error",
+        "storage": "ok" if storage_live else "error",
         "jobs": {
             "running": jobs_running,
             "queued": jobs_queued,
+            "processing": processing_jobs,
+            "queueLength": queue_length,
+            "maxRunningAgeSeconds": round(max_running_age_seconds, 1),
             "lastCompletedAt": last_completed_at,
         },
         "worker": {

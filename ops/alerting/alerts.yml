@@ -70,22 +70,31 @@ groups:
           description: "The /health/internal endpoint reports db=error."
 
       - alert: JobQueueBacklog
-        expr: novu_jobs_queued > 50
+        expr: novu_queue_length > 50
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "Large analysis job backlog"
-          description: "More than 50 analysis jobs have been queued for 10+ minutes."
+          description: "More than 50 jobs are waiting in the durable Redis queue for 10+ minutes."
 
-      - alert: StuckRunningJobs
-        expr: novu_jobs_running > 10
-        for: 15m
+      - alert: HighJobFailRate
+        expr: novu_job_fail_rate > 0.25
+        for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "Many jobs stuck in running state"
-          description: "More than 10 jobs have been in 'running' state for 15+ minutes — possible worker crash."
+          summary: "High analysis job failure rate"
+          description: "More than 25% of recently observed terminal analysis job outcomes are failing."
+
+      - alert: StuckRunningJobs
+        expr: novu_job_stuck_max_age_seconds > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Analysis job appears stuck"
+          description: "The oldest running analysis job has been active for more than 15 minutes."
 
       # ── Disk / storage ──────────────────────────────────────────────────────
 

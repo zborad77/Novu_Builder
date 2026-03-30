@@ -1,14 +1,146 @@
 import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
+from starlette.requests import Request
 
+import app.worker.queue as queue_module
+from app.services.analysis_service import AnalysisJobCreateResult
 from app.worker.queue import (
+    AnalysisJobQueueCapacityExceededError,
     InvalidAnalysisJobPayloadError,
+    PROCESSING_QUEUE_KEY,
     QUEUE_KEY,
+    ack_analysis_job,
     dequeue_analysis_job,
     enqueue_analysis_job,
+    get_analysis_job_queue_counts,
+    get_expired_analysis_job_leases,
+    requeue_expired_analysis_job,
 )
+
+
+class FakeRedisQueue:
+    def __init__(self) -> None:
+        self.lists: dict[str, list[str]] = {}
+        self.hashes: dict[str, dict[str, str]] = {}
+        self.zsets: dict[str, dict[str, int]] = {}
+        self.sequences: dict[str, int] = {}
+
+    async def rpush(self, key: str, raw: str) -> int:
+        self.lists.setdefault(key, []).append(raw)
+        return len(self.lists[key])
+
+    async def llen(self, key: str) -> int:
+        return len(self.lists.setdefault(key, []))
+
+    async def eval(self, script: str, numkeys: int, *parts: object):
+        keys = [str(part) for part in parts[:numkeys]]
+        args = [str(part) for part in parts[numkeys:]]
+
+        if script == queue_module._LEASE_JOB_SCRIPT:
+            queue_key, processing_key, expiry_key, lease_prefix, sequence_key = keys
+            queue_items = self.lists.setdefault(queue_key, [])
+            if not queue_items:
+                return None
+
+            raw = queue_items.pop(0)
+            token = str(self.sequences.get(sequence_key, 0) + 1)
+            self.sequences[sequence_key] = int(token)
+            leased_at_ms, worker_id, lease_timeout_ms = args
+            expires_at_ms = str(int(leased_at_ms) + int(lease_timeout_ms))
+
+            self.lists.setdefault(processing_key, []).append(raw)
+            self.hashes[f"{lease_prefix}{token}"] = {
+                "token": token,
+                "raw": raw,
+                "worker_id": worker_id,
+                "leased_at_ms": leased_at_ms,
+                "lease_timeout_ms": lease_timeout_ms,
+                "expires_at_ms": expires_at_ms,
+            }
+            self.zsets.setdefault(expiry_key, {})[token] = int(expires_at_ms)
+            return [token, raw, worker_id, leased_at_ms, lease_timeout_ms, expires_at_ms]
+
+        if script == queue_module._ACK_JOB_SCRIPT:
+            lease_prefix, processing_key, expiry_key = keys
+            token, worker_id = args
+            lease_key = f"{lease_prefix}{token}"
+            lease = self.hashes.get(lease_key)
+            if lease is None:
+                return 0
+            if lease["worker_id"] != worker_id:
+                return -1
+
+            raw = lease["raw"]
+            processing = self.lists.setdefault(processing_key, [])
+            if raw in processing:
+                processing.remove(raw)
+            self.hashes.pop(lease_key, None)
+            self.zsets.setdefault(expiry_key, {}).pop(token, None)
+            return 1
+
+        if script == queue_module._ENQUEUE_WITH_LIMIT_SCRIPT:
+            queue_key, processing_key = keys
+            raw, max_depth = args
+            queue_depth = len(self.lists.setdefault(queue_key, []))
+            processing_depth = len(self.lists.setdefault(processing_key, []))
+            if queue_depth + processing_depth + 1 > int(max_depth):
+                return [0, queue_depth, processing_depth]
+            self.lists.setdefault(queue_key, []).append(raw)
+            return [1, queue_depth + 1, processing_depth]
+
+        if script == queue_module._RENEW_LEASE_SCRIPT:
+            lease_prefix, expiry_key = keys
+            token, worker_id, leased_at_ms, lease_timeout_ms = args
+            lease_key = f"{lease_prefix}{token}"
+            lease = self.hashes.get(lease_key)
+            if lease is None:
+                return 0
+            if lease["worker_id"] != worker_id:
+                return -1
+
+            expires_at_ms = str(int(leased_at_ms) + int(lease_timeout_ms))
+            lease["leased_at_ms"] = leased_at_ms
+            lease["lease_timeout_ms"] = lease_timeout_ms
+            lease["expires_at_ms"] = expires_at_ms
+            self.zsets.setdefault(expiry_key, {})[token] = int(expires_at_ms)
+            return 1
+
+        if script == queue_module._FINALIZE_EXPIRED_LEASE_SCRIPT:
+            lease_prefix, processing_key, expiry_key, queue_key = keys
+            token, expected_leased_at_ms, action = args
+            lease_key = f"{lease_prefix}{token}"
+            lease = self.hashes.get(lease_key)
+            if lease is None:
+                return 0
+            if lease["leased_at_ms"] != expected_leased_at_ms:
+                return 0
+
+            raw = lease["raw"]
+            processing = self.lists.setdefault(processing_key, [])
+            if raw in processing:
+                processing.remove(raw)
+            if action == "requeue":
+                self.lists.setdefault(queue_key, []).append(raw)
+            self.hashes.pop(lease_key, None)
+            self.zsets.setdefault(expiry_key, {}).pop(token, None)
+            return 1
+
+        raise AssertionError(f"Unexpected script: {script[:40]!r}")
+
+    async def zrangebyscore(self, key: str, *, min: int, max: int, start: int = 0, num: int = 100):
+        tokens = [
+            token
+            for token, expiry in sorted(self.zsets.setdefault(key, {}).items(), key=lambda item: item[1])
+            if min <= expiry <= max
+        ]
+        return tokens[start:start + num]
+
+    async def hgetall(self, key: str) -> dict[str, str]:
+        return dict(self.hashes.get(key, {}))
 
 
 class TestEnqueueAnalysisJob:
@@ -34,21 +166,6 @@ class TestEnqueueAnalysisJob:
         }
 
     @pytest.mark.asyncio
-    async def test_superadmin_org_id_none(self):
-        redis = AsyncMock()
-        await enqueue_analysis_job(
-            redis,
-            job_id="job-2",
-            project_id="proj-2",
-            organization_id=None,
-            is_superadmin_context=True,
-        )
-        _key, raw = redis.rpush.call_args[0]
-        payload = json.loads(raw)
-        assert payload["organization_id"] is None
-        assert payload["is_superadmin_context"] is True
-
-    @pytest.mark.asyncio
     async def test_rejects_invalid_payload_before_push(self):
         redis = AsyncMock()
 
@@ -63,68 +180,192 @@ class TestEnqueueAnalysisJob:
 
         redis.rpush.assert_not_called()
 
-
-class TestDequeueAnalysisJob:
     @pytest.mark.asyncio
-    async def test_returns_parsed_payload(self):
-        raw = json.dumps({
-            "job_id": "job-3",
-            "project_id": "proj-3",
-            "organization_id": "org-3",
-            "is_superadmin_context": False,
-        }).encode()
-        redis = AsyncMock()
-        redis.blpop = AsyncMock(return_value=(QUEUE_KEY.encode(), raw))
-        result = await dequeue_analysis_job(redis)
-        assert result == {
+    async def test_rejects_enqueue_when_queue_capacity_would_be_exceeded(self):
+        redis = FakeRedisQueue()
+
+        await enqueue_analysis_job(
+            redis,
+            job_id="job-1",
+            project_id="proj-1",
+            organization_id="org-1",
+            is_superadmin_context=False,
+            max_depth=1,
+        )
+
+        with pytest.raises(AnalysisJobQueueCapacityExceededError):
+            await enqueue_analysis_job(
+                redis,
+                job_id="job-2",
+                project_id="proj-2",
+                organization_id="org-2",
+                is_superadmin_context=False,
+                max_depth=1,
+            )
+
+    @pytest.mark.asyncio
+    async def test_queue_count_includes_queued_and_processing(self):
+        redis = FakeRedisQueue()
+
+        await enqueue_analysis_job(
+            redis,
+            job_id="job-queued",
+            project_id="proj-queued",
+            organization_id="org-1",
+            is_superadmin_context=False,
+        )
+        await enqueue_analysis_job(
+            redis,
+            job_id="job-processing",
+            project_id="proj-processing",
+            organization_id="org-1",
+            is_superadmin_context=False,
+        )
+        await dequeue_analysis_job(redis, worker_id="worker-a", lease_timeout_seconds=600)
+
+        queued, processing = await get_analysis_job_queue_counts(redis)
+
+        assert queued == 1
+        assert processing == 1
+
+
+class TestLeasedQueueFlow:
+    @pytest.mark.asyncio
+    async def test_dequeue_returns_leased_payload_and_moves_item_to_processing(self):
+        redis = FakeRedisQueue()
+        now = datetime(2026, 3, 30, 12, 0, tzinfo=UTC)
+
+        await enqueue_analysis_job(
+            redis,
+            job_id="job-3",
+            project_id="proj-3",
+            organization_id="org-3",
+            is_superadmin_context=False,
+        )
+
+        lease = await dequeue_analysis_job(
+            redis,
+            worker_id="worker-a",
+            lease_timeout_seconds=600,
+            now=now,
+        )
+
+        assert lease is not None
+        assert lease.payload == {
             "job_id": "job-3",
             "project_id": "proj-3",
             "organization_id": "org-3",
             "is_superadmin_context": False,
         }
+        assert lease.worker_id == "worker-a"
+        assert lease.lease_timeout_seconds == 600
+        assert redis.lists[QUEUE_KEY] == []
+        assert len(redis.lists[PROCESSING_QUEUE_KEY]) == 1
 
     @pytest.mark.asyncio
-    async def test_rejects_malformed_json(self):
-        redis = AsyncMock()
-        redis.blpop = AsyncMock(return_value=(QUEUE_KEY.encode(), b"{broken"))
-
-        with pytest.raises(InvalidAnalysisJobPayloadError):
-            await dequeue_analysis_job(redis)
-
-    @pytest.mark.asyncio
-    async def test_rejects_non_object_json(self):
-        redis = AsyncMock()
-        redis.blpop = AsyncMock(return_value=(QUEUE_KEY.encode(), json.dumps(["bad"]).encode()))
-
-        with pytest.raises(InvalidAnalysisJobPayloadError):
-            await dequeue_analysis_job(redis)
-
-    @pytest.mark.asyncio
-    async def test_rejects_structurally_invalid_object_json(self):
-        raw = json.dumps({
-            "job_id": "job-3",
-            "organization_id": "org-3",
-            "is_superadmin_context": False,
-        }).encode()
-        redis = AsyncMock()
-        redis.blpop = AsyncMock(return_value=(QUEUE_KEY.encode(), raw))
-
-        with pytest.raises(InvalidAnalysisJobPayloadError):
-            await dequeue_analysis_job(redis)
-
-    @pytest.mark.asyncio
-    async def test_returns_none_on_timeout(self):
-        redis = AsyncMock()
-        redis.blpop = AsyncMock(return_value=None)
-        result = await dequeue_analysis_job(redis)
+    async def test_returns_none_when_queue_is_empty(self):
+        redis = FakeRedisQueue()
+        result = await dequeue_analysis_job(
+            redis,
+            worker_id="worker-a",
+            lease_timeout_seconds=600,
+        )
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_passes_timeout_to_blpop(self):
-        redis = AsyncMock()
-        redis.blpop = AsyncMock(return_value=None)
-        await dequeue_analysis_job(redis, timeout=30)
-        redis.blpop.assert_awaited_once_with(QUEUE_KEY, timeout=30)
+    async def test_ack_removes_processing_item_and_lease_metadata(self):
+        redis = FakeRedisQueue()
+
+        await enqueue_analysis_job(
+            redis,
+            job_id="job-4",
+            project_id="proj-4",
+            organization_id="org-4",
+            is_superadmin_context=False,
+        )
+        lease = await dequeue_analysis_job(
+            redis,
+            worker_id="worker-a",
+            lease_timeout_seconds=600,
+        )
+        assert lease is not None
+
+        acked = await ack_analysis_job(redis, lease)
+
+        assert acked is True
+        assert redis.lists[PROCESSING_QUEUE_KEY] == []
+        assert redis.hashes == {}
+
+    @pytest.mark.asyncio
+    async def test_lease_expiration_exposes_job_to_reaper(self):
+        redis = FakeRedisQueue()
+        leased_at = datetime(2026, 3, 30, 12, 0, tzinfo=UTC)
+
+        await enqueue_analysis_job(
+            redis,
+            job_id="job-5",
+            project_id="proj-5",
+            organization_id="org-5",
+            is_superadmin_context=False,
+        )
+        lease = await dequeue_analysis_job(
+            redis,
+            worker_id="worker-a",
+            lease_timeout_seconds=600,
+            now=leased_at,
+        )
+        assert lease is not None
+
+        before_expiry = await get_expired_analysis_job_leases(
+            redis,
+            now=leased_at + timedelta(minutes=9),
+        )
+        after_expiry = await get_expired_analysis_job_leases(
+            redis,
+            now=leased_at + timedelta(minutes=11),
+        )
+
+        assert before_expiry == []
+        assert [item.job_id for item in after_expiry] == ["job-5"]
+
+    @pytest.mark.asyncio
+    async def test_requeue_expired_lease_recovers_lost_job(self):
+        redis = FakeRedisQueue()
+        leased_at = datetime(2026, 3, 30, 12, 0, tzinfo=UTC)
+
+        await enqueue_analysis_job(
+            redis,
+            job_id="job-6",
+            project_id="proj-6",
+            organization_id="org-6",
+            is_superadmin_context=False,
+        )
+        first_lease = await dequeue_analysis_job(
+            redis,
+            worker_id="worker-a",
+            lease_timeout_seconds=600,
+            now=leased_at,
+        )
+        assert first_lease is not None
+
+        expired = await get_expired_analysis_job_leases(
+            redis,
+            now=leased_at + timedelta(minutes=11),
+        )
+        assert len(expired) == 1
+
+        requeued = await requeue_expired_analysis_job(redis, expired[0])
+        recovered_lease = await dequeue_analysis_job(
+            redis,
+            worker_id="worker-b",
+            lease_timeout_seconds=600,
+            now=leased_at + timedelta(minutes=11, seconds=1),
+        )
+
+        assert requeued is True
+        assert recovered_lease is not None
+        assert recovered_lease.job_id == "job-6"
+        assert recovered_lease.worker_id == "worker-b"
 
 
 class TestExecuteJobStatusGuard:
@@ -208,3 +449,132 @@ class TestCreateAnalysisJobRoute:
         mock_request.app.state = MagicMock(spec=[])
         result = get_job_queue(mock_request)
         assert result is None
+
+
+class TestDuplicateEnqueueGuard:
+    @pytest.mark.asyncio
+    async def test_create_analysis_job_skips_enqueue_for_existing_active_job(self):
+        from app.api.routes.analysis_jobs import create_analysis_job
+
+        current_user = MagicMock()
+        current_user.id = "usr-1"
+        current_user.isSuperAdmin = False
+        current_user.organizationId = "org-1"
+
+        project = MagicMock(id="proj-1")
+        existing_job = MagicMock(id="job-existing", status="queued")
+        project_service = MagicMock(get_project=AsyncMock(return_value=project))
+        analysis_service = MagicMock(
+            provider_key="mock",
+            create_job=AsyncMock(
+                return_value=AnalysisJobCreateResult(job=existing_job, created_new=False)
+            ),
+        )
+        request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
+
+        with patch("app.api.routes.analysis_jobs.enqueue_analysis_job", new=AsyncMock()) as enqueue_mock:
+            response = await create_analysis_job(
+                case_id="proj-1",
+                request=request,
+                current_user=current_user,
+                project_service=project_service,
+                analysis_service=analysis_service,
+                job_queue=AsyncMock(),
+            )
+
+        enqueue_mock.assert_not_awaited()
+        assert response.jobId == "job-existing"
+
+
+class TestQueueOverflowGuards:
+    @pytest.mark.asyncio
+    async def test_create_analysis_job_returns_429_when_enqueue_race_hits_capacity(self):
+        from app.api.routes.analysis_jobs import create_analysis_job
+
+        current_user = MagicMock()
+        current_user.id = "usr-1"
+        current_user.isSuperAdmin = False
+        current_user.organizationId = "org-1"
+
+        project = MagicMock(id="proj-1")
+        new_job = MagicMock(id="job-new", status="queued")
+        project_service = MagicMock(get_project=AsyncMock(return_value=project))
+        analysis_service = MagicMock(
+            provider_key="mock",
+            create_job=AsyncMock(
+                return_value=AnalysisJobCreateResult(job=new_job, created_new=True)
+            ),
+            cancel_analysis_job=AsyncMock(),
+        )
+        request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
+
+        with (
+            patch("app.api.routes.analysis_jobs.get_settings") as get_settings,
+            patch(
+                "app.api.routes.analysis_jobs.enqueue_analysis_job",
+                new=AsyncMock(
+                    side_effect=AnalysisJobQueueCapacityExceededError(
+                        queued=1000,
+                        processing=0,
+                        max_depth=1000,
+                    )
+                ),
+            ),
+        ):
+            get_settings.return_value.analysis_queue_max_depth = 1000
+            with pytest.raises(HTTPException) as exc_info:
+                await create_analysis_job(
+                    case_id="proj-1",
+                    request=request,
+                    current_user=current_user,
+                    project_service=project_service,
+                    analysis_service=analysis_service,
+                    job_queue=AsyncMock(),
+                )
+
+        assert exc_info.value.status_code == 429
+        analysis_service.cancel_analysis_job.assert_awaited_once_with("job-new", organization_id="org-1")
+
+    @pytest.mark.asyncio
+    async def test_retry_analysis_job_returns_429_when_enqueue_race_hits_capacity(self):
+        from app.api.routes.analysis_jobs import retry_analysis_job
+
+        current_user = MagicMock()
+        current_user.id = "usr-1"
+        current_user.isSuperAdmin = False
+        current_user.organizationId = "org-1"
+
+        analysis_service = MagicMock(
+            provider_key="mock",
+            get_job=AsyncMock(return_value={"id": "job-old"}),
+            retry_job=AsyncMock(return_value=MagicMock(id="job-new", project_id="proj-1", status="queued")),
+            cancel_analysis_job=AsyncMock(),
+        )
+        request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
+
+        with (
+            patch("app.api.routes.analysis_jobs.get_settings") as get_settings,
+            patch(
+                "app.api.routes.analysis_jobs.enqueue_analysis_job",
+                new=AsyncMock(
+                    side_effect=AnalysisJobQueueCapacityExceededError(
+                        queued=999,
+                        processing=1,
+                        max_depth=1000,
+                    )
+                ),
+            ),
+        ):
+            get_settings.return_value.analysis_queue_max_depth = 1000
+            with pytest.raises(HTTPException) as exc_info:
+                await retry_analysis_job(
+                    job_id="job-old",
+                    request=request,
+                    current_user=current_user,
+                    analysis_service=analysis_service,
+                    project_service=MagicMock(),
+                    job_queue=AsyncMock(),
+                )
+
+        assert exc_info.value.status_code == 429
+        analysis_service.cancel_analysis_job.assert_awaited_once_with("job-new", organization_id="org-1")

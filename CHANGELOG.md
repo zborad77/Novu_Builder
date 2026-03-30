@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.001 - 2026-03-30
+
+Current release snapshot of the repository state prepared for GitHub versioning.
+
+### Worker And Queue Hardening
+
+- Added durable lease ownership with `lease_token` and `worker_id` verification during job processing.
+- Hardened analysis execution for duplicate delivery, ACK-after-commit safety, and stale lease recovery.
+- Added queue depth limits, per-tenant active job limits, and configurable worker concurrency.
+- Expanded duplicate execution, stale job recovery, and concurrency test coverage.
+
+### Observability And Operations
+
+- Added Prometheus job metrics for queue depth, processing load, duration, fail rate, reaper requeues, and prevented duplicates.
+- Enriched worker job logs with `job_id`, `tenant_id`, `worker_id`, `status`, and duration fields.
+- Extended `/metrics` and internal health diagnostics with real-time job and queue visibility.
+- Updated alert rules for queue backlog, elevated fail rate, and stuck job detection.
+
+### Storage, Export, And Restore Hardening
+
+- Continued hardening backup, restore, export TTL, and storage consistency flows.
+- Improved backend storage services and validation scripts for safer operational recovery.
+
+### Notes
+
+- This version captures the current integrated project state on branch `master`.
+
 ## v0.2.0 - 2026-03-23
 
 Current milestone based on commit `4e29351`.

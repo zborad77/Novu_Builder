@@ -250,8 +250,8 @@ async def _app_media_smoke(session: AsyncSession, selected_references: list[Samp
         )
 
     if sampled_photo.preview_storage_key:
-        preview_variant = read_model.variants.get("preview") or {}
-        if preview_variant.get("storageKey") != sampled_photo.preview_storage_key or not preview_variant.get("url"):
+        preview_variant = read_model.variants.preview
+        if preview_variant.storageKey != sampled_photo.preview_storage_key or not preview_variant.url:
             return StepResult(
                 status="FAILED",
                 detail=f"photo read model did not expose preview media URL for photo_id={sampled_photo.id}",

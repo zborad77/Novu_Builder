@@ -111,6 +111,14 @@ class Project(TimestampMixin, Base):
 class ProjectPhoto(Base):
     __tablename__ = "project_photos"
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'pending_delete', 'deleted')",
+            name="ck_project_photos_status",
+        ),
+        CheckConstraint(
+            "processing_status IN ('uploaded', 'processing', 'ready', 'failed')",
+            name="ck_project_photos_processing_status",
+        ),
         Index("idx_project_photos_project_id", "project_id"),
         Index(
             "idx_project_photos_project_sort_created",
@@ -122,6 +130,7 @@ class ProjectPhoto(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
     preview_storage_key: Mapped[str | None] = mapped_column(String(512))
     ai_input_storage_key: Mapped[str | None] = mapped_column(String(512))
@@ -186,6 +195,10 @@ class ProjectFinalProposal(TimestampMixin, Base):
 class ProjectExport(Base):
     __tablename__ = "project_exports"
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'generating', 'completed', 'failed')",
+            name="ck_project_exports_status",
+        ),
         Index("idx_project_exports_project_id", "project_id"),
         Index("idx_project_exports_expires_at", "expires_at"),
     )
@@ -232,6 +245,10 @@ class AnalysisJob(Base):
     requested_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     parent_job_id: Mapped[str | None] = mapped_column(String(64))   # set when this is a retry
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lease_token: Mapped[str | None] = mapped_column(String(128))
+    worker_id: Mapped[str | None] = mapped_column(String(255))
+    leased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_message: Mapped[str | None] = mapped_column(Text)

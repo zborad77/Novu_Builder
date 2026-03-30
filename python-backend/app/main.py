@@ -2,8 +2,6 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from datetime import UTC, datetime
-
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
@@ -26,9 +24,9 @@ from app.core.redis_client import build_redis_client_from_settings
 from app.db.base import Base
 from app.db.bootstrap import ensure_dev_seed
 from app.db.session import AsyncSessionFactory, engine
-from app.models import AnalysisJob, Project
+from app.models import Project
 from app.repositories.token_repository import TokenRepository
-from app.storage.local_photo_storage import EXPORTS_ROOT, STORAGE_ROOT, UPLOADS_ROOT
+from app.storage.backend import verify_storage_health
 
 
 logger = structlog.get_logger(__name__)
@@ -62,59 +60,16 @@ async def verify_application_schema() -> None:
         ) from exc
 
 
-def verify_storage_root() -> None:
-    # Ensure all persistent storage directories exist
-    for directory in (STORAGE_ROOT, UPLOADS_ROOT, EXPORTS_ROOT):
-        directory.mkdir(parents=True, exist_ok=True)
-
-    # Write probe — fail-fast if storage is not writable
-    probe_file = STORAGE_ROOT / ".startup-write-check"
+async def verify_storage_backend(settings) -> None:
     try:
-        probe_file.write_text("ok", encoding="utf-8")
-        probe_file.unlink(missing_ok=True)
-    except OSError as exc:
-        logger.error("storage.not_writable", root=str(STORAGE_ROOT), error=str(exc))
+        await verify_storage_health()
+    except Exception as exc:
         raise RuntimeError(
-            startup_failure_message("storage", f"STORAGE_ROOT is not writable: {STORAGE_ROOT}")
+            startup_failure_message(
+                "storage",
+                f"Storage availability check failed for STORAGE_BACKEND={settings.storage_backend!r}: {exc}",
+            )
         ) from exc
-
-    # Count existing files to confirm data persists across restarts
-    upload_count = sum(1 for _ in UPLOADS_ROOT.rglob("*") if _.is_file())
-    export_count = sum(1 for _ in EXPORTS_ROOT.rglob("*") if _.is_file() and _.suffix != ".json")
-    logger.info(
-        "storage.verified",
-        backend="local",
-        root=str(STORAGE_ROOT),
-        uploads_root=str(UPLOADS_ROOT),
-        exports_root=str(EXPORTS_ROOT),
-        existing_uploads=upload_count,
-        existing_exports=export_count,
-    )
-
-
-def verify_storage_backend(settings) -> None:
-    backend = settings.storage_backend.strip().lower()
-
-    if backend == "local":
-        verify_storage_root()
-        return
-
-    if backend == "s3":
-        logger.info(
-            "storage.verified",
-            backend="s3",
-            bucket=settings.s3_bucket,
-            endpoint_url_configured=bool(settings.s3_endpoint_url),
-            cdn_base_url_configured=bool(settings.s3_cdn_base_url),
-        )
-        return
-
-    raise RuntimeError(
-        startup_failure_message(
-            "storage",
-            f"Unsupported STORAGE_BACKEND during startup: {settings.storage_backend!r}",
-        )
-    )
 
 
 def _is_strict_startup_environment(settings) -> bool:
@@ -173,17 +128,14 @@ async def lifespan(app: FastAPI):
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
     else:
-        # R-17: application startup must NOT run migrations.
-        # Run 'alembic upgrade head' (or use docker-entrypoint.sh) before starting the app.
-        # Here we only verify the DB is already at the expected head revision.
         logger.info("db.schema_check", mode="version_guard", environment=settings.app_env)
-        _BACKEND_ROOT = Path(__file__).resolve().parent.parent
+        backend_root = Path(__file__).resolve().parent.parent
         from alembic.config import Config as AlembicConfig
         from alembic.runtime.migration import MigrationContext
         from alembic.script import ScriptDirectory
 
-        alembic_cfg = AlembicConfig(str(_BACKEND_ROOT / "alembic.ini"))
-        alembic_cfg.set_main_option("script_location", str(_BACKEND_ROOT / "alembic"))
+        alembic_cfg = AlembicConfig(str(backend_root / "alembic.ini"))
+        alembic_cfg.set_main_option("script_location", str(backend_root / "alembic"))
 
         script_dir = ScriptDirectory.from_config(alembic_cfg)
         expected_head = script_dir.get_current_head()
@@ -215,8 +167,22 @@ async def lifespan(app: FastAPI):
     startup_checks["database"] = "ok"
     await verify_application_schema()
     startup_checks["schema"] = "ok"
-    verify_storage_backend(settings)
-    startup_checks["storage"] = "ok"
+    try:
+        await verify_storage_backend(settings)
+    except Exception as exc:
+        startup_checks["storage"] = "error"
+        app.state.startup_checks = startup_checks
+        logger.critical(
+            "storage.startup_validation_failed",
+            backend=settings.storage_backend,
+            error=str(exc),
+            fail_fast=_is_strict_startup_environment(settings),
+        )
+        if _is_strict_startup_environment(settings):
+            raise
+        logger.warning("storage.startup_validation_degraded", backend=settings.storage_backend, error=str(exc))
+    else:
+        startup_checks["storage"] = "ok"
     app.state.startup_checks = startup_checks
     logger.info("startup.checks", **startup_checks)
 
@@ -232,33 +198,8 @@ async def lifespan(app: FastAPI):
 
     app.state.job_queue = await initialize_job_queue(settings)
 
-    # R-36: recover stale running jobs — mark as failed so they don't block retries
-    try:
-        async with AsyncSessionFactory() as session:
-            result = await session.execute(
-                select(AnalysisJob).where(AnalysisJob.status == "running")
-            )
-            stale_jobs = result.scalars().all()
-            if stale_jobs:
-                now = datetime.now(UTC)
-                for job in stale_jobs:
-                    job.status = "failed"
-                    job.finished_at = job.finished_at or now
-                    job.error_message = "Server restart detected — job interrupted."
-                await session.commit()
-                logger.warning(
-                    "startup.stale_jobs_recovered",
-                    count=len(stale_jobs),
-                    job_ids=[job.id for job in stale_jobs],
-                )
-            else:
-                logger.info("startup.stale_jobs_detected", count=0)
-    except Exception as exc:
-        logger.warning("startup.stale_jobs_check_failed", error=str(exc))
-
     yield
 
-    # Teardown — close Redis connection pool
     if getattr(app.state, "job_queue", None) is not None:
         await app.state.job_queue.aclose()
         logger.info("job_queue.closed")
@@ -268,21 +209,19 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_file, settings.log_error_file)
 
-    # Error monitoring — opt-in via SENTRY_DSN env var
     if settings.sentry_dsn:
         try:
             import sentry_sdk
             sentry_sdk.init(
                 dsn=settings.sentry_dsn,
                 environment=settings.app_env,
-                traces_sample_rate=0.0,   # disable performance tracing — errors only
+                traces_sample_rate=0.0,
                 profiles_sample_rate=0.0,
             )
             logger.info("sentry.initialized", environment=settings.app_env)
         except ImportError:
             logger.warning("sentry.disabled", reason="sentry-sdk not installed")
 
-    # In production, hide docs endpoints and disable debug tracebacks
     docs_url = "/docs" if settings.app_debug else None
     redoc_url = "/redoc" if settings.app_debug else None
 
@@ -301,12 +240,10 @@ def create_app() -> FastAPI:
         "storage": "pending",
     }
 
-    # Rate limiter state + 429 handler
     app.state.limiter = limiter
     if RateLimitExceeded is not None and _rate_limit_exceeded_handler is not None:
         app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-    # HTTPS redirect — only when explicitly required (production, no reverse-proxy)
     if settings.require_https:
         app.add_middleware(HTTPSRedirectMiddleware)
 
@@ -322,12 +259,10 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def security_headers(request: Request, call_next) -> Response:
         response = await call_next(request)
-        # HSTS — tell browsers to always use HTTPS (only meaningful over TLS)
         if settings.require_https or settings.app_env != "development":
             response.headers["Strict-Transport-Security"] = (
                 f"max-age={settings.hsts_max_age}; includeSubDomains"
             )
-        # Prevent MIME sniffing and clickjacking on API responses
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -346,8 +281,6 @@ def create_app() -> FastAPI:
         elapsed = time.monotonic() - start
         duration_ms = round(elapsed * 1000)
         if not request.url.path.startswith("/mock-storage"):
-            # R-38: use route path template (e.g. /api/v1/cases/{case_id}) to avoid
-            # label cardinality explosion from per-resource IDs.
             status_str = str(response.status_code)
             HTTP_REQUESTS_TOTAL.labels(
                 method=request.method,
@@ -372,7 +305,6 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def request_id_context(request: Request, call_next) -> Response:
-        """Bind a unique request ID to the structlog context for this request."""
         structlog.contextvars.clear_contextvars()
         request_id = sanitize_request_id(request.headers.get("X-Request-ID"))
         structlog.contextvars.bind_contextvars(request_id=request_id)
@@ -405,10 +337,6 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 
-    # WARNING: /mock-storage serves local filesystem files through an
-    # authenticated route. It is a dev-only facility — in production, files
-    # are served by a dedicated storage backend (S3/CDN). Never enable this
-    # mount in production; doing so exposes the local storage directory.
     if settings.is_development:
         from app.api.routes.storage import router as storage_router
         app.include_router(storage_router)

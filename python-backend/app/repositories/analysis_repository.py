@@ -61,6 +61,10 @@ class InvalidAnalysisResultPayloadError(ValueError):
     """Raised when an analysis payload cannot be safely persisted."""
 
 
+class AnalysisJobLeaseOwnershipError(RuntimeError):
+    """Raised when a worker no longer owns the DB lease for a job."""
+
+
 def normalize_analysis_job_status(status: str) -> str:
     if not isinstance(status, str):
         raise InvalidAnalysisJobStatusError("Analysis job status must be a string.")
@@ -188,6 +192,27 @@ def _prepare_analysis_result_values(analysis: object) -> dict[str, object]:
     }
 
 
+def _build_output_summary(analysis: object, *, duration_seconds: float | None) -> str:
+    payload = _require_analysis_mapping(analysis)
+    summary = {
+        "provider": payload.get("providerKey"),
+        "model_name": payload.get("modelName"),
+        "object_type": payload.get("objectType"),
+        "estimated_area_sqm": payload.get("estimatedAreaSqm"),
+        "area_confidence": payload.get("areaConfidence"),
+        "duration_seconds": duration_seconds,
+    }
+    return json.dumps(summary, ensure_ascii=False)
+
+
+def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 class AnalysisRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -224,6 +249,12 @@ class AnalysisRepository:
             job.error_traceback = error_traceback
         elif target_status == ANALYSIS_JOB_STATUS_COMPLETED:
             job.error_traceback = None
+
+        if target_status in ANALYSIS_JOB_FINAL_STATUSES:
+            job.lease_token = None
+            job.worker_id = None
+            job.leased_at = None
+            job.heartbeat_at = None
 
     async def get_project_in_org(self, project_id: str, organization_id: str) -> Project | None:
         result = await self.session.execute(
@@ -292,6 +323,23 @@ class AnalysisRepository:
         )
         return result.scalar_one_or_none()
 
+    async def count_active_jobs_for_organization(self, organization_id: str) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(AnalysisJob)
+            .join(Project, Project.id == AnalysisJob.project_id)
+            .where(
+                Project.organization_id == organization_id,
+                AnalysisJob.status.in_(
+                    (
+                        ANALYSIS_JOB_STATUS_QUEUED,
+                        ANALYSIS_JOB_STATUS_RUNNING,
+                    )
+                ),
+            )
+        )
+        return int(result.scalar_one() or 0)
+
     async def list_analysis_jobs_by_project_id(self, project_id: str) -> list[AnalysisJob]:
         result = await self.session.execute(
             select(AnalysisJob)
@@ -323,6 +371,10 @@ class AnalysisRepository:
             requested_by_user_id=resolved_user_id,
             parent_job_id=parent_job_id,
             retry_count=retry_count,
+            lease_token=None,
+            worker_id=None,
+            leased_at=None,
+            heartbeat_at=None,
             started_at=None,
             finished_at=None,
             error_message=None,
@@ -350,6 +402,22 @@ class AnalysisRepository:
         completed_status = _resolve_completed_job_status(_optional_string(payload, "jobStatus"))
         result_values = _prepare_analysis_result_values(payload)
         error_message = _optional_string(payload, "errorMessage")
+        started_at = _normalize_utc_datetime(job.started_at)
+        duration_seconds = (
+            round((timestamp - started_at).total_seconds(), 1)
+            if started_at is not None
+            else None
+        )
+
+        existing_result = await self.get_analysis_result_by_job_id(job.id)
+        if existing_result is not None:
+            if current_status != ANALYSIS_JOB_STATUS_COMPLETED:
+                raise InvalidAnalysisJobStatusTransition(
+                    f"Analysis job '{job.id}' already has a persisted result."
+                )
+            await self.session.refresh(job)
+            await self.session.refresh(existing_result)
+            return job, existing_result
 
         self._set_job_status(
             job,
@@ -358,6 +426,7 @@ class AnalysisRepository:
             error_message=error_message,
             error_traceback=None,
         )
+        job.output_summary = _build_output_summary(analysis, duration_seconds=duration_seconds)
 
         result = AnalysisResult(
             id=f"ana_{uuid4().hex[:8]}",
@@ -411,6 +480,10 @@ class AnalysisRepository:
             status=terminal_status,
             job_type=job_type,
             requested_by_user_id=project.created_by_user_id,
+            lease_token=None,
+            worker_id=None,
+            leased_at=None,
+            heartbeat_at=None,
             started_at=timestamp,
             finished_at=timestamp,
             error_message=error_message,
@@ -490,8 +563,18 @@ class AnalysisRepository:
         await self.session.refresh(job)
         return job
 
-    async def mark_job_running(self, job: AnalysisJob) -> AnalysisJob:
+    async def mark_job_running(
+        self,
+        job: AnalysisJob,
+        *,
+        lease_token: str | None = None,
+        worker_id: str | None = None,
+        leased_at: datetime | None = None,
+        heartbeat_at: datetime | None = None,
+    ) -> AnalysisJob:
         timestamp = datetime.now(UTC)
+        lease_timestamp = leased_at or timestamp
+        heartbeat_timestamp = heartbeat_at or lease_timestamp
         result = await self.session.execute(
             update(AnalysisJob)
             .where(
@@ -502,12 +585,100 @@ class AnalysisRepository:
                 status=ANALYSIS_JOB_STATUS_RUNNING,
                 started_at=func.coalesce(AnalysisJob.started_at, timestamp),
                 finished_at=None,
+                lease_token=lease_token,
+                worker_id=worker_id,
+                leased_at=lease_timestamp,
+                heartbeat_at=heartbeat_timestamp,
             )
         )
         if getattr(result, "rowcount", 0) != 1:
             await self.session.refresh(job)
             raise InvalidAnalysisJobStatusTransition(
                 f"Cannot transition analysis job from '{job.status}' to '{ANALYSIS_JOB_STATUS_RUNNING}'."
+            )
+        await self.session.commit()
+        await self.session.refresh(job)
+        return job
+
+    async def assert_job_lease_owned(
+        self,
+        job: AnalysisJob,
+        *,
+        lease_token: str,
+        worker_id: str,
+    ) -> AnalysisJob:
+        await self.session.refresh(job)
+        if (
+            normalize_analysis_job_status(job.status) != ANALYSIS_JOB_STATUS_RUNNING
+            or job.lease_token != lease_token
+            or job.worker_id != worker_id
+        ):
+            raise AnalysisJobLeaseOwnershipError(
+                f"Analysis job '{job.id}' is no longer owned by worker {worker_id!r} "
+                f"with lease {lease_token!r}."
+            )
+        return job
+
+    async def heartbeat_job_lease(
+        self,
+        job_id: str,
+        *,
+        lease_token: str,
+        worker_id: str,
+        leased_at: datetime,
+        heartbeat_at: datetime,
+    ) -> bool:
+        result = await self.session.execute(
+            update(AnalysisJob)
+            .where(
+                AnalysisJob.id == job_id,
+                AnalysisJob.status == ANALYSIS_JOB_STATUS_RUNNING,
+                AnalysisJob.lease_token == lease_token,
+                AnalysisJob.worker_id == worker_id,
+            )
+            .values(
+                leased_at=leased_at,
+                heartbeat_at=heartbeat_at,
+            )
+        )
+        if getattr(result, "rowcount", 0) != 1:
+            await self.session.rollback()
+            return False
+        await self.session.commit()
+        return True
+
+    async def reset_job_to_queued(self, job: AnalysisJob) -> AnalysisJob:
+        current_status = normalize_analysis_job_status(job.status)
+        if current_status == ANALYSIS_JOB_STATUS_QUEUED:
+            await self.session.refresh(job)
+            return job
+        if current_status != ANALYSIS_JOB_STATUS_RUNNING:
+            raise InvalidAnalysisJobStatusTransition(
+                f"Cannot transition analysis job from '{job.status}' to '{ANALYSIS_JOB_STATUS_QUEUED}'."
+            )
+
+        result = await self.session.execute(
+            update(AnalysisJob)
+            .where(
+                AnalysisJob.id == job.id,
+                AnalysisJob.status == ANALYSIS_JOB_STATUS_RUNNING,
+            )
+            .values(
+                status=ANALYSIS_JOB_STATUS_QUEUED,
+                lease_token=None,
+                worker_id=None,
+                leased_at=None,
+                heartbeat_at=None,
+                started_at=None,
+                finished_at=None,
+                error_message=None,
+                error_traceback=None,
+            )
+        )
+        if getattr(result, "rowcount", 0) != 1:
+            await self.session.refresh(job)
+            raise InvalidAnalysisJobStatusTransition(
+                f"Cannot transition analysis job from '{job.status}' to '{ANALYSIS_JOB_STATUS_QUEUED}'."
             )
         await self.session.commit()
         await self.session.refresh(job)

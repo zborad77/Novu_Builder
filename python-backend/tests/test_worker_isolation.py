@@ -644,6 +644,46 @@ class TestRetryJobGuards:
         # Reached org check (403), not count guard (409)
         assert exc_info.value.status_code == 403
 
+    @pytest.mark.asyncio
+    async def test_retry_rejects_when_tenant_active_limit_is_reached(self):
+        job = _make_job("job_1", "prj_A")
+        job.status = "failed"
+        job.retry_count = 0
+
+        from app.services.analysis_service import AnalysisService
+        from app.repositories.analysis_repository import AnalysisRepository
+        from app.repositories.photo_repository import PhotoRepository
+
+        project = MagicMock(id="prj_A", organization_id="org_A")
+        mock_repo = AsyncMock(spec=AnalysisRepository)
+        mock_repo.get_analysis_job = AsyncMock(return_value=job)
+        mock_inner_repo = AsyncMock(spec=AnalysisRepository)
+        mock_inner_repo.get_project_in_org = AsyncMock(return_value=project)
+        mock_inner_repo.count_active_jobs_for_organization = AsyncMock(return_value=10)
+
+        session = AsyncMock()
+        with (
+            patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory,
+            patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo),
+            patch("app.services.analysis_service.get_settings") as get_settings,
+        ):
+            get_settings.return_value.analysis_jobs_per_tenant_limit = 10
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=session)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_factory.return_value = mock_ctx
+
+            service = AnalysisService(
+                repository=mock_repo,
+                photo_repository=AsyncMock(spec=PhotoRepository),
+                provider_key="mock",
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await service.retry_job("job_1", organization_id="org_A")
+
+        assert exc_info.value.status_code == 429
+        mock_inner_repo.create_queued_job.assert_not_awaited()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Dead-letter / repeated-failure sentinel log

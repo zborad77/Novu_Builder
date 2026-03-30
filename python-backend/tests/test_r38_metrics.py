@@ -1,14 +1,8 @@
-"""R-38: Prometheus metrics — unit and integration tests.
+"""R-38: Prometheus metrics - unit and integration tests."""
 
-Tests cover:
-  - /metrics endpoint returns 200 with Prometheus text content type
-  - HTTP request counter increments after a request
-  - Metrics module defines the three expected metric names
-  - Bearer token auth guard (R-SEC-01): enabled/disabled/wrong token/no token
-"""
 import os
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -17,16 +11,63 @@ _METRICS_URL = "/api/v1/metrics"
 _ALIVE_URL = "/api/v1/alive"
 
 
+def _metric_value(body: str, metric_name: str, labels: dict[str, str] | None = None) -> float | None:
+    for line in body.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        if labels is None:
+            if line.startswith(f"{metric_name} "):
+                return float(line.rsplit(" ", 1)[1])
+            continue
+
+        if not line.startswith(f"{metric_name}{{"):
+            continue
+        if all(f'{key}="{value}"' in line for key, value in labels.items()):
+            return float(line.rsplit(" ", 1)[1])
+    return None
+
+
 @pytest.fixture(autouse=True)
-def _reset_operational_metrics_cache():
-    from app.api.routes.system import _clear_operational_metrics_cache, _clear_readiness_db_cache
+def _reset_metrics_state():
+    from app.api.routes.system import (
+        _clear_operational_metrics_cache,
+        _clear_readiness_db_cache,
+        _clear_readiness_storage_cache,
+    )
+    from app.core import metrics as metrics_module
     from app.main import app as fastapi_app
 
     _clear_operational_metrics_cache(fastapi_app)
     _clear_readiness_db_cache(fastapi_app)
+    _clear_readiness_storage_cache(fastapi_app)
+
+    with metrics_module._JOB_DURATION_LOCK:
+        metrics_module._JOB_DURATION_WINDOW.clear()
+        metrics_module._JOB_OUTCOME_COUNTS["completed"] = 0
+        metrics_module._JOB_OUTCOME_COUNTS["failed"] = 0
+        metrics_module._JOB_FAIL_RATE_CURRENT = 0.0
+        metrics_module._JOB_DURATION_AVG_CURRENT = 0.0
+        metrics_module._JOB_DURATION_P95_CURRENT = 0.0
+
+    metrics_module.DB_ALIVE.set(0)
+    metrics_module.WORKER_ALIVE.set(0)
+    metrics_module.WORKER_ALIVE_INSTANCES.set(0)
+    metrics_module.WORKER_SEEN_INSTANCES.set(0)
+    metrics_module.WORKER_MONITORING_AVAILABLE.set(0)
+    metrics_module.JOBS_QUEUED.set(0)
+    metrics_module.JOBS_RUNNING.set(0)
+    metrics_module.QUEUE_LENGTH.set(0)
+    metrics_module.PROCESSING_JOBS.set(0)
+    metrics_module.JOB_STUCK_MAX_AGE_SECONDS.set(0)
+    metrics_module.JOB_FAIL_RATE.set(0)
+    metrics_module.JOB_DURATION_SECONDS_AVG.set(0)
+    metrics_module.JOB_DURATION_SECONDS_P95.set(0)
+
     yield
+
     _clear_operational_metrics_cache(fastapi_app)
     _clear_readiness_db_cache(fastapi_app)
+    _clear_readiness_storage_cache(fastapi_app)
 
 
 class TestMetricsEndpoint:
@@ -38,89 +79,109 @@ class TestMetricsEndpoint:
     @pytest.mark.asyncio
     async def test_metrics_content_type_is_prometheus(self, app_client):
         resp = await app_client.get(_METRICS_URL)
-        # Prometheus text format content type
         assert "text/plain" in resp.headers["content-type"]
 
     @pytest.mark.asyncio
     async def test_metrics_body_contains_expected_metric_names(self, app_client):
-        # Trigger at least one request so counters are non-zero
         await app_client.get(_ALIVE_URL)
         resp = await app_client.get(_METRICS_URL)
         body = resp.text
         assert "http_requests_total" in body
         assert "http_request_duration_seconds" in body
         assert "http_requests_in_progress" in body
+        assert "novu_queue_length" in body
+        assert "novu_processing_jobs" in body
+        assert "novu_job_duration_seconds_avg" in body
+        assert "novu_job_duration_seconds_p95" in body
+        assert "novu_job_fail_rate" in body
+        assert "novu_reaper_requeues_total" in body
+        assert "novu_duplicate_prevented_count_total" in body
 
     @pytest.mark.asyncio
     async def test_alive_request_appears_in_metrics(self, app_client):
         await app_client.get(_ALIVE_URL)
         resp = await app_client.get(_METRICS_URL)
-        # The /alive path template should appear in the counter output
         assert "/alive" in resp.text
 
 
 class TestMetricsModule:
-    def test_metrics_module_defines_all_three_objects(self):
+    def test_metrics_module_defines_expected_objects(self):
         from app.core.metrics import (
             AUTH_FAILURES_TOTAL,
+            DB_ALIVE,
+            DUPLICATE_PREVENTED_COUNT,
             HTTP_REQUEST_DURATION_SECONDS,
             HTTP_REQUESTS_IN_PROGRESS,
             HTTP_REQUESTS_TOTAL,
+            JOB_DURATION_SECONDS,
+            JOB_DURATION_SECONDS_AVG,
+            JOB_DURATION_SECONDS_P95,
+            JOB_FAIL_RATE,
+            JOB_STUCK_MAX_AGE_SECONDS,
+            JOBS_QUEUED,
+            JOBS_RUNNING,
+            PROCESSING_JOBS,
+            QUEUE_LENGTH,
+            REAPER_REQUEUES_TOTAL,
             UPLOAD_REJECTIONS_TOTAL,
+            WORKER_ALIVE,
         )
+
         assert HTTP_REQUESTS_TOTAL is not None
         assert HTTP_REQUEST_DURATION_SECONDS is not None
         assert HTTP_REQUESTS_IN_PROGRESS is not None
         assert AUTH_FAILURES_TOTAL is not None
         assert UPLOAD_REJECTIONS_TOTAL is not None
+        assert DB_ALIVE is not None
+        assert WORKER_ALIVE is not None
+        assert JOBS_QUEUED is not None
+        assert JOBS_RUNNING is not None
+        assert QUEUE_LENGTH is not None
+        assert PROCESSING_JOBS is not None
+        assert JOB_STUCK_MAX_AGE_SECONDS is not None
+        assert JOB_DURATION_SECONDS is not None
+        assert JOB_DURATION_SECONDS_AVG is not None
+        assert JOB_DURATION_SECONDS_P95 is not None
+        assert JOB_FAIL_RATE is not None
+        assert REAPER_REQUEUES_TOTAL is not None
+        assert DUPLICATE_PREVENTED_COUNT is not None
 
     def test_counter_has_correct_labels(self):
         from app.core.metrics import HTTP_REQUESTS_TOTAL
-        # labelnames are stored as a tuple on the metric
+
         labels = HTTP_REQUESTS_TOTAL._labelnames
         assert "method" in labels
         assert "path_template" in labels
         assert "status_code" in labels
 
     def test_histogram_has_correct_labels(self):
-        from app.core.metrics import HTTP_REQUEST_DURATION_SECONDS
-        labels = HTTP_REQUEST_DURATION_SECONDS._labelnames
-        assert "method" in labels
-        assert "path_template" in labels
-        assert "status_code" in labels
+        from app.core.metrics import HTTP_REQUEST_DURATION_SECONDS, JOB_DURATION_SECONDS
 
-    def test_gauge_has_method_label(self):
-        from app.core.metrics import HTTP_REQUESTS_IN_PROGRESS
-        assert "method" in HTTP_REQUESTS_IN_PROGRESS._labelnames
+        assert "method" in HTTP_REQUEST_DURATION_SECONDS._labelnames
+        assert "path_template" in HTTP_REQUEST_DURATION_SECONDS._labelnames
+        assert "status_code" in HTTP_REQUEST_DURATION_SECONDS._labelnames
+        assert JOB_DURATION_SECONDS._labelnames == ("status",)
 
-    def test_operational_gauges_defined(self):
+    def test_operational_metric_names(self):
         from app.core.metrics import (
             DB_ALIVE,
+            DUPLICATE_PREVENTED_COUNT,
+            JOB_DURATION_SECONDS,
+            JOB_DURATION_SECONDS_AVG,
+            JOB_DURATION_SECONDS_P95,
+            JOB_FAIL_RATE,
+            JOB_STUCK_MAX_AGE_SECONDS,
             JOBS_QUEUED,
             JOBS_RUNNING,
+            PROCESSING_JOBS,
+            QUEUE_LENGTH,
+            REAPER_REQUEUES_TOTAL,
             WORKER_ALIVE,
             WORKER_ALIVE_INSTANCES,
             WORKER_MONITORING_AVAILABLE,
             WORKER_SEEN_INSTANCES,
         )
-        assert DB_ALIVE is not None
-        assert WORKER_ALIVE is not None
-        assert WORKER_ALIVE_INSTANCES is not None
-        assert WORKER_SEEN_INSTANCES is not None
-        assert WORKER_MONITORING_AVAILABLE is not None
-        assert JOBS_QUEUED is not None
-        assert JOBS_RUNNING is not None
 
-    def test_operational_gauge_names(self):
-        from app.core.metrics import (
-            DB_ALIVE,
-            JOBS_QUEUED,
-            JOBS_RUNNING,
-            WORKER_ALIVE,
-            WORKER_ALIVE_INSTANCES,
-            WORKER_MONITORING_AVAILABLE,
-            WORKER_SEEN_INSTANCES,
-        )
         assert DB_ALIVE._name == "novu_db_alive"
         assert WORKER_ALIVE._name == "novu_worker_alive"
         assert WORKER_ALIVE_INSTANCES._name == "novu_worker_alive_instances"
@@ -128,15 +189,24 @@ class TestMetricsModule:
         assert WORKER_MONITORING_AVAILABLE._name == "novu_worker_monitoring_available"
         assert JOBS_QUEUED._name == "novu_jobs_queued"
         assert JOBS_RUNNING._name == "novu_jobs_running"
+        assert QUEUE_LENGTH._name == "novu_queue_length"
+        assert PROCESSING_JOBS._name == "novu_processing_jobs"
+        assert JOB_STUCK_MAX_AGE_SECONDS._name == "novu_job_stuck_max_age_seconds"
+        assert JOB_DURATION_SECONDS._name == "novu_job_duration_seconds"
+        assert JOB_DURATION_SECONDS_AVG._name == "novu_job_duration_seconds_avg"
+        assert JOB_DURATION_SECONDS_P95._name == "novu_job_duration_seconds_p95"
+        assert JOB_FAIL_RATE._name == "novu_job_fail_rate"
+        assert REAPER_REQUEUES_TOTAL._name == "novu_reaper_requeues"
+        assert DUPLICATE_PREVENTED_COUNT._name == "novu_duplicate_prevented_count"
 
     def test_failure_counter_names(self):
         from app.core.metrics import AUTH_FAILURES_TOTAL, UPLOAD_REJECTIONS_TOTAL
+
         assert AUTH_FAILURES_TOTAL._name == "novu_auth_failures"
         assert UPLOAD_REJECTIONS_TOTAL._name == "novu_upload_rejections"
 
 
 class TestOperationalMetricsExported:
-
     @pytest.mark.asyncio
     async def test_metrics_body_contains_operational_gauge_names(self, app_client):
         resp = await app_client.get(_METRICS_URL)
@@ -148,14 +218,59 @@ class TestOperationalMetricsExported:
         assert "novu_worker_monitoring_available" in body
         assert "novu_jobs_queued" in body
         assert "novu_jobs_running" in body
+        assert "novu_queue_length" in body
+        assert "novu_processing_jobs" in body
+        assert "novu_job_stuck_max_age_seconds" in body
 
     @pytest.mark.asyncio
     async def test_db_alive_gauge_is_1_after_scrape(self, app_client):
-        """After a successful scrape the DB gauge must reflect a live DB."""
         resp = await app_client.get(_METRICS_URL)
         assert resp.status_code == 200
-        # The test DB is always available so novu_db_alive should be 1.0
         assert "novu_db_alive 1.0" in resp.text
+
+    @pytest.mark.asyncio
+    async def test_job_observability_metrics_are_exported(self, app_client):
+        from app.core.metrics import (
+            observe_job_outcome,
+            record_duplicate_prevented,
+            record_reaper_requeues,
+        )
+
+        baseline = await app_client.get(_METRICS_URL)
+        baseline_requeues = _metric_value(baseline.text, "novu_reaper_requeues_total") or 0.0
+        baseline_duplicates = (
+            _metric_value(
+                baseline.text,
+                "novu_duplicate_prevented_count_total",
+                {"reason": "test_guard"},
+            )
+            or 0.0
+        )
+
+        observe_job_outcome(status="completed", duration_seconds=4.0)
+        observe_job_outcome(status="failed", duration_seconds=10.0)
+        record_reaper_requeues(2)
+        record_duplicate_prevented("test_guard")
+
+        resp = await app_client.get(_METRICS_URL)
+        assert _metric_value(resp.text, "novu_job_fail_rate") == pytest.approx(0.5)
+        assert _metric_value(resp.text, "novu_job_duration_seconds_avg") == pytest.approx(7.0)
+        assert _metric_value(resp.text, "novu_job_duration_seconds_p95") == pytest.approx(10.0)
+        assert (
+            _metric_value(resp.text, "novu_job_outcomes_total", {"status": "completed"}) or 0.0
+        ) >= 1.0
+        assert (
+            _metric_value(resp.text, "novu_job_outcomes_total", {"status": "failed"}) or 0.0
+        ) >= 1.0
+        assert (_metric_value(resp.text, "novu_reaper_requeues_total") or 0.0) >= baseline_requeues + 2.0
+        assert (
+            _metric_value(
+                resp.text,
+                "novu_duplicate_prevented_count_total",
+                {"reason": "test_guard"},
+            )
+            or 0.0
+        ) >= baseline_duplicates + 1.0
 
     @pytest.mark.asyncio
     async def test_metrics_headers_disable_caching_and_indexing(self, app_client):
@@ -184,11 +299,8 @@ class TestOperationalMetricsExported:
             _get_operational_metrics_snapshot_cached,
         )
 
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(job_queue=None)))
-        db_result = MagicMock()
-        db_result.one.return_value = (2, 3)
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(job_queue=object())))
         session = AsyncMock()
-        session.execute = AsyncMock(return_value=db_result)
         session_ctx = AsyncMock()
         session_ctx.__aenter__ = AsyncMock(return_value=session)
         session_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -198,9 +310,13 @@ class TestOperationalMetricsExported:
             alive_instances=0,
             seen_instances=0,
         )
+        query_counts = AsyncMock(return_value=(2, 3, 45.0))
+        queue_counts = AsyncMock(return_value=(7, 1))
 
         with (
             patch("app.api.routes.system.AsyncSessionFactory", return_value=session_ctx),
+            patch("app.api.routes.system._query_job_counts", new=query_counts),
+            patch("app.api.routes.system.get_analysis_job_queue_counts", new=queue_counts),
             patch(
                 "app.api.routes.system._get_worker_heartbeat_snapshot",
                 new=AsyncMock(return_value=worker_snapshot),
@@ -213,8 +329,12 @@ class TestOperationalMetricsExported:
         assert first.db_alive is True
         assert first.jobs_running == 2
         assert first.jobs_queued == 3
+        assert first.queue_length == 7
+        assert first.processing_jobs == 1
+        assert first.job_stuck_max_age_seconds == pytest.approx(45.0)
         assert second == first
-        session.execute.assert_awaited_once()
+        assert query_counts.await_count == 1
+        assert queue_counts.await_count == 1
 
     @pytest.mark.asyncio
     async def test_operational_metrics_cache_refreshes_after_ttl_expiry(self):
@@ -223,13 +343,8 @@ class TestOperationalMetricsExported:
             _get_operational_metrics_snapshot_cached,
         )
 
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(job_queue=None)))
-        first_result = MagicMock()
-        first_result.one.return_value = (1, 4)
-        second_result = MagicMock()
-        second_result.one.return_value = (5, 6)
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(job_queue=object())))
         session = AsyncMock()
-        session.execute = AsyncMock(side_effect=[first_result, second_result])
         session_ctx = AsyncMock()
         session_ctx.__aenter__ = AsyncMock(return_value=session)
         session_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -239,9 +354,13 @@ class TestOperationalMetricsExported:
             alive_instances=1,
             seen_instances=1,
         )
+        query_counts = AsyncMock(side_effect=[(1, 4, 30.0), (5, 6, 120.0)])
+        queue_counts = AsyncMock(side_effect=[(2, 1), (9, 3)])
 
         with (
             patch("app.api.routes.system.AsyncSessionFactory", return_value=session_ctx),
+            patch("app.api.routes.system._query_job_counts", new=query_counts),
+            patch("app.api.routes.system.get_analysis_job_queue_counts", new=queue_counts),
             patch(
                 "app.api.routes.system._get_worker_heartbeat_snapshot",
                 new=AsyncMock(return_value=worker_snapshot),
@@ -256,9 +375,16 @@ class TestOperationalMetricsExported:
 
         assert first.jobs_running == 1
         assert first.jobs_queued == 4
+        assert first.queue_length == 2
+        assert first.processing_jobs == 1
+        assert first.job_stuck_max_age_seconds == pytest.approx(30.0)
         assert second.jobs_running == 5
         assert second.jobs_queued == 6
-        assert session.execute.await_count == 2
+        assert second.queue_length == 9
+        assert second.processing_jobs == 3
+        assert second.job_stuck_max_age_seconds == pytest.approx(120.0)
+        assert query_counts.await_count == 2
+        assert queue_counts.await_count == 2
 
 
 class TestMetricsAuthGuard:
@@ -269,6 +395,7 @@ class TestMetricsAuthGuard:
         os.environ["METRICS_AUTH_ENABLED"] = "true"
         os.environ["METRICS_AUTH_TOKEN"] = "test-scrape-secret"
         from app.core.config import get_settings
+
         get_settings.cache_clear()
         try:
             resp = await app_client.get(_METRICS_URL)
@@ -283,6 +410,7 @@ class TestMetricsAuthGuard:
         os.environ["METRICS_AUTH_ENABLED"] = "true"
         os.environ["METRICS_AUTH_TOKEN"] = "test-scrape-secret"
         from app.core.config import get_settings
+
         get_settings.cache_clear()
         try:
             resp = await app_client.get(_METRICS_URL, headers={"Authorization": "Bearer wrong-token"})
@@ -297,6 +425,7 @@ class TestMetricsAuthGuard:
         os.environ["METRICS_AUTH_ENABLED"] = "true"
         os.environ["METRICS_AUTH_TOKEN"] = "test-scrape-secret"
         from app.core.config import get_settings
+
         get_settings.cache_clear()
         try:
             resp = await app_client.get(_METRICS_URL, headers={"Authorization": "Bearer test-scrape-secret"})
@@ -309,10 +438,10 @@ class TestMetricsAuthGuard:
 
     @pytest.mark.asyncio
     async def test_no_token_configured_returns_401(self, app_client):
-        """Guard enabled but no token set → fail closed (401)."""
         os.environ["METRICS_AUTH_ENABLED"] = "true"
         os.environ.pop("METRICS_AUTH_TOKEN", None)
         from app.core.config import get_settings
+
         get_settings.cache_clear()
         try:
             resp = await app_client.get(_METRICS_URL, headers={"Authorization": "Bearer anything"})
@@ -323,9 +452,9 @@ class TestMetricsAuthGuard:
 
     @pytest.mark.asyncio
     async def test_guard_disabled_allows_unauthenticated(self, app_client):
-        """METRICS_AUTH_ENABLED=false → public access (for internal-network-only setups)."""
         os.environ["METRICS_AUTH_ENABLED"] = "false"
         from app.core.config import get_settings
+
         get_settings.cache_clear()
         try:
             resp = await app_client.get(_METRICS_URL)

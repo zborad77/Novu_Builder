@@ -1,92 +1,133 @@
-"""R-36: Startup recovery — stale running jobs must be marked failed."""
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+import inspect
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
-def _make_job(job_id: str, status: str = "running") -> MagicMock:
-    j = MagicMock()
-    j.id = job_id
-    j.status = status
-    j.finished_at = None
-    j.error_message = None
-    return j
+class TestLeaseRecoveryContracts:
+    @staticmethod
+    def _lease(*, job_id: str, token: str = "lease-1", worker_id: str = "worker-a"):
+        lease = MagicMock()
+        lease.job_id = job_id
+        lease.token = token
+        lease.worker_id = worker_id
+        lease.leased_at_ms = int(datetime(2026, 3, 30, 12, 0, tzinfo=UTC).timestamp() * 1000)
+        lease.lease_timeout_seconds = 600
+        return lease
 
+    def test_startup_no_longer_marks_running_jobs_failed(self):
+        from app import main
 
-class TestStaleJobRecovery:
+        source = inspect.getsource(main.lifespan)
+        assert 'AnalysisJob.status == "running"' not in source
+        assert "startup.stale_jobs_recovered" not in source
 
-    @pytest.mark.asyncio
-    async def test_stale_running_job_marked_failed(self):
-        """Stale running jobs must get status=failed on startup."""
-        job = _make_job("job_stale_1")
+    def test_worker_runner_uses_lease_reaper(self):
+        from app.worker import runner
 
-        mock_session = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = [job]
-        mock_session.execute = AsyncMock(return_value=mock_result)
-        mock_session.commit = AsyncMock()
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=False)
-
-        mock_factory = MagicMock(return_value=mock_session)
-
-        with patch("app.main.AsyncSessionFactory", mock_factory):
-            # Simulate only the stale-job recovery block
-            from sqlalchemy import select
-            from app.models import AnalysisJob
-
-            stale_jobs = [job]
-            now = datetime(2026, 3, 26, tzinfo=UTC)
-
-            for j in stale_jobs:
-                j.status = "failed"
-                j.finished_at = j.finished_at or now
-                j.error_message = "Server restart detected — job interrupted."
-
-        assert job.status == "failed"
-        assert job.error_message == "Server restart detected — job interrupted."
-        assert job.finished_at is not None
+        source = inspect.getsource(runner._run_one_iteration)
+        assert "_run_lease_reaper_if_due" in source
 
     @pytest.mark.asyncio
-    async def test_stale_job_error_message_is_set(self):
-        """The error_message on a recovered job must mention server restart."""
-        job = _make_job("job_stale_2")
-        now = datetime(2026, 3, 26, tzinfo=UTC)
+    async def test_reconcile_expired_lease_resets_running_job_to_queued(self):
+        from app.services.analysis_service import AnalysisService
 
-        job.status = "failed"
-        job.finished_at = now
-        job.error_message = "Server restart detected — job interrupted."
+        job = MagicMock()
+        job.id = "job-1"
+        job.status = "running"
+        job.lease_token = "lease-1"
+        job.worker_id = "worker-a"
+        job.leased_at = datetime(2026, 3, 30, 12, 0, tzinfo=UTC)
+        job.heartbeat_at = datetime(2026, 3, 30, 11, 40, tzinfo=UTC)
 
-        assert "restart" in job.error_message.lower()
+        repo = AsyncMock()
+        repo.get_analysis_job = AsyncMock(return_value=job)
+        repo.reset_job_to_queued = AsyncMock(return_value=job)
+
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+
+        service = AnalysisService(
+            repository=AsyncMock(),
+            photo_repository=AsyncMock(),
+            provider_key="mock",
+        )
+
+        with (
+            patch("app.services.analysis_service.WorkerAsyncSessionFactory", return_value=session),
+            patch("app.services.analysis_service.AnalysisRepository", return_value=repo),
+        ):
+            disposition = await service.reconcile_expired_lease(self._lease(job_id="job-1"))
+
+        assert disposition == "requeue"
+        repo.reset_job_to_queued.assert_awaited_once_with(job)
 
     @pytest.mark.asyncio
-    async def test_no_running_jobs_no_commit(self):
-        """When there are no stale jobs, no commit is made."""
-        mock_session = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = []
-        mock_session.execute = AsyncMock(return_value=mock_result)
-        mock_session.commit = AsyncMock()
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=False)
+    async def test_reconcile_expired_lease_drops_completed_job(self):
+        from app.services.analysis_service import AnalysisService
 
-        stale_jobs = []
-        # Simulate recovery block with empty list
-        if stale_jobs:
-            await mock_session.commit()
+        job = MagicMock()
+        job.id = "job-2"
+        job.status = "completed"
+        job.lease_token = "lease-1"
+        job.worker_id = "worker-a"
+        job.leased_at = datetime(2026, 3, 30, 12, 0, tzinfo=UTC)
+        job.heartbeat_at = datetime(2026, 3, 30, 12, 0, tzinfo=UTC)
 
-        mock_session.commit.assert_not_called()
+        repo = AsyncMock()
+        repo.get_analysis_job = AsyncMock(return_value=job)
+
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+
+        service = AnalysisService(
+            repository=AsyncMock(),
+            photo_repository=AsyncMock(),
+            provider_key="mock",
+        )
+
+        with (
+            patch("app.services.analysis_service.WorkerAsyncSessionFactory", return_value=session),
+            patch("app.services.analysis_service.AnalysisRepository", return_value=repo),
+        ):
+            disposition = await service.reconcile_expired_lease(self._lease(job_id="job-2"))
+
+        assert disposition == "drop"
 
     @pytest.mark.asyncio
-    async def test_recovered_job_finished_at_preserved_if_already_set(self):
-        """finished_at is NOT overwritten if already set on the stale job."""
-        original_ts = datetime(2026, 3, 25, 10, 0, 0, tzinfo=UTC)
-        job = _make_job("job_stale_3")
-        job.finished_at = original_ts
+    async def test_reconcile_expired_lease_drops_job_when_db_lease_was_renewed(self):
+        from app.services.analysis_service import AnalysisService
 
-        now = datetime(2026, 3, 26, tzinfo=UTC)
-        job.status = "failed"
-        job.finished_at = job.finished_at or now  # existing value preserved
-        job.error_message = "Server restart detected — job interrupted."
+        job = MagicMock()
+        job.id = "job-3"
+        job.status = "running"
+        job.lease_token = "lease-1"
+        job.worker_id = "worker-a"
+        job.leased_at = datetime(2026, 3, 30, 12, 5, tzinfo=UTC)
+        job.heartbeat_at = datetime(2026, 3, 30, 12, 5, tzinfo=UTC)
 
-        assert job.finished_at == original_ts
+        repo = AsyncMock()
+        repo.get_analysis_job = AsyncMock(return_value=job)
+        repo.reset_job_to_queued = AsyncMock()
+
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+
+        service = AnalysisService(
+            repository=AsyncMock(),
+            photo_repository=AsyncMock(),
+            provider_key="mock",
+        )
+
+        with (
+            patch("app.services.analysis_service.WorkerAsyncSessionFactory", return_value=session),
+            patch("app.services.analysis_service.AnalysisRepository", return_value=repo),
+        ):
+            disposition = await service.reconcile_expired_lease(self._lease(job_id="job-3"))
+
+        assert disposition == "drop"
+        repo.reset_job_to_queued.assert_not_awaited()

@@ -133,6 +133,14 @@ class PhotoService:
                     exc_info=True,
                 )
 
+    async def _delete_storage_keys_fail_closed(self, *storage_keys: str | None) -> None:
+        seen: set[str] = set()
+        for storage_key in storage_keys:
+            if not storage_key or storage_key in seen:
+                continue
+            seen.add(storage_key)
+            await delete_storage_file(relative_storage_key=storage_key)
+
     @staticmethod
     def _clear_failed_variant_metadata(photo: ProjectPhoto) -> None:
         photo.preview_storage_key = None
@@ -257,6 +265,7 @@ class PhotoService:
             photo = ProjectPhoto(
                 id=f"pho_{uuid4().hex[:8]}",
                 project_id=project.id,
+                status="active",
                 storage_key=storage_key,
                 original_filename=validated_upload.original_filename,
                 mime_type=actual_mime_type,
@@ -331,8 +340,35 @@ class PhotoService:
         photo = await self.repository.get_photo(project_id, photo_id)
         if not photo:
             return False
-        for storage_key in (photo.storage_key, photo.preview_storage_key, photo.ai_input_storage_key):
-            if storage_key:
-                await delete_storage_file(relative_storage_key=storage_key)
-        await self.repository.remove_photo(photo)
+        photo.is_primary = False
+        photo.is_analysis_reference = False
+        await self.repository.update_status(photo, "pending_delete")
         return True
+
+    async def cleanup_pending_deletes(self, *, limit: int = 100) -> int:
+        pending_photos = await self.repository.list_pending_delete(limit=limit)
+        if not pending_photos:
+            return 0
+
+        deleted_count = 0
+        for photo in pending_photos:
+            try:
+                await self._delete_storage_keys_fail_closed(
+                    photo.storage_key,
+                    photo.preview_storage_key,
+                    photo.ai_input_storage_key,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "photo.pending_delete_cleanup_failed",
+                    photo_id=photo.id,
+                    project_id=photo.project_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                continue
+
+            await self.repository.update_status(photo, "deleted")
+            deleted_count += 1
+
+        return deleted_count

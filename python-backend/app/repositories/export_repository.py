@@ -54,6 +54,39 @@ class ExportRepository:
     async def get_by_id(self, export_id: str) -> ProjectExport | None:
         return await self.session.get(ProjectExport, export_id)
 
+    async def update_state(
+        self,
+        export: ProjectExport,
+        *,
+        status: str,
+        storage_key: str | None,
+        completed_at: datetime | None,
+    ) -> ProjectExport:
+        allowed_transitions = {
+            "pending": {"pending", "generating", "failed"},
+            "generating": {"generating", "completed", "failed"},
+            "completed": {"completed", "failed"},
+            "failed": {"failed"},
+        }
+        current_status = export.status
+        if status not in allowed_transitions.get(current_status, set()):
+            raise ValueError(f"Invalid export status transition: {current_status!r} -> {status!r}")
+        if status == "completed":
+            if not storage_key:
+                raise ValueError("Completed export must have a storage_key.")
+            if completed_at is None:
+                raise ValueError("Completed export must have completed_at.")
+        else:
+            completed_at = None
+            if status != "completed":
+                storage_key = None
+        export.status = status
+        export.storage_key = storage_key
+        export.completed_at = completed_at
+        await self.session.commit()
+        await self.session.refresh(export)
+        return export
+
     async def list_expired(self, *, now: datetime | None = None) -> list[ExpiredExportReference]:
         current_time = now or datetime.now(UTC)
         result = await self.session.execute(
@@ -65,7 +98,10 @@ class ExportRepository:
                 ProjectExport.expires_at,
             )
             .join(Project, Project.id == ProjectExport.project_id)
-            .where(ProjectExport.expires_at <= current_time)
+            .where(
+                ProjectExport.expires_at <= current_time,
+                ProjectExport.status.in_(("completed", "failed")),
+            )
             .order_by(ProjectExport.expires_at.asc(), ProjectExport.id.asc())
         )
         return [

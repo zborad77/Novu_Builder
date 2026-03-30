@@ -3,6 +3,7 @@ import json
 from uuid import uuid4
 
 import structlog
+from sqlalchemy import delete
 
 from app.models import Project, ProjectPhoto
 from app.repositories.final_proposal_repository import FinalProposalRepository
@@ -23,7 +24,7 @@ from app.services.proposal_draft_service import (
     build_project_proposal_draft,
     normalize_proposal_patch_payload,
 )
-from app.storage.backend import copy_storage_file
+from app.storage.backend import copy_storage_file, delete_storage_file
 
 logger = structlog.get_logger(__name__)
 
@@ -34,8 +35,13 @@ def is_reference_dataset_project(project: Project) -> bool:
     return project.id.startswith("ref_case_")
 
 
+def _active_project_photos(project: Project) -> list[ProjectPhoto]:
+    return [photo for photo in (project.photos or []) if getattr(photo, "status", "active") == "active"]
+
+
 def build_project_summary(project: Project) -> ProjectSummary:
     creator = getattr(project, "created_by_user", None)
+    active_photos = _active_project_photos(project)
     return ProjectSummary(
         id=project.id,
         title=project.title,
@@ -44,7 +50,7 @@ def build_project_summary(project: Project) -> ProjectSummary:
         propertyType=project.property_type,
         repairScope=project.repair_scope,
         addressLabel=project.address_label,
-        photoCount=len(project.photos) if getattr(project, "photos", None) else 0,
+        photoCount=len(active_photos),
         estimatedAreaSqm=None,
         latestQuoteTotal=None,
         updatedAt=project.updated_at,
@@ -58,7 +64,7 @@ def build_project_workflow_status_summary(
     proposal_draft,
     latest_final,
 ) -> ProjectWorkflowStatusSummary:
-    photos = project.photos or []
+    photos = _active_project_photos(project)
     ready_photos = [photo for photo in photos if photo.processing_status == "ready"]
     total_photo_count = len(photos)
     ready_photo_count = len(ready_photos)
@@ -175,7 +181,10 @@ def _parse_json(value: str | None):
 
 
 def build_project_detail(project: Project) -> ProjectDetail:
-    proposal_draft = build_project_proposal_draft(project, project.photos or [], proposal_record=project.proposal_draft)
+    from app.services.photo_service import to_read_model
+
+    active_photos = _active_project_photos(project)
+    proposal_draft = build_project_proposal_draft(project, active_photos, proposal_record=project.proposal_draft)
     latest_final = None
     if getattr(project, "final_proposals", None):
         latest_final = max(
@@ -214,7 +223,7 @@ def build_project_detail(project: Project) -> ProjectDetail:
             if project.client
             else None
         ),
-        photos=[],
+        photos=[to_read_model(photo).model_dump(mode="json") for photo in active_photos],
         latestAnalysis=_build_latest_analysis_dict(project),
         proposalDraft=proposal_draft,
         finalProposal=build_final_proposal_from_record(latest_final),
@@ -268,65 +277,93 @@ class ProjectService:
         self.final_proposal_repository = final_proposal_repository
         self.export_service = export_service
 
+    async def _cleanup_duplicated_storage(self, storage_keys: list[str]) -> None:
+        seen: set[str] = set()
+        for storage_key in storage_keys:
+            if not storage_key or storage_key in seen:
+                continue
+            seen.add(storage_key)
+            try:
+                await delete_storage_file(relative_storage_key=storage_key)
+            except Exception as exc:
+                logger.warning(
+                    "photo.duplicate.rollback_cleanup_failed",
+                    storage_key=storage_key,
+                    error=str(exc),
+                    exc_info=True,
+                )
+
+    async def _rollback_duplicated_project(self, project_id: str) -> None:
+        await self.repository.session.rollback()
+        await self.repository.session.execute(delete(Project).where(Project.id == project_id))
+        await self.repository.session.commit()
+
     async def _duplicate_project_photos(self, source_project: Project, duplicated_project: Project) -> None:
         duplicated_photos: list[ProjectPhoto] = []
+        copy_journal: list[str] = []
 
-        for source_photo in source_project.photos or []:
-            duplicated_photo_id = f"pho_{uuid4().hex[:8]}"
-            duplicated_storage_key = build_duplicated_storage_key(source_photo.storage_key, source_project.id, duplicated_project.id)
-            duplicated_preview_key = build_duplicated_storage_key(source_photo.preview_storage_key, source_project.id, duplicated_project.id)
-            duplicated_ai_key = build_duplicated_storage_key(source_photo.ai_input_storage_key, source_project.id, duplicated_project.id)
+        try:
+            for source_photo in _active_project_photos(source_project):
+                duplicated_photo_id = f"pho_{uuid4().hex[:8]}"
+                duplicated_storage_key = build_duplicated_storage_key(source_photo.storage_key, source_project.id, duplicated_project.id)
+                duplicated_preview_key = build_duplicated_storage_key(source_photo.preview_storage_key, source_project.id, duplicated_project.id)
+                duplicated_ai_key = build_duplicated_storage_key(source_photo.ai_input_storage_key, source_project.id, duplicated_project.id)
 
-            if duplicated_storage_key and source_photo.storage_key:
-                await copy_storage_file(source_storage_key=source_photo.storage_key, target_storage_key=duplicated_storage_key)
-            if duplicated_preview_key and source_photo.preview_storage_key:
-                await copy_storage_file(source_storage_key=source_photo.preview_storage_key, target_storage_key=duplicated_preview_key)
-            if duplicated_ai_key and source_photo.ai_input_storage_key:
-                await copy_storage_file(source_storage_key=source_photo.ai_input_storage_key, target_storage_key=duplicated_ai_key)
+                if duplicated_storage_key and source_photo.storage_key:
+                    await copy_storage_file(source_storage_key=source_photo.storage_key, target_storage_key=duplicated_storage_key)
+                    copy_journal.append(duplicated_storage_key)
+                if duplicated_preview_key and source_photo.preview_storage_key:
+                    await copy_storage_file(source_storage_key=source_photo.preview_storage_key, target_storage_key=duplicated_preview_key)
+                    copy_journal.append(duplicated_preview_key)
+                if duplicated_ai_key and source_photo.ai_input_storage_key:
+                    await copy_storage_file(source_storage_key=source_photo.ai_input_storage_key, target_storage_key=duplicated_ai_key)
+                    copy_journal.append(duplicated_ai_key)
 
-            if not duplicated_storage_key:
-                # Intentional fail-safe skip: if the target storage_key cannot be resolved,
-                # do not persist a photo record with storage_key="" — that would create a DB
-                # reference to a non-existent file and cause 404 errors on photo retrieval.
-                # Remaining valid photos continue to be duplicated normally.
-                logger.warning(
-                    "photo.duplicate.storage_key_unresolvable",
-                    source_photo_id=source_photo.id,
-                    source_project_id=source_project.id,
-                    duplicated_project_id=duplicated_project.id,
+                if not duplicated_storage_key:
+                    # Fail closed if the storage key cannot be mapped to the duplicate.
+                    # No DB row should point at a missing duplicate artifact.
+                    logger.warning(
+                        "photo.duplicate.storage_key_unresolvable",
+                        source_photo_id=source_photo.id,
+                        source_project_id=source_project.id,
+                        duplicated_project_id=duplicated_project.id,
+                    )
+                    continue
+
+                duplicated_photos.append(
+                    ProjectPhoto(
+                        id=duplicated_photo_id,
+                        project_id=duplicated_project.id,
+                        status="active",
+                        storage_key=duplicated_storage_key,
+                        preview_storage_key=duplicated_preview_key,
+                        ai_input_storage_key=duplicated_ai_key,
+                        original_filename=source_photo.original_filename,
+                        mime_type=source_photo.mime_type,
+                        file_size=source_photo.file_size,
+                        width=source_photo.width,
+                        height=source_photo.height,
+                        preview_file_size=source_photo.preview_file_size,
+                        preview_width=source_photo.preview_width,
+                        preview_height=source_photo.preview_height,
+                        ai_input_file_size=source_photo.ai_input_file_size,
+                        ai_input_width=source_photo.ai_input_width,
+                        ai_input_height=source_photo.ai_input_height,
+                        processing_status=source_photo.processing_status,
+                        taken_at=source_photo.taken_at,
+                        exif_lat=source_photo.exif_lat,
+                        exif_lng=source_photo.exif_lng,
+                        is_primary=source_photo.is_primary,
+                        is_analysis_reference=source_photo.is_analysis_reference,
+                        sort_order=source_photo.sort_order,
+                    )
                 )
-                continue
 
-            duplicated_photos.append(
-                ProjectPhoto(
-                    id=duplicated_photo_id,
-                    project_id=duplicated_project.id,
-                    storage_key=duplicated_storage_key,
-                    preview_storage_key=duplicated_preview_key,
-                    ai_input_storage_key=duplicated_ai_key,
-                    original_filename=source_photo.original_filename,
-                    mime_type=source_photo.mime_type,
-                    file_size=source_photo.file_size,
-                    width=source_photo.width,
-                    height=source_photo.height,
-                    preview_file_size=source_photo.preview_file_size,
-                    preview_width=source_photo.preview_width,
-                    preview_height=source_photo.preview_height,
-                    ai_input_file_size=source_photo.ai_input_file_size,
-                    ai_input_width=source_photo.ai_input_width,
-                    ai_input_height=source_photo.ai_input_height,
-                    processing_status=source_photo.processing_status,
-                    taken_at=source_photo.taken_at,
-                    exif_lat=source_photo.exif_lat,
-                    exif_lng=source_photo.exif_lng,
-                    is_primary=source_photo.is_primary,
-                    is_analysis_reference=source_photo.is_analysis_reference,
-                    sort_order=source_photo.sort_order,
-                )
-            )
-
-        self.repository.session.add_all(duplicated_photos)
-        await self.repository.session.commit()
+            self.repository.session.add_all(duplicated_photos)
+            await self.repository.session.commit()
+        except Exception:
+            await self._cleanup_duplicated_storage(copy_journal)
+            raise
 
     async def get_project(self, project_id: str, *, organization_id: str | None = None) -> Project | None:
         return await self.repository.get_project(project_id, organization_id=organization_id)
@@ -411,7 +448,11 @@ class ProjectService:
             location_lng=source_project.location_lng,
             address_label=source_project.address_label,
         )
-        await self._duplicate_project_photos(source_project, duplicated_project)
+        try:
+            await self._duplicate_project_photos(source_project, duplicated_project)
+        except Exception:
+            await self._rollback_duplicated_project(duplicated_project.id)
+            raise
         return await self.repository.get_project(duplicated_project.id)
 
     async def mark_project_sent(self, project_id: str, *, organization_id: str | None = None) -> ProjectDetail | None:
@@ -446,8 +487,9 @@ class ProjectService:
         if not project:
             return None
 
-        proposal_draft = build_project_proposal_draft(project, project.photos or [], proposal_record=project.proposal_draft)
-        ready_photos = [photo for photo in (project.photos or []) if photo.processing_status == "ready"]
+        active_photos = _active_project_photos(project)
+        proposal_draft = build_project_proposal_draft(project, active_photos, proposal_record=project.proposal_draft)
+        ready_photos = [photo for photo in active_photos if photo.processing_status == "ready"]
         if proposal_draft.status != "ready":
             raise ValueError(
                 f"Final proposal can only be created from a ready proposal draft. Current status: {proposal_draft.status}."

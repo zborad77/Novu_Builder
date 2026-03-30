@@ -9,6 +9,7 @@ from app.repositories.analysis_repository import (
     ANALYSIS_JOB_STATUS_FAILED,
     ANALYSIS_JOB_STATUS_QUEUED,
     ANALYSIS_JOB_STATUS_RUNNING,
+    AnalysisJobLeaseOwnershipError,
     InvalidAnalysisJobStatusError,
     InvalidAnalysisResultPayloadError,
     InvalidAnalysisJobStatusTransition,
@@ -23,6 +24,10 @@ def _make_job(status: str = "queued") -> MagicMock:
     job.project_id = "proj_1"
     job.status = status
     job.retry_count = 0
+    job.lease_token = None
+    job.worker_id = None
+    job.leased_at = None
+    job.heartbeat_at = None
     job.started_at = None
     job.finished_at = None
     job.error_message = None
@@ -206,7 +211,7 @@ class TestAnalysisServiceFailureGuards:
         mock_repo.get_analysis_job = AsyncMock(return_value=job)
         mock_repo.get_project_in_org = AsyncMock(return_value=project)
 
-        async def _mark_running(current_job):
+        async def _mark_running(current_job, **_kwargs):
             current_job.status = ANALYSIS_JOB_STATUS_RUNNING
             current_job.started_at = datetime.now(UTC)
             return current_job
@@ -290,6 +295,57 @@ class TestAnalysisServiceFailureGuards:
 
         run_analysis.assert_not_awaited()
         mock_repo.complete_job_with_result.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_execute_job_aborts_when_db_lease_no_longer_matches(self):
+        job = _make_job(status=ANALYSIS_JOB_STATUS_QUEUED)
+        project = _make_project()
+        session = AsyncMock()
+
+        mock_repo = AsyncMock()
+        mock_repo.get_analysis_job = AsyncMock(side_effect=[job, job])
+        mock_repo.get_project_in_org = AsyncMock(return_value=project)
+
+        async def _mark_running(current_job, **_kwargs):
+            current_job.status = ANALYSIS_JOB_STATUS_RUNNING
+            current_job.started_at = datetime.now(UTC)
+            return current_job
+
+        mock_repo.mark_job_running = AsyncMock(side_effect=_mark_running)
+        mock_repo.assert_job_lease_owned = AsyncMock(
+            side_effect=[job, AnalysisJobLeaseOwnershipError("lost lease")]
+        )
+        mock_photo_repo = AsyncMock()
+        mock_photo_repo.list_photos_by_project_id = AsyncMock(return_value=[])
+
+        service = AnalysisService(
+            repository=AsyncMock(),
+            photo_repository=AsyncMock(),
+            provider_key="mock",
+        )
+
+        with (
+            patch("app.services.analysis_service.WorkerAsyncSessionFactory") as factory,
+            patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo),
+            patch("app.services.analysis_service.PhotoRepository", return_value=mock_photo_repo),
+            patch(
+                "app.services.analysis_service.run_project_analysis",
+                new=AsyncMock(return_value={"jobStatus": "completed", "estimatedAreaSqm": 1.0}),
+            ),
+        ):
+            ctx = AsyncMock()
+            ctx.__aenter__ = AsyncMock(return_value=session)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            factory.return_value = ctx
+
+            with pytest.raises(AnalysisJobLeaseOwnershipError):
+                await service.execute_job(
+                    "job_1",
+                    "proj_1",
+                    organization_id="org_1",
+                    lease_token="lease-1",
+                    worker_id="worker-a",
+                )
 
     @pytest.mark.asyncio
     async def test_cancel_analysis_job_is_idempotent_for_failed_job(self):

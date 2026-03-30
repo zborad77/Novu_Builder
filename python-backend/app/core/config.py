@@ -223,6 +223,14 @@ class Settings(BaseSettings):
     storage_root: str = Field(default="", alias="STORAGE_ROOT")
     ai_analysis_provider: str = Field(default="mock", alias="AI_ANALYSIS_PROVIDER")
     worker_concurrency: int = Field(default=1, alias="WORKER_CONCURRENCY")
+    worker_job_lease_timeout_seconds: int = Field(default=600, alias="WORKER_JOB_LEASE_TIMEOUT_SECONDS")
+    worker_job_reap_interval_seconds: int = Field(default=30, alias="WORKER_JOB_REAP_INTERVAL_SECONDS")
+    analysis_queue_max_depth: int = Field(default=1000, alias="ANALYSIS_QUEUE_MAX_DEPTH", ge=1)
+    analysis_jobs_per_tenant_limit: int = Field(
+        default=10,
+        alias="ANALYSIS_JOBS_PER_TENANT_LIMIT",
+        ge=1,
+    )
     # Worker-specific DB pool (separate engine, isolated from API pool).
     # 0 = auto-derive pool size from WORKER_CONCURRENCY (recommended default).
     worker_db_pool_size: int = Field(default=0, alias="WORKER_DB_POOL_SIZE")
@@ -256,6 +264,7 @@ class Settings(BaseSettings):
     rate_limit_admin_write: str = Field(default="10/minute", alias="RATE_LIMIT_ADMIN_WRITE")
     rate_limit_admin_sensitive: str = Field(default="5/minute", alias="RATE_LIMIT_ADMIN_SENSITIVE")
     rate_limit_upload: str = Field(default="30/minute", alias="RATE_LIMIT_UPLOAD")
+    rate_limit_analysis_jobs: str = Field(default="20/minute", alias="RATE_LIMIT_ANALYSIS_JOBS")
 
     # Email — password reset and transactional emails (C7)
     smtp_host: str = Field(default="", alias="SMTP_HOST")
@@ -592,6 +601,14 @@ class Settings(BaseSettings):
         if self.worker_concurrency <= 0:
             raise ValueError(
                 "WORKER_CONCURRENCY must be > 0."
+            )
+        if self.worker_job_lease_timeout_seconds < 60:
+            raise ValueError(
+                "WORKER_JOB_LEASE_TIMEOUT_SECONDS must be >= 60."
+            )
+        if self.worker_job_reap_interval_seconds <= 0:
+            raise ValueError(
+                "WORKER_JOB_REAP_INTERVAL_SECONDS must be > 0."
             )
         return self
 

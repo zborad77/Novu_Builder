@@ -21,6 +21,7 @@ from app.storage.backend import (
     generate_presigned_url,
     read_storage_file,
     sanitize_filename,
+    storage_key_exists,
     write_storage_file,
 )
 
@@ -48,7 +49,11 @@ def _to_export_read(export: ProjectExport) -> ExportRead:
         status=export.status,
         fileName=export.file_name,
         storageKey=export.storage_key,
-        downloadUrl=generate_presigned_url(export.storage_key) if export.storage_key else None,
+        downloadUrl=(
+            generate_presigned_url(export.storage_key)
+            if export.status == "completed" and export.storage_key
+            else None
+        ),
         createdAt=_as_utc(export.created_at),
         completedAt=_as_utc(export.completed_at),
         expiresAt=_as_utc(export.expires_at),
@@ -778,10 +783,10 @@ async def _build_case_zip_bytes(case_detail: ProjectDetail) -> bytes:
         for photo in case_detail.photos:
             storage_key = photo.get("storageKey") if isinstance(photo, dict) else getattr(photo, "storageKey", None)
             if not storage_key:
-                continue
+                raise FileNotFoundError("Case ZIP export requires a valid photo storageKey for every included photo.")
             photo_bytes = await read_storage_file(relative_storage_key=storage_key)
             if photo_bytes is None:
-                continue
+                raise FileNotFoundError(f"Case ZIP export is missing storage object: {storage_key}")
             archive_name = f"photos/{Path(storage_key).name}"
             archive.writestr(archive_name, photo_bytes)
 
@@ -792,22 +797,203 @@ class ExportService:
     def __init__(self, repository: ExportRepository):
         self.repository = repository
 
+    async def _artifact_exists(self, storage_key: str | None) -> bool:
+        if not storage_key:
+            return False
+        try:
+            return await storage_key_exists(relative_storage_key=storage_key)
+        except Exception as exc:
+            logger.error(
+                "export.artifact_probe_failed",
+                storage_key=storage_key,
+                error=str(exc),
+                exc_info=True,
+            )
+            return False
+
+    async def _create_export_record(
+        self,
+        *,
+        export_id: str,
+        project_id: str,
+        export_type: str,
+        status: str,
+        file_name: str,
+        storage_key: str | None,
+        created_at: datetime,
+        completed_at: datetime | None,
+    ) -> ExportRead:
+        export = await self.repository.create(
+            export_id=export_id,
+            project_id=project_id,
+            export_type=export_type,
+            status=status,
+            file_name=file_name,
+            storage_key=storage_key,
+            created_at=created_at,
+            completed_at=completed_at,
+            expires_at=_default_export_expires_at(created_at),
+        )
+        return _to_export_read(export)
+
+    async def _create_pending_export_record(
+        self,
+        *,
+        export_id: str,
+        project_id: str,
+        export_type: str,
+        file_name: str,
+        created_at: datetime,
+    ) -> ProjectExport:
+        return await self.repository.create(
+            export_id=export_id,
+            project_id=project_id,
+            export_type=export_type,
+            status="pending",
+            file_name=file_name,
+            storage_key=None,
+            created_at=created_at,
+            completed_at=None,
+            expires_at=_default_export_expires_at(created_at),
+        )
+
+    async def _fail_export(self, export: ProjectExport) -> ExportRead:
+        export = await self.repository.update_state(
+            export,
+            status="failed",
+            storage_key=None,
+            completed_at=None,
+        )
+        return _to_export_read(export)
+
+    async def _create_storage_backed_export(
+        self,
+        *,
+        export_id: str,
+        project_id: str,
+        export_type: str,
+        file_name: str,
+        storage_key: str,
+        content: bytes,
+        now: datetime,
+    ) -> ExportRead:
+        export = await self._create_pending_export_record(
+            export_id=export_id,
+            project_id=project_id,
+            export_type=export_type,
+            file_name=file_name,
+            created_at=now,
+        )
+        await self.repository.update_state(
+            export,
+            status="generating",
+            storage_key=None,
+            completed_at=None,
+        )
+        return await self._write_generated_export(
+            export,
+            project_id=project_id,
+            export_type=export_type,
+            storage_key=storage_key,
+            content=content,
+            now=now,
+        )
+
+    async def _write_generated_export(
+        self,
+        export: ProjectExport,
+        *,
+        project_id: str,
+        export_type: str,
+        storage_key: str,
+        content: bytes,
+        now: datetime,
+    ) -> ExportRead:
+        completed = False
+        try:
+            await write_storage_file(
+                relative_storage_key=storage_key,
+                content=content,
+            )
+            completed = await self._artifact_exists(storage_key)
+        except Exception as exc:
+            logger.error(
+                "export.write_failed",
+                export_id=export.id,
+                project_id=project_id,
+                export_type=export_type,
+                storage_key=storage_key,
+                error=str(exc),
+                exc_info=True,
+            )
+            completed = False
+
+        if not completed:
+            try:
+                await delete_storage_file(relative_storage_key=storage_key)
+            except Exception as exc:
+                logger.warning(
+                    "export.failed_artifact_cleanup_failed",
+                    export_id=export.id,
+                    project_id=project_id,
+                    export_type=export_type,
+                    storage_key=storage_key,
+                    error=str(exc),
+                )
+            logger.error(
+                "export.fail_closed",
+                export_id=export.id,
+                project_id=project_id,
+                export_type=export_type,
+                storage_key=storage_key,
+                reason="artifact_missing_or_unverified",
+            )
+            return await self._fail_export(export)
+
+        export = await self.repository.update_state(
+            export,
+            status="completed",
+            storage_key=storage_key,
+            completed_at=now,
+        )
+        return _to_export_read(export)
+
+    async def _mark_export_failed_if_artifact_missing(self, export: ProjectExport) -> ProjectExport:
+        artifact_ready = await self._artifact_exists(export.storage_key)
+        if artifact_ready:
+            return export
+
+        logger.error(
+            "export.invalid_completed_state",
+            export_id=export.id,
+            project_id=export.project_id,
+            export_type=export.export_type,
+            storage_key=export.storage_key,
+        )
+        return await self.repository.update_state(
+            export,
+            status="failed",
+            storage_key=None,
+            completed_at=None,
+        )
+
     async def create_export(self, *, case_id: str, export_type: str) -> ExportRead:
         export_id = f"exp_{uuid4().hex[:8]}"
         now = datetime.now(UTC)
-        storage_key = f"exports/{case_id}/{export_id}-{case_id}-{export_type}.pdf"
-        export = await self.repository.create(
+        logger.error(
+            "export.unsupported_generation",
             export_id=export_id,
             project_id=case_id,
             export_type=export_type,
-            status="completed",
-            file_name=f"{case_id}-{export_type}.pdf",
-            storage_key=storage_key,
-            created_at=now,
-            completed_at=now,
-            expires_at=_default_export_expires_at(now),
         )
-        return _to_export_read(export)
+        export = await self._create_pending_export_record(
+            export_id=export_id,
+            project_id=case_id,
+            export_type=export_type,
+            file_name=f"{case_id}-{export_type}.pdf",
+            created_at=now,
+        )
+        return await self._fail_export(export)
 
     async def create_quote_docx_export(self, *, case_detail: ProjectDetail) -> ExportRead:
         if case_detail.finalProposal is None:
@@ -818,22 +1004,15 @@ class ExportService:
         base_name = sanitize_filename(case_detail.finalProposal.subject or case_detail.title or "nabidka")
         file_name = f"{base_name}.docx"
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        await write_storage_file(
-            relative_storage_key=relative_storage_key.as_posix(),
-            content=_build_docx_bytes(case_detail),
-        )
-        export = await self.repository.create(
+        return await self._create_storage_backed_export(
             export_id=export_id,
             project_id=case_detail.id,
             export_type="quote-docx",
-            status="completed",
             file_name=file_name,
             storage_key=relative_storage_key.as_posix(),
-            created_at=now,
-            completed_at=now,
-            expires_at=_default_export_expires_at(now),
+            content=_build_docx_bytes(case_detail),
+            now=now,
         )
-        return _to_export_read(export)
 
     async def create_proposal_docx_export(self, *, case_detail: ProjectDetail) -> ExportRead:
         if case_detail.proposalDraft is None:
@@ -844,22 +1023,15 @@ class ExportService:
         base_name = sanitize_filename(case_detail.proposalDraft.subject or case_detail.title or "pracovni-navrh")
         file_name = f"{base_name}.docx"
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        await write_storage_file(
-            relative_storage_key=relative_storage_key.as_posix(),
-            content=_build_proposal_docx_bytes(case_detail),
-        )
-        export = await self.repository.create(
+        return await self._create_storage_backed_export(
             export_id=export_id,
             project_id=case_detail.id,
             export_type="proposal-docx",
-            status="completed",
             file_name=file_name,
             storage_key=relative_storage_key.as_posix(),
-            created_at=now,
-            completed_at=now,
-            expires_at=_default_export_expires_at(now),
+            content=_build_proposal_docx_bytes(case_detail),
+            now=now,
         )
-        return _to_export_read(export)
 
     async def create_quote_pdf_export(self, *, case_detail: ProjectDetail) -> ExportRead:
         if case_detail.finalProposal is None:
@@ -870,22 +1042,15 @@ class ExportService:
         base_name = sanitize_filename(case_detail.finalProposal.subject or case_detail.title or "nabidka")
         file_name = f"{base_name}.pdf"
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        await write_storage_file(
-            relative_storage_key=relative_storage_key.as_posix(),
-            content=_build_pdf_bytes(case_detail),
-        )
-        export = await self.repository.create(
+        return await self._create_storage_backed_export(
             export_id=export_id,
             project_id=case_detail.id,
             export_type="quote-pdf",
-            status="completed",
             file_name=file_name,
             storage_key=relative_storage_key.as_posix(),
-            created_at=now,
-            completed_at=now,
-            expires_at=_default_export_expires_at(now),
+            content=_build_pdf_bytes(case_detail),
+            now=now,
         )
-        return _to_export_read(export)
 
     async def create_final_proposal_exports(self, *, case_detail: ProjectDetail) -> list[ExportRead]:
         return [
@@ -899,22 +1064,39 @@ class ExportService:
         base_name = sanitize_filename(case_detail.title or case_detail.id)
         file_name = f"{base_name}.zip"
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        await write_storage_file(
-            relative_storage_key=relative_storage_key.as_posix(),
-            content=await _build_case_zip_bytes(case_detail),
-        )
-        export = await self.repository.create(
+        export = await self._create_pending_export_record(
             export_id=export_id,
             project_id=case_detail.id,
             export_type="case-zip",
-            status="completed",
             file_name=file_name,
-            storage_key=relative_storage_key.as_posix(),
             created_at=now,
-            completed_at=now,
-            expires_at=_default_export_expires_at(now),
         )
-        return _to_export_read(export)
+        await self.repository.update_state(
+            export,
+            status="generating",
+            storage_key=None,
+            completed_at=None,
+        )
+        try:
+            content = await _build_case_zip_bytes(case_detail)
+        except Exception as exc:
+            logger.error(
+                "export.generation_failed",
+                export_id=export_id,
+                project_id=case_detail.id,
+                export_type="case-zip",
+                error=str(exc),
+                exc_info=True,
+            )
+            return await self._fail_export(export)
+        return await self._write_generated_export(
+            export,
+            project_id=case_detail.id,
+            export_type="case-zip",
+            storage_key=relative_storage_key.as_posix(),
+            content=content,
+            now=now,
+        )
 
     async def get_export(self, export_id: str) -> ExportRead | None:
         export = await self.repository.get_by_id(export_id)
@@ -930,6 +1112,8 @@ class ExportService:
                 expires_at=expires_at.isoformat(),
             )
             return None
+        if export.status == "completed":
+            export = await self._mark_export_failed_if_artifact_missing(export)
         return _to_export_read(export)
 
     async def delete_expired_exports(self, *, now: datetime | None = None) -> int:

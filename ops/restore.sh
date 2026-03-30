@@ -188,6 +188,11 @@ DB_RESTORE_STATUS="NOT EXECUTED"
 DB_RESTORE_REASON="restore pipeline has not completed"
 PRODUCTION_DR_STATUS="NOT VERIFIED"
 PRODUCTION_DR_REASON="this restore flow does not verify full production disaster recovery"
+PRODUCTION_S3_MANIFEST=0
+PRODUCTION_DR_ELIGIBLE="false"
+PRODUCTION_DR_ELIGIBILITY_REASON="production DR eligibility has not been computed"
+FULL_STATE_RESTORE_STATUS="NOT VERIFIED"
+FULL_STATE_RESTORE_REASON="full-state restore claim has not been computed"
 PREVERIFY_STATUS="NOT EXECUTED"
 VERIFY_DB_QUERY_USABILITY_STATUS="NOT EXECUTED"
 VERIFY_DB_QUERY_USABILITY_REASON="pre-restore verify has not reported DB query usability"
@@ -214,6 +219,7 @@ step_label() {
     BACKEND_HANDOFF_READINESS) echo "9. Backend liveness / handoff readiness" ;;
     POST_RESTORE_VALIDATION) echo "10. Post-restore validation" ;;
     RELEASE_READINESS_DECISION) echo "11. Release readiness decision" ;;
+    STORAGE_CONSISTENCY_CHECK) echo "12. Storage consistency check (DB<->S3)" ;;
     *) echo "$1" ;;
   esac
 }
@@ -290,6 +296,8 @@ init_restore_steps() {
   set_step_status BACKEND_HANDOFF_READINESS "NOT EXECUTED" "backend liveness has not been checked"
   set_step_status POST_RESTORE_VALIDATION "NOT EXECUTED" "post-restore validation has not completed"
   set_step_status RELEASE_READINESS_DECISION "NOT EXECUTED" "release readiness has not been decided"
+  set_step_status STORAGE_CONSISTENCY_CHECK "NOT EXECUTED" \
+    "full DB<->storage consistency check has not run yet"
 }
 
 emit_final_summary() {
@@ -308,6 +316,10 @@ emit_final_summary() {
   echo "  Backup-set verify: $PREVERIFY_STATUS"
   echo "  DB restore status: $DB_RESTORE_STATUS"
   echo "  DB restore detail: $DB_RESTORE_REASON"
+  echo "  production_dr_eligible: $PRODUCTION_DR_ELIGIBLE"
+  echo "  production_dr_eligibility detail: $PRODUCTION_DR_ELIGIBILITY_REASON"
+  echo "  Full-state restore claim: $FULL_STATE_RESTORE_STATUS"
+  echo "  Full-state restore detail: $FULL_STATE_RESTORE_REASON"
   echo "  Production DR status: $PRODUCTION_DR_STATUS"
   echo "  Production DR detail: $PRODUCTION_DR_REASON"
   echo ""
@@ -322,7 +334,8 @@ emit_final_summary() {
     SCHEMA_HEAD_VALIDATION \
     BACKEND_HANDOFF_READINESS \
     POST_RESTORE_VALIDATION \
-    RELEASE_READINESS_DECISION; do
+    RELEASE_READINESS_DECISION \
+    STORAGE_CONSISTENCY_CHECK; do
     status="$(get_step_status "$step")"
     detail="$(get_step_detail "$step")"
     echo "  $(step_label "$step"): $status"
@@ -343,6 +356,206 @@ emit_final_summary() {
   echo ""
 }
 
+# ── DR claim gating ───────────────────────────────────────────────────────────
+# compute_release_readiness_decision:
+#   Evaluates ALL required conditions and sets RELEASE_READINESS_DECISION.
+#   Must be called after all restore steps complete (not inside fail_restore paths).
+#
+# Conditions for RELEASE_READINESS_DECISION=PASSED:
+#   (a) all critical restore steps are PASSED
+#   (b) verify DB-referenced objects check is not FAILED
+#
+# NOTE: production_dr_eligible=true is a SEPARATE, HIGHER bar than release readiness.
+# It requires the full authoritative DB+storage restore contract to be proven.
+compute_release_readiness_decision() {
+  local blocked_by=""
+  local step status
+
+  for step in BACKUP_SET_VALIDATION DB_RESTORE SCHEMA_HEAD_VALIDATION \
+              BACKEND_HANDOFF_READINESS POST_RESTORE_VALIDATION STORAGE_CONSISTENCY_CHECK; do
+    status="$(get_step_status "$step")"
+    if [[ "$status" != "PASSED" ]]; then
+      blocked_by="${blocked_by}${blocked_by:+; }$(step_label "$step"): ${status}"
+    fi
+  done
+
+  if [[ "$VERIFY_DB_QUERY_USABILITY_STATUS" == "FAILED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }verify DB query usability: FAILED"
+  fi
+  if [[ "$VERIFY_SCHEMA_HEAD_ALIGNMENT_STATUS" == "FAILED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }verify schema/head alignment: FAILED"
+  fi
+  if [[ "$VERIFY_REFERENCE_SAMPLE_VALIDATION_STATUS" == "FAILED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }DB-referenced storage objects validation: FAILED (sampled)"
+  fi
+  if [[ "$VERIFY_SIGNED_URL_VALIDATION_STATUS" == "FAILED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }signed URL/access path validation: FAILED"
+  fi
+  if [[ "$VERIFY_APP_MEDIA_SMOKE_STATUS" == "FAILED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }application media smoke validation: FAILED"
+  fi
+
+  if [[ -n "$blocked_by" ]]; then
+    set_step_status RELEASE_READINESS_DECISION "FAILED" \
+      "release readiness blocked — $blocked_by"
+  elif [[ $PRODUCTION_S3_MANIFEST -eq 1 ]]; then
+    set_step_status RELEASE_READINESS_DECISION "PASSED" \
+      "DB handoff ready only; media restore is not implemented and Production DR remains NOT VERIFIED"
+  else
+    set_step_status RELEASE_READINESS_DECISION "PASSED" \
+      "DB handoff ready for the DB-only restore contract; Production DR remains NOT VERIFIED"
+  fi
+}
+
+run_storage_consistency_check() {
+  local output status summary
+
+  set_step_status STORAGE_CONSISTENCY_CHECK "IN PROGRESS" \
+    "running full DB<->storage consistency check via backend runtime"
+
+  set +e
+  output="$(docker compose -f "$COMPOSE_FILE" run --rm backend \
+    python scripts/check_storage_consistency.py --mode full --json-only 2>&1)"
+  status=$?
+  set -e
+
+  [[ -n "$output" ]] && printf '%s\n' "$output"
+  summary="$(printf '%s\n' "$output" | grep '^STORAGE_CONSISTENCY_SCAN_STATUS|' | tail -1 || true)"
+
+  if [[ $status -eq 0 ]]; then
+    set_step_status STORAGE_CONSISTENCY_CHECK "PASSED" \
+      "full DB<->storage consistency check passed (${summary:-scan status not reported})"
+    return 0
+  fi
+
+  set_step_status STORAGE_CONSISTENCY_CHECK "FAILED" \
+    "full DB<->storage consistency check failed with exit $status (${summary:-no scan status reported})"
+  return $status
+}
+
+compute_production_dr_claim_state() {
+  local blocked_by=""
+
+  if [[ $PRODUCTION_S3_MANIFEST -ne 1 ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }authoritative production+s3 restore contract is not declared"
+  fi
+  if [[ "$(get_step_status BACKUP_SET_VALIDATION)" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }backup set validation is not PASSED"
+  fi
+  if [[ "$(get_step_status DB_RESTORE)" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }DB restore is not PASSED"
+  fi
+  if [[ "$(get_step_status SCHEMA_HEAD_VALIDATION)" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }schema/head alignment is not PASSED"
+  fi
+  if [[ "$VERIFY_DB_QUERY_USABILITY_STATUS" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }DB query usability validation is not PASSED"
+  fi
+  if [[ "$VERIFY_SCHEMA_HEAD_ALIGNMENT_STATUS" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }verify schema/head alignment is not PASSED"
+  fi
+  if [[ "$S3_PROTECTION_PREREQ_STATUS" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }S3 protection prerequisites are not PASSED"
+  fi
+  if [[ "$S3_PRE_RESTORE_VALIDATION_STATUS" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }S3 pre-restore validation is not PASSED"
+  fi
+  if [[ "$(get_step_status POST_RESTORE_VALIDATION)" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }post-restore validation is not PASSED"
+  fi
+  if [[ "$VERIFY_REFERENCE_SAMPLE_VALIDATION_STATUS" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }DB-referenced objects validation is not PASSED"
+  fi
+  if [[ "$VERIFY_SIGNED_URL_VALIDATION_STATUS" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }signed URL/access path validation is not PASSED"
+  fi
+  if [[ "$VERIFY_APP_MEDIA_SMOKE_STATUS" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }application media smoke validation is not PASSED"
+  fi
+  if [[ "$(get_step_status STORAGE_CONSISTENCY_CHECK)" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }no blocker consistency failure is not proven because storage consistency check is not PASSED"
+  fi
+  if [[ "$(get_step_status MEDIA_RESTORE)" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }media restore step is not PASSED"
+  fi
+  if [[ "$(get_step_status MEDIA_VALIDATION)" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }media validation step is not PASSED"
+  fi
+
+  if [[ -n "$blocked_by" ]]; then
+    PRODUCTION_DR_ELIGIBLE="false"
+    PRODUCTION_DR_ELIGIBILITY_REASON="required claim gates are missing: $blocked_by"
+    FULL_STATE_RESTORE_STATUS="NOT VERIFIED"
+    FULL_STATE_RESTORE_REASON="full-state restore claim blocked: $blocked_by"
+    PRODUCTION_DR_STATUS="NOT VERIFIED"
+    PRODUCTION_DR_REASON="production DR claim blocked: $blocked_by"
+  else
+    PRODUCTION_DR_ELIGIBLE="true"
+    PRODUCTION_DR_ELIGIBILITY_REASON="all required production DR gates passed"
+    FULL_STATE_RESTORE_STATUS="VERIFIED"
+    FULL_STATE_RESTORE_REASON="full-state DB + authoritative storage restore was verified"
+    PRODUCTION_DR_STATUS="VERIFIED"
+    PRODUCTION_DR_REASON="all required production DR gates passed"
+  fi
+}
+
+# emit_dr_claim_decision_block:
+#   Prints the formal DR claim gating table after the restore summary.
+#   Shows exactly what was and was not verified, in separated labeled sections.
+emit_dr_claim_decision_block() {
+  local sep="──────────────────────────────────────────────────────────────────────────────"
+  echo ""
+  echo "──── DR Claim Decision $sep"
+  echo ""
+  echo "  [DB restore contract]"
+  echo "    DB restore:                  $(get_step_status DB_RESTORE)"
+  echo "    Schema/head alignment:       $(get_step_status SCHEMA_HEAD_VALIDATION)"
+  echo ""
+  echo "  [Post-restore validation]"
+  echo "    DB-referenced objects:       $VERIFY_REFERENCE_SAMPLE_VALIDATION_STATUS"
+  echo "      detail: $VERIFY_REFERENCE_SAMPLE_VALIDATION_REASON"
+  echo "    Signed URL / access path:    $VERIFY_SIGNED_URL_VALIDATION_STATUS"
+  echo "    Application media smoke:     $VERIFY_APP_MEDIA_SMOKE_STATUS"
+  echo ""
+  echo "  [Backend handoff readiness]"
+  echo "    Backend liveness:            $(get_step_status BACKEND_HANDOFF_READINESS)"
+  if [[ $PRODUCTION_S3_MANIFEST -eq 1 ]]; then
+    echo ""
+    echo "  [S3 pre-restore guards]"
+    echo "    S3 prerequisites:            $S3_PROTECTION_PREREQ_STATUS"
+    echo "    S3 pre-restore validation:   $S3_PRE_RESTORE_VALIDATION_STATUS"
+    echo "    Authoritative storage:       NOT VERIFIED / OUT OF SCOPE"
+  fi
+  echo ""
+  echo "  [Production DR eligibility]"
+  echo "    Required conditions for production_dr_eligible=true:"
+  echo "      Backup set validation:     $(get_step_status BACKUP_SET_VALIDATION)"
+  echo "      DB restore:                $(get_step_status DB_RESTORE)"
+  echo "      Schema/head alignment:     $(get_step_status SCHEMA_HEAD_VALIDATION)"
+  echo "      S3 prerequisites:          $S3_PROTECTION_PREREQ_STATUS"
+  echo "      S3 validation:             $S3_PRE_RESTORE_VALIDATION_STATUS"
+  echo "      Post-restore validation:   $(get_step_status POST_RESTORE_VALIDATION)"
+  echo "      DB-referenced objects:     $VERIFY_REFERENCE_SAMPLE_VALIDATION_STATUS"
+  echo "      Signed URL/access path:    $VERIFY_SIGNED_URL_VALIDATION_STATUS"
+  echo "      App media smoke:           $VERIFY_APP_MEDIA_SMOKE_STATUS"
+  echo "      Media restore step:        $(get_step_status MEDIA_RESTORE)"
+  echo "      Media validation step:     $(get_step_status MEDIA_VALIDATION)"
+  echo "      Storage consistency gate:  $(get_step_status STORAGE_CONSISTENCY_CHECK)"
+  echo "    production_dr_eligible:      $PRODUCTION_DR_ELIGIBLE"
+  echo "      detail: $PRODUCTION_DR_ELIGIBILITY_REASON"
+  echo "    Full-state restore claim:    $FULL_STATE_RESTORE_STATUS"
+  echo "      detail: $FULL_STATE_RESTORE_REASON"
+  echo "    Production DR verified:      $PRODUCTION_DR_STATUS"
+  echo "      detail: $PRODUCTION_DR_REASON"
+  echo ""
+  echo "  [Decision]"
+  echo "    Release readiness decision:  $(get_step_status RELEASE_READINESS_DECISION)"
+  if [[ -n "$(get_step_detail RELEASE_READINESS_DECISION)" ]]; then
+    echo "      detail: $(get_step_detail RELEASE_READINESS_DECISION)"
+  fi
+  echo "$sep"
+}
+
 fail_restore() {
   local step="$1"
   local detail="$2"
@@ -358,8 +571,10 @@ fail_restore() {
       DB_RESTORE_REASON="$message"
       ;;
   esac
+  compute_production_dr_claim_state
   log "ERROR: $message" >&2
   emit_final_summary
+  emit_dr_claim_decision_block
   exit 1
 }
 
@@ -592,7 +807,16 @@ if [[ "$SKIP_VERIFY" == "--skip-verify" ]]; then
   sleep 2
 else
   [ -f "$VERIFY_SCRIPT" ] || { echo "ERROR: verify script missing: $VERIFY_SCRIPT"; exit 1; }
-  if ! timeout 60 bash "$VERIFY_SCRIPT" "$BACKUP_FILE"; then
+  _verify_tmp="$(mktemp)"
+  set +e
+  timeout 60 bash "$VERIFY_SCRIPT" "$BACKUP_FILE" >"$_verify_tmp" 2>&1
+  _verify_pipe_status=$?
+  set -e
+  _verify_output="$(cat "$_verify_tmp")"
+  [[ -n "$_verify_output" ]] && printf '%s\n' "$_verify_output"
+  capture_verify_validation_output "$_verify_output"
+  rm -f "$_verify_tmp"
+  if [[ "$_verify_pipe_status" -ne 0 ]]; then
     echo "ERROR: verify_restore.sh FAILED or timed out (>60s) — aborting restore"
     exit 1
   fi
@@ -740,23 +964,37 @@ else
 fi
 
 # ── 8. Summary ─────────────────────────────────────────────────────────────────
+if ! run_storage_consistency_check; then
+  warn "Full DB<->storage consistency validation failed - release readiness will be blocked."
+fi
+
 if [[ $HEALTHY -eq 1 ]]; then
-  set_step_status POST_RESTORE_VALIDATION "PASSED" "DB restore, schema/head validation, and backend liveness checks completed"
+  if [[ "$VERIFY_DB_QUERY_USABILITY_STATUS" == "FAILED" \
+     || "$VERIFY_SCHEMA_HEAD_ALIGNMENT_STATUS" == "FAILED" \
+     || "$VERIFY_REFERENCE_SAMPLE_VALIDATION_STATUS" == "FAILED" \
+     || "$VERIFY_SIGNED_URL_VALIDATION_STATUS" == "FAILED" \
+     || "$VERIFY_APP_MEDIA_SMOKE_STATUS" == "FAILED" ]]; then
+    set_step_status POST_RESTORE_VALIDATION "FAILED" "post-restore validation is blocked by failed verify-reported DB/storage validation steps"
+  else
+    set_step_status POST_RESTORE_VALIDATION "PASSED" "DB restore, schema/head validation, backend liveness, and verify-reported DB/storage checks completed"
+  fi
   DB_RESTORE_STATUS="PASSED"
   DB_RESTORE_REASON="database restore, schema/head validation, and backend liveness completed"
-  if [[ $PRODUCTION_S3_MANIFEST -eq 1 ]]; then
-    set_step_status RELEASE_READINESS_DECISION "PASSED" "DB handoff ready only; media restore is not implemented and Production DR remains NOT VERIFIED"
-  else
-    set_step_status RELEASE_READINESS_DECISION "PASSED" "DB handoff ready for the DB-only restore contract; Production DR remains NOT VERIFIED"
-  fi
 else
   set_step_status POST_RESTORE_VALIDATION "FAILED" "backend liveness was not confirmed, so post-restore validation is incomplete"
-  set_step_status RELEASE_READINESS_DECISION "FAILED" "backend liveness was not confirmed; do not release restored services"
   DB_RESTORE_STATUS="FAILED"
   DB_RESTORE_REASON="database state was restored but backend liveness was not confirmed"
 fi
 
+# Explicit multi-condition DR claim gate.
+# Sets RELEASE_READINESS_DECISION based on ALL required conditions, not only liveness.
+compute_release_readiness_decision
+compute_production_dr_claim_state
+
 emit_final_summary
+
+# Formal DR claim decision block: separated labeled sections for auditability.
+emit_dr_claim_decision_block
 
 echo "  DB restore contract: PASSED"
 echo "  Schema/head alignment: PASSED ($POST_MIGRATION_REV)"
@@ -765,7 +1003,13 @@ if [[ $HEALTHY -eq 1 ]]; then
 else
   echo "  Backend liveness probe: FAILED (no response within 60s)"
 fi
-echo "  Production DR: NOT VERIFIED"
+echo "  DB -> storage sampled reference validation: $VERIFY_REFERENCE_SAMPLE_VALIDATION_STATUS"
+echo "  Signed URL / storage access path validation: $VERIFY_SIGNED_URL_VALIDATION_STATUS"
+echo "  Application media smoke validation: $VERIFY_APP_MEDIA_SMOKE_STATUS"
+echo "  Full DB<->storage consistency validation: $(get_step_status STORAGE_CONSISTENCY_CHECK)"
+echo "  production_dr_eligible: $PRODUCTION_DR_ELIGIBLE"
+echo "  Full-state restore claim: $FULL_STATE_RESTORE_STATUS"
+echo "  Production DR: $PRODUCTION_DR_STATUS"
 if [[ $PRODUCTION_S3_MANIFEST -eq 1 ]]; then
   echo "  S3 protection prerequisites: $S3_PROTECTION_PREREQ_STATUS"
   echo "  S3 pre-restore validation: $S3_PRE_RESTORE_VALIDATION_STATUS"
@@ -781,15 +1025,19 @@ if [[ $PRODUCTION_S3_MANIFEST -eq 1 ]]; then
   fi
 fi
 echo ""
-echo "This workflow validates DB restore integrity and schema/head alignment only."
-echo "A dependency-free liveness probe does NOT prove full application readiness or S3 media recovery."
-if [[ $HEALTHY -ne 1 ]]; then
+echo "This workflow validates DB restore integrity, schema/head alignment, backend liveness, sampled verify_restore media checks, and a mandatory full DB<->storage consistency scan."
+echo "It does NOT prove full media recovery orchestration or authoritative S3/object storage disaster recovery."
+if [[ "$(get_step_status RELEASE_READINESS_DECISION)" != "PASSED" ]]; then
   echo ""
-  echo "Release readiness decision: FAILED (backend liveness was not confirmed; Production DR remains NOT VERIFIED)"
+  if [[ $HEALTHY -ne 1 ]]; then
+    echo "Release readiness decision: FAILED (backend liveness was not confirmed; Production DR remains NOT VERIFIED)"
+  else
+    echo "Release readiness decision: FAILED ($(get_step_detail RELEASE_READINESS_DECISION))"
+  fi
   exit 1
 fi
 echo ""
-echo "Release readiness decision: PASSED (DB handoff ready only; Production DR remains NOT VERIFIED)"
+echo "Release readiness decision: PASSED (DB handoff ready with validated DB<->storage consistency; Production DR remains NOT VERIFIED)"
 echo ""
 echo "Verify data manually:"
 echo "  docker compose exec db psql -U novu novu_builder -c 'SELECT COUNT(*) FROM organizations;'"

@@ -27,6 +27,7 @@ if _backend == "s3":
         read_storage_file,
         save_original_photo,
         storage_key_exists,
+        verify_storage_health,
         write_storage_file,
     )
 elif _backend == "local":
@@ -39,6 +40,7 @@ elif _backend == "local":
         read_storage_file,
         save_original_photo,
         storage_key_exists,
+        verify_storage_health,
         write_storage_file,
     )
 else:

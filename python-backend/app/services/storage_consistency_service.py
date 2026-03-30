@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import Literal
 
 import structlog
 
@@ -175,3 +176,99 @@ class StorageConsistencyService:
         if parts[0] == "exports":
             return parts[1]
         return None
+
+    async def build_consistency_report(self) -> "ConsistencyReport":
+        """
+        Run both direction scans and return a structured ConsistencyReport.
+
+        DB→S3 (blockers): any DB-referenced object missing from storage is a HARD FAIL.
+        S3→DB (warnings): orphan storage objects are reported as warnings, not blockers.
+
+        Fail-closed: if the underlying scan raises an exception, scan_status is set to
+        "scan_partial" rather than silently reporting a clean state.
+        """
+        try:
+            scan_result = await self.scan_db_vs_s3()
+        except Exception as exc:
+            logger.error("storage.consistency.scan_error", error=str(exc))
+            return ConsistencyReport(
+                scan_status="scan_partial",
+                db_to_s3=DbToS3ScanResult(status="not_executed", blockers=[]),
+                s3_to_db=S3ToDbScanResult(status="not_executed", warnings=[]),
+                error_detail=str(exc),
+            )
+
+        db_to_s3 = DbToS3ScanResult(
+            status="complete",
+            blockers=scan_result.missing_storage_objects,
+        )
+        s3_to_db = S3ToDbScanResult(
+            status="complete",
+            warnings=scan_result.orphan_storage_objects,
+        )
+
+        if db_to_s3.blockers:
+            overall_status: Literal["scan_complete", "warning", "fail", "scan_partial"] = "fail"
+        elif s3_to_db.warnings:
+            overall_status = "warning"
+        else:
+            overall_status = "scan_complete"
+
+        return ConsistencyReport(
+            scan_status=overall_status,
+            db_to_s3=db_to_s3,
+            s3_to_db=s3_to_db,
+        )
+
+
+@dataclass(frozen=True)
+class DbToS3ScanResult:
+    """
+    Result of the DB→S3 direction scan.
+
+    Enumerates every DB-referenced storage key and verifies it exists in the storage backend.
+    A non-empty blockers list is a HARD FAIL — the referenced object does not exist in storage.
+    """
+
+    status: Literal["complete", "not_executed"]
+    blockers: list[StorageConsistencyIssue]
+
+
+@dataclass(frozen=True)
+class S3ToDbScanResult:
+    """
+    Result of the S3→DB direction scan.
+
+    Enumerates storage objects and identifies those with no corresponding DB reference.
+    Orphan objects are reported as warnings. They do NOT constitute a blocker on their own
+    and must not be treated as a success claim or a hard fail without an explicit policy.
+
+    NOTE: Future orphan cleanup workflow reads from .warnings via cleanup_orphans().
+          Cleanup is NOT implemented here — see StorageConsistencyService.cleanup_orphans().
+    """
+
+    status: Literal["complete", "partial", "not_executed"]
+    warnings: list[StorageConsistencyIssue]
+
+
+@dataclass(frozen=True)
+class ConsistencyReport:
+    """
+    Structured output of a full storage consistency check run.
+
+    scan_status semantics
+    ─────────────────────
+    "scan_complete"  Both directions ran fully; no issues found.
+    "warning"        Both directions ran fully; orphan objects found — no blockers.
+    "fail"           One or more DB-referenced objects are missing from storage (HARD FAIL).
+    "scan_partial"   One or both directions could not complete due to a scan error;
+                     fail-closed: the system cannot confirm a clean state.
+
+    db_to_s3.blockers  → list of StorageConsistencyIssue with action="missing_storage_object"
+    s3_to_db.warnings  → list of StorageConsistencyIssue with action="orphan_storage_object"
+    """
+
+    scan_status: Literal["scan_complete", "warning", "fail", "scan_partial"]
+    db_to_s3: DbToS3ScanResult
+    s3_to_db: S3ToDbScanResult
+    error_detail: str | None = None

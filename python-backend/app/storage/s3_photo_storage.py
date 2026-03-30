@@ -202,6 +202,19 @@ def _sync_delete_storage_file(*, relative_storage_key: str) -> None:
         )
 
 
+def _sync_verify_storage_health() -> None:
+    client = _get_s3_client()
+    bucket = _s3_bucket()
+    client.head_bucket(Bucket=bucket)
+    logger.info(
+        "storage.verified",
+        backend="s3",
+        bucket=bucket,
+        endpoint_url_configured=bool(os.getenv("S3_ENDPOINT_URL", "").strip()),
+        signed_url_ttl_seconds=_configured_signed_url_ttl(),
+    )
+
+
 async def save_original_photo(
     *, project_id: str, original_filename: str | None, content: bytes
 ) -> tuple[str, Path]:
@@ -255,3 +268,7 @@ async def delete_storage_file(*, relative_storage_key: str) -> None:
         _sync_delete_storage_file,
         relative_storage_key=relative_storage_key,
     )
+
+
+async def verify_storage_health() -> None:
+    await asyncio.to_thread(_sync_verify_storage_health)

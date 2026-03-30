@@ -38,6 +38,7 @@ class StorageConsistencyRepository:
                 ProjectPhoto.ai_input_storage_key,
             )
             .join(Project, Project.id == ProjectPhoto.project_id)
+            .where(ProjectPhoto.status == "active")
             .order_by(Project.organization_id.asc(), ProjectPhoto.project_id.asc(), ProjectPhoto.id.asc())
         )
 
@@ -83,7 +84,10 @@ class StorageConsistencyRepository:
                 ProjectExport.storage_key,
             )
             .join(Project, Project.id == ProjectExport.project_id)
-            .where(ProjectExport.storage_key.is_not(None))
+            .where(
+                ProjectExport.storage_key.is_not(None),
+                ProjectExport.status == "completed",
+            )
             .order_by(Project.organization_id.asc(), ProjectExport.project_id.asc(), ProjectExport.id.asc())
         )
         return [

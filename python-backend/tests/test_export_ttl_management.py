@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy import delete
@@ -52,9 +52,153 @@ async def test_create_export_persists_db_expires_at(db_session, test_tenants):
     row = await db_session.get(ProjectExport, export.id)
     assert row is not None
     assert row.project_id == project_id
+    assert row.status == "failed"
     assert row.storage_key == export.storageKey
+    assert export.status == "failed"
     assert export.expiresAt is not None
     assert before + timedelta(days=7) <= _as_utc(row.expires_at) <= after + timedelta(days=7, seconds=1)
+
+
+@pytest.mark.asyncio
+async def test_quote_pdf_export_fails_closed_when_artifact_is_missing(monkeypatch, db_session, test_tenants):
+    project_id = await _seed_project(db_session, test_tenants)
+    service = ExportService(ExportRepository(db_session))
+    case_detail = MagicMock()
+    case_detail.id = project_id
+    case_detail.title = "Quote PDF"
+    case_detail.finalProposal = MagicMock(subject="Nabidka")
+
+    monkeypatch.setattr(export_service_mod, "write_storage_file", AsyncMock(return_value=None))
+    monkeypatch.setattr(export_service_mod, "storage_key_exists", AsyncMock(return_value=False))
+    monkeypatch.setattr(export_service_mod, "delete_storage_file", AsyncMock(return_value=None))
+    monkeypatch.setattr(export_service_mod, "_build_pdf_bytes", lambda _detail: b"pdf-bytes")
+
+    export = await service.create_quote_pdf_export(case_detail=case_detail)
+
+    row = await db_session.get(ProjectExport, export.id)
+    assert row is not None
+    assert row.status == "failed"
+    assert row.storage_key is None
+    assert row.completed_at is None
+    assert export.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_quote_pdf_export_records_completed_only_after_verified_storage(monkeypatch, db_session, test_tenants):
+    project_id = await _seed_project(db_session, test_tenants)
+    service = ExportService(ExportRepository(db_session))
+    case_detail = MagicMock()
+    case_detail.id = project_id
+    case_detail.title = "Quote PDF"
+    case_detail.finalProposal = MagicMock(subject="Nabidka")
+
+    write_storage = AsyncMock(return_value=None)
+    storage_exists = AsyncMock(return_value=True)
+    monkeypatch.setattr(export_service_mod, "write_storage_file", write_storage)
+    monkeypatch.setattr(export_service_mod, "storage_key_exists", storage_exists)
+    monkeypatch.setattr(export_service_mod, "_build_pdf_bytes", lambda _detail: b"pdf-bytes")
+
+    export = await service.create_quote_pdf_export(case_detail=case_detail)
+
+    row = await db_session.get(ProjectExport, export.id)
+    assert row is not None
+    assert row.status == "completed"
+    assert row.storage_key is not None
+    assert row.completed_at is not None
+    assert export.status == "completed"
+    write_storage.assert_awaited_once()
+    storage_exists.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_case_zip_export_fails_closed_when_any_photo_is_missing(monkeypatch, db_session, test_tenants):
+    project_id = await _seed_project(db_session, test_tenants)
+    service = ExportService(ExportRepository(db_session))
+    case_detail = MagicMock()
+    case_detail.id = project_id
+    case_detail.title = "ZIP"
+    case_detail.model_dump = MagicMock(return_value={"id": project_id})
+    case_detail.latestAnalysis = None
+    case_detail.photos = [
+        {
+            "storageKey": f"projects/{project_id}/missing.jpg",
+        }
+    ]
+
+    monkeypatch.setattr(export_service_mod, "read_storage_file", AsyncMock(return_value=None))
+    monkeypatch.setattr(export_service_mod, "delete_storage_file", AsyncMock(return_value=None))
+
+    export = await service.create_case_zip_export(case_detail=case_detail)
+
+    row = await db_session.get(ProjectExport, export.id)
+    assert row is not None
+    assert row.status == "failed"
+    assert row.storage_key is None
+    assert export.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_export_interruption_marks_generating_export_failed(monkeypatch, db_session, test_tenants):
+    project_id = await _seed_project(db_session, test_tenants)
+    service = ExportService(ExportRepository(db_session))
+    case_detail = MagicMock()
+    case_detail.id = project_id
+    case_detail.title = "Interrupted"
+    case_detail.finalProposal = MagicMock(subject="Nabidka")
+
+    monkeypatch.setattr(export_service_mod, "_build_pdf_bytes", lambda _detail: b"pdf-bytes")
+    monkeypatch.setattr(
+        export_service_mod,
+        "write_storage_file",
+        AsyncMock(side_effect=TimeoutError("write interrupted")),
+    )
+    monkeypatch.setattr(export_service_mod, "delete_storage_file", AsyncMock(return_value=None))
+
+    export = await service.create_quote_pdf_export(case_detail=case_detail)
+
+    row = await db_session.get(ProjectExport, export.id)
+    assert row is not None
+    assert row.status == "failed"
+    assert row.storage_key is None
+    assert row.completed_at is None
+    assert export.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_get_export_marks_missing_completed_artifact_as_failed(monkeypatch, db_session, test_tenants):
+    await db_session.execute(delete(ProjectExport))
+    await db_session.commit()
+    project_id = await _seed_project(db_session, test_tenants)
+    now = datetime.now(UTC)
+    export_id = f"exp_{uuid4().hex[:8]}"
+    db_session.add(
+        ProjectExport(
+            id=export_id,
+            project_id=project_id,
+            export_type="quote-pdf",
+            status="completed",
+            file_name="missing.pdf",
+            storage_key=f"exports/{project_id}/{export_id}-missing.pdf",
+            created_at=now,
+            completed_at=now,
+            expires_at=now + timedelta(days=7),
+        )
+    )
+    await db_session.commit()
+
+    monkeypatch.setattr(export_service_mod, "storage_key_exists", AsyncMock(return_value=False))
+
+    service = ExportService(ExportRepository(db_session))
+    export = await service.get_export(export_id)
+
+    row = await db_session.get(ProjectExport, export_id)
+    assert export is not None
+    assert export.status == "failed"
+    assert export.downloadUrl is None
+    assert row is not None
+    assert row.status == "failed"
+    assert row.storage_key is None
+    assert row.completed_at is None
 
 
 @pytest.mark.asyncio

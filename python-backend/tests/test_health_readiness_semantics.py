@@ -8,13 +8,19 @@ from fastapi import Response
 
 @pytest.fixture(autouse=True)
 def _reset_readiness_cache():
-    from app.api.routes.system import _clear_operational_metrics_cache, _clear_readiness_db_cache
+    from app.api.routes.system import (
+        _clear_operational_metrics_cache,
+        _clear_readiness_db_cache,
+        _clear_readiness_storage_cache,
+    )
     from app.main import app as fastapi_app
 
     _clear_readiness_db_cache(fastapi_app)
+    _clear_readiness_storage_cache(fastapi_app)
     _clear_operational_metrics_cache(fastapi_app)
     yield
     _clear_readiness_db_cache(fastapi_app)
+    _clear_readiness_storage_cache(fastapi_app)
     _clear_operational_metrics_cache(fastapi_app)
 
 
@@ -65,6 +71,15 @@ async def test_ready_returns_503_when_database_probe_fails(app_client):
     failing_ctx.__aexit__ = AsyncMock(return_value=False)
 
     with patch("app.api.routes.system.AsyncSessionFactory", return_value=failing_ctx):
+        response = await app_client.get("/api/v1/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "service": "python-backend"}
+
+
+@pytest.mark.asyncio
+async def test_ready_returns_503_when_storage_probe_fails(app_client):
+    with patch("app.api.routes.system.verify_storage_health", new=AsyncMock(side_effect=RuntimeError("s3 down"))):
         response = await app_client.get("/api/v1/ready")
 
     assert response.status_code == 503
@@ -137,6 +152,7 @@ async def test_internal_health_returns_503_when_service_is_not_ready():
     assert response.status_code == 503
     assert body["status"] == "degraded"
     assert body["ready"] is False
+    assert body["storage"] in {"ok", "error"}
 
 
 @pytest.mark.asyncio
@@ -276,3 +292,22 @@ async def test_ready_reuses_fresh_operational_snapshot_without_extra_db_probe():
 
     assert ready is True
     db_probe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_storage_ready_cache_returns_failed_after_expiry():
+    from app.api.routes.system import _storage_ready_cached
+
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    storage_probe = AsyncMock(side_effect=[True, False])
+
+    with (
+        patch("app.api.routes.system._storage_ready", storage_probe),
+        patch("app.api.routes.system._readiness_now", side_effect=[400.0, 400.0, 402.5, 402.5]),
+    ):
+        first = await _storage_ready_cached(request)
+        second = await _storage_ready_cached(request)
+
+    assert first is True
+    assert second is False
+    assert storage_probe.await_count == 2

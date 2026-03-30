@@ -46,6 +46,31 @@ def ensure_directory(target_directory: Path) -> None:
     target_directory.mkdir(parents=True, exist_ok=True)
 
 
+def _sync_verify_storage_health() -> None:
+    for directory in (STORAGE_ROOT, UPLOADS_ROOT, EXPORTS_ROOT):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    probe_file = STORAGE_ROOT / ".startup-write-check"
+    try:
+        probe_file.write_text("ok", encoding="utf-8")
+        probe_file.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.error("storage.not_writable", root=str(STORAGE_ROOT), error=str(exc))
+        raise
+
+    upload_count = sum(1 for path in UPLOADS_ROOT.rglob("*") if path.is_file())
+    export_count = sum(1 for path in EXPORTS_ROOT.rglob("*") if path.is_file() and path.suffix != ".json")
+    logger.info(
+        "storage.verified",
+        backend="local",
+        root=str(STORAGE_ROOT),
+        uploads_root=str(UPLOADS_ROOT),
+        exports_root=str(EXPORTS_ROOT),
+        existing_uploads=upload_count,
+        existing_exports=export_count,
+    )
+
+
 def sanitize_filename(filename: str | None) -> str:
     safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", (filename or "upload.bin").strip())
     safe_name = re.sub(r"-+", "-", safe_name).strip("-")
@@ -472,6 +497,10 @@ async def write_storage_file(*, relative_storage_key: str, content: bytes) -> Pa
         relative_storage_key=relative_storage_key,
         content=content,
     )
+
+
+async def verify_storage_health() -> None:
+    await asyncio.to_thread(_sync_verify_storage_health)
 
 
 async def copy_storage_file(*, source_storage_key: str, target_storage_key: str) -> Path:
