@@ -1,6 +1,8 @@
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+import structlog
 
+from app.core.audit import bind_request_audit_actor
 from app.core.config import get_settings
 from app.repositories.analysis_repository import AnalysisRepository
 from app.db.session import get_db_session
@@ -22,6 +24,8 @@ from app.services.pricebook_service import PricebookService
 from app.services.project_service import ProjectService
 from app.services.quote_variant_service import QuoteVariantService
 from app.services.supplier_service import SupplierService
+
+logger = structlog.get_logger(__name__)
 
 
 def get_project_service(session: AsyncSession = Depends(get_db_session)) -> ProjectService:
@@ -68,15 +72,31 @@ def get_auth_service(session: AsyncSession = Depends(get_db_session)) -> AuthSer
 
 
 async def get_current_user(
+    request: Request,
     authorization: str = Header(None),
     auth_service: AuthService = Depends(get_auth_service),
 ) -> AuthUserRead:
     if not authorization or not authorization.startswith("Bearer "):
+        logger.warning(
+            "SECURITY_EVENT: auth_header_invalid",
+            reason="missing_or_invalid_bearer_header",
+            method=request.method,
+            path=request.url.path,
+            client_ip=request.client.host if request.client else None,
+        )
         raise HTTPException(status_code=401, detail="Missing or invalid authorization header.")
     token = authorization[7:]
     user = await auth_service.get_user_by_token(token)
     if not user:
+        logger.warning(
+            "SECURITY_EVENT: token_rejected",
+            reason="invalid_or_expired_token",
+            method=request.method,
+            path=request.url.path,
+            client_ip=request.client.host if request.client else None,
+        )
         raise HTTPException(status_code=401, detail="Invalid or expired token.")
+    bind_request_audit_actor(request, user)
     return user
 
 
@@ -84,8 +104,18 @@ async def require_superadmin(
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> AuthUserRead:
     if not current_user.isSuperAdmin:
+        logger.warning(
+            "SECURITY_EVENT: superadmin_access_denied",
+            user_id=current_user.id,
+            role=current_user.role,
+        )
         raise HTTPException(status_code=403, detail="Super-admin access required.")
     if current_user.impersonatedBy:
+        logger.warning(
+            "SECURITY_EVENT: impersonated_admin_access_denied",
+            user_id=current_user.id,
+            impersonated_by=current_user.impersonatedBy,
+        )
         raise HTTPException(status_code=403, detail="Impersonated tokens cannot access admin routes.")
     return current_user
 
@@ -121,6 +151,12 @@ def require_admin_capability(capability: str):
         session: AsyncSession = Depends(get_db_session),
     ) -> AuthUserRead:
         if current_user.impersonatedBy:
+            logger.warning(
+                "SECURITY_EVENT: impersonated_admin_access_denied",
+                user_id=current_user.id,
+                impersonated_by=current_user.impersonatedBy,
+                capability=capability,
+            )
             raise HTTPException(status_code=403, detail="Impersonated tokens cannot access admin routes.")
 
         # Superadmin always has all capabilities
@@ -137,6 +173,12 @@ def require_admin_capability(capability: str):
             )
         )
         if result.scalar_one_or_none() is None:
+            logger.warning(
+                "SECURITY_EVENT: admin_capability_denied",
+                user_id=current_user.id,
+                role=current_user.role,
+                capability=capability,
+            )
             raise HTTPException(status_code=403, detail=f"Permission denied: {capability!r} required.")
 
         return current_user

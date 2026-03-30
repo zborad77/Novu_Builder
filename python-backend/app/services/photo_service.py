@@ -4,8 +4,8 @@ from uuid import uuid4
 import structlog
 from fastapi import UploadFile
 
-from app.models import Project, ProjectPhoto
 from app.core.config import get_settings
+from app.models import Project, ProjectPhoto
 from app.repositories.photo_repository import PhotoRepository
 from app.schemas.photo import ProjectPhotoRead
 from app.storage.backend import (
@@ -14,7 +14,7 @@ from app.storage.backend import (
     get_public_url,
     resize_image_bytes,
     save_original_photo,
-    validate_image_format,
+    validate_photo_upload,
     write_storage_file,
 )
 
@@ -117,6 +117,33 @@ class PhotoService:
     def __init__(self, repository: PhotoRepository):
         self.repository = repository
 
+    async def _cleanup_storage_keys(self, *storage_keys: str | None) -> None:
+        seen: set[str] = set()
+        for storage_key in storage_keys:
+            if not storage_key or storage_key in seen:
+                continue
+            seen.add(storage_key)
+            try:
+                await delete_storage_file(relative_storage_key=storage_key)
+            except Exception as exc:
+                logger.warning(
+                    "photo.storage_cleanup_failed",
+                    storage_key=storage_key,
+                    error=str(exc),
+                    exc_info=True,
+                )
+
+    @staticmethod
+    def _clear_failed_variant_metadata(photo: ProjectPhoto) -> None:
+        photo.preview_storage_key = None
+        photo.preview_file_size = None
+        photo.preview_width = None
+        photo.preview_height = None
+        photo.ai_input_storage_key = None
+        photo.ai_input_file_size = None
+        photo.ai_input_width = None
+        photo.ai_input_height = None
+
     async def _update_processing_status(self, photo: ProjectPhoto, status: str) -> ProjectPhoto:
         photo.processing_status = status
         return await self.repository.update_photo(photo)
@@ -126,15 +153,17 @@ class PhotoService:
             return photo
 
         await self._update_processing_status(photo, "processing")
+        written_storage_keys: list[str] = []
 
         try:
-            # R-15: generate real resized variants instead of copying original bytes
             if photo.preview_storage_key:
                 preview_content = await asyncio.to_thread(resize_image_bytes, content, 1600)
                 await write_storage_file(relative_storage_key=photo.preview_storage_key, content=preview_content)
+                written_storage_keys.append(photo.preview_storage_key)
             if photo.ai_input_storage_key:
                 ai_content = await asyncio.to_thread(resize_image_bytes, content, 1280)
                 await write_storage_file(relative_storage_key=photo.ai_input_storage_key, content=ai_content)
+                written_storage_keys.append(photo.ai_input_storage_key)
         except Exception as exc:
             logger.error(
                 "photo.variant_processing_failed",
@@ -143,6 +172,8 @@ class PhotoService:
                 error=str(exc),
                 exc_info=True,
             )
+            await self._cleanup_storage_keys(*written_storage_keys)
+            self._clear_failed_variant_metadata(photo)
             return await self._update_processing_status(photo, "failed")
 
         return await self._update_processing_status(photo, "ready")
@@ -155,9 +186,8 @@ class PhotoService:
         ready_photos = [photo for photo in photos if photo.processing_status == "ready"]
         if not ready_photos:
             return
-        candidates = ready_photos
-        primary_candidate = next((photo for photo in candidates if photo.is_primary), None)
-        chosen_photo = primary_candidate or candidates[0]
+        primary_candidate = next((photo for photo in ready_photos if photo.is_primary), None)
+        chosen_photo = primary_candidate or ready_photos[0]
 
         await self.repository.clear_analysis_reference(project_id)
         chosen_photo.is_analysis_reference = True
@@ -186,7 +216,7 @@ class PhotoService:
         return to_read_model(photo)
 
     async def create_json_photo(self, project: Project, payload: dict) -> ProjectPhotoRead:
-        filename = payload.get("originalFilename") or f"photo-{uuid4().hex[:8]}.jpg"  # intentional upload fallback
+        filename = payload.get("originalFilename") or f"photo-{uuid4().hex[:8]}.jpg"
         photo_count = await self.repository.count_photos(project.id)
         is_primary = bool(payload.get("isPrimary")) or photo_count == 0
         if is_primary:
@@ -198,7 +228,6 @@ class PhotoService:
             width=payload.get("width"),
             height=payload.get("height"),
         )
-        # intentional upload fallback — client may omit mimeType; image/jpeg is the safe default
         mime_type = payload.get("mimeType") or "image/jpeg"
         if not payload.get("mimeType"):
             logger.warning("photo.create_json.mime_type_missing", project_id=project.id, fallback=mime_type)
@@ -225,87 +254,80 @@ class PhotoService:
             exif_lng=payload.get("exifLng"),
             is_primary=is_primary,
             is_analysis_reference=photo_count == 0,
-            # NOTE: sortOrder=0 is falsy and also triggers the auto-assign path — accepted edge case
             sort_order=payload.get("sortOrder") or await self.repository.get_next_sort_order(project.id),
         )
         return to_read_model(await self.repository.add_photo(photo))
 
     async def create_multipart_photo(self, project: Project, file: UploadFile, *, is_primary: bool) -> ProjectPhotoRead:
-        # Path traversal guard: reject filenames that attempt directory escape
-        if file.filename and ".." in file.filename:
-            raise ValueError("Invalid filename: path traversal sequences are not allowed.")
-
-        # Extension whitelist: checked before reading bytes to fail fast
-        _ALLOWED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
-        if file.filename:
-            from pathlib import Path as _Path
-            _ext = _Path(file.filename).suffix.lower()
-            if _ext and _ext not in _ALLOWED_EXTENSIONS:
-                raise ValueError(
-                    f"Unsupported file extension '{_ext}': "
-                    "only JPEG, PNG, and WEBP files are accepted."
-                )
-
-        max_bytes = get_settings().max_upload_size_mb * 1024 * 1024
-        # Content-Length guard: reject before loading bytes when the declared per-part size
-        # already exceeds the limit. file.size is set by Starlette from the multipart
-        # part Content-Length header; it may be None for browser uploads that omit it.
-        _declared_size = getattr(file, "size", None)
-        if isinstance(_declared_size, int) and _declared_size > max_bytes:
-            raise ValueError(
-                f"File too large: Content-Length {_declared_size} bytes exceeds the "
-                f"{get_settings().max_upload_size_mb} MB upload limit."
-            )
-        content = await file.read()
-        if len(content) > max_bytes:
-            raise ValueError(
-                f"File too large: {len(content)} bytes exceeds the "
-                f"{get_settings().max_upload_size_mb} MB upload limit."
-            )
-        validate_image_format(content)
-        # R-15: capture real image dimensions via Pillow before storing
+        max_upload_size_mb = get_settings().max_upload_size_mb
+        validated_upload = await validate_photo_upload(
+            file,
+            max_bytes=max_upload_size_mb * 1024 * 1024,
+            max_upload_size_mb=max_upload_size_mb,
+        )
+        content = validated_upload.content
+        actual_mime_type = validated_upload.actual_mime_type
         actual_width, actual_height = await asyncio.to_thread(get_image_dimensions, content)
-        storage_key, _ = await save_original_photo(project_id=project.id, original_filename=file.filename, content=content)
-        # intentional upload fallback — multipart filename is optional per HTTP spec
-        filename = file.filename or f"upload-{uuid4().hex[:8]}.bin"
-        if not file.filename:
-            logger.warning("photo.create_multipart.filename_missing", project_id=project.id)
-        photo_count = await self.repository.count_photos(project.id)
-        should_be_primary = is_primary or photo_count == 0
-        if should_be_primary:
-            await self.repository.clear_primary(project.id)
-        variants = build_derived_variants(
-            project.id,
-            filename,
-            original_size=len(content),
-            width=actual_width,
-            height=actual_height,
-        )
-        # intentional upload fallback — content_type may be None from some HTTP clients
-        content_type = file.content_type or "application/octet-stream"
-        if not file.content_type:
-            logger.warning("photo.create_multipart.content_type_missing", project_id=project.id, fallback=content_type)
-        photo = ProjectPhoto(
-            id=f"pho_{uuid4().hex[:8]}",
+        storage_key, _ = await save_original_photo(
             project_id=project.id,
-            storage_key=storage_key,
-            original_filename=filename,
-            mime_type=content_type,
-            file_size=len(content),
-            preview_storage_key=variants["preview_storage_key"],
-            preview_file_size=variants["preview_file_size"],
-            preview_width=variants["preview_width"],
-            preview_height=variants["preview_height"],
-            ai_input_storage_key=variants["ai_input_storage_key"],
-            ai_input_file_size=variants["ai_input_file_size"],
-            ai_input_width=variants["ai_input_width"],
-            ai_input_height=variants["ai_input_height"],
-            processing_status="uploaded",
-            is_primary=should_be_primary,
-            is_analysis_reference=photo_count == 0,
-            sort_order=await self.repository.get_next_sort_order(project.id),
+            original_filename=validated_upload.storage_filename,
+            content=content,
         )
-        created_photo = await self.repository.add_photo(photo)
+        try:
+            if validated_upload.filename_was_missing:
+                logger.warning(
+                    "photo.create_multipart.filename_missing",
+                    project_id=project.id,
+                    fallback=validated_upload.original_filename,
+                )
+            photo_count = await self.repository.count_photos(project.id)
+            should_be_primary = is_primary or photo_count == 0
+            if should_be_primary:
+                await self.repository.clear_primary(project.id)
+            variants = build_derived_variants(
+                project.id,
+                validated_upload.storage_filename,
+                original_size=validated_upload.file_size,
+                width=actual_width,
+                height=actual_height,
+            )
+            if validated_upload.content_type_was_missing:
+                logger.warning(
+                    "photo.create_multipart.content_type_missing",
+                    project_id=project.id,
+                    fallback=actual_mime_type,
+                )
+            photo = ProjectPhoto(
+                id=f"pho_{uuid4().hex[:8]}",
+                project_id=project.id,
+                storage_key=storage_key,
+                original_filename=validated_upload.original_filename,
+                mime_type=actual_mime_type,
+                file_size=validated_upload.file_size,
+                preview_storage_key=variants["preview_storage_key"],
+                preview_file_size=variants["preview_file_size"],
+                preview_width=variants["preview_width"],
+                preview_height=variants["preview_height"],
+                ai_input_storage_key=variants["ai_input_storage_key"],
+                ai_input_file_size=variants["ai_input_file_size"],
+                ai_input_width=variants["ai_input_width"],
+                ai_input_height=variants["ai_input_height"],
+                processing_status="uploaded",
+                is_primary=should_be_primary,
+                is_analysis_reference=photo_count == 0,
+                sort_order=await self.repository.get_next_sort_order(project.id),
+            )
+            created_photo = await self.repository.add_photo(photo)
+        except Exception as exc:
+            logger.error(
+                "photo.persistence_failed_after_storage_write",
+                project_id=project.id,
+                storage_key=storage_key,
+                error=str(exc),
+                exc_info=True,
+            )
+            await self._cleanup_storage_keys(storage_key)
+            raise
         processed_photo = await self._process_multipart_photo_variants(created_photo, content)
         return to_read_model(processed_photo)
 
@@ -352,7 +374,6 @@ class PhotoService:
         photo = await self.repository.get_photo(project_id, photo_id)
         if not photo:
             return False
-        # R-14: delete physical files before removing the DB record
         for storage_key in (photo.storage_key, photo.preview_storage_key, photo.ai_input_storage_key):
             if storage_key:
                 await delete_storage_file(relative_storage_key=storage_key)

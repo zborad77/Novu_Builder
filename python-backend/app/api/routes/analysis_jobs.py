@@ -124,7 +124,11 @@ async def patch_analysis_selection(
         changes["manualAreaSqm"] = float(area) if area is not None else None
         if changes["manualAreaSqm"] is not None:
             changes["finalAreaSource"] = "manual"
-    updated = await analysis_service.update_manual_selection_by_result_id(result_id, changes)
+    updated = await analysis_service.update_manual_selection_by_result_id(
+        result_id,
+        changes,
+        organization_id=org_id,
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="Analysis result not found.")
     return {"id": updated.id, "status": "ok"}

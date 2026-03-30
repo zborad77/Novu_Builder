@@ -18,6 +18,11 @@ async def test_openapi_smoke_exposes_key_runtime_paths(app_client):
 
     paths = response.json()["paths"]
 
+    assert "/api/v1/health" in paths
+    assert "get" in paths["/api/v1/health"]
+    assert "/api/v1/ready" in paths
+    assert "get" in paths["/api/v1/ready"]
+
     assert "/api/v1/cases" in paths
     assert "get" in paths["/api/v1/cases"]
     assert "post" in paths["/api/v1/cases"]
@@ -42,8 +47,11 @@ async def test_health_and_alive_smoke(app_client):
 
     health = await app_client.get("/api/v1/health")
     assert health.status_code == 200
-    assert health.json()["status"] == "ok"
-    assert health.json()["service"] == "python-backend"
+    assert health.json() == {"status": "ok", "service": "python-backend"}
+
+    ready = await app_client.get("/api/v1/ready")
+    assert ready.status_code == 200
+    assert ready.json() == {"status": "ready", "service": "python-backend"}
 
 
 async def test_auth_me_requires_bearer_token(app_client):

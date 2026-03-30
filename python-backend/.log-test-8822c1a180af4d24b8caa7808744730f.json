@@ -1,0 +1,49 @@
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:12.728834Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/logout \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:12.763310Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/refresh \"HTTP/1.1 401 Unauthorized\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:12.773593Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:15.092113Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/logout \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:15.125840Z"}
+{"event": "HTTP Request: GET http://test/api/v1/auth/me \"HTTP/1.1 401 Unauthorized\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:15.135756Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:17.497929Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/logout \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:17.521691Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/refresh \"HTTP/1.1 401 Unauthorized\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:17.531820Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 429 Too Many Requests\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:22.373362Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 429 Too Many Requests\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:22.385260Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 401 Unauthorized\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:22.400031Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:22.702228Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 401 Unauthorized\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:24.011670Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 401 Unauthorized\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:25.040682Z"}
+{"event": "APP_BASE_URL is not configured for real client (current: 'http://localhost:8000'). Self-service password reset will not work if re-enabled without a real client URL.", "level": "warning", "logger": "app.core.config", "timestamp": "2026-03-30T07:08:25.053945Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:26.350012Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:26.398085Z"}
+{"event": "HTTP Request: GET http://test/api/v1/alive \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:26.406304Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:26.447927Z"}
+{"event": "HTTP Request: GET http://test/api/v1/alive \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:26.456546Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:26.499236Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:26.559891Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:26.608805Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:26.653200Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 401 Unauthorized\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:28.980840Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:29.036235Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:29.091726Z"}
+{"event": "APP_BASE_URL is not configured for real client (current: 'http://localhost:8000'). Self-service password reset will not work if re-enabled without a real client URL.", "level": "warning", "logger": "app.core.config", "timestamp": "2026-03-30T07:08:29.252339Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 401 Unauthorized\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:29.259030Z"}
+{"event": "APP_BASE_URL is not configured for real client (current: 'http://localhost:8000'). Self-service password reset will not work if re-enabled without a real client URL.", "level": "warning", "logger": "app.core.config", "timestamp": "2026-03-30T07:08:29.280484Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 401 Unauthorized\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:29.285471Z"}
+{"event": "APP_BASE_URL is not configured for real client (current: 'http://localhost:8000'). Self-service password reset will not work if re-enabled without a real client URL.", "level": "warning", "logger": "app.core.config", "timestamp": "2026-03-30T07:08:29.301067Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:29.341356Z"}
+{"event": "APP_BASE_URL is not configured for real client (current: 'http://localhost:8000'). Self-service password reset will not work if re-enabled without a real client URL.", "level": "warning", "logger": "app.core.config", "timestamp": "2026-03-30T07:08:29.356707Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 401 Unauthorized\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:29.364132Z"}
+{"event": "APP_BASE_URL is not configured for real client (current: 'http://localhost:8000'). Self-service password reset will not work if re-enabled without a real client URL.", "level": "warning", "logger": "app.core.config", "timestamp": "2026-03-30T07:08:29.379920Z"}
+{"event": "HTTP Request: GET http://test/api/v1/metrics \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:29.420055Z"}
+{"event": "APP_BASE_URL is not configured for real client (current: 'http://localhost:8000'). Self-service password reset will not work if re-enabled without a real client URL.", "level": "warning", "logger": "app.core.config", "timestamp": "2026-03-30T07:08:29.888832Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:32.205511Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/refresh \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:32.239410Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:34.556735Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/change-password \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:35.142999Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/refresh \"HTTP/1.1 401 Unauthorized\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:35.154600Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:37.792986Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/change-password \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:38.404314Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:40.717172Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/refresh \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-30T07:08:40.742653Z"}
+{"event": "APP_BASE_URL is not configured for real client (current: 'http://localhost:8000'). Self-service password reset will not work if re-enabled without a real client URL.", "level": "warning", "logger": "app.core.config", "timestamp": "2026-03-30T07:08:40.988325Z"}

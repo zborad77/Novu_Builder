@@ -25,7 +25,7 @@ if _backend == "s3":
         save_original_photo,
         write_storage_file,
     )
-else:
+elif _backend == "local":
     from app.storage.local_photo_storage import (  # type: ignore[assignment]  # noqa: F401
         copy_storage_file,
         delete_storage_file,
@@ -33,13 +33,20 @@ else:
         save_original_photo,
         write_storage_file,
     )
+else:
+    raise RuntimeError(
+        f"Unsupported STORAGE_BACKEND={_backend!r}. "
+        "Use 'local' or 's3' instead of relying on an implicit fallback."
+    )
 
 # Backend-independent helpers — always sourced from local_photo_storage
 # (pure computation, no I/O)
 from app.storage.local_photo_storage import (  # noqa: F401
+    UploadValidationError,
     ensure_directory,
     get_image_dimensions,
     resize_image_bytes,
     sanitize_filename,
+    validate_photo_upload,
     validate_image_format,
 )

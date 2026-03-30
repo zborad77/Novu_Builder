@@ -106,6 +106,26 @@ class TestAccountLimiterUnit:
             # Must not raise
             await limiter_mod.reset_login_failures("user@example.com", "redis://localhost")
 
+    @pytest.mark.asyncio
+    async def test_get_client_uses_shared_hardening_builder(self):
+        mock_client = AsyncMock()
+        mock_client.ping = AsyncMock()
+        settings = MagicMock()
+
+        with (
+            patch.object(limiter_mod, "get_settings", return_value=settings),
+            patch.object(limiter_mod, "build_redis_client_from_settings", return_value=mock_client) as build_client,
+        ):
+            client = await limiter_mod._get_client("redis://localhost")
+
+        assert client is mock_client
+        build_client.assert_called_once_with(
+            settings,
+            redis_url="redis://localhost",
+            client_name="novu-auth-limiter",
+        )
+        mock_client.ping.assert_awaited_once()
+
 
 # ── B6: shared Redis client path ─────────────────────────────────────────────
 

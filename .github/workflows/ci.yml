@@ -82,8 +82,8 @@ jobs:
 
       # --- No server needed ---
 
-      - name: Import & startup check
-        run: python scripts/test-import-startup.py
+      - name: Import & startup verification
+        run: python scripts/verify_import_startup.py
 
       - name: Environment check
         run: python scripts/test-env.py
@@ -93,7 +93,7 @@ jobs:
 
       - name: Pytest
         working-directory: python-backend
-        run: python -m pytest tests/ -v --cov=app --cov-report=term-missing --cov-fail-under=0
+        run: python -m pytest tests/ -v --cov=app --cov-report=term-missing --cov-fail-under=40
 
       # --- Start backend ---
 
@@ -121,8 +121,8 @@ jobs:
       - name: DB connectivity
         run: python scripts/test-db-connection.py
 
-      - name: Health endpoint
-        run: python scripts/test-backend-startup.py --url http://127.0.0.1:8000
+      - name: Post-deploy verification bundle
+        run: python scripts/verify_deploy.py --base-url http://127.0.0.1:8000
 
       - name: API contracts
         run: python scripts/test-api-contracts.py --url http://127.0.0.1:8000

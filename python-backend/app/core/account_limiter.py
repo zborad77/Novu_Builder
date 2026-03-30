@@ -16,15 +16,14 @@ from ``redis_url`` (original behaviour, preserves backward compatibility).
 import structlog
 from redis.asyncio import Redis
 
+from app.core.config import get_settings
+from app.core.redis_client import build_redis_client_from_settings
+
 logger = structlog.get_logger(__name__)
 
 # 10 failed attempts within a 15-minute sliding window
 _MAX_FAILED_ATTEMPTS: int = 10
 _WINDOW_SECONDS: int = 900  # 15 minutes
-
-# Fail-fast connect timeout — don't block the login path if Redis is slow
-_REDIS_TIMEOUT: float = 1.0
-
 
 def _key(email: str) -> str:
     """Normalised Redis key for the per-account failure counter."""
@@ -34,10 +33,10 @@ def _key(email: str) -> str:
 async def _get_client(redis_url: str) -> Redis | None:
     """Return a new short-lived Redis client, or None if Redis is unavailable."""
     try:
-        client = Redis.from_url(
-            redis_url,
-            socket_connect_timeout=_REDIS_TIMEOUT,
-            socket_timeout=_REDIS_TIMEOUT,
+        client = build_redis_client_from_settings(
+            get_settings(),
+            redis_url=redis_url,
+            client_name="novu-auth-limiter",
         )
         await client.ping()  # type: ignore[misc]  # redis.asyncio stubs: ping() typed as Awaitable|bool
         return client

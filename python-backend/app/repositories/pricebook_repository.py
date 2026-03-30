@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import MaterialCatalog, PricingProfile
@@ -34,9 +34,14 @@ class PricebookRepository:
             is_default=payload["isDefault"],
         )
         if pricebook.is_default:
-            existing = await self.list_pricebooks(organization_id)
-            for item in existing:
-                item.is_default = False
+            await self.session.execute(
+                update(PricingProfile)
+                .where(
+                    PricingProfile.organization_id == organization_id,
+                    PricingProfile.is_default.is_(True),
+                )
+                .values(is_default=False)
+            )
         self.session.add(pricebook)
         await self.session.commit()
         await self.session.refresh(pricebook)

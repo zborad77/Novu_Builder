@@ -87,3 +87,71 @@ class TestStorageFunctionalBehaviour:
             assert (tmp_path / dst_key).read_bytes() == b"original content"
         finally:
             storage_mod.STORAGE_ROOT = orig_root
+
+    @pytest.mark.asyncio
+    async def test_write_storage_file_rejects_path_escape(self, tmp_path):
+        orig_root = storage_mod.STORAGE_ROOT
+        storage_mod.STORAGE_ROOT = tmp_path
+        try:
+            with pytest.raises(ValueError, match="storage key"):
+                await storage_mod.write_storage_file(
+                    relative_storage_key="../escaped.bin",
+                    content=b"escape attempt",
+                )
+        finally:
+            storage_mod.STORAGE_ROOT = orig_root
+
+    @pytest.mark.asyncio
+    async def test_write_storage_file_rejects_unknown_prefix(self, tmp_path):
+        orig_root = storage_mod.STORAGE_ROOT
+        storage_mod.STORAGE_ROOT = tmp_path
+        try:
+            with pytest.raises(ValueError, match="projects/' and 'exports/'"):
+                await storage_mod.write_storage_file(
+                    relative_storage_key="tmp/escaped.bin",
+                    content=b"wrong namespace",
+                )
+        finally:
+            storage_mod.STORAGE_ROOT = orig_root
+
+    @pytest.mark.asyncio
+    async def test_delete_storage_file_rejects_path_escape(self, tmp_path):
+        orig_root = storage_mod.STORAGE_ROOT
+        storage_mod.STORAGE_ROOT = tmp_path
+        try:
+            with pytest.raises(ValueError, match="storage key"):
+                await storage_mod.delete_storage_file(relative_storage_key="projects/../../escaped.bin")
+        finally:
+            storage_mod.STORAGE_ROOT = orig_root
+
+    @pytest.mark.asyncio
+    async def test_copy_storage_file_rejects_target_path_escape(self, tmp_path):
+        orig_root = storage_mod.STORAGE_ROOT
+        storage_mod.STORAGE_ROOT = tmp_path
+        try:
+            src_key = "projects/p/original.bin"
+            src = tmp_path / src_key
+            src.parent.mkdir(parents=True, exist_ok=True)
+            src.write_bytes(b"original content")
+
+            with pytest.raises(ValueError, match="storage key"):
+                await storage_mod.copy_storage_file(
+                    source_storage_key=src_key,
+                    target_storage_key="../escaped.bin",
+                )
+        finally:
+            storage_mod.STORAGE_ROOT = orig_root
+
+    @pytest.mark.asyncio
+    async def test_save_original_photo_rejects_unsafe_project_id(self, tmp_path):
+        orig_root = storage_mod.STORAGE_ROOT
+        storage_mod.STORAGE_ROOT = tmp_path
+        try:
+            with pytest.raises(ValueError, match="project_id"):
+                await storage_mod.save_original_photo(
+                    project_id="../escape",
+                    original_filename="photo.jpg",
+                    content=b"payload",
+                )
+        finally:
+            storage_mod.STORAGE_ROOT = orig_root

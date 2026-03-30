@@ -1,15 +1,26 @@
 import asyncio
 import json
 import traceback
-from datetime import UTC, datetime
 
 import structlog
 from fastapi import HTTPException
 
 from app.ai import describe_analysis_provider, run_project_analysis
-from app.db.session import AsyncSessionFactory
+from app.db.session import (
+    AsyncSessionFactory,        # HTTP-originated ops (retry_job, etc.)
+    WorkerAsyncSessionFactory,  # background runner only (execute_job, fail_job_before_processing)
+)
 from app.models import AnalysisJob, AnalysisResult, Project
-from app.repositories.analysis_repository import AnalysisRepository
+from app.repositories.analysis_repository import (
+    ANALYSIS_JOB_STATUS_CANCELED,
+    ANALYSIS_JOB_STATUS_COMPLETED,
+    ANALYSIS_JOB_STATUS_FAILED,
+    ANALYSIS_JOB_FINAL_STATUSES,
+    ANALYSIS_JOB_STATUS_QUEUED,
+    AnalysisRepository,
+    InvalidAnalysisResultPayloadError,
+    InvalidAnalysisJobStatusTransition,
+)
 from app.repositories.photo_repository import PhotoRepository
 from app.schemas.analysis import AnalysisResultRead, parse_json_field
 
@@ -80,17 +91,16 @@ def _safe_json_load(value: str | None) -> dict | None:
 
 async def _fail_job_and_raise(
     job: AnalysisJob,
-    session,
+    repo: AnalysisRepository,
     *,
     message: str,
     status_code: int,
     detail: str,
 ) -> None:
     """Mark job as failed, commit, then raise HTTPException. Never returns."""
-    job.status = "failed"
+    job.status = ANALYSIS_JOB_STATUS_FAILED
     job.error_message = message
-    job.finished_at = datetime.now(UTC)
-    await session.commit()
+    await repo.fail_job(job, message=message)
     raise HTTPException(status_code=status_code, detail=detail)
 
 
@@ -156,7 +166,12 @@ class AnalysisService:
         *,
         is_superadmin_context: bool = False,
     ) -> None:
-        """Runs the analysis in the background. Uses its own DB session.
+        """Runs the analysis in the background using the worker DB pool.
+
+        Session lifecycle (eliminates pool starvation under concurrent load):
+          Phase 1  fetch job, validate, mark running, build input  → short session, CLOSED
+          Phase 2  AI analysis (run_project_analysis)              → NO DB connection held
+          Phase 3  persist result or failure                       → short session, CLOSED
 
         organization_id=None is the superadmin cross-tenant path. Callers MUST
         set is_superadmin_context=True when intentionally omitting organization_id;
@@ -164,18 +179,32 @@ class AnalysisService:
         """
         log = logger.bind(job_id=job_id, project_id=project_id)
 
+        # Security check before opening any session.
         if organization_id is None and not is_superadmin_context:
             log.warning(
                 "SECURITY_EVENT: execute_job_missing_org_id",
                 job_id=job_id,
                 project_id=project_id,
             )
+            await self.fail_job_before_processing(
+                job_id,
+                message="Invalid worker payload: organization_id is required for non-superadmin context.",
+            )
             raise HTTPException(
                 status_code=403,
                 detail="organization_id is required for non-superadmin context.",
             )
 
-        async with AsyncSessionFactory() as session:
+        # ------------------------------------------------------------------
+        # Phase 1: Fetch job data, validate, mark running — short DB session.
+        # All data needed for Phase 2 is serialised to plain Python objects
+        # before the session closes so no DB connection is held during the AI call.
+        # ------------------------------------------------------------------
+        project_dict: dict
+        photos: list
+        job_retry_count: int
+
+        async with WorkerAsyncSessionFactory() as session:
             repo = AnalysisRepository(session)
             photo_repo = PhotoRepository(session)
 
@@ -185,17 +214,16 @@ class AnalysisService:
                 raise HTTPException(status_code=404, detail="Analysis job not found.")
 
             # R-19: idempotency guard — skip if job was already picked up or cancelled
-            if job.status != "queued":
+            if job.status != ANALYSIS_JOB_STATUS_QUEUED:
                 log.warning("worker.job_skipped", reason="not_queued", current_status=job.status)
                 return
 
             if job.project_id != project_id:
                 log.error("worker.job_project_mismatch", job_project_id=job.project_id, expected_project_id=project_id)
                 log.warning("SECURITY_EVENT: job_project_mismatch", job_id=job_id, job_project_id=job.project_id, requested_project_id=project_id)
-                await _fail_job_and_raise(job, session, message=f"Job {job_id} belongs to project {job.project_id}, not {project_id}.", status_code=403, detail="Job project mismatch.")
+                await _fail_job_and_raise(job, repo, message=f"Job {job_id} belongs to project {job.project_id}, not {project_id}.", status_code=403, detail="Job project mismatch.")
 
             if organization_id is None:
-                # Superadmin path — no org filter; observable via log
                 log.info("worker.superadmin_bypass", job_id=job_id, project_id=project_id)
 
             if organization_id is not None:
@@ -206,13 +234,14 @@ class AnalysisService:
             if not project:
                 log.error("worker.project_not_found", organization_id=organization_id)
                 log.warning("SECURITY_EVENT: org_mismatch", project_id=project_id, organization_id=organization_id)
-                await _fail_job_and_raise(job, session, message="Project not found.", status_code=403, detail="Project not found.")
+                await _fail_job_and_raise(job, repo, message="Project not found.", status_code=403, detail="Project not found.")
 
-            job.status = "running"
-            job.started_at = datetime.now(UTC)
-            await session.commit()
+            try:
+                await repo.mark_job_running(job)
+            except InvalidAnalysisJobStatusTransition:
+                log.warning("worker.job_skipped", reason="invalid_status_transition", current_status=job.status)
+                return
 
-            # Build and persist input payload for debugging
             photos = await photo_repo.list_photos_by_project_id(project_id)
             input_data = {
                 "provider": self.provider_key,
@@ -223,105 +252,194 @@ class AnalysisService:
                 "photo_count": len(photos),
             }
             job.input_payload = json.dumps(input_data, ensure_ascii=False)
-            await session.commit()
 
-            log.info(
-                "worker.job_started",
-                provider=self.provider_key,
-                photo_count=len(photos),
-                retry_count=job.retry_count,
+            # Capture all primitives needed for Phase 2 & 3 before session closes.
+            # expire_on_commit=False keeps ORM attribute values accessible on
+            # detached objects, so photos list is safe to pass to run_project_analysis.
+            job_retry_count = job.retry_count
+            project_dict = {
+                "id": project.id,
+                "title": project.title,
+                "description": project.description,
+                "address_label": project.address_label,
+                "property_type": project.property_type,
+                "repair_scope": project.repair_scope,
+            }
+
+            await session.commit()
+        # Phase 1 session CLOSED — no DB connection held from this point.
+
+        log.info(
+            "worker.job_started",
+            provider=self.provider_key,
+            photo_count=len(photos),
+            retry_count=job_retry_count,
+        )
+
+        # ------------------------------------------------------------------
+        # Phase 2: AI analysis — no DB connection held for up to 180 s.
+        # Errors are captured as plain values; DB writes happen in Phase 3.
+        # ------------------------------------------------------------------
+        analysis: dict | None = None
+        _failure_message: str | None = None
+        _failure_traceback: str | None = None
+        _failure_type: str | None = None  # "invalid_payload" | "timeout" | "exception"
+
+        try:
+            analysis = await asyncio.wait_for(
+                run_project_analysis(
+                    provider_key=self.provider_key,
+                    project=project_dict,
+                    photos=photos,  # detached ORM objects; attrs cached (expire_on_commit=False)
+                ),
+                timeout=_JOB_TIMEOUT_SECONDS,
             )
+        except InvalidAnalysisResultPayloadError as exc:
+            _failure_message = f"Invalid analysis payload: {exc}"
+            _failure_type = "invalid_payload"
+            log.warning("worker.invalid_analysis_payload", error=str(exc), retry_count=job_retry_count)
+            if job_retry_count >= _REPEATED_FAILURE_THRESHOLD:
+                log.warning("worker.job_repeated_failure", retry_count=job_retry_count,
+                            max_retry_count=_MAX_JOB_RETRY_COUNT, error=_failure_message)
+        except asyncio.TimeoutError:
+            _failure_message = f"Analysis timed out after {_JOB_TIMEOUT_SECONDS}s."
+            _failure_type = "timeout"
+            log.error("worker.job_timeout", timeout_seconds=_JOB_TIMEOUT_SECONDS, retry_count=job_retry_count)
+            if job_retry_count >= _REPEATED_FAILURE_THRESHOLD:
+                log.warning("worker.job_repeated_failure", retry_count=job_retry_count,
+                            max_retry_count=_MAX_JOB_RETRY_COUNT, error=_failure_message)
+        except Exception as exc:
+            _failure_message = str(exc)
+            _failure_traceback = traceback.format_exc()
+            _failure_type = "exception"
+            log.error("worker.job_failed", error=str(exc), retry_count=job_retry_count, exc_info=True)
+            if job_retry_count >= _REPEATED_FAILURE_THRESHOLD:
+                log.warning("worker.job_repeated_failure", retry_count=job_retry_count,
+                            max_retry_count=_MAX_JOB_RETRY_COUNT, error=str(exc))
+
+        # ------------------------------------------------------------------
+        # Phase 3: Persist result or failure — new short DB session.
+        # Re-fetch the job: it may have been externally cancelled during Phase 2.
+        # ------------------------------------------------------------------
+        duration: float | None = None
+
+        async with WorkerAsyncSessionFactory() as session:
+            repo = AnalysisRepository(session)
+
+            job = await repo.get_analysis_job(job_id)
+            if not job:
+                log.error("worker.job_disappeared_before_result")
+                return
+
+            # Honour external cancellation that happened while Phase 2 ran.
+            if job.status == ANALYSIS_JOB_STATUS_CANCELED:
+                log.info("worker.job_cancelled_during_analysis", job_id=job_id)
+                return
+
+            if _failure_type is not None:
+                # Failure path — persist the error and exit.
+                try:
+                    await repo.fail_job(
+                        job,
+                        message=_failure_message,
+                        error_traceback=_failure_traceback,
+                    )
+                except InvalidAnalysisJobStatusTransition:
+                    log.warning("worker.job_fail_rejected", job_id=job_id, current_status=job.status)
+                return
+
+            # Success path — re-fetch project for complete_job_with_result.
+            if organization_id is not None:
+                project = await repo.get_project_in_org(project_id, organization_id)
+            else:
+                project = await session.get(Project, project_id)
+
+            if not project:
+                log.error("worker.project_disappeared_before_result", project_id=project_id)
+                await repo.fail_job(job, message="Project not found when persisting analysis result.")
+                return
 
             try:
-                analysis = await asyncio.wait_for(
-                    run_project_analysis(
-                        provider_key=self.provider_key,
-                        project={
-                            "id": project.id,
-                            "title": project.title,
-                            "description": project.description,
-                            "address_label": project.address_label,
-                            "property_type": project.property_type,
-                            "repair_scope": project.repair_scope,
-                        },
-                        photos=photos,
-                    ),
-                    timeout=_JOB_TIMEOUT_SECONDS,
-                )
-
                 await repo.complete_job_with_result(job, project, analysis)
+            except InvalidAnalysisJobStatusTransition:
+                log.warning("worker.job_complete_rejected", job_id=job_id, current_status=job.status)
+                return
+            except InvalidAnalysisResultPayloadError as exc:
+                # AI returned structurally invalid data — fail the job and stop.
+                error_msg = f"Invalid analysis payload: {exc}"
+                log.warning("worker.invalid_analysis_payload", error=str(exc), retry_count=job_retry_count)
+                if job_retry_count >= _REPEATED_FAILURE_THRESHOLD:
+                    log.warning("worker.job_repeated_failure", retry_count=job_retry_count,
+                                max_retry_count=_MAX_JOB_RETRY_COUNT, error=error_msg)
+                try:
+                    await repo.fail_job(job, message=error_msg)
+                except InvalidAnalysisJobStatusTransition:
+                    log.warning("worker.job_fail_rejected_after_invalid_payload",
+                                job_id=job_id, current_status=job.status)
+                return
 
-                # Persist output summary
-                duration = (
-                    round((job.finished_at - job.started_at).total_seconds(), 1)
-                    if job.started_at and job.finished_at else None
-                )
-                output_summary = {
-                    "provider": analysis.get("providerKey"),
-                    "model_name": analysis.get("modelName"),
-                    "object_type": analysis.get("objectType"),
-                    "estimated_area_sqm": analysis.get("estimatedAreaSqm"),
-                    "area_confidence": analysis.get("areaConfidence"),
-                    "duration_seconds": duration,
-                }
+            # expire_on_commit=False: job.finished_at / started_at are still
+            # accessible after the commit inside complete_job_with_result.
+            duration = (
+                round((job.finished_at - job.started_at).total_seconds(), 1)
+                if job.started_at and job.finished_at else None
+            )
+            output_summary = {
+                "provider": analysis.get("providerKey"),
+                "model_name": analysis.get("modelName"),
+                "object_type": analysis.get("objectType"),
+                "estimated_area_sqm": analysis.get("estimatedAreaSqm"),
+                "area_confidence": analysis.get("areaConfidence"),
+                "duration_seconds": duration,
+            }
+            try:
                 job.output_summary = json.dumps(output_summary, ensure_ascii=False)
                 await session.commit()
-
-                log.info(
-                    "worker.job_completed",
-                    duration_seconds=duration,
-                    model=analysis.get("modelName"),
-                    object_type=analysis.get("objectType"),
-                    estimated_area=analysis.get("estimatedAreaSqm"),
-                )
-
-                # Non-critical: recalculate quote variants
-                try:
-                    from app.repositories.quote_variant_repository import QuoteVariantRepository
-                    from app.services.quote_variant_service import QuoteVariantService
-                    await QuoteVariantService(QuoteVariantRepository(session)).recalculate_quote_variants(project_id)
-                    log.info("worker.quote_variants_recalculated")
-                except Exception as qe:
-                    log.warning("worker.quote_variants_failed", error=str(qe))
-
-            except asyncio.TimeoutError:
-                job.status = "failed"
-                job.error_message = f"Analysis timed out after {_JOB_TIMEOUT_SECONDS}s."
-                job.finished_at = datetime.now(UTC)
-                await session.commit()
-                log.error("worker.job_timeout", timeout_seconds=_JOB_TIMEOUT_SECONDS, retry_count=job.retry_count)
-                if job.retry_count >= _REPEATED_FAILURE_THRESHOLD:
-                    log.warning(
-                        "worker.job_repeated_failure",
-                        retry_count=job.retry_count,
-                        max_retry_count=_MAX_JOB_RETRY_COUNT,
-                        error=job.error_message,
-                    )
-
             except Exception as exc:
-                tb = traceback.format_exc()
-                job.status = "failed"
-                job.error_message = str(exc)
-                job.error_traceback = tb
-                job.finished_at = datetime.now(UTC)
-                await session.commit()
+                log.warning("worker.output_summary_persist_failed", error=str(exc))
+        # Phase 3 session CLOSED.
 
-                log.error(
-                    "worker.job_failed",
-                    error=str(exc),
-                    retry_count=job.retry_count,
-                    exc_info=True,
+        log.info(
+            "worker.job_completed",
+            duration_seconds=duration,
+            model=analysis.get("modelName"),
+            object_type=analysis.get("objectType"),
+            estimated_area=analysis.get("estimatedAreaSqm"),
+        )
+
+        # Non-critical: recalculate quote variants in a dedicated short session.
+        try:
+            async with WorkerAsyncSessionFactory() as qv_session:
+                from app.repositories.quote_variant_repository import QuoteVariantRepository
+                from app.services.quote_variant_service import QuoteVariantService
+                await QuoteVariantService(QuoteVariantRepository(qv_session)).recalculate_quote_variants(project_id)
+            log.info("worker.quote_variants_recalculated")
+        except Exception as qe:
+            log.warning("worker.quote_variants_failed", error=str(qe))
+
+    async def fail_job_before_processing(
+        self,
+        job_id: str,
+        *,
+        message: str,
+        error_traceback: str | None = None,
+    ) -> bool:
+        async with WorkerAsyncSessionFactory() as session:
+            repo = AnalysisRepository(session)
+            job = await repo.get_analysis_job(job_id)
+            if not job:
+                logger.warning("worker.job_not_found_for_failure", job_id=job_id)
+                return False
+            try:
+                await repo.fail_job(job, message=message, error_traceback=error_traceback)
+            except InvalidAnalysisJobStatusTransition:
+                logger.warning(
+                    "worker.job_failure_rejected",
+                    job_id=job_id,
+                    current_status=job.status,
                 )
-                # Dead-letter sentinel: emit a distinct event when the same job
-                # has failed multiple times so on-call / alerting can target it
-                # without grepping retry_count out of worker.job_failed entries.
-                if job.retry_count >= _REPEATED_FAILURE_THRESHOLD:
-                    log.warning(
-                        "worker.job_repeated_failure",
-                        retry_count=job.retry_count,
-                        max_retry_count=_MAX_JOB_RETRY_COUNT,
-                        error=str(exc),
-                    )
+                return False
+        return True
 
     async def retry_job(
         self,
@@ -358,7 +476,7 @@ class AnalysisService:
             raise HTTPException(status_code=404, detail="Analysis job not found.")
 
         # Only terminal states can be retried — prevent two active jobs for the same project.
-        if original.status not in ("failed", "canceled"):
+        if original.status not in (ANALYSIS_JOB_STATUS_FAILED, ANALYSIS_JOB_STATUS_CANCELED):
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -423,17 +541,26 @@ class AnalysisService:
             job = await self.repository.get_analysis_job(job_id)
         if not job:
             return None
-        if job.status == "completed":
+        if job.status in ANALYSIS_JOB_FINAL_STATUSES:
             return to_job_read(job)
-        updated = await self.repository.update_analysis_job_status(job, "canceled")
+        updated = await self.repository.update_analysis_job_status(job, ANALYSIS_JOB_STATUS_CANCELED)
         return to_job_read(updated)
 
     async def update_manual_selection(self, project_id: str, changes: dict) -> AnalysisResultRead | None:
         updated = await self.repository.update_latest_analysis_manual_selection(project_id, changes)
         return to_read_model(updated) if updated else None
 
-    async def update_manual_selection_by_result_id(self, analysis_result_id: str, changes: dict) -> AnalysisResultRead | None:
-        result = await self.repository.get_analysis_result(analysis_result_id)
+    async def update_manual_selection_by_result_id(
+        self,
+        analysis_result_id: str,
+        changes: dict,
+        *,
+        organization_id: str | None = None,
+    ) -> AnalysisResultRead | None:
+        if organization_id is not None:
+            result = await self.repository.get_analysis_result_in_org(analysis_result_id, organization_id)
+        else:
+            result = await self.repository.get_analysis_result(analysis_result_id)
         if result is None:
             return None
         updated = await self.repository.update_analysis_manual_selection(result, changes)

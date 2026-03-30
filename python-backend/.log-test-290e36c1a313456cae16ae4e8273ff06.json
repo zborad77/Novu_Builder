@@ -1,0 +1,15 @@
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:58:41.986093Z"}
+{"event": "HTTP Request: GET http://test/api/v1/auth/me \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:58:42.005501Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:58:44.668035Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:58:47.289650Z"}
+{"event": "HTTP Request: POST http://test/api/v1/admin/users/usr_tgt_c7af802f/reset-password \"HTTP/1.1 204 No Content\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:58:47.671442Z"}
+{"event": "HTTP Request: GET http://test/api/v1/auth/me \"HTTP/1.1 401 Unauthorized\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:58:47.683507Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:58:50.339247Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:58:53.081214Z"}
+{"event": "HTTP Request: POST http://test/api/v1/admin/users/usr_tgt_fd6506aa/reset-password \"HTTP/1.1 204 No Content\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:58:53.413092Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:58:55.759122Z"}
+{"event": "HTTP Request: GET http://test/api/v1/auth/me \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:58:55.769494Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:58:58.458494Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 200 OK\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:59:01.127233Z"}
+{"event": "HTTP Request: POST http://test/api/v1/admin/users/usr_tgt_2b86d292/reset-password \"HTTP/1.1 204 No Content\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:59:01.467567Z"}
+{"event": "HTTP Request: POST http://test/api/v1/auth/login \"HTTP/1.1 401 Unauthorized\"", "level": "info", "logger": "httpx", "timestamp": "2026-03-29T20:59:03.801435Z"}

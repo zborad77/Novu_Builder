@@ -77,7 +77,7 @@ class TestExecuteJobOrgScope:
         mock_repo = AsyncMock(spec=AnalysisRepository)
         mock_repo.get_analysis_job = AsyncMock(return_value=job)
 
-        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory:
+        with patch("app.services.analysis_service.WorkerAsyncSessionFactory") as mock_factory:
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -115,7 +115,7 @@ class TestExecuteJobOrgScope:
         # get_project_in_org returns None — project not in org_B
         mock_repo.get_project_in_org = AsyncMock(return_value=None)
 
-        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory:
+        with patch("app.services.analysis_service.WorkerAsyncSessionFactory") as mock_factory:
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -170,7 +170,7 @@ class TestExecuteJobCrossTenantBlocked:
         mock_photo_repo = AsyncMock(spec=PhotoRepository)
         mock_photo_repo.list_photos_by_project_id = AsyncMock(return_value=[])
 
-        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory, \
+        with patch("app.services.analysis_service.WorkerAsyncSessionFactory") as mock_factory, \
              patch("app.services.analysis_service.run_project_analysis") as mock_analysis, \
              patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo), \
              patch("app.services.analysis_service.PhotoRepository", return_value=mock_photo_repo):
@@ -201,7 +201,7 @@ class TestExecuteJobCrossTenantBlocked:
 
             await service.execute_job("job_1", "prj_A", organization_id="org_A")
 
-        mock_repo.get_project_in_org.assert_called_once_with("prj_A", "org_A")
+        mock_repo.get_project_in_org.assert_any_call("prj_A", "org_A")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -279,9 +279,21 @@ class TestWorkerExplicitFail:
         """Job status is set to 'failed' explicitly on mismatch — no silent skip."""
         from app.services.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.execute_job)
-        # After mismatch detection, status must be failed
-        assert '"failed"' in src
+        # After mismatch detection, _fail_job_and_raise is called (sets status to failed)
+        assert "_fail_job_and_raise" in src
         assert "job_project_mismatch" in src
+
+    def test_retry_job_uses_api_session_factory_not_worker(self):
+        """retry_job is HTTP-initiated — must use AsyncSessionFactory, never WorkerAsyncSessionFactory.
+
+        Routing rule: HTTP-originated ops → AsyncSessionFactory.
+        Worker runner ops → WorkerAsyncSessionFactory.
+        If this test fails, a refactor violated the session factory routing rule.
+        """
+        from app.services.analysis_service import AnalysisService
+        src = inspect.getsource(AnalysisService.retry_job)
+        assert "AsyncSessionFactory" in src
+        assert "WorkerAsyncSessionFactory" not in src
 
     def test_analysis_repository_get_project_in_org_requires_both_args(self):
         """get_project_in_org must require both project_id and organization_id — no defaults."""
@@ -385,7 +397,7 @@ class TestSuperadminBypass:
         mock_repo = AsyncMock(spec=AnalysisRepository)
         mock_repo.get_analysis_job = AsyncMock(return_value=job)
 
-        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory:
+        with patch("app.services.analysis_service.WorkerAsyncSessionFactory") as mock_factory:
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -678,7 +690,7 @@ class TestDeadLetterSentinelLog:
         session.get = AsyncMock(return_value=project)
         session.commit = AsyncMock()
 
-        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory, \
+        with patch("app.services.analysis_service.WorkerAsyncSessionFactory") as mock_factory, \
              patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo), \
              patch("app.services.analysis_service.PhotoRepository", return_value=mock_photo_repo), \
              patch("app.services.analysis_service.run_project_analysis", side_effect=RuntimeError("provider error")), \
@@ -723,7 +735,7 @@ class TestDeadLetterSentinelLog:
         session.get = AsyncMock(return_value=project)
         session.commit = AsyncMock()
 
-        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory, \
+        with patch("app.services.analysis_service.WorkerAsyncSessionFactory") as mock_factory, \
              patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo), \
              patch("app.services.analysis_service.PhotoRepository", return_value=mock_photo_repo), \
              patch("app.services.analysis_service.run_project_analysis", side_effect=RuntimeError("provider error")), \

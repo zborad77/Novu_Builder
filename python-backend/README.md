@@ -17,7 +17,7 @@ Aktualne je pripraveny zaklad vedle puvodniho Node prototypu:
 - FastAPI app bootstrap
 - settings pres pydantic-settings
 - zakladni logging pres structlog
-- API router a health endpoint
+- API router a liveness/readiness endpointy
 - SQLAlchemy Base, async session a prvni domenove modely
 - modul `projects`
 - modul `photos` vcetne local uploadu, primary photo a derivative metadata

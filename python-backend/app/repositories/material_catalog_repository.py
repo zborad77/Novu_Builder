@@ -1,5 +1,6 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models import MaterialCatalog, Supplier, SupplierMaterialPrice
 
@@ -9,7 +10,11 @@ class MaterialCatalogRepository:
         self.session = session
 
     async def list_material_catalog(self, *, organization_id: str, active_only: bool = True, search: str | None = None) -> list[MaterialCatalog]:
-        query = select(MaterialCatalog).where(MaterialCatalog.organization_id == organization_id)
+        query = (
+            select(MaterialCatalog)
+            .options(selectinload(MaterialCatalog.default_supplier))
+            .where(MaterialCatalog.organization_id == organization_id)
+        )
         if active_only:
             query = query.where(MaterialCatalog.is_active.is_(True))
         if search:

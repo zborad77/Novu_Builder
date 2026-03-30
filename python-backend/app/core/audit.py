@@ -13,6 +13,8 @@ fully verified by the route dependency.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+from dataclasses import dataclass
 import json
 import time
 from datetime import UTC, datetime
@@ -21,16 +23,17 @@ from uuid import uuid4
 
 import jwt
 import structlog
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import Headers
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import get_settings
+from app.core.metrics import AUDIT_WRITE_FAILED_TOTAL
 from app.db.session import AsyncSessionFactory
 from app.models.domain import AuditLog
 
 if TYPE_CHECKING:
-    pass
+    from app.schemas.auth import AuthUserRead
 
 logger = structlog.get_logger(__name__)
 
@@ -83,6 +86,20 @@ _SKIP_PREFIXES = ("/mock-storage", "/api/v1/admin")
 _DENY_WINDOW_SEC: int = 60
 _DENY_MAX_PER_WINDOW: int = 5
 _deny_counts: dict[str, tuple[float, int]] = {}
+
+
+@dataclass(frozen=True)
+class _AuditActor:
+    user_id: str | None
+    user_email: str | None
+    org_id: str | None
+    impersonated_by: str | None
+
+
+_request_audit_actor: ContextVar[_AuditActor | None] = ContextVar(
+    "request_audit_actor",
+    default=None,
+)
 
 
 def log_cross_tenant_denied(
@@ -179,6 +196,163 @@ def _decode_user(authorization: str | None) -> tuple[str | None, str | None]:
         return None, None
 
 
+def bind_request_audit_actor(request: Request, current_user: "AuthUserRead") -> None:
+    actor = _AuditActor(
+        user_id=current_user.id,
+        user_email=current_user.email,
+        org_id=current_user.organizationId,
+        impersonated_by=current_user.impersonatedBy,
+    )
+    request.state.audit_actor = actor
+    _request_audit_actor.set(actor)
+
+
+def _audit_actor_from_request(request: Request) -> _AuditActor | None:
+    actor = getattr(request.state, "audit_actor", None)
+    if isinstance(actor, _AuditActor):
+        return actor
+    return None
+
+
+def _audit_actor_from_context(user_id: str | None = None) -> _AuditActor | None:
+    actor = _request_audit_actor.get()
+    if not isinstance(actor, _AuditActor):
+        return None
+    if user_id is not None and actor.user_id != user_id:
+        return None
+    return actor
+
+
+def _audit_actor_from_scope(scope: Scope) -> _AuditActor | None:
+    state = scope.get("state")
+    actor = state.get("audit_actor") if isinstance(state, dict) else getattr(state, "audit_actor", None)
+    if isinstance(actor, _AuditActor):
+        return actor
+    return _audit_actor_from_context()
+
+
+async def _enrich_audit_actor(session, actor: _AuditActor | None) -> _AuditActor:
+    if actor is None:
+        context_actor = _audit_actor_from_context()
+        if context_actor is not None:
+            return context_actor
+        return _AuditActor(None, None, None, None)
+
+    context_actor = _audit_actor_from_context(actor.user_id)
+    if (
+        context_actor is not None
+        and context_actor.user_email is not None
+        and context_actor.org_id is not None
+    ):
+        return _AuditActor(
+            user_id=actor.user_id,
+            user_email=context_actor.user_email,
+            org_id=context_actor.org_id,
+            impersonated_by=actor.impersonated_by or context_actor.impersonated_by,
+        )
+
+    if not actor.user_id:
+        return actor
+
+    if actor.user_email is not None and actor.org_id is not None:
+        return actor
+
+    from app.models.domain import User as _User
+
+    user_obj = await session.get(_User, actor.user_id)
+    if user_obj is None:
+        return actor
+
+    enriched_actor = _AuditActor(
+        user_id=actor.user_id,
+        user_email=user_obj.email,
+        org_id=user_obj.organization_id,
+        impersonated_by=actor.impersonated_by,
+    )
+    _request_audit_actor.set(enriched_actor)
+    return enriched_actor
+
+
+async def _safe_rollback(session) -> None:
+    try:
+        await session.rollback()
+    except Exception:
+        pass
+
+
+def _log_audit_write_failure(
+    *,
+    error: Exception,
+    action: str | None = None,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
+    user_id: str | None = None,
+) -> None:
+    AUDIT_WRITE_FAILED_TOTAL.inc()
+    logger.warning(
+        "SECURITY_EVENT: audit_write_failed",
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        user_id=user_id,
+        error_type=type(error).__name__,
+        error=str(error),
+    )
+
+
+def _build_audit_log(
+    *,
+    actor: _AuditActor,
+    action: str,
+    resource_type: str | None,
+    resource_id: str | None,
+    detail: dict | None = None,
+    ip: str | None = None,
+    user_id: str | None = None,
+) -> AuditLog:
+    serialized_detail = None
+    if detail is not None:
+        serialized_detail = json.dumps(detail, ensure_ascii=False)
+
+    return AuditLog(
+        id=uuid4().hex,
+        user_id=user_id if user_id is not None else actor.user_id,
+        user_email=actor.user_email,
+        org_id=actor.org_id,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        detail=serialized_detail,
+        impersonated_by=actor.impersonated_by,
+        ip=ip,
+        created_at=datetime.now(UTC),
+    )
+
+
+async def _stage_audit_log(
+    session,
+    *,
+    actor: _AuditActor | None,
+    action: str,
+    resource_type: str | None,
+    resource_id: str | None,
+    detail: dict | None = None,
+    ip: str | None = None,
+    user_id: str | None = None,
+) -> _AuditActor:
+    enriched_actor = await _enrich_audit_actor(session, actor)
+    session.add(_build_audit_log(
+        actor=enriched_actor,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        detail=detail,
+        ip=ip,
+        user_id=user_id,
+    ))
+    return enriched_actor
+
+
 async def write_audit_log(
     session,
     *,
@@ -190,87 +364,125 @@ async def write_audit_log(
 ) -> None:
     """Write a rich AuditLog entry reusing an existing DB session.
 
-    Looks up the actor's email and org_id from the DB for full traceability.
+    Reuses request/auth actor data first; falls back to DB only when needed.
     Failures are logged as SECURITY_EVENT warnings and do not propagate — audit
     logging must never break the main request path (fail-open). For fail-closed
     enforcement, use transactional audit writes at the repository layer.
     """
-    try:
-        from app.models.domain import AuditLog as _AuditLog
-        from app.models.domain import User as _User
-
-        actor = await session.get(_User, current_user_id)
-        session.add(_AuditLog(
-            id=uuid4().hex,
+    actor = _audit_actor_from_context(current_user_id)
+    if actor is None:
+        actor = _AuditActor(
             user_id=current_user_id,
-            user_email=actor.email if actor else None,
-            org_id=actor.organization_id if actor else None,
+            user_email=None,
+            org_id=None,
+            impersonated_by=None,
+        )
+    try:
+        actor = await _stage_audit_log(
+            session,
+            actor=actor,
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
-            detail=json.dumps(detail, ensure_ascii=False),
-            created_at=datetime.now(UTC),
-        ))
+            detail=detail,
+            user_id=current_user_id,
+        )
         await session.commit()
     except Exception as exc:
-        logger.warning(
-            "SECURITY_EVENT: audit_write_failed",
+        await _safe_rollback(session)
+        # SECURITY_EVENT: audit_write_failed
+        # logger.warning
+        _log_audit_write_failure(
+            error=exc,
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
-            error=str(exc),
+            user_id=current_user_id,
         )
 
 
-class AuditMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next) -> Response:
-        path = request.url.path
-        method = request.method
+async def _persist_http_audit_log(
+    *,
+    actor: _AuditActor | None,
+    action: str,
+    resource_type: str | None,
+    resource_id: str | None,
+    ip: str | None,
+) -> None:
+    session = None
+    try:
+        async with AsyncSessionFactory() as session:
+            await _stage_audit_log(
+                session,
+                actor=actor,
+                action=action,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                ip=ip,
+            )
+            await session.commit()
+    except Exception as exc:
+        if session is not None:
+            await _safe_rollback(session)
+        _log_audit_write_failure(
+            error=exc,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            user_id=actor.user_id if actor else None,
+        )
 
-        # Skip non-mutating and noisy paths
-        if method == "GET" or path in _SKIP_PATHS:
-            return await call_next(request)
-        if any(path.startswith(p) for p in _SKIP_PREFIXES):
-            return await call_next(request)
 
-        response = await call_next(request)
+class AuditMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
 
-        # Only log successful mutations
-        if response.status_code < 200 or response.status_code >= 300:
-            return response
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        method = scope.get("method", "")
+        path = scope.get("path", "")
+        actor_token = _request_audit_actor.set(None)
+        status_code: int | None = None
+
+        async def send_wrapper(message: Message) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = int(message["status"])
+            await send(message)
 
         try:
-            auth_header = request.headers.get("Authorization")
-            user_id, impersonated_by = _decode_user(auth_header)
+            if method == "GET" or path in _SKIP_PATHS or any(path.startswith(p) for p in _SKIP_PREFIXES):
+                await self.app(scope, receive, send_wrapper)
+                return
+
+            await self.app(scope, receive, send_wrapper)
+
+            if status_code is None or status_code < 200 or status_code >= 300:
+                return
+
             action, resource_type, resource_id = _classify(method, path)
-            ip = request.client.host if request.client else None
+            actor = _audit_actor_from_scope(scope)
+            if actor is None:
+                auth_header = Headers(scope=scope).get("authorization")
+                user_id, impersonated_by = _decode_user(auth_header)
+                actor = _AuditActor(
+                    user_id=user_id,
+                    user_email=None,
+                    org_id=None,
+                    impersonated_by=impersonated_by,
+                )
 
-            async with AsyncSessionFactory() as session:
-                async with session.begin():
-                    # Enrich with email + org_id from DB (one extra SELECT, worth it)
-                    user_email: str | None = None
-                    org_id: str | None = None
-                    if user_id:
-                        from app.models.domain import User as UserModel
-                        user_obj = await session.get(UserModel, user_id)
-                        if user_obj:
-                            user_email = user_obj.email
-                            org_id = user_obj.organization_id
-
-                    log = AuditLog(
-                        id=uuid4().hex,
-                        user_id=user_id,
-                        user_email=user_email,
-                        org_id=org_id,
-                        action=action,
-                        resource_type=resource_type,
-                        resource_id=resource_id,
-                        impersonated_by=impersonated_by,
-                        ip=ip,
-                        created_at=datetime.now(UTC),
-                    )
-                    session.add(log)
-        except Exception as exc:
-            logger.warning("audit.write_failed", error=str(exc))
-
-        return response
+            client = scope.get("client")
+            ip = client[0] if client else None
+            await _persist_http_audit_log(
+                actor=actor,
+                action=action,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                ip=ip,
+            )
+        finally:
+            _request_audit_actor.reset(actor_token)

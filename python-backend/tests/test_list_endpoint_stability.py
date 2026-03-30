@@ -263,6 +263,58 @@ async def test_cases_list_cursor_and_limit_are_stable_and_non_overlapping(
     assert set(first_ids).isdisjoint(second_ids)
 
 
+async def test_cases_list_status_filter_is_tenant_scoped_and_deterministic(
+    app_client,
+    db_session,
+    test_tenants,
+    token_a,
+):
+    seeded = await _seed_list_stability_rows(db_session, test_tenants)
+    headers = {"Authorization": f"Bearer {token_a}"}
+
+    response = await app_client.get(
+        "/api/v1/cases",
+        params={"search": seeded["token"], "status": "draft", "limit": 10},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    body = response.json()
+    ids = [item["id"] for item in body["items"] if seeded["token"] in item["title"]]
+    assert ids == [
+        seeded["projects"]["newest"],
+        seeded["projects"]["tie_high"],
+    ]
+    assert seeded["projects"]["tie_low"] not in ids
+    assert seeded["projects"]["other_org"] not in ids
+    assert body["next_cursor"] is None
+
+
+async def test_cases_list_invalid_cursor_falls_back_without_breaking_listing(
+    app_client,
+    db_session,
+    test_tenants,
+    token_a,
+):
+    seeded = await _seed_list_stability_rows(db_session, test_tenants)
+    headers = {"Authorization": f"Bearer {token_a}"}
+
+    baseline = await app_client.get(
+        "/api/v1/cases",
+        params={"search": seeded["token"], "limit": 2},
+        headers=headers,
+    )
+    invalid_cursor = await app_client.get(
+        "/api/v1/cases",
+        params={"search": seeded["token"], "limit": 2, "cursor": "%%%not-base64%%%"},
+        headers=headers,
+    )
+
+    assert baseline.status_code == 200, baseline.text
+    assert invalid_cursor.status_code == 200, invalid_cursor.text
+    assert invalid_cursor.json()["items"] == baseline.json()["items"]
+
+
 async def test_suppliers_list_include_inactive_and_ordering_are_stable(
     app_client,
     db_session,

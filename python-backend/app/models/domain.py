@@ -1,8 +1,9 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.token_limits import JTI_MAX_LENGTH
 from app.db.base import Base
 
 
@@ -105,6 +106,15 @@ class Project(TimestampMixin, Base):
 
 class ProjectPhoto(Base):
     __tablename__ = "project_photos"
+    __table_args__ = (
+        Index("idx_project_photos_project_id", "project_id"),
+        Index(
+            "idx_project_photos_project_sort_created",
+            "project_id",
+            "sort_order",
+            "created_at",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
@@ -171,6 +181,25 @@ class ProjectFinalProposal(TimestampMixin, Base):
 
 class AnalysisJob(Base):
     __tablename__ = "analysis_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'failed', 'canceled')",
+            name="ck_analysis_jobs_status",
+        ),
+        Index(
+            "idx_analysis_jobs_project_status_created_id",
+            "project_id",
+            "status",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "idx_analysis_jobs_project_created_id",
+            "project_id",
+            "created_at",
+            "id",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
@@ -194,6 +223,20 @@ class AnalysisJob(Base):
 
 class AnalysisResult(Base):
     __tablename__ = "analysis_results"
+    __table_args__ = (
+        Index(
+            "idx_analysis_results_project_created_id",
+            "project_id",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "idx_analysis_results_job_created_id",
+            "analysis_job_id",
+            "created_at",
+            "id",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
@@ -223,6 +266,14 @@ class AnalysisResult(Base):
 
 class PricingProfile(TimestampMixin, Base):
     __tablename__ = "pricing_profiles"
+    __table_args__ = (
+        Index(
+            "idx_pricing_profiles_org_default_name",
+            "organization_id",
+            "is_default",
+            "name",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
@@ -243,6 +294,14 @@ class PricingProfile(TimestampMixin, Base):
 
 class Supplier(TimestampMixin, Base):
     __tablename__ = "suppliers"
+    __table_args__ = (
+        Index(
+            "idx_suppliers_org_active_name",
+            "organization_id",
+            "is_active",
+            "name",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
@@ -262,6 +321,14 @@ class Supplier(TimestampMixin, Base):
 
 class MaterialCatalog(TimestampMixin, Base):
     __tablename__ = "material_catalog"
+    __table_args__ = (
+        Index(
+            "idx_material_catalog_org_active_name",
+            "organization_id",
+            "is_active",
+            "name",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
@@ -354,7 +421,7 @@ class RevokedToken(Base):
     """Blocklist for revoked JWT tokens. Checked on every authenticated request."""
     __tablename__ = "revoked_tokens"
 
-    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    jti: Mapped[str] = mapped_column(String(JTI_MAX_LENGTH), primary_key=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -376,9 +443,20 @@ class PasswordResetToken(Base):
     """Single-use token for the email-based password reset flow (C7).
 
     Created by POST /auth/forgot-password; consumed by POST /auth/reset-password.
-    Expired or already-used tokens must never be accepted.
+    The raw token must never be persisted: the token column stores a SHA-256
+    digest, and expired or already-used tokens must never be accepted.
     """
     __tablename__ = "password_reset_tokens"
+    __table_args__ = (
+        Index("ix_password_reset_tokens_expires_at", "expires_at"),
+        Index(
+            "uq_password_reset_tokens_user_id_unused",
+            "user_id",
+            unique=True,
+            postgresql_where=text("used_at IS NULL"),
+            sqlite_where=text("used_at IS NULL"),
+        ),
+    )
 
     token: Mapped[str] = mapped_column(String(128), primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)

@@ -151,7 +151,7 @@ async def _seed_project_list_rows(db_session, test_tenants):
                 created_by_user_id="usr_e2e_a1",
                 title=f"Service invariant {token} tie low",
                 description=f"Service invariant marker {token}",
-                status="draft",
+                status="archived",
                 source="mobile",
                 created_at=base + timedelta(minutes=2),
                 updated_at=base + timedelta(minutes=2),
@@ -291,6 +291,193 @@ async def test_project_service_list_projects_is_tenant_scoped_and_cursor_stable(
     }
     assert set(item.id for item in first_page).isdisjoint(item.id for item in second_page)
     assert second_cursor is None
+
+
+async def test_project_service_list_projects_status_filter_preserves_semantics(
+    db_session,
+    test_tenants,
+):
+    seeded = await _seed_project_list_rows(db_session, test_tenants)
+    service = ProjectService(
+        repository=ProjectRepository(db_session),
+        proposal_draft_repository=MagicMock(),
+        final_proposal_repository=MagicMock(),
+        export_service=MagicMock(),
+    )
+
+    page, next_cursor = await service.list_projects(
+        organization_id=test_tenants["org_a"],
+        status="draft",
+        search=seeded["token"],
+        limit=10,
+    )
+
+    assert [item.id for item in page] == [
+        seeded["projects"]["newest"],
+        seeded["projects"]["tie_high"],
+    ]
+    assert seeded["projects"]["tie_low"] not in {item.id for item in page}
+    assert seeded["projects"]["other_org"] not in {item.id for item in page}
+    assert next_cursor is None
+
+
+async def _seed_project_search_escape_rows(db_session, test_tenants):
+    token = uuid4().hex[:8]
+    base = datetime.now(UTC) + timedelta(days=22)
+    project_ids = {
+        "normal": f"prj_srch_{token}_normal",
+        "percent_literal": f"prj_srch_{token}_percent_literal",
+        "percent_wildcard_trap": f"prj_srch_{token}_percent_trap",
+        "underscore_literal": f"prj_srch_{token}_underscore_literal",
+        "underscore_wildcard_trap": f"prj_srch_{token}_underscore_trap",
+        "backslash_literal": f"prj_srch_{token}_backslash",
+    }
+
+    db_session.add_all(
+        [
+            Project(
+                id=project_ids["normal"],
+                organization_id=test_tenants["org_a"],
+                created_by_user_id="usr_e2e_a1",
+                title=f"Escaped Search MixedCase {token}",
+                description="baseline search row",
+                status="draft",
+                source="mobile",
+                created_at=base + timedelta(minutes=1),
+                updated_at=base + timedelta(minutes=1),
+            ),
+            Project(
+                id=project_ids["percent_literal"],
+                organization_id=test_tenants["org_a"],
+                created_by_user_id="usr_e2e_a1",
+                title=f"Budget rate%2026 {token}",
+                description="literal percent row",
+                status="draft",
+                source="mobile",
+                created_at=base + timedelta(minutes=2),
+                updated_at=base + timedelta(minutes=2),
+            ),
+            Project(
+                id=project_ids["percent_wildcard_trap"],
+                organization_id=test_tenants["org_a"],
+                created_by_user_id="usr_e2e_a1",
+                title=f"Budget rateX2026 {token}",
+                description="must not match literal percent term",
+                status="draft",
+                source="mobile",
+                created_at=base + timedelta(minutes=3),
+                updated_at=base + timedelta(minutes=3),
+            ),
+            Project(
+                id=project_ids["underscore_literal"],
+                organization_id=test_tenants["org_a"],
+                created_by_user_id="usr_e2e_a1",
+                title=f"Phase_1 milestone {token}",
+                description="literal underscore row",
+                status="draft",
+                source="mobile",
+                created_at=base + timedelta(minutes=4),
+                updated_at=base + timedelta(minutes=4),
+            ),
+            Project(
+                id=project_ids["underscore_wildcard_trap"],
+                organization_id=test_tenants["org_a"],
+                created_by_user_id="usr_e2e_a1",
+                title=f"PhaseA1 milestone {token}",
+                description="must not match literal underscore term",
+                status="draft",
+                source="mobile",
+                created_at=base + timedelta(minutes=5),
+                updated_at=base + timedelta(minutes=5),
+            ),
+            Project(
+                id=project_ids["backslash_literal"],
+                organization_id=test_tenants["org_a"],
+                created_by_user_id="usr_e2e_a1",
+                title=f"Path C:\\Roof\\North {token}",
+                description="literal backslash row",
+                status="draft",
+                source="mobile",
+                created_at=base + timedelta(minutes=6),
+                updated_at=base + timedelta(minutes=6),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    return {
+        "token": token,
+        "projects": project_ids,
+    }
+
+
+async def test_project_repository_search_preserves_case_insensitive_substring_matching(
+    db_session,
+    test_tenants,
+):
+    seeded = await _seed_project_search_escape_rows(db_session, test_tenants)
+    repo = ProjectRepository(db_session)
+
+    items = await repo.list_projects(
+        organization_id=test_tenants["org_a"],
+        search=f"mixedcase {seeded['token'].lower()}",
+        limit=20,
+    )
+
+    assert seeded["projects"]["normal"] in {item.id for item in items}
+
+
+async def test_project_repository_search_treats_percent_as_literal_character(
+    db_session,
+    test_tenants,
+):
+    seeded = await _seed_project_search_escape_rows(db_session, test_tenants)
+    repo = ProjectRepository(db_session)
+
+    items = await repo.list_projects(
+        organization_id=test_tenants["org_a"],
+        search=f"rate%2026 {seeded['token']}",
+        limit=20,
+    )
+
+    ids = {item.id for item in items}
+    assert seeded["projects"]["percent_literal"] in ids
+    assert seeded["projects"]["percent_wildcard_trap"] not in ids
+
+
+async def test_project_repository_search_treats_underscore_as_literal_character(
+    db_session,
+    test_tenants,
+):
+    seeded = await _seed_project_search_escape_rows(db_session, test_tenants)
+    repo = ProjectRepository(db_session)
+
+    items = await repo.list_projects(
+        organization_id=test_tenants["org_a"],
+        search=f"Phase_1 milestone {seeded['token']}",
+        limit=20,
+    )
+
+    ids = {item.id for item in items}
+    assert seeded["projects"]["underscore_literal"] in ids
+    assert seeded["projects"]["underscore_wildcard_trap"] not in ids
+
+
+async def test_project_repository_search_treats_backslash_as_literal_character(
+    db_session,
+    test_tenants,
+):
+    seeded = await _seed_project_search_escape_rows(db_session, test_tenants)
+    repo = ProjectRepository(db_session)
+
+    items = await repo.list_projects(
+        organization_id=test_tenants["org_a"],
+        search=f"C:\\Roof\\North {seeded['token']}",
+        limit=20,
+    )
+
+    ids = {item.id for item in items}
+    assert ids == {seeded["projects"]["backslash_literal"]}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

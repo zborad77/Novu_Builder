@@ -6,6 +6,7 @@ from app.api.deps import get_current_user, get_photo_service, get_project_servic
 from app.core.audit import log_cross_tenant_denied
 from app.core.config import get_settings
 from app.core.limiter import limiter
+from app.core.metrics import UPLOAD_REJECTIONS_TOTAL
 from app.schemas.auth import AuthUserRead
 from app.schemas.photo import (
     AnalysisReferencePhotoResponse,
@@ -18,10 +19,48 @@ from app.schemas.photo import (
 )
 from app.services.photo_service import PhotoService
 from app.services.project_service import ProjectService
+from app.storage.backend import UploadValidationError
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["images"])
+
+
+def _upload_error_status_code(exc: UploadValidationError) -> int:
+    status_code = getattr(exc, "status_code", status.HTTP_400_BAD_REQUEST)
+    detail = str(exc)
+    if status_code == status.HTTP_400_BAD_REQUEST and detail.startswith("File too large:"):
+        return status.HTTP_413_CONTENT_TOO_LARGE
+    if status_code == status.HTTP_400_BAD_REQUEST and detail.startswith(
+        ("Unsupported Content-Type", "Unsupported file type", "Content-Type mismatch", "File extension mismatch")
+    ):
+        return status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+    if status_code in {
+        status.HTTP_400_BAD_REQUEST,
+        status.HTTP_413_CONTENT_TOO_LARGE,
+        status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+    }:
+        return status_code
+    return status.HTTP_400_BAD_REQUEST
+
+
+def _upload_error_reason(exc: UploadValidationError) -> str:
+    detail = str(exc)
+    if detail.startswith("File too large:"):
+        return "file_too_large"
+    if detail.startswith("Unsupported Content-Type"):
+        return "unsupported_content_type"
+    if detail.startswith("Unsupported file type"):
+        return "unsupported_file_type"
+    if detail.startswith("Content-Type mismatch"):
+        return "content_type_mismatch"
+    if detail.startswith("File extension mismatch"):
+        return "file_extension_mismatch"
+    if "filename" in detail.lower():
+        return "invalid_filename"
+    if "image" in detail.lower() or "corrupt" in detail.lower():
+        return "invalid_image_content"
+    return "invalid_upload"
 
 
 @router.get("/cases/{case_id}/images", response_model=PhotoListResponse)
@@ -32,8 +71,8 @@ async def list_case_images(
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PhotoListResponse:
     org_id = resolve_org_id(current_user)
-    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
-    if not detail:
+    project = await project_service.get_project_lean(case_id, organization_id=org_id)
+    if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
     items, meta = await photo_service.list_photos(case_id)
     return PhotoListResponse(items=items, meta=meta)
@@ -49,7 +88,7 @@ async def upload_case_images(
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PhotoUploadResponse:
     org_id = resolve_org_id(current_user)
-    project = await project_service.get_project(case_id, organization_id=org_id)
+    project = await project_service.get_project_lean(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
 
@@ -70,15 +109,22 @@ async def upload_case_images(
         for index, file in enumerate(upload_files):
             try:
                 uploaded.append(await photo_service.create_multipart_photo(project, file, is_primary=is_primary and index == 0))
-            except ValueError as exc:
+            except UploadValidationError as exc:
+                reason_code = _upload_error_reason(exc)
+                status_code = _upload_error_status_code(exc)
+                UPLOAD_REJECTIONS_TOTAL.labels(
+                    reason=reason_code,
+                    status_code=str(status_code),
+                ).inc()
                 logger.warning(
                     "photo.upload_rejected",
                     project_id=case_id,
                     user_id=current_user.id,
                     filename=getattr(file, "filename", None),
-                    reason=str(exc),
+                    reason=reason_code,
+                    status_code=status_code,
                 )
-                raise HTTPException(status_code=413, detail=str(exc)) from exc
+                raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     else:
         raise HTTPException(status_code=400, detail="This endpoint expects multipart/form-data files or a JSON body with a files array.")
 
@@ -107,7 +153,7 @@ async def get_image_preview(
     if not photo:
         raise HTTPException(status_code=404, detail="Image not found.")
     org_id = resolve_org_id(current_user)
-    project = await project_service.get_project(photo.projectId, organization_id=org_id)
+    project = await project_service.get_project_lean(photo.projectId, organization_id=org_id)
     if not project:
         if not current_user.isSuperAdmin:
             log_cross_tenant_denied(
@@ -129,8 +175,8 @@ async def set_case_primary_image(
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PrimaryPhotoResponse:
     org_id = resolve_org_id(current_user)
-    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
-    if not detail:
+    project = await project_service.get_project_lean(case_id, organization_id=org_id)
+    if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
     photo = await photo_service.set_primary_photo(case_id, image_id)
     if not photo:
@@ -147,8 +193,8 @@ async def set_case_analysis_reference_image(
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> AnalysisReferencePhotoResponse:
     org_id = resolve_org_id(current_user)
-    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
-    if not detail:
+    project = await project_service.get_project_lean(case_id, organization_id=org_id)
+    if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
     try:
         photo = await photo_service.set_analysis_reference_photo(case_id, image_id)
@@ -169,8 +215,8 @@ async def move_case_image(
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PhotoListResponse:
     org_id = resolve_org_id(current_user)
-    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
-    if not detail:
+    project = await project_service.get_project_lean(case_id, organization_id=org_id)
+    if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
 
     moved = await photo_service.move_photo(case_id, image_id, payload.direction)
@@ -190,8 +236,8 @@ async def delete_case_image(
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> DeletePhotoResponse:
     org_id = resolve_org_id(current_user)
-    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
-    if not detail:
+    project = await project_service.get_project_lean(case_id, organization_id=org_id)
+    if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
     deleted = await photo_service.delete_photo(case_id, image_id)
     if not deleted:

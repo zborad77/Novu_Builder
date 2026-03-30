@@ -161,6 +161,19 @@ Pro bezpecne overeni bez spusteni procesu:
 powershell -ExecutionPolicy Bypass -File scripts\start-dev.ps1 -DryRun
 ```
 
+## Production compose env
+
+Production `docker compose` startup expects a filled root
+[.env.production.example](.env.production.example) copy with at least:
+
+- `APP_BASE_URL`
+- `CORS_ALLOWED_ORIGINS`
+- `METRICS_AUTH_TOKEN`
+- `STORAGE_BACKEND=s3`
+- `S3_BUCKET`
+
+Deployment details and the operator checklist are in [DEPLOY.md](DEPLOY.md).
+
 ## Nejblizsi kroky
 
 1. Rozvijet `desktop-qt` jako cilovy kancelarsky klient.

@@ -1,22 +1,15 @@
-"""R-19: Redis job queue unit tests.
-
-Tests cover:
-  - enqueue_analysis_job pushes correctly serialised payload
-  - dequeue_analysis_job returns correct dict
-  - dequeue_analysis_job returns None on timeout
-  - execute_job skips jobs not in 'queued' status (idempotency guard)
-  - Route enqueues job when job_queue is available
-  - Route returns 202 and logs warning when job_queue is None
-"""
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.worker.queue import QUEUE_KEY, dequeue_analysis_job, enqueue_analysis_job
+from app.worker.queue import (
+    InvalidAnalysisJobPayloadError,
+    QUEUE_KEY,
+    dequeue_analysis_job,
+    enqueue_analysis_job,
+)
 
-
-# ── queue.py unit tests ──────────────────────────────────────────────────────
 
 class TestEnqueueAnalysisJob:
     @pytest.mark.asyncio
@@ -55,6 +48,21 @@ class TestEnqueueAnalysisJob:
         assert payload["organization_id"] is None
         assert payload["is_superadmin_context"] is True
 
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_payload_before_push(self):
+        redis = AsyncMock()
+
+        with pytest.raises(InvalidAnalysisJobPayloadError):
+            await enqueue_analysis_job(
+                redis,
+                job_id="   ",
+                project_id="proj-2",
+                organization_id="org-2",
+                is_superadmin_context=False,
+            )
+
+        redis.rpush.assert_not_called()
+
 
 class TestDequeueAnalysisJob:
     @pytest.mark.asyncio
@@ -76,6 +84,35 @@ class TestDequeueAnalysisJob:
         }
 
     @pytest.mark.asyncio
+    async def test_rejects_malformed_json(self):
+        redis = AsyncMock()
+        redis.blpop = AsyncMock(return_value=(QUEUE_KEY.encode(), b"{broken"))
+
+        with pytest.raises(InvalidAnalysisJobPayloadError):
+            await dequeue_analysis_job(redis)
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_object_json(self):
+        redis = AsyncMock()
+        redis.blpop = AsyncMock(return_value=(QUEUE_KEY.encode(), json.dumps(["bad"]).encode()))
+
+        with pytest.raises(InvalidAnalysisJobPayloadError):
+            await dequeue_analysis_job(redis)
+
+    @pytest.mark.asyncio
+    async def test_rejects_structurally_invalid_object_json(self):
+        raw = json.dumps({
+            "job_id": "job-3",
+            "organization_id": "org-3",
+            "is_superadmin_context": False,
+        }).encode()
+        redis = AsyncMock()
+        redis.blpop = AsyncMock(return_value=(QUEUE_KEY.encode(), raw))
+
+        with pytest.raises(InvalidAnalysisJobPayloadError):
+            await dequeue_analysis_job(redis)
+
+    @pytest.mark.asyncio
     async def test_returns_none_on_timeout(self):
         redis = AsyncMock()
         redis.blpop = AsyncMock(return_value=None)
@@ -90,12 +127,9 @@ class TestDequeueAnalysisJob:
         redis.blpop.assert_awaited_once_with(QUEUE_KEY, timeout=30)
 
 
-# ── execute_job idempotency guard ─────────────────────────────────────────────
-
 class TestExecuteJobStatusGuard:
     @pytest.mark.asyncio
     async def test_skips_running_job(self):
-        """execute_job must return early without DB writes when status != 'queued'."""
         from app.services.analysis_service import AnalysisService
 
         mock_job = MagicMock()
@@ -121,10 +155,8 @@ class TestExecuteJobStatusGuard:
             patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo),
             patch("app.services.analysis_service.PhotoRepository", return_value=AsyncMock()),
         ):
-            # Should return without error or DB writes
             await service.execute_job("job-1", "proj-1", "org-1", is_superadmin_context=False)
 
-        # Confirm job status was NOT changed (no commit called)
         mock_session.commit.assert_not_called()
 
     @pytest.mark.asyncio
@@ -158,11 +190,8 @@ class TestExecuteJobStatusGuard:
         mock_session.commit.assert_not_called()
 
 
-# ── route-level tests ─────────────────────────────────────────────────────────
-
 class TestCreateAnalysisJobRoute:
     def test_enqueues_when_queue_available(self):
-        """get_job_queue returns the Redis client when job_queue is set on app.state."""
         from app.api.deps import get_job_queue
 
         mock_redis = AsyncMock()
@@ -175,7 +204,7 @@ class TestCreateAnalysisJobRoute:
         from app.api.deps import get_job_queue
 
         mock_request = MagicMock()
-        del mock_request.app.state.job_queue  # simulate missing attr
-        mock_request.app.state = MagicMock(spec=[])  # no job_queue attribute
+        del mock_request.app.state.job_queue
+        mock_request.app.state = MagicMock(spec=[])
         result = get_job_queue(mock_request)
         assert result is None

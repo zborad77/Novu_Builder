@@ -1,7 +1,6 @@
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from uuid import uuid4
 
 from datetime import UTC, datetime
 
@@ -14,7 +13,7 @@ import structlog
 
 from app.api.router import api_router
 from app.core.audit import AuditMiddleware
-from app.core.config import get_settings
+from app.core.config import get_settings, startup_failure_message
 from app.core.limiter import limiter
 from app.core.logging import configure_logging
 from app.core.metrics import (
@@ -22,6 +21,8 @@ from app.core.metrics import (
     HTTP_REQUESTS_IN_PROGRESS,
     HTTP_REQUESTS_TOTAL,
 )
+from app.core.request_id import sanitize_request_id
+from app.core.redis_client import build_redis_client_from_settings
 from app.db.base import Base
 from app.db.bootstrap import ensure_dev_seed
 from app.db.session import AsyncSessionFactory, engine
@@ -42,13 +43,23 @@ except ModuleNotFoundError as exc:
 
 
 async def verify_database_connectivity() -> None:
-    async with engine.connect() as connection:
-        await connection.execute(text("SELECT 1"))
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise RuntimeError(
+            startup_failure_message("database", f"Database connectivity check failed: {exc}")
+        ) from exc
 
 
 async def verify_application_schema() -> None:
-    async with AsyncSessionFactory() as session:
-        await session.execute(select(Project.id).limit(1))
+    try:
+        async with AsyncSessionFactory() as session:
+            await session.execute(select(Project.id).limit(1))
+    except Exception as exc:
+        raise RuntimeError(
+            startup_failure_message("schema", f"Application schema verification failed: {exc}")
+        ) from exc
 
 
 def verify_storage_root() -> None:
@@ -63,19 +74,89 @@ def verify_storage_root() -> None:
         probe_file.unlink(missing_ok=True)
     except OSError as exc:
         logger.error("storage.not_writable", root=str(STORAGE_ROOT), error=str(exc))
-        raise RuntimeError(f"STORAGE_ROOT is not writable: {STORAGE_ROOT}") from exc
+        raise RuntimeError(
+            startup_failure_message("storage", f"STORAGE_ROOT is not writable: {STORAGE_ROOT}")
+        ) from exc
 
     # Count existing files to confirm data persists across restarts
     upload_count = sum(1 for _ in UPLOADS_ROOT.rglob("*") if _.is_file())
     export_count = sum(1 for _ in EXPORTS_ROOT.rglob("*") if _.is_file() and _.suffix != ".json")
     logger.info(
         "storage.verified",
+        backend="local",
         root=str(STORAGE_ROOT),
         uploads_root=str(UPLOADS_ROOT),
         exports_root=str(EXPORTS_ROOT),
         existing_uploads=upload_count,
         existing_exports=export_count,
     )
+
+
+def verify_storage_backend(settings) -> None:
+    backend = settings.storage_backend.strip().lower()
+
+    if backend == "local":
+        verify_storage_root()
+        return
+
+    if backend == "s3":
+        logger.info(
+            "storage.verified",
+            backend="s3",
+            bucket=settings.s3_bucket,
+            endpoint_url_configured=bool(settings.s3_endpoint_url),
+            cdn_base_url_configured=bool(settings.s3_cdn_base_url),
+        )
+        return
+
+    raise RuntimeError(
+        startup_failure_message(
+            "storage",
+            f"Unsupported STORAGE_BACKEND during startup: {settings.storage_backend!r}",
+        )
+    )
+
+
+def _is_strict_startup_environment(settings) -> bool:
+    return settings.app_env.lower() not in ("development", "test")
+
+
+def _build_redis_client(settings):
+    return build_redis_client_from_settings(
+        settings,
+        client_name="novu-backend",
+    )
+
+
+async def initialize_job_queue(settings):
+    if not settings.redis_url:
+        logger.info("job_queue.disabled", reason="REDIS_URL_not_set")
+        return None
+
+    try:
+        redis_client = _build_redis_client(settings)
+        await redis_client.ping()  # type: ignore[misc]  # redis.asyncio stubs
+        logger.info("job_queue.ready")
+        return redis_client
+    except Exception as exc:
+        if "redis_client" in locals():
+            try:
+                await redis_client.aclose()
+            except Exception as close_exc:
+                logger.warning("job_queue.close_failed", error=str(close_exc))
+
+        if _is_strict_startup_environment(settings):
+            logger.error("job_queue.unavailable", error=str(exc), fail_fast=True)
+            raise RuntimeError(
+                startup_failure_message(
+                    "redis",
+                    f"Redis job queue is unavailable in APP_ENV={settings.app_env!r}. "
+                    "Fix REDIS_URL/connectivity before startup.",
+                )
+            ) from exc
+
+        logger.warning("job_queue.unavailable", error=str(exc), fail_fast=False)
+        return None
 
 
 @asynccontextmanager
@@ -114,9 +195,12 @@ async def lifespan(app: FastAPI):
 
         if current_rev != expected_head:
             raise RuntimeError(
-                f"Database schema is not at the expected revision. "
-                f"Current: {current_rev!r}, expected head: {expected_head!r}. "
-                f"Run 'alembic upgrade head' before starting the application."
+                startup_failure_message(
+                    "schema",
+                    f"Database schema is not at the expected revision. "
+                    f"Current: {current_rev!r}, expected head: {expected_head!r}. "
+                    "Run 'alembic upgrade head' before starting the application.",
+                )
             )
         logger.info("db.schema_check", status="ok", revision=current_rev)
 
@@ -131,34 +215,22 @@ async def lifespan(app: FastAPI):
     startup_checks["database"] = "ok"
     await verify_application_schema()
     startup_checks["schema"] = "ok"
-    verify_storage_root()
+    verify_storage_backend(settings)
     startup_checks["storage"] = "ok"
     app.state.startup_checks = startup_checks
     logger.info("startup.checks", **startup_checks)
 
     async with AsyncSessionFactory() as session:
-        deleted = await TokenRepository(session).delete_expired()
-        if deleted:
-            logger.info("startup.revoked_tokens_cleanup", deleted=deleted)
+        token_repository = TokenRepository(session)
+        revoked_deleted = await token_repository.delete_expired()
+        if revoked_deleted:
+            logger.info("startup.revoked_tokens_cleanup", deleted=revoked_deleted)
 
-    # R-19: initialise Redis job queue — optional, fails open when Redis is absent
-    if settings.redis_url:
-        try:
-            from redis.asyncio import Redis as _Redis
-            _redis_client = _Redis.from_url(
-                settings.redis_url,
-                socket_connect_timeout=1.0,
-                socket_timeout=1.0,
-            )
-            await _redis_client.ping()  # type: ignore[misc]  # redis.asyncio stubs
-            app.state.job_queue = _redis_client
-            logger.info("job_queue.ready")
-        except Exception as exc:
-            logger.warning("job_queue.unavailable", error=str(exc))
-            app.state.job_queue = None
-    else:
-        app.state.job_queue = None
-        logger.info("job_queue.disabled", reason="REDIS_URL_not_set")
+        password_reset_deleted = await token_repository.delete_expired_password_reset_tokens()
+        if password_reset_deleted:
+            logger.info("startup.password_reset_tokens_cleanup", deleted=password_reset_deleted)
+
+    app.state.job_queue = await initialize_job_queue(settings)
 
     # R-36: recover stale running jobs — mark as failed so they don't block retries
     try:
@@ -265,6 +337,8 @@ def create_app() -> FastAPI:
     async def log_requests(request: Request, call_next) -> Response:
         start = time.monotonic()
         HTTP_REQUESTS_IN_PROGRESS.labels(method=request.method).inc()
+        route = request.scope.get("route")
+        path_template = route.path if route else request.url.path
         try:
             response = await call_next(request)
         finally:
@@ -274,8 +348,6 @@ def create_app() -> FastAPI:
         if not request.url.path.startswith("/mock-storage"):
             # R-38: use route path template (e.g. /api/v1/cases/{case_id}) to avoid
             # label cardinality explosion from per-resource IDs.
-            route = request.scope.get("route")
-            path_template = route.path if route else request.url.path
             status_str = str(response.status_code)
             HTTP_REQUESTS_TOTAL.labels(
                 method=request.method,
@@ -292,6 +364,7 @@ def create_app() -> FastAPI:
                 "http.request",
                 method=request.method,
                 path=request.url.path,
+                path_template=path_template,
                 status=response.status_code,
                 duration_ms=duration_ms,
             )
@@ -301,7 +374,7 @@ def create_app() -> FastAPI:
     async def request_id_context(request: Request, call_next) -> Response:
         """Bind a unique request ID to the structlog context for this request."""
         structlog.contextvars.clear_contextvars()
-        request_id = request.headers.get("X-Request-ID") or uuid4().hex
+        request_id = sanitize_request_id(request.headers.get("X-Request-ID"))
         structlog.contextvars.bind_contextvars(request_id=request_id)
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
@@ -309,11 +382,14 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        route = request.scope.get("route")
+        path_template = route.path if route else request.url.path
         logger.error(
             "http.unhandled_exception",
             exc_type=type(exc).__name__,
             method=request.method,
             path=request.url.path,
+            path_template=path_template,
             exc_info=True,
         )
         if settings.sentry_dsn:

@@ -331,6 +331,9 @@ class ProjectService:
     async def get_project(self, project_id: str, *, organization_id: str | None = None) -> Project | None:
         return await self.repository.get_project(project_id, organization_id=organization_id)
 
+    async def get_project_lean(self, project_id: str, *, organization_id: str | None = None) -> Project | None:
+        return await self.repository.get_project_lean(project_id, organization_id=organization_id)
+
     async def list_projects(
         self,
         *,

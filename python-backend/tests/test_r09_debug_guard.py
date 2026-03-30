@@ -7,6 +7,7 @@ from app.core.config import Settings
 _STRONG_JWT = "a-strong-secret-that-is-not-the-default-value-99!"
 _STRONG_REDIS = "redis://:a-strong-redis-password-xyz123@localhost:6379/0"
 _STRONG_METRICS = "a-strong-metrics-token-xyz-for-testing-123456789"
+_STRONG_DB = "postgresql+asyncpg://novu:Str0ngP%40ssw0rd!@localhost:5432/novu_prod"
 
 
 def test_default_debug_is_false(monkeypatch):
@@ -39,8 +40,11 @@ def test_debug_false_allowed_in_production(monkeypatch):
     monkeypatch.setenv("APP_DEBUG", "false")
     monkeypatch.setenv("JWT_SECRET", _STRONG_JWT)
     monkeypatch.setenv("REDIS_URL", _STRONG_REDIS)
+    monkeypatch.setenv("METRICS_AUTH_ENABLED", "true")
     monkeypatch.setenv("METRICS_AUTH_TOKEN", _STRONG_METRICS)
-    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    monkeypatch.setenv("DATABASE_URL", _STRONG_DB)
+    monkeypatch.setenv("APP_BASE_URL", "https://app.novu-builder.com")
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://app.novu-builder.com")
     monkeypatch.setenv("STORAGE_BACKEND", "s3")
     monkeypatch.setenv("S3_BUCKET", "my-production-bucket")
     s = Settings()

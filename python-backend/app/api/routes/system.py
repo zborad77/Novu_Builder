@@ -1,9 +1,14 @@
+from __future__ import annotations
+
+import asyncio
 import secrets
+import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import Response
-from sqlalchemy import func, select, text
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import Response as RawResponse
+from sqlalchemy import case, func, select, text
 import structlog
 
 from app.api.deps import require_superadmin
@@ -14,13 +19,25 @@ from app.core.metrics import (
     JOBS_RUNNING,
     PROMETHEUS_CLIENT_AVAILABLE,
     WORKER_ALIVE,
+    WORKER_ALIVE_INSTANCES,
+    WORKER_MONITORING_AVAILABLE,
+    WORKER_SEEN_INSTANCES,
 )
 from app.db.session import AsyncSessionFactory
 from app.models import AnalysisJob
 from app.schemas.auth import AuthUserRead
+from app.worker.heartbeat import (
+    WORKER_HEARTBEAT_FRESHNESS_SECONDS,
+    WORKER_HEARTBEAT_KEY_PATTERN,
+    WORKER_HEARTBEAT_KEY_PREFIX,
+    WORKER_HEARTBEAT_LEGACY_KEY,
+)
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
+_PROBE_SERVICE_NAME = "python-backend"
+_READINESS_DB_CACHE_TTL_SECONDS = 2.0
+_OPERATIONAL_METRICS_CACHE_TTL_SECONDS = 5.0
 
 try:
     from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -29,44 +46,327 @@ except ModuleNotFoundError:
     generate_latest = None
 
 
+@dataclass
+class _ReadinessDbCache:
+    ready: bool | None = None
+    expires_at_monotonic: float = 0.0
+    lock: asyncio.Lock | None = None
+
+    def get_lock(self) -> asyncio.Lock:
+        if self.lock is None:
+            self.lock = asyncio.Lock()
+        return self.lock
+
+
+@dataclass
+class _OperationalMetricsCache:
+    snapshot: "_OperationalMetricsSnapshot" | None = None
+    expires_at_monotonic: float = 0.0
+    lock: asyncio.Lock | None = None
+
+    def get_lock(self) -> asyncio.Lock:
+        if self.lock is None:
+            self.lock = asyncio.Lock()
+        return self.lock
+
+
+@dataclass(frozen=True)
+class _WorkerHeartbeatSnapshot:
+    alive: bool | None
+    last_seen_at: str | None
+    alive_instances: int | None
+    seen_instances: int | None
+
+
+@dataclass(frozen=True)
+class _OperationalMetricsSnapshot:
+    db_alive: bool
+    jobs_running: int
+    jobs_queued: int
+    worker: _WorkerHeartbeatSnapshot
+
+
 async def _refresh_operational_metrics(request: Request) -> None:
     """Refresh DB/worker/job gauges before each Prometheus scrape (C5).
 
     Failures are silently swallowed; a missing gauge value is better than a
     broken scrape endpoint.
     """
+    snapshot = await _get_operational_metrics_snapshot_cached(request)
+    DB_ALIVE.set(1 if snapshot.db_alive else 0)
+    JOBS_RUNNING.set(snapshot.jobs_running)
+    JOBS_QUEUED.set(snapshot.jobs_queued)
+
+    worker = snapshot.worker
+    if worker.alive is None:
+        WORKER_MONITORING_AVAILABLE.set(0)
+        WORKER_ALIVE.set(0)
+        WORKER_ALIVE_INSTANCES.set(0)
+        WORKER_SEEN_INSTANCES.set(0)
+        return
+
+    WORKER_MONITORING_AVAILABLE.set(1)
+    WORKER_ALIVE.set(1 if worker.alive else 0)
+    WORKER_ALIVE_INSTANCES.set(worker.alive_instances or 0)
+    WORKER_SEEN_INSTANCES.set(worker.seen_instances or 0)
+
+
+async def _database_ready() -> bool:
     try:
         async with AsyncSessionFactory() as session:
             await session.execute(text("SELECT 1"))
-            DB_ALIVE.set(1)
-
-            running_row = await session.execute(
-                select(func.count()).where(AnalysisJob.status == "running")
-            )
-            queued_row = await session.execute(
-                select(func.count()).where(AnalysisJob.status == "queued")
-            )
-            JOBS_RUNNING.set(running_row.scalar_one() or 0)
-            JOBS_QUEUED.set(queued_row.scalar_one() or 0)
+        return True
     except Exception:
-        DB_ALIVE.set(0)
+        return False
+
+
+def _startup_ready(request: Request) -> bool:
+    startup_checks = getattr(request.app.state, "startup_checks", {})
+    return bool(startup_checks) and all(value == "ok" for value in startup_checks.values())
+
+
+def _readiness_now() -> float:
+    return time.monotonic()
+
+
+def _get_readiness_db_cache(request: Request) -> _ReadinessDbCache:
+    cache = getattr(request.app.state, "readiness_db_cache", None)
+    if cache is None:
+        cache = _ReadinessDbCache()
+        request.app.state.readiness_db_cache = cache
+    return cache
+
+
+def _clear_readiness_db_cache(app) -> None:
+    app.state.readiness_db_cache = _ReadinessDbCache()
+
+
+def _get_operational_metrics_cache(request: Request) -> _OperationalMetricsCache:
+    cache = getattr(request.app.state, "operational_metrics_cache", None)
+    if cache is None:
+        cache = _OperationalMetricsCache()
+        request.app.state.operational_metrics_cache = cache
+    return cache
+
+
+def _clear_operational_metrics_cache(app) -> None:
+    app.state.operational_metrics_cache = _OperationalMetricsCache()
+
+
+def _decode_heartbeat_timestamp(raw_value: bytes | str | None) -> datetime | None:
+    if raw_value is None:
+        return None
+
+    decoded = raw_value.decode() if isinstance(raw_value, bytes) else str(raw_value)
+    try:
+        parsed = datetime.fromisoformat(decoded)
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+async def _iter_worker_heartbeat_values(redis):
+    scan_iter = getattr(redis, "scan_iter", None)
+    if scan_iter is not None:
+        heartbeat_keys: list[object] = []
+        async for raw_key in scan_iter(match=WORKER_HEARTBEAT_KEY_PATTERN):
+            heartbeat_keys.append(raw_key)
+
+        if heartbeat_keys:
+            raw_values = await redis.mget(heartbeat_keys)
+            for raw_key, raw_value in zip(heartbeat_keys, raw_values):
+                if raw_value is None:
+                    continue
+
+                key = raw_key.decode() if isinstance(raw_key, bytes) else str(raw_key)
+                instance_id = (
+                    key[len(WORKER_HEARTBEAT_KEY_PREFIX):]
+                    if key.startswith(WORKER_HEARTBEAT_KEY_PREFIX)
+                    else None
+                )
+                yield instance_id, raw_value
+
+    legacy_value = await redis.get(WORKER_HEARTBEAT_LEGACY_KEY)
+    if legacy_value is not None:
+        yield None, legacy_value
+
+
+async def _get_worker_heartbeat_snapshot(redis) -> _WorkerHeartbeatSnapshot:
+    if redis is None:
+        return _WorkerHeartbeatSnapshot(
+            alive=None,
+            last_seen_at=None,
+            alive_instances=None,
+            seen_instances=None,
+        )
+
+    entries: list[tuple[str | None, datetime]] = []
+    async for instance_id, raw_value in _iter_worker_heartbeat_values(redis):
+        timestamp = _decode_heartbeat_timestamp(raw_value)
+        if timestamp is not None:
+            entries.append((instance_id, timestamp))
+
+    if not entries:
+        return _WorkerHeartbeatSnapshot(
+            alive=False,
+            last_seen_at=None,
+            alive_instances=0,
+            seen_instances=0,
+        )
+
+    now = datetime.now(UTC)
+    alive_instances = sum(
+        1
+        for _, timestamp in entries
+        if (now - timestamp).total_seconds() < WORKER_HEARTBEAT_FRESHNESS_SECONDS
+    )
+    last_seen_at = max(timestamp for _, timestamp in entries).isoformat()
+    return _WorkerHeartbeatSnapshot(
+        alive=alive_instances > 0,
+        last_seen_at=last_seen_at,
+        alive_instances=alive_instances,
+        seen_instances=len(entries),
+    )
+
+
+def _store_readiness_db_cache(
+    request: Request,
+    *,
+    ready: bool,
+    now_monotonic: float | None = None,
+) -> None:
+    cache = _get_readiness_db_cache(request)
+    now = _readiness_now() if now_monotonic is None else now_monotonic
+    cache.ready = ready
+    cache.expires_at_monotonic = now + _READINESS_DB_CACHE_TTL_SECONDS
+
+
+def _peek_operational_metrics_snapshot(
+    request: Request,
+    *,
+    now_monotonic: float | None = None,
+) -> _OperationalMetricsSnapshot | None:
+    cache = _get_operational_metrics_cache(request)
+    now = _readiness_now() if now_monotonic is None else now_monotonic
+    if cache.snapshot is None or now >= cache.expires_at_monotonic:
+        return None
+    return cache.snapshot
+
+
+async def _query_job_counts(session) -> tuple[int, int]:
+    counts_row = await session.execute(
+        select(
+            func.coalesce(
+                func.sum(case((AnalysisJob.status == "running", 1), else_=0)),
+                0,
+            ),
+            func.coalesce(
+                func.sum(case((AnalysisJob.status == "queued", 1), else_=0)),
+                0,
+            ),
+        )
+    )
+    jobs_running, jobs_queued = counts_row.one()
+    return int(jobs_running or 0), int(jobs_queued or 0)
+
+
+async def _collect_operational_metrics_snapshot(request: Request) -> _OperationalMetricsSnapshot:
+    db_alive = False
+    jobs_running = 0
+    jobs_queued = 0
+    try:
+        async with AsyncSessionFactory() as session:
+            jobs_running, jobs_queued = await _query_job_counts(session)
+            db_alive = True
+    except Exception:
+        db_alive = False
+
+    _store_readiness_db_cache(request, ready=db_alive)
 
     try:
-        redis = getattr(request.app.state, "job_queue", None)
-        if redis is not None:
-            raw = await redis.get("worker:heartbeat")
-            if raw is not None:
-                ts = datetime.fromisoformat(raw.decode())
-                WORKER_ALIVE.set(1 if (datetime.now(UTC) - ts).total_seconds() < 90 else 0)
-            else:
-                WORKER_ALIVE.set(0)
+        worker_snapshot = await _get_worker_heartbeat_snapshot(getattr(request.app.state, "job_queue", None))
     except Exception:
-        pass
+        worker_snapshot = _WorkerHeartbeatSnapshot(
+            alive=None,
+            last_seen_at=None,
+            alive_instances=None,
+            seen_instances=None,
+        )
+
+    return _OperationalMetricsSnapshot(
+        db_alive=db_alive,
+        jobs_running=jobs_running,
+        jobs_queued=jobs_queued,
+        worker=worker_snapshot,
+    )
+
+
+async def _get_operational_metrics_snapshot_cached(request: Request) -> _OperationalMetricsSnapshot:
+    cache = _get_operational_metrics_cache(request)
+    now = _readiness_now()
+    if cache.snapshot is not None and now < cache.expires_at_monotonic:
+        return cache.snapshot
+
+    async with cache.get_lock():
+        now = _readiness_now()
+        if cache.snapshot is not None and now < cache.expires_at_monotonic:
+            return cache.snapshot
+
+        snapshot = await _collect_operational_metrics_snapshot(request)
+        cache.snapshot = snapshot
+        cache.expires_at_monotonic = now + _OPERATIONAL_METRICS_CACHE_TTL_SECONDS
+        return snapshot
+
+
+async def _database_ready_cached(request: Request) -> bool:
+    cache = _get_readiness_db_cache(request)
+    now = _readiness_now()
+    if cache.ready is not None and now < cache.expires_at_monotonic:
+        return cache.ready
+
+    async with cache.get_lock():
+        now = _readiness_now()
+        if cache.ready is not None and now < cache.expires_at_monotonic:
+            return cache.ready
+
+        operational_snapshot = _peek_operational_metrics_snapshot(request, now_monotonic=now)
+        if operational_snapshot is not None:
+            cache.ready = operational_snapshot.db_alive
+            cache.expires_at_monotonic = min(
+                now + _READINESS_DB_CACHE_TTL_SECONDS,
+                _get_operational_metrics_cache(request).expires_at_monotonic,
+            )
+            return operational_snapshot.db_alive
+
+        ready = await _database_ready()
+        cache.ready = ready
+        cache.expires_at_monotonic = now + _READINESS_DB_CACHE_TTL_SECONDS
+        return ready
+
+
+async def _is_ready(request: Request) -> bool:
+    return _startup_ready(request) and await _database_ready_cached(request)
+
+
+def _probe_payload(status_value: str) -> dict[str, str]:
+    return {
+        "status": status_value,
+        "service": _PROBE_SERVICE_NAME,
+    }
+
+
+def _set_readiness_status(response: Response, *, ready: bool) -> None:
+    response.status_code = (
+        status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE
+    )
 
 
 @router.get("/metrics", include_in_schema=False)
-async def metrics(request: Request) -> Response:
-    """Prometheus metrics scrape endpoint (R-38)."""
+async def metrics(request: Request) -> RawResponse:
+    """Prometheus scrape endpoint. Not a health or readiness probe."""
     if not PROMETHEUS_CLIENT_AVAILABLE or generate_latest is None:
         logger.warning("metrics.scrape_unavailable", reason="prometheus_client_not_installed")
         raise HTTPException(
@@ -86,12 +386,19 @@ async def metrics(request: Request) -> Response:
             raise HTTPException(status_code=401, detail="Invalid metrics token.")
 
     await _refresh_operational_metrics(request)
-    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    return RawResponse(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Robots-Tag": "noindex, nofollow",
+        },
+    )
 
 
 @router.get("/alive")
 async def alive() -> dict:
-    """Liveness probe; confirms the process is running."""
+    """Legacy liveness alias; confirms the process is running."""
     return {"status": "alive"}
 
 
@@ -106,32 +413,30 @@ async def root() -> dict:
 
 
 @router.get("/health")
-async def health(request: Request) -> dict:
-    """Public health check; minimal, safe for load balancer probes."""
-    db_live = False
-    try:
-        async with AsyncSessionFactory() as session:
-            await session.execute(text("SELECT 1"))
-            db_live = True
-    except Exception:
-        pass
+async def health() -> dict[str, str]:
+    """Public liveness probe; fast, dependency-free, and intentionally minimal."""
+    return _probe_payload("ok")
 
-    ready = all(value == "ok" for value in request.app.state.startup_checks.values())
-    return {
-        "status": "ok" if (ready and db_live) else "degraded",
-        "service": "python-backend",
-        "timestamp": datetime.now(UTC).isoformat(),
-    }
+
+@router.get("/ready")
+async def ready(request: Request, response: Response) -> dict[str, str]:
+    """Public readiness probe; returns ready only when traffic can be served safely."""
+    if await _is_ready(request):
+        _set_readiness_status(response, ready=True)
+        return _probe_payload("ready")
+
+    _set_readiness_status(response, ready=False)
+    return _probe_payload("not_ready")
 
 
 @router.get("/health/internal", include_in_schema=False)
 async def health_internal(
     request: Request,
+    response: Response,
     _: AuthUserRead = Depends(require_superadmin),
 ) -> dict:
-    """Detailed internal health check; DB stats, job counts, startup checks."""
-    settings = get_settings()
-    ready = all(value == "ok" for value in request.app.state.startup_checks.values())
+    """Protected diagnostics endpoint; richer than liveness/readiness probes."""
+    startup_ready = _startup_ready(request)
 
     db_live = False
     jobs_running = 0
@@ -165,25 +470,28 @@ async def health_internal(
     except Exception:
         pass
 
-    worker_alive: bool | None = None
-    worker_last_seen: str | None = None
+    worker_snapshot = _WorkerHeartbeatSnapshot(
+        alive=None,
+        last_seen_at=None,
+        alive_instances=None,
+        seen_instances=None,
+    )
     try:
-        redis = getattr(request.app.state, "job_queue", None)
-        if redis is not None:
-            raw = await redis.get("worker:heartbeat")
-            if raw is not None:
-                worker_last_seen = raw.decode()
-                ts = datetime.fromisoformat(worker_last_seen)
-                worker_alive = (datetime.now(UTC) - ts).total_seconds() < 90
-            else:
-                worker_alive = False
+        worker_snapshot = await _get_worker_heartbeat_snapshot(getattr(request.app.state, "job_queue", None))
     except Exception:
-        worker_alive = None
+        worker_snapshot = _WorkerHeartbeatSnapshot(
+            alive=None,
+            last_seen_at=None,
+            alive_instances=None,
+            seen_instances=None,
+        )
+
+    ready = startup_ready and db_live
+    _set_readiness_status(response, ready=ready)
 
     return {
-        "status": "ok" if (ready and db_live) else "degraded",
-        "service": "python-backend",
-        "debug": settings.app_debug,
+        "status": "ok" if ready else "degraded",
+        "service": _PROBE_SERVICE_NAME,
         "ready": ready,
         "startupChecks": request.app.state.startup_checks,
         "db": "ok" if db_live else "error",
@@ -193,8 +501,10 @@ async def health_internal(
             "lastCompletedAt": last_completed_at,
         },
         "worker": {
-            "alive": worker_alive,
-            "lastSeenAt": worker_last_seen,
+            "alive": worker_snapshot.alive,
+            "lastSeenAt": worker_snapshot.last_seen_at,
+            "aliveInstances": worker_snapshot.alive_instances,
+            "seenInstances": worker_snapshot.seen_instances,
         },
         "timestamp": datetime.now(UTC).isoformat(),
     }

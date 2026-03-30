@@ -52,7 +52,7 @@ async def create_or_update_measurement(
     analysis_service: AnalysisService = Depends(get_analysis_service),
 ) -> MeasurementRead:
     org_id = resolve_org_id(current_user)
-    project = await project_service.get_project(case_id, organization_id=org_id)
+    project = await project_service.get_project_lean(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
     changes = payload.model_dump(exclude_unset=True)
@@ -85,7 +85,11 @@ async def patch_measurement(
     changes = payload.model_dump(exclude_unset=True)
     if "referenceImageId" in changes:
         changes["referencePhotoId"] = changes.pop("referenceImageId")
-    updated = await analysis_service.update_manual_selection_by_result_id(measurement_id, changes)
+    updated = await analysis_service.update_manual_selection_by_result_id(
+        measurement_id,
+        changes,
+        organization_id=org_id,
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="Measurement not found.")
     return _to_measurement(updated)
@@ -111,6 +115,7 @@ async def confirm_measurement(
     updated = await analysis_service.update_manual_selection_by_result_id(
         measurement_id,
         {"finalAreaSource": "manual"},
+        organization_id=org_id,
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Measurement not found.")

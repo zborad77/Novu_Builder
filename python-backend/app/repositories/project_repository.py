@@ -1,12 +1,39 @@
 import base64
+from binascii import Error as BinasciiError
 from collections.abc import Sequence
 from datetime import datetime
 
+import structlog
 from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import Client, Project
+
+logger = structlog.get_logger(__name__)
+_LIKE_ESCAPE_CHAR = "\\"
+
+
+def _decode_project_list_cursor(cursor: str) -> tuple[datetime, str] | None:
+    try:
+        decoded = base64.b64decode(cursor.encode(), validate=True).decode()
+        ts_str, cur_id = decoded.rsplit(":", 1)
+        if not cur_id:
+            raise ValueError("missing project id")
+        return datetime.fromisoformat(ts_str), cur_id
+    except (BinasciiError, UnicodeDecodeError, ValueError) as exc:
+        logger.warning("projects.list.invalid_cursor", error=str(exc))
+        return None
+
+
+def _build_project_search_pattern(search: str) -> str:
+    escaped = (
+        search
+        .replace(_LIKE_ESCAPE_CHAR, _LIKE_ESCAPE_CHAR * 2)
+        .replace("%", _LIKE_ESCAPE_CHAR + "%")
+        .replace("_", _LIKE_ESCAPE_CHAR + "_")
+    )
+    return f"%{escaped}%"
 
 
 class ProjectRepository:
@@ -22,39 +49,41 @@ class ProjectRepository:
         limit: int = 200,
         cursor: str | None = None,
     ) -> Sequence[Project]:
-        # Stable sort: created_at DESC, id DESC. Enables reliable cursor-based pagination
-        # because created_at never changes (unlike updated_at).
-        query: Select[tuple[Project]] = (
-            select(Project)
-            .options(selectinload(Project.photos), selectinload(Project.created_by_user))
-            .order_by(Project.created_at.desc(), Project.id.desc())
+        normalized_search = search.strip() if search else None
+        query: Select[tuple[Project]] = select(Project).options(
+            selectinload(Project.photos),
+            selectinload(Project.created_by_user),
         )
 
-        if organization_id:
+        if organization_id is not None:
             query = query.where(Project.organization_id == organization_id)
 
         if status:
             query = query.where(Project.status == status)
 
-        if search:
-            like_value = f"%{search.lower()}%"
+        if normalized_search:
+            like_value = _build_project_search_pattern(normalized_search)
             query = query.where(
-                (Project.title.ilike(like_value)) | (Project.description.ilike(like_value))
+                or_(
+                    Project.title.ilike(like_value, escape=_LIKE_ESCAPE_CHAR),
+                    Project.description.ilike(like_value, escape=_LIKE_ESCAPE_CHAR),
+                )
             )
 
         if cursor:
-            try:
-                decoded = base64.b64decode(cursor.encode()).decode()
-                ts_str, cur_id = decoded.rsplit(":", 1)
-                cursor_ts = datetime.fromisoformat(ts_str)
+            decoded_cursor = _decode_project_list_cursor(cursor)
+            if decoded_cursor is not None:
+                cursor_ts, cur_id = decoded_cursor
                 query = query.where(
                     or_(
                         Project.created_at < cursor_ts,
                         and_(Project.created_at == cursor_ts, Project.id < cur_id),
                     )
                 )
-            except Exception:
-                pass  # invalid cursor → return from start
+
+        # Stable sort: created_at DESC, id DESC. Enables reliable cursor-based pagination
+        # because created_at never changes (unlike updated_at).
+        query = query.order_by(Project.created_at.desc(), Project.id.desc())
 
         # Fetch limit+1 to detect whether a next page exists
         query = query.limit(limit + 1)

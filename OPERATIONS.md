@@ -23,6 +23,11 @@ METRICS_AUTH_TOKEN=<openssl rand -hex 32>
 METRICS_AUTH_ENABLED=true
 AI_ANALYSIS_PROVIDER=mock          # or claude / openai
 ANTHROPIC_API_KEY=                 # required when provider=claude
+APP_BASE_URL=https://app.example.com
+CORS_ALLOWED_ORIGINS=https://app.example.com
+STORAGE_BACKEND=s3
+S3_BUCKET=novu-prod-bucket
+S3_REGION=us-east-1
 ```
 
 Spouštěj jako:
@@ -76,12 +81,18 @@ docker compose run --rm backend alembic revision --autogenerate -m "describe cha
 | Endpoint                     | Auth                         | Purpose                                      |
 |------------------------------|------------------------------|----------------------------------------------|
 | `GET /api/v1/alive`          | none                         | Liveness probe — process is up               |
-| `GET /api/v1/health`         | none                         | Readiness + DB connectivity (public, minimal) |
+| `GET /api/v1/health`         | none                         | Public liveness probe â€” minimal, no internals |
+| `GET /api/v1/ready`          | none                         | Public readiness probe â€” startup + DB ready  |
 | `GET /api/v1/health/internal`| superadmin token + interní IP| Detailní stav: worker, joby, startup checks   |
 | `GET /api/v1/metrics`        | Bearer `METRICS_AUTH_TOKEN`  | Prometheus scrape — IP whitelist v nginx      |
 
 `/api/v1/metrics` vyžaduje Bearer token (`METRICS_AUTH_ENABLED=true`, výchozí).
 nginx navíc povoluje přístup pouze z interní sítě (10.x, 172.x, 192.168.x, localhost).
+
+`/api/v1/health` je zÃ¡mÄ›rnÄ› dependency-free a vracÃ­ jen minimÃ¡lnÃ­ payload.
+`/api/v1/ready` vracÃ­ `200 {"status":"ready",...}` pouze kdyÅ¾ startup checks dobÄ›hly
+a databÃ¡ze odpovÃ­dÃ¡; jinak vracÃ­ `503 {"status":"not_ready",...}`.
+`/api/v1/health/internal` je diagnostickÃ½ endpoint pro operÃ¡tory a pÅ™i degradaci vracÃ­ HTTP 503.
 
 ### Key metrics exposed
 
@@ -94,6 +105,9 @@ nginx navíc povoluje přístup pouze z interní sítě (10.x, 172.x, 192.168.x,
 | `novu_worker_alive` | Gauge | 1.0 = worker aktivní (heartbeat < 90 s) |
 | `novu_jobs_queued` | Gauge | Počet jobů čekajících na zpracování |
 | `novu_jobs_running` | Gauge | Počet právě běžících jobů |
+
+| `novu_auth_failures_total` | Counter | Auth selhani podle endpointu a coarse-grained reason |
+| `novu_upload_rejections_total` | Counter | Odmitnute uploady podle coarse-grained reason a HTTP status |
 
 Prometheus scrape config:
 
@@ -131,7 +145,10 @@ Superadmin (cross-tenant) views bypass the cache entirely.
 | Data | Location | Method |
 |------|----------|--------|
 | PostgreSQL | `postgres_data` Docker volume | `pg_dump` |
-| File storage (photos, exports) | `storage_data` Docker volume | `tar` via alpine container |
+| File storage (photos, exports) | S3 bucket from `S3_BUCKET` | provider-native backup / versioning |
+
+When `STORAGE_BACKEND=s3` (required in production), the compatibility
+`storage_data` Docker volume is not the source of uploaded media.
 
 ### Running a backup
 

@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ProjectPhoto
@@ -46,14 +46,24 @@ class PhotoRepository:
         return result.scalar_one_or_none()
 
     async def clear_primary(self, project_id: str) -> None:
-        photos = await self.list_photos_by_project_id(project_id)
-        for photo in photos:
-            photo.is_primary = False
+        await self.session.execute(
+            update(ProjectPhoto)
+            .where(
+                ProjectPhoto.project_id == project_id,
+                ProjectPhoto.is_primary.is_(True),
+            )
+            .values(is_primary=False)
+        )
 
     async def clear_analysis_reference(self, project_id: str) -> None:
-        photos = await self.list_photos_by_project_id(project_id)
-        for photo in photos:
-            photo.is_analysis_reference = False
+        await self.session.execute(
+            update(ProjectPhoto)
+            .where(
+                ProjectPhoto.project_id == project_id,
+                ProjectPhoto.is_analysis_reference.is_(True),
+            )
+            .values(is_analysis_reference=False)
+        )
 
     async def add_photo(self, photo: ProjectPhoto) -> ProjectPhoto:
         self.session.add(photo)

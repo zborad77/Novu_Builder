@@ -64,11 +64,11 @@ def _make_photo(photo_id: str, project_id: str):
 class TestUploadRouteStructure:
 
     def test_upload_route_validates_org_before_upload(self):
-        """upload_case_images must call get_project with organization_id before processing files."""
+        """upload_case_images must call get_project_lean with organization_id before processing files."""
         from app.api.routes.images import upload_case_images
         src = inspect.getsource(upload_case_images)
         assert "organization_id=org_id" in src
-        assert "get_project" in src
+        assert "get_project_lean" in src
 
     def test_preview_route_requires_authentication(self):
         """get_image_preview must require get_current_user dependency."""
@@ -81,7 +81,7 @@ class TestUploadRouteStructure:
         from app.api.routes.images import get_image_preview
         src = inspect.getsource(get_image_preview)
         assert "organization_id=org_id" in src
-        assert "get_project" in src
+        assert "get_project_lean" in src
 
     def test_photo_read_model_has_project_id(self):
         """ProjectPhotoRead must expose projectId for org validation."""
@@ -111,13 +111,13 @@ class TestUploadOwnProject:
         project = _make_project("prj_A", "org_A")
 
         mock_project_service = AsyncMock(spec=ProjectService)
-        mock_project_service.get_project = AsyncMock(return_value=project)
+        mock_project_service.get_project_lean = AsyncMock(return_value=project)
 
         # Verify: no 404 raised for matching org
-        result = await mock_project_service.get_project("prj_A", organization_id="org_A")
+        result = await mock_project_service.get_project_lean("prj_A", organization_id="org_A")
         assert result is not None
         assert result.id == "prj_A"
-        mock_project_service.get_project.assert_called_once_with("prj_A", organization_id="org_A")
+        mock_project_service.get_project_lean.assert_called_once_with("prj_A", organization_id="org_A")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -142,7 +142,7 @@ class TestUploadForeignProject:
 
         mock_project_service = AsyncMock(spec=ProjectService)
         # project belongs to org_A, but user is in org_B → returns None
-        mock_project_service.get_project = AsyncMock(return_value=None)
+        mock_project_service.get_project_lean = AsyncMock(return_value=None)
 
         mock_photo_service = AsyncMock(spec=PhotoService)
 
@@ -156,7 +156,7 @@ class TestUploadForeignProject:
             )
 
         assert exc_info.value.status_code == 404
-        mock_project_service.get_project.assert_called_once_with("prj_A", organization_id="org_B")
+        mock_project_service.get_project_lean.assert_called_once_with("prj_A", organization_id="org_B")
 
     @pytest.mark.asyncio
     async def test_upload_fails_when_project_not_found(self):
@@ -173,7 +173,7 @@ class TestUploadForeignProject:
         mock_user.organizationId = "org_A"
 
         mock_project_service = AsyncMock(spec=ProjectService)
-        mock_project_service.get_project = AsyncMock(return_value=None)
+        mock_project_service.get_project_lean = AsyncMock(return_value=None)
 
         mock_photo_service = AsyncMock(spec=PhotoService)
 
@@ -220,7 +220,7 @@ class TestPreviewOrgCheck:
 
         mock_project_service = AsyncMock(spec=ProjectService)
         # project not in org_B → returns None
-        mock_project_service.get_project = AsyncMock(return_value=None)
+        mock_project_service.get_project_lean = AsyncMock(return_value=None)
 
         with pytest.raises(HTTPException) as exc_info:
             await get_image_preview(
@@ -231,7 +231,7 @@ class TestPreviewOrgCheck:
             )
 
         assert exc_info.value.status_code == 404
-        mock_project_service.get_project.assert_called_once_with("prj_A", organization_id="org_B")
+        mock_project_service.get_project_lean.assert_called_once_with("prj_A", organization_id="org_B")
 
     @pytest.mark.asyncio
     async def test_preview_fails_for_nonexistent_photo(self):
@@ -258,7 +258,7 @@ class TestPreviewOrgCheck:
             )
 
         assert exc_info.value.status_code == 404
-        mock_project_service.get_project.assert_not_called()
+        mock_project_service.get_project_lean.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_preview_succeeds_for_own_org_photo(self):
@@ -285,7 +285,7 @@ class TestPreviewOrgCheck:
         mock_photo_service.get_photo_by_id = AsyncMock(return_value=read_model)
 
         mock_project_service = AsyncMock(spec=ProjectService)
-        mock_project_service.get_project = AsyncMock(return_value=project)
+        mock_project_service.get_project_lean = AsyncMock(return_value=project)
 
         response = await get_image_preview(
             image_id="pho_X",
@@ -295,7 +295,7 @@ class TestPreviewOrgCheck:
         )
 
         assert isinstance(response, RedirectResponse)
-        mock_project_service.get_project.assert_called_once_with("prj_A", organization_id="org_A")
+        mock_project_service.get_project_lean.assert_called_once_with("prj_A", organization_id="org_A")
 
     @pytest.mark.asyncio
     async def test_superadmin_bypasses_org_check_on_preview(self):
@@ -323,7 +323,7 @@ class TestPreviewOrgCheck:
 
         mock_project_service = AsyncMock(spec=ProjectService)
         # superadmin: get_project with org_id=None returns project regardless of org
-        mock_project_service.get_project = AsyncMock(return_value=project)
+        mock_project_service.get_project_lean = AsyncMock(return_value=project)
 
         response = await get_image_preview(
             image_id="pho_X",
@@ -334,7 +334,7 @@ class TestPreviewOrgCheck:
 
         assert isinstance(response, RedirectResponse)
         # org_id=None is passed for superadmin (no org filter)
-        mock_project_service.get_project.assert_called_once_with("prj_A", organization_id=None)
+        mock_project_service.get_project_lean.assert_called_once_with("prj_A", organization_id=None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -27,6 +27,25 @@ JWT_SECRET=$(openssl rand -hex 32)
 METRICS_AUTH_TOKEN=$(openssl rand -hex 32)
 ```
 
+Production values that must be filled before `docker compose up`:
+
+- `APP_BASE_URL` - deployed client URL, must not point to localhost/example domains
+- `CORS_ALLOWED_ORIGINS` - deployed browser origins, comma-separated when needed
+- `METRICS_AUTH_ENABLED=true`
+- `METRICS_AUTH_TOKEN` - strong bearer token for `/api/v1/metrics`
+- `STORAGE_BACKEND=s3`
+- `S3_BUCKET` - real object-storage bucket/container name
+- `S3_REGION` - set explicitly when not using the default
+
+Optional S3 wiring:
+
+- `S3_ENDPOINT_URL` for S3-compatible providers
+- `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` together, or leave both unset for IAM/instance-role auth
+- `S3_CDN_BASE_URL` when public media should resolve through a CDN
+
+Note: `docker-compose.yml` still mounts `storage_data` for compatibility, but
+when `STORAGE_BACKEND=s3` it is not the production source of uploaded media.
+
 ### 2. SSL certifikáty
 
 ```bash
@@ -69,12 +88,16 @@ docker compose ps   # všechny služby "running" nebo "healthy"
 # Liveness
 curl -f https://localhost/api/v1/alive
 
-# Health
+# Public liveness
 curl -k https://localhost/api/v1/health
+curl -k https://localhost/api/v1/ready
+# /health â†’ {"status":"ok","service":"python-backend"}
+curl -k https://localhost/api/v1/ready
+# /ready â†’ {"status":"ready","service":"python-backend"}
 # Očekávané: {"status":"ok","service":"python-backend",...}
 
 # Smoke check
-python scripts/smoke_check_live.py https://localhost <email> <password>
+python scripts/verify_deploy.py --base-url https://localhost --auth-email <email> --auth-password <password>
 ```
 
 ---
@@ -129,7 +152,10 @@ sleep 60
 docker compose exec redis redis-cli -a "$REDIS_PASSWORD" GET worker:heartbeat
 
 # d) Smoke check
-python scripts/smoke_check_live.py https://localhost <email> <pass>
+python scripts/verify_deploy.py --base-url https://localhost --auth-email <email> --auth-password <pass>
+
+# Bezpecny wrapper pro preflight + explicitni migraci + post-deploy verification
+python scripts/verify_release_gate.py --base-url https://localhost --apply-migrations --auth-email <email> --auth-password <pass>
 
 # e) Zkontroluj logy na chyby
 docker compose logs backend --tail=50 | grep -E "ERROR|CRITICAL"

@@ -7,6 +7,7 @@ Three metrics cover the minimum useful signal:
 
 The log_requests middleware in app/main.py populates these.
 The /metrics endpoint in app/api/routes/system.py exposes them.
+It is intentionally separate from /health and /ready probe semantics.
 
 Path template (e.g. /api/v1/cases/{case_id}) is used as the label, not the raw
 URL, to prevent label cardinality explosion from per-resource IDs.
@@ -75,8 +76,9 @@ HTTP_REQUESTS_IN_PROGRESS = Gauge(
     ["method"],
 )
 
-# Operational health gauges (C5)
-# Refreshed on every /metrics scrape inside system.py::metrics().
+# Operational gauges (C5)
+# Refreshed from the system.py operational snapshot path used by /metrics.
+# The snapshot is intentionally short-lived and in-process only.
 
 DB_ALIVE = Gauge(
     "novu_db_alive",
@@ -85,7 +87,22 @@ DB_ALIVE = Gauge(
 
 WORKER_ALIVE = Gauge(
     "novu_worker_alive",
-    "1 if the worker heartbeat was received within 90 s, 0 if stale or absent",
+    "1 if at least one worker heartbeat was received within 90 s, 0 if stale or absent",
+)
+
+WORKER_ALIVE_INSTANCES = Gauge(
+    "novu_worker_alive_instances",
+    "Number of worker instances with a fresh heartbeat",
+)
+
+WORKER_SEEN_INSTANCES = Gauge(
+    "novu_worker_seen_instances",
+    "Number of worker heartbeat keys currently visible to monitoring",
+)
+
+WORKER_MONITORING_AVAILABLE = Gauge(
+    "novu_worker_monitoring_available",
+    "1 if worker heartbeat monitoring can read Redis, 0 if worker status is currently unknown",
 )
 
 JOBS_QUEUED = Gauge(
@@ -96,4 +113,24 @@ JOBS_QUEUED = Gauge(
 JOBS_RUNNING = Gauge(
     "novu_jobs_running",
     "Number of analysis jobs in running state",
+)
+
+# Audit trail health (R-AUD-01)
+# Incremented whenever an audit log write fails so that Prometheus can alert on
+# silent audit-trail gaps.  Complements the SECURITY_EVENT log warning.
+AUDIT_WRITE_FAILED_TOTAL = Counter(
+    "novu_audit_write_failed_total",
+    "Total number of audit log write failures",
+)
+
+AUTH_FAILURES_TOTAL = Counter(
+    "novu_auth_failures_total",
+    "Total auth failures by endpoint and coarse-grained reason",
+    ["endpoint", "reason"],
+)
+
+UPLOAD_REJECTIONS_TOTAL = Counter(
+    "novu_upload_rejections_total",
+    "Total rejected uploads by coarse-grained reason and HTTP status",
+    ["reason", "status_code"],
 )

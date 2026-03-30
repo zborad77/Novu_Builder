@@ -20,7 +20,7 @@ class MaterialCatalogService:
                     norm_per_sqm=item.norm_per_sqm,
                     default_unit_price=item.default_unit_price,
                     default_supplier_id=item.default_supplier_id,
-                    default_supplier_name=await self.repository.get_supplier_name(item.default_supplier_id),
+                    default_supplier_name=item.default_supplier.name if item.default_supplier else None,
                     is_active=item.is_active,
                     notes=item.notes,
                     created_at=item.created_at,
