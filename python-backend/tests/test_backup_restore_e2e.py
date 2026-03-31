@@ -28,7 +28,9 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import tempfile
 import textwrap
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -38,6 +40,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BACKUP_SH  = REPO_ROOT / "scripts" / "backup.sh"
 RESTORE_SH = REPO_ROOT / "ops" / "restore.sh"
 VALIDATE_RESTORED_MEDIA = REPO_ROOT / "python-backend" / "scripts" / "validate_restored_media.py"
+LOCAL_TEST_ROOT = Path(tempfile.gettempdir()) / "novu_restore_e2e"
+LOCAL_TEST_ROOT.mkdir(parents=True, exist_ok=True)
 
 _TS = "20260101_120000"  # fixed timestamp for artifacts
 
@@ -68,6 +72,12 @@ REPO_ALEMBIC_HEAD = _repo_alembic_head()
 def _exe(path: Path, content: str) -> None:
     path.write_text(content)
     path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _create_local_test_case_dir() -> Path:
+    path = LOCAL_TEST_ROOT / f"restore_case_{uuid.uuid4().hex[:8]}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 # ── fixture ───────────────────────────────────────────────────────────────────
@@ -231,6 +241,154 @@ class Env:
         """))
         return p
 
+    def s3_media_export_helper(self, *, unique_object_count: int = 2) -> Path:
+        p = self.tmp / "fake_export_s3_manifest.py"
+        p.write_text(textwrap.dedent(f"""\
+            #!/usr/bin/env python
+            import argparse, json
+            from pathlib import Path
+
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--database-url", required=True)
+            parser.add_argument("--output", required=True)
+            parser.add_argument("--bucket", required=True)
+            parser.add_argument("--region", required=True)
+            parser.add_argument("--declared-recovery-point", required=True)
+            parser.add_argument("--db-backup-file", required=True)
+            parser.add_argument("--db-manifest-file", required=True)
+            args = parser.parse_args()
+
+            output = Path(args.output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            payload = {{
+                "format": "novu-s3-media-manifest-v1",
+                "generated_at": "2026-03-31T00:00:00Z",
+                "db_backup_file": args.db_backup_file,
+                "db_manifest_file": args.db_manifest_file,
+                "source_bucket": args.bucket,
+                "source_region": args.region,
+                "declared_recovery_point": args.declared_recovery_point,
+                "storage_snapshot_consistent": True,
+                "source_reference_count": {unique_object_count},
+                "unique_object_count": {unique_object_count},
+                "objects": [
+                    {{
+                        "key": f"projects/prj_{{idx}}/original.jpg",
+                        "version_id": f"v{{idx}}",
+                        "size": 10 + idx,
+                        "etag": None,
+                        "last_modified_at": "2026-03-31T00:00:00Z",
+                        "references": [
+                            {{
+                                "source": "db.project_photo.original",
+                                "organization_id": "org_1",
+                                "project_id": f"prj_{{idx}}",
+                                "record_id": f"pho_{{idx}}",
+                            }}
+                        ],
+                    }}
+                    for idx in range(1, {unique_object_count} + 1)
+                ],
+            }}
+            output.write_text(json.dumps(payload, separators=(",", ":")) + "\\n", encoding="utf-8")
+            print(json.dumps({{"status": "ok", "unique_object_count": {unique_object_count}}}, separators=(",", ":")))
+        """), encoding="utf-8")
+        p.chmod(p.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        return p
+
+    def media_restore_helper(self, *, exit_code: int = 0) -> Path:
+        p = self.tmp / "fake_restore_s3_media.py"
+        p.write_text(textwrap.dedent(f"""\
+            #!/usr/bin/env python
+            import argparse, json, sys
+            from pathlib import Path
+
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--media-manifest", required=True)
+            parser.add_argument("--target-bucket", required=True)
+            parser.add_argument("--target-region", required=True)
+            parser.add_argument("--output", required=True)
+            args = parser.parse_args()
+            if {exit_code} != 0:
+                raise SystemExit({exit_code})
+            manifest = json.loads(Path(args.media_manifest).read_text(encoding="utf-8"))
+            objects = manifest.get("objects", [])
+            payload = {{
+                "format": "novu-restored-s3-media-v1",
+                "restored_at": "2026-03-31T00:00:00Z",
+                "source_bucket": manifest["source_bucket"],
+                "source_region": manifest["source_region"],
+                "target_bucket": args.target_bucket,
+                "target_region": args.target_region,
+                "db_backup_file": manifest["db_backup_file"],
+                "db_manifest_file": manifest["db_manifest_file"],
+                "declared_recovery_point": manifest["declared_recovery_point"],
+                "object_count": len(objects),
+                "app_compatible_key_layout": True,
+                "objects": [
+                    {{
+                        "source_key": item["key"],
+                        "target_key": item["key"],
+                        "source_version_id": item["version_id"],
+                        "size": item["size"],
+                    }}
+                    for item in objects
+                ],
+            }}
+            output = Path(args.output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps(payload, separators=(",", ":")) + "\\n", encoding="utf-8")
+            print(json.dumps({{"status": "ok", "object_count": len(objects), "target_bucket": args.target_bucket}}, separators=(",", ":")))
+        """), encoding="utf-8")
+        p.chmod(p.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        return p
+
+    def media_validation_helper(
+        self,
+        *,
+        reference_sample_status: str = "PASSED",
+        signed_url_status: str = "PASSED",
+        app_smoke_status: str = "PASSED",
+        exit_code: int = 0,
+    ) -> Path:
+        p = self.tmp / "fake_validate_restored_media.py"
+        p.write_text(textwrap.dedent(f"""\
+            #!/usr/bin/env python
+            import argparse, json
+
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--database-url", required=True)
+            parser.add_argument("--sample-size", required=True)
+            parser.parse_args()
+            print("POST_RESTORE_VALIDATION_STEP|reference_sample_validation|{reference_sample_status}|validated restored DB references")
+            print("POST_RESTORE_VALIDATION_STEP|signed_url_validation|{signed_url_status}|validated restored signed URL path")
+            print("POST_RESTORE_VALIDATION_STEP|app_media_smoke|{app_smoke_status}|validated restored app media smoke")
+            print("POST_RESTORE_VALIDATION_JSON=" + json.dumps({{"status": "ok"}}, separators=(",", ":")))
+            raise SystemExit({exit_code})
+        """), encoding="utf-8")
+        p.chmod(p.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        return p
+
+    def storage_consistency_helper(self, *, exit_code: int = 0) -> Path:
+        p = self.tmp / "fake_check_storage_consistency.py"
+        p.write_text(textwrap.dedent(f"""\
+            #!/usr/bin/env python
+            import argparse
+
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--database-url", required=False)
+            parser.add_argument("--mode", required=True)
+            parser.add_argument("--json-only", action="store_true")
+            parser.parse_args()
+            if {exit_code} == 0:
+                print("STORAGE_CONSISTENCY_SCAN_STATUS|scan_complete|db_to_s3=complete s3_to_db=complete")
+            else:
+                print("STORAGE_CONSISTENCY_SCAN_STATUS|fail|db_to_s3=complete blockers=1 s3_to_db=complete")
+            raise SystemExit({exit_code})
+        """), encoding="utf-8")
+        p.chmod(p.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        return p
+
     def docker_logging(self) -> Path:
         """Replace docker with a logging stub; returns the log file path."""
         log = self.tmp / "docker_calls.log"
@@ -259,10 +417,16 @@ class Env:
         storage_archive_included: bool = True,
         dr_contract: Optional[str] = "variant-a-foundation-v1",
         dr_recovery_point_model: Optional[str] = "db-artifact-paired-with-explicit-s3-recovery-point",
+        backup_scope: str = "db-only",
+        production_dr_eligible: bool = False,
         s3_bucket: Optional[str] = None,
         s3_region: Optional[str] = None,
         s3_recovery_point: Optional[str] = None,
         storage_snapshot_consistent: Optional[bool] = None,
+        s3_media_manifest_file: Optional[str] = None,
+        s3_media_manifest_format: Optional[str] = None,
+        s3_media_restore_strategy: Optional[str] = None,
+        s3_object_count: Optional[int] = None,
     ) -> tuple[Path, Path, Path]:
         """
         Create a valid backup artifact set (dump, sha256, manifest).
@@ -284,8 +448,8 @@ class Env:
             "timestamp": ts,
             "app_env": app_env,
             "backup_contract": "db-restore-v1",
-            "backup_scope": "db-only",
-            "production_dr_eligible": False,
+            "backup_scope": backup_scope,
+            "production_dr_eligible": production_dr_eligible,
             "storage_backend": storage_backend,
             "s3_bucket": s3_bucket,
             "s3_region": s3_region,
@@ -304,8 +468,61 @@ class Env:
             manifest_payload["dr_contract"] = dr_contract
         if dr_recovery_point_model is not None:
             manifest_payload["dr_recovery_point_model"] = dr_recovery_point_model
+        if s3_media_manifest_file is not None:
+            manifest_payload["s3_media_manifest_file"] = s3_media_manifest_file
+        if s3_media_manifest_format is not None:
+            manifest_payload["s3_media_manifest_format"] = s3_media_manifest_format
+        if s3_media_restore_strategy is not None:
+            manifest_payload["s3_media_restore_strategy"] = s3_media_restore_strategy
+        if s3_object_count is not None:
+            manifest_payload["s3_object_count"] = s3_object_count
         manifest.write_text(json.dumps(manifest_payload, separators=(",", ":")) + "\n")
         return dump, sha, manifest
+
+    def make_s3_media_manifest(
+        self,
+        *,
+        db_backup_file: str,
+        db_manifest_file: str,
+        source_bucket: str,
+        source_region: str,
+        declared_recovery_point: str,
+        unique_object_count: int = 2,
+        object_count_override: Optional[int] = None,
+    ) -> Path:
+        manifest = self.bdir / Path(db_backup_file).with_suffix(".s3-media.json").name
+        payload = {
+            "format": "novu-s3-media-manifest-v1",
+            "generated_at": "2026-03-31T00:00:00Z",
+            "db_backup_file": db_backup_file,
+            "db_manifest_file": db_manifest_file,
+            "source_bucket": source_bucket,
+            "source_region": source_region,
+            "declared_recovery_point": declared_recovery_point,
+            "storage_snapshot_consistent": True,
+            "source_reference_count": unique_object_count,
+            "unique_object_count": object_count_override if object_count_override is not None else unique_object_count,
+            "objects": [
+                {
+                    "key": f"projects/prj_{idx}/original.jpg",
+                    "version_id": f"v{idx}",
+                    "size": 10 + idx,
+                    "etag": None,
+                    "last_modified_at": "2026-03-31T00:00:00Z",
+                    "references": [
+                        {
+                            "source": "db.project_photo.original",
+                            "organization_id": "org_1",
+                            "project_id": f"prj_{idx}",
+                            "record_id": f"pho_{idx}",
+                        }
+                    ],
+                }
+                for idx in range(1, unique_object_count + 1)
+            ],
+        }
+        manifest.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
+        return manifest
 
     def make_legacy_manifest_only(self, ts: str = _TS) -> tuple[Path, Path, Path]:
         dump, sha, manifest = self.make_artifacts(ts=ts)
@@ -340,6 +557,19 @@ class Env:
                 return candidate
         raise FileNotFoundError("bash executable not found for backup/restore E2E test")
 
+    def _require_working_bash(self) -> str:
+        bash = self._bash()
+        probe = subprocess.run(
+            [bash, "-lc", "true"],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        if probe.returncode != 0:
+            detail = (probe.stderr or probe.stdout or "").strip()
+            pytest.skip(f"bash-backed restore E2E is unavailable in this runner: {detail}")
+        return bash
+
     def _bash_path(self, path: Path) -> str:
         resolved = path.resolve().as_posix()
         if len(resolved) >= 3 and resolved[1:3] == ":/":
@@ -357,8 +587,9 @@ class Env:
         return bash_env
 
     def run_backup(self, **env: str) -> subprocess.CompletedProcess:
+        bash = self._require_working_bash()
         return subprocess.run(
-            [self._bash(), str(BACKUP_SH)],
+            [bash, str(BACKUP_SH)],
             capture_output=True, text=True,
             env=self._base_env(**env),
             cwd=str(REPO_ROOT),
@@ -372,7 +603,8 @@ class Env:
         verify_script_path: Optional[Path] = None,
         **env: str,
     ) -> subprocess.CompletedProcess:
-        cmd = [self._bash(), str(RESTORE_SH), str(dump), "--yes"]
+        bash = self._require_working_bash()
+        cmd = [bash, str(RESTORE_SH), str(dump), "--yes"]
         if skip_verify:
             cmd.append("--skip-verify")
         e = self._base_env(**env)
@@ -580,8 +812,22 @@ class Env:
 
 
 @pytest.fixture
-def fx(tmp_path: Path) -> Env:
-    return Env(tmp_path)
+def fx() -> Env:
+    tmp_path = _create_local_test_case_dir()
+    try:
+        yield Env(tmp_path)
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_restore_fixture_uses_dedicated_local_temp_root() -> None:
+    tmp_path = _create_local_test_case_dir()
+    try:
+        assert tmp_path.parent == LOCAL_TEST_ROOT
+        assert tmp_path.name.startswith("restore_case_")
+        assert tmp_path.is_dir()
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -776,8 +1022,8 @@ class TestBackupProductionS3DbOnlySemantics:
         assert "S3 protection prerequisites: PASSED" in combined
         assert "S3 pre-restore validation: PASSED" in combined
         assert "Variant A storage-readiness: PASSED" in combined
-        assert "5. Media restore step: NOT IMPLEMENTED" in combined
-        assert "6. Media validation step: NOT VERIFIED" in combined
+        assert "5. Media restore step: NOT EXECUTED" in combined
+        assert "6. Media validation step: NOT EXECUTED" in combined
         assert "Variant A foundation contract: metadata recorded only; full DR still not implemented" in combined
 
     def test_real_production_s3_backup_output_restores_as_db_only(self, fx: Env) -> None:
@@ -794,6 +1040,50 @@ class TestBackupProductionS3DbOnlySemantics:
         assert "Variant A storage-readiness: FAILED" in combined
         assert "Release readiness decision: PASSED (DB handoff ready with validated DB<->storage consistency; Production DR remains NOT VERIFIED)" in combined
         assert "Authoritative S3/object storage recovery: NOT VERIFIED / OUT OF SCOPE" in combined
+
+
+class TestBackupProductionS3FullStateSemantics:
+    _s3_env = dict(
+        APP_ENV="production",
+        STORAGE_BACKEND="s3",
+        S3_BUCKET="novu-prod-bucket",
+        S3_REGION="us-east-1",
+        S3_RECOVERY_POINT="versioned-bucket@2026-03-30T01:15:00Z",
+        STORAGE_SNAPSHOT_CONSISTENT="true",
+        S3_FULL_COVERAGE_DECLARED="true",
+        AWS_ACCESS_KEY_ID="test-access-key",
+        AWS_SECRET_ACCESS_KEY="test-secret-key",
+        DATABASE_URL="sqlite:///placeholder.sqlite3",
+    )
+
+    def test_full_state_opt_in_writes_media_manifest_and_marks_backup_scope(self, fx: Env) -> None:
+        helper = fx.s3_media_export_helper(unique_object_count=2)
+        r = fx.run_backup(
+            **self._s3_env,
+            S3_MEDIA_EXPORT_HELPER_OVERRIDE=fx._bash_path(helper),
+        )
+        combined = r.stdout + r.stderr
+        assert r.returncode == 0, combined
+        manifest = json.loads(next(fx.bdir.glob("db_*.json")).read_text())
+        assert manifest["backup_scope"] == "db-plus-s3-media-manifest"
+        assert manifest["production_dr_eligible"] is True
+        assert manifest["dr_contract"] == "s3-full-state-v1"
+        assert manifest["dr_recovery_point_model"] == "db-artifact-paired-with-versioned-s3-object-manifest"
+        assert manifest["s3_media_manifest_format"] == "novu-s3-media-manifest-v1"
+        assert manifest["s3_media_restore_strategy"] == "versioned-copy-to-isolated-bucket-v1"
+        assert manifest["s3_object_count"] == 2
+        assert (fx.bdir / manifest["s3_media_manifest_file"]).is_file()
+
+    def test_full_state_backup_output_is_explicitly_conditional(self, fx: Env) -> None:
+        helper = fx.s3_media_export_helper(unique_object_count=2)
+        r = fx.run_backup(
+            **self._s3_env,
+            S3_MEDIA_EXPORT_HELPER_OVERRIDE=fx._bash_path(helper),
+        )
+        combined = r.stdout + r.stderr
+        assert r.returncode == 0, combined
+        assert "version-pinned S3 media manifest" in combined
+        assert "eligible only after isolated media restore + validation succeeds" in combined
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -938,8 +1228,8 @@ class TestRestoreValidArtifacts:
         assert "Production DR status: NOT VERIFIED" in combined
         assert "S3 protection prerequisites: PASSED" in combined
         assert "S3 pre-restore validation: PASSED" in combined
-        assert "5. Media restore step: NOT IMPLEMENTED" in combined
-        assert "6. Media validation step: NOT VERIFIED" in combined
+        assert "5. Media restore step: NOT EXECUTED" in combined
+        assert "6. Media validation step: NOT EXECUTED" in combined
         assert "Authoritative S3/object storage recovery: NOT VERIFIED / OUT OF SCOPE" in combined
 
 
@@ -1064,6 +1354,95 @@ class TestRestoreProductionS3Guards:
         assert "Variant A storage-readiness reason: manifest is missing s3_recovery_point" in combined
         assert "11. Release readiness decision: PASSED" in combined
         assert "Production DR: NOT VERIFIED" in combined
+
+
+class TestRestoreProductionS3FullState:
+    _base_env = dict(
+        APP_ENV="production",
+        STORAGE_BACKEND="s3",
+        S3_BUCKET="novu-prod-bucket",
+        S3_REGION="us-east-1",
+        S3_RESTORE_TARGET_BUCKET="novu-restore-bucket",
+        S3_RESTORE_TARGET_REGION="us-east-1",
+        AWS_ACCESS_KEY_ID="test-access-key",
+        AWS_SECRET_ACCESS_KEY="test-secret-key",
+        DATABASE_URL="sqlite:///restore-validation.sqlite3",
+    )
+
+    def _make_full_state_dump(self, fx: Env, *, object_count_override: Optional[int] = None) -> Path:
+        dump, _, manifest = fx.make_artifacts(
+            app_env="production",
+            storage_backend="s3",
+            storage_coverage="authoritative-s3-media-manifest",
+            storage_archive_included=False,
+            dr_contract="s3-full-state-v1",
+            dr_recovery_point_model="db-artifact-paired-with-versioned-s3-object-manifest",
+            backup_scope="db-plus-s3-media-manifest",
+            production_dr_eligible=True,
+            s3_bucket="novu-prod-bucket",
+            s3_region="us-east-1",
+            s3_recovery_point="versioned-bucket@2026-03-30T01:15:00Z",
+            storage_snapshot_consistent=True,
+            s3_media_manifest_file=f"db_{_TS}.s3-media.json",
+            s3_media_manifest_format="novu-s3-media-manifest-v1",
+            s3_media_restore_strategy="versioned-copy-to-isolated-bucket-v1",
+            s3_object_count=2 if object_count_override is None else object_count_override,
+        )
+        fx.make_s3_media_manifest(
+            db_backup_file=dump.name,
+            db_manifest_file=manifest.name,
+            source_bucket="novu-prod-bucket",
+            source_region="us-east-1",
+            declared_recovery_point="versioned-bucket@2026-03-30T01:15:00Z",
+            unique_object_count=2,
+            object_count_override=object_count_override,
+        )
+        return dump
+
+    def test_missing_restore_target_bucket_fails_before_destructive_restore(self, fx: Env) -> None:
+        dump = self._make_full_state_dump(fx)
+        log = fx.docker_logging()
+        env = dict(self._base_env)
+        env.pop("S3_RESTORE_TARGET_BUCKET")
+        r = fx.run_restore(dump, **env)
+        combined = (r.stdout + r.stderr).lower()
+        calls = log.read_text() if log.exists() else ""
+        assert r.returncode != 0, combined
+        assert "s3_restore_target_bucket is required" in combined
+        assert "stop backend" not in calls
+
+    def test_pairing_mismatch_fails_before_destructive_restore(self, fx: Env) -> None:
+        dump = self._make_full_state_dump(fx, object_count_override=3)
+        log = fx.docker_logging()
+        r = fx.run_restore(dump, **self._base_env)
+        combined = (r.stdout + r.stderr).lower()
+        calls = log.read_text() if log.exists() else ""
+        assert r.returncode != 0, combined
+        assert "s3 media manifest object count does not match the db manifest" in combined
+        assert "stop backend" not in calls
+
+    def test_full_state_restore_happy_path_verifies_production_dr(self, fx: Env) -> None:
+        dump = self._make_full_state_dump(fx)
+        restore_helper = fx.media_restore_helper()
+        validation_helper = fx.media_validation_helper()
+        consistency_helper = fx.storage_consistency_helper()
+        r = fx.run_restore(
+            dump,
+            **self._base_env,
+            MEDIA_RESTORE_HELPER_OVERRIDE=fx._bash_path(restore_helper),
+            MEDIA_VALIDATE_HELPER_OVERRIDE=fx._bash_path(validation_helper),
+            STORAGE_CONSISTENCY_HELPER_OVERRIDE=fx._bash_path(consistency_helper),
+        )
+        combined = r.stdout + r.stderr
+        assert r.returncode == 0, combined
+        assert "5. Media restore step: PASSED" in combined
+        assert "6. Media validation step: PASSED" in combined
+        assert "production_dr_eligible: true" in combined
+        assert "Full-state restore claim: VERIFIED" in combined
+        assert "Production DR status: VERIFIED" in combined
+        assert "Production DR: VERIFIED" in combined
+        assert "Authoritative S3/object storage recovery: VERIFIED" in combined
+        assert "Restored isolated bucket: novu-restore-bucket" in combined
 
 
 class TestRestoreMissingChecksum:
@@ -1371,23 +1750,23 @@ class TestDrClaimGating:
     Tests for the explicit DR claim gating model.
 
     Verifies that:
-      - production_dr_eligible is always false in backup manifests
+      - DB-only manifests keep production_dr_eligible=false
       - RELEASE_READINESS_DECISION is gated on all required conditions
       - verify substep statuses are captured and fed into the decision gate
-      - Production DR is never claimed as VERIFIED on any code path
+      - DB-only restore paths never overclaim Production DR
       - The DR claim decision block is present and correctly labelled
     """
 
     # ── backup manifest ───────────────────────────────────────────────────────
 
     def test_production_dr_eligible_is_always_false_in_backup_manifest(self, fx: Env) -> None:
-        """production_dr_eligible must be hardcoded false in every backup manifest."""
+        """DB-only local backup manifests must keep production_dr_eligible=false."""
         fx.run_backup()
         manifest = json.loads(next(fx.bdir.glob("db_*.json")).read_text())
         assert manifest["production_dr_eligible"] is False
 
     def test_production_dr_eligible_false_in_s3_production_manifest(self, fx: Env) -> None:
-        """production_dr_eligible must be false even when all Variant A metadata is present."""
+        """Default production+s3 DB-only fallback must keep production_dr_eligible=false."""
         fx.run_backup(
             APP_ENV="production",
             STORAGE_BACKEND="s3",
@@ -1442,7 +1821,7 @@ class TestDrClaimGating:
         combined = r.stdout + r.stderr
         assert "Full-state restore claim:    NOT VERIFIED" in combined
 
-    # ── Production DR never verified ──────────────────────────────────────────
+    # ── DB-only paths never overclaim Production DR ──────────────────────────
 
     def test_production_dr_never_verified_on_happy_path(self, fx: Env) -> None:
         """Even when all restore steps pass, Production DR must remain NOT VERIFIED."""
@@ -1615,8 +1994,8 @@ class TestDrClaimGating:
 
     def test_restore_rejects_manifest_with_production_dr_eligible_true(self, fx: Env) -> None:
         """
-        ops/restore.sh must reject any manifest declaring production_dr_eligible=true.
-        No code path may produce production_dr_eligible=true legitimately.
+        ops/restore.sh must reject a DB-only manifest that claims production_dr_eligible=true.
+        Full-state eligibility is valid only for the explicit db-plus-s3-media-manifest scope.
         """
         dump, _, _ = fx.make_artifacts()
         bad_manifest = fx.bdir / f"db_{_TS}.json"

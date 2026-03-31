@@ -62,6 +62,10 @@ class QuoteVariantRecalculateSummary(BaseModel):
 
 class QuoteVariantRecalculateResponse(BaseModel):
     variants: list[QuoteVariantRecalculateSummary]
+    jobId: str | None = None
+    jobStatus: str | None = None
+    jobType: str | None = None
+    createdNew: bool | None = None
 
 
 class QuoteVariantPatch(BaseModel):

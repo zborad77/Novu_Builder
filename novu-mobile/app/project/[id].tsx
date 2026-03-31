@@ -13,7 +13,7 @@ import {
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { PROJECT_STATUS_LABELS } from '../../src/types';
-import { TokenStorage, PhotosApi, AnalysisApi, getBaseUrl } from '../../src/services/api';
+import { PhotosApi, AnalysisApi, ProjectsApi, getBaseUrl } from '../../src/services/api';
 
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -120,30 +120,13 @@ function photoThumbUrl(photo: ProjectPhoto, baseUrl: string): string {
   return `${host}${thumb}`;
 }
 
-async function authHeaders(): Promise<Record<string, string>> {
-  const token = await TokenStorage.getAccessToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-const FETCH_TIMEOUT_MS = 15_000;
-
-function fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
-}
-
 async function fetchProjectDetail(id: string): Promise<ProjectDetail> {
-  const res = await fetchWithTimeout(`${getBaseUrl()}/cases/${id}`, { headers: await authHeaders() });
-  if (!res.ok) throw new Error(`Chyba serveru (HTTP ${res.status})`);
-  return res.json();
+  return ProjectsApi.getDetail<ProjectDetail>(id);
 }
 
 async function fetchLatestAnalysisResult(projectId: string): Promise<AnalysisResult | null> {
   try {
-    const res = await fetchWithTimeout(`${getBaseUrl()}/cases/${projectId}`, { headers: await authHeaders() });
-    if (!res.ok) return null;
-    const detail = await res.json();
+    const detail = await ProjectsApi.getDetail<ProjectDetail & { latestAnalysis?: AnalysisResult | null }>(projectId);
     return detail.latestAnalysis ?? null;
   } catch {
     return null;

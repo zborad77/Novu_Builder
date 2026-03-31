@@ -953,7 +953,9 @@ void MainWindow::openServerSetupDialog(bool firstTime)
         }
     } else if (firstTime) {
         // User cancelled on first launch — use default
-        const QString defaultUrl = QStringLiteral("http://127.0.0.1:8000/api/v1");
-        ApiService::setGlobalBaseUrl(defaultUrl);
+        ApiService::setGlobalBaseUrl(QString());
+        statusBar()->showMessage(
+            QString::fromUtf8("Server neni nastaven. Prihlaseni zustane blokovane, dokud nezadate URL serveru."),
+            6000);
     }
 }

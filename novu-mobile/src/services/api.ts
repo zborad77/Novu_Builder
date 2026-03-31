@@ -1,6 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import type {
+  AuthUser,
   LoginResponse,
   ProjectListResponse,
   ProjectCreate,
@@ -8,16 +9,33 @@ import type {
   PhotoUploadResponse,
 } from '../types';
 
-const DEFAULT_BASE_URL = 'http://localhost:8000/api/v1';
 const REQUEST_TIMEOUT_MS = 15_000;
-
-export function getBaseUrl(): string {
-  const extra = Constants.expoConfig?.extra as { apiUrl?: string } | undefined;
-  return extra?.apiUrl ?? DEFAULT_BASE_URL;
-}
-
 const TOKEN_KEY = 'novu_access_token';
 const REFRESH_KEY = 'novu_refresh_token';
+
+export class ClientConfigurationError extends Error {}
+
+type ExpoExtraConfig = {
+  apiUrl?: string;
+};
+
+function normalizeBaseUrl(rawValue: string): string {
+  const normalized = rawValue.trim().replace(/\/+$/, '');
+  if (!normalized) {
+    throw new ClientConfigurationError(
+      'Mobilni klient vyzaduje explicitni expo.extra.apiUrl nebo EXPO_PUBLIC_API_URL. Implicitni localhost fallback neni podporovany.',
+    );
+  }
+  if (!/^https?:\/\//i.test(normalized)) {
+    throw new ClientConfigurationError('API URL musi zacinat http:// nebo https://.');
+  }
+  return normalized;
+}
+
+export function getBaseUrl(): string {
+  const extra = Constants.expoConfig?.extra as ExpoExtraConfig | undefined;
+  return normalizeBaseUrl(extra?.apiUrl ?? '');
+}
 
 export const TokenStorage = {
   async getAccessToken(): Promise<string | null> {
@@ -40,70 +58,150 @@ export const TokenStorage = {
   },
 };
 
-async function getAuthHeaders(): Promise<Record<string, string>> {
-  const token = await TokenStorage.getAccessToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
+function isAuthRefreshCandidate(path: string): boolean {
+  return !path.startsWith('/auth/login') && !path.startsWith('/auth/refresh') && !path.startsWith('/auth/logout');
 }
 
-async function request<T>(
-  path: string,
-  options: RequestInit = {},
-): Promise<T> {
-  const url = `${getBaseUrl()}${path}`;
-  const authHeaders = await getAuthHeaders();
+function buildJsonHeaders(
+  authToken: string | null,
+  headers?: HeadersInit,
+): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    ...(headers as Record<string, string> | undefined),
+  };
+}
 
+async function fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  let response: Response;
   try {
-    response = await fetch(url, {
+    return await fetch(url, {
       ...options,
       signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...authHeaders,
-        ...(options.headers as Record<string, string>),
-      },
     });
   } catch (err: unknown) {
-    clearTimeout(timer);
     if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('Požadavek vypršel — zkontrolujte připojení k internetu.');
+      throw new Error('Pozadavek vyprsel - zkontrolujte pripojeni nebo API URL.');
     }
     throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  clearTimeout(timer);
+}
+
+async function parseApiError(response: Response): Promise<Error> {
+  const body = await response.text();
+  let message = `Chyba serveru (HTTP ${response.status})`;
+  try {
+    const json = JSON.parse(body);
+    message = json.detail ?? json.message ?? message;
+  } catch {
+    // ignore
+  }
+  return new Error(message);
+}
+
+async function refreshSessionTokens(): Promise<boolean> {
+  const refreshToken = await TokenStorage.getRefreshToken();
+  if (!refreshToken) {
+    await TokenStorage.clearTokens();
+    return false;
+  }
+
+  const response = await fetchWithTimeout(`${getBaseUrl()}/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken }),
+  }).catch(async () => {
+    return null;
+  });
+
+  if (!response || !response.ok) {
+    await TokenStorage.clearTokens();
+    return false;
+  }
+
+  const payload = (await response.json()) as LoginResponse;
+  await TokenStorage.setTokens(payload.accessToken, payload.refreshToken);
+  return true;
+}
+
+export async function requestJson<T>(
+  path: string,
+  options: RequestInit = {},
+  requestOptions: { allowAuthRefresh?: boolean } = {},
+): Promise<T> {
+  const allowAuthRefresh = requestOptions.allowAuthRefresh ?? true;
+  const url = `${getBaseUrl()}${path}`;
+  const accessToken = await TokenStorage.getAccessToken();
+  let response = await fetchWithTimeout(url, {
+    ...options,
+    headers: buildJsonHeaders(accessToken, options.headers),
+  });
+
+  if (response.status === 401 && allowAuthRefresh && isAuthRefreshCandidate(path)) {
+    const refreshed = await refreshSessionTokens();
+    if (refreshed) {
+      const rotatedToken = await TokenStorage.getAccessToken();
+      response = await fetchWithTimeout(url, {
+        ...options,
+        headers: buildJsonHeaders(rotatedToken, options.headers),
+      });
+    }
+  }
 
   if (!response.ok) {
-    const body = await response.text();
-    let message = `Chyba serveru (HTTP ${response.status})`;
-    try {
-      const json = JSON.parse(body);
-      message = json.detail ?? json.message ?? message;
-    } catch {
-      // ignore
-    }
-    throw new Error(message);
+    throw await parseApiError(response);
   }
   return response.json() as Promise<T>;
 }
 
 export const AuthApi = {
   async login(email: string, password: string): Promise<LoginResponse> {
-    return request<LoginResponse>('/auth/login', {
+    return requestJson<LoginResponse>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
-    });
+    }, { allowAuthRefresh: false });
+  },
+
+  async refresh(refreshToken: string): Promise<LoginResponse> {
+    return requestJson<LoginResponse>('/auth/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken }),
+    }, { allowAuthRefresh: false });
   },
 
   async logout(refreshToken: string): Promise<void> {
-    await request('/auth/logout', {
+    await requestJson('/auth/logout', {
       method: 'POST',
       body: JSON.stringify({ refreshToken }),
     }).catch(() => {
-      // best-effort
+      // best-effort revoke
     });
+  },
+
+  async me(): Promise<AuthUser> {
+    return requestJson<AuthUser>('/auth/me');
+  },
+
+  async bootstrapSession(): Promise<AuthUser | null> {
+    const accessToken = await TokenStorage.getAccessToken();
+    const refreshToken = await TokenStorage.getRefreshToken();
+    if (!accessToken || !refreshToken) {
+      await TokenStorage.clearTokens();
+      return null;
+    }
+    try {
+      return await AuthApi.me();
+    } catch (err: unknown) {
+      if (err instanceof ClientConfigurationError) {
+        throw err;
+      }
+      await TokenStorage.clearTokens();
+      return null;
+    }
   },
 };
 
@@ -113,14 +211,18 @@ export const ProjectsApi = {
     if (params?.status) qs.set('status', params.status);
     if (params?.search) qs.set('search', params.search);
     const query = qs.toString() ? `?${qs}` : '';
-    return request<ProjectListResponse>(`/cases${query}`);
+    return requestJson<ProjectListResponse>(`/cases${query}`);
   },
 
   async create(payload: ProjectCreate): Promise<ProjectCreateResponse> {
-    return request<ProjectCreateResponse>('/cases', {
+    return requestJson<ProjectCreateResponse>('/cases', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+  },
+
+  async getDetail<T>(projectId: string): Promise<T> {
+    return requestJson<T>(`/cases/${projectId}`);
   },
 };
 
@@ -132,17 +234,16 @@ export interface AnalysisJobStatus {
 
 export const AnalysisApi = {
   async startJob(caseId: string): Promise<{ jobId: string }> {
-    return request<{ jobId: string }>(`/cases/${caseId}/analysis-jobs`, { method: 'POST' });
+    return requestJson<{ jobId: string }>(`/cases/${caseId}/analysis-jobs`, { method: 'POST' });
   },
 
   async getJob(jobId: string): Promise<AnalysisJobStatus> {
-    return request<AnalysisJobStatus>(`/analysis-jobs/${jobId}`);
+    return requestJson<AnalysisJobStatus>(`/analysis-jobs/${jobId}`);
   },
 };
 
 export const PhotosApi = {
   async upload(projectId: string, uri: string, filename: string): Promise<PhotoUploadResponse> {
-    const token = await TokenStorage.getAccessToken();
     const formData = new FormData();
     formData.append('files', {
       uri,
@@ -150,24 +251,27 @@ export const PhotosApi = {
       type: 'image/jpeg',
     } as unknown as Blob);
 
-    const response = await fetch(`${getBaseUrl()}/cases/${projectId}/images`, {
+    const initialToken = await TokenStorage.getAccessToken();
+    let response = await fetchWithTimeout(`${getBaseUrl()}/cases/${projectId}/images`, {
       method: 'POST',
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
+      headers: initialToken ? { Authorization: `Bearer ${initialToken}` } : {},
       body: formData,
     });
 
-    if (!response.ok) {
-      const body = await response.text();
-      let message = `HTTP ${response.status}`;
-      try {
-        const json = JSON.parse(body);
-        message = json.detail ?? json.message ?? message;
-      } catch {
-        // ignore
+    if (response.status === 401) {
+      const refreshed = await refreshSessionTokens();
+      if (refreshed) {
+        const rotatedToken = await TokenStorage.getAccessToken();
+        response = await fetchWithTimeout(`${getBaseUrl()}/cases/${projectId}/images`, {
+          method: 'POST',
+          headers: rotatedToken ? { Authorization: `Bearer ${rotatedToken}` } : {},
+          body: formData,
+        });
       }
-      throw new Error(message);
+    }
+
+    if (!response.ok) {
+      throw await parseApiError(response);
     }
 
     return response.json() as Promise<PhotoUploadResponse>;

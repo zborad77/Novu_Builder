@@ -332,6 +332,9 @@ async def _async_main() -> int:
         "POST_RESTORE_VALIDATION_JSON="
         + json.dumps(
             {
+                "storage_backend": os.getenv("STORAGE_BACKEND", "local").strip().lower(),
+                "storage_bucket": os.getenv("S3_BUCKET"),
+                "storage_region": os.getenv("S3_REGION"),
                 "selected_references": [asdict(reference) for reference in summary.selected_references],
                 "reference_sample_validation": asdict(summary.reference_sample_validation),
                 "signed_url_validation": asdict(summary.signed_url_validation),

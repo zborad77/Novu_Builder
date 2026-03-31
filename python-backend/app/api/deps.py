@@ -4,20 +4,20 @@ import structlog
 
 from app.core.audit import bind_request_audit_actor
 from app.core.config import get_settings
-from app.repositories.analysis_repository import AnalysisRepository
 from app.db.session import get_db_session
-from app.schemas.auth import AuthUserRead
+from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.export_repository import ExportRepository
 from app.repositories.final_proposal_repository import FinalProposalRepository
 from app.repositories.material_catalog_repository import MaterialCatalogRepository
 from app.repositories.photo_repository import PhotoRepository
 from app.repositories.pricebook_repository import PricebookRepository
-from app.repositories.proposal_draft_repository import ProposalDraftRepository
 from app.repositories.project_repository import ProjectRepository
+from app.repositories.proposal_draft_repository import ProposalDraftRepository
 from app.repositories.quote_variant_repository import QuoteVariantRepository
 from app.repositories.storage_consistency_repository import StorageConsistencyRepository
 from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.work_catalog_repository import WorkCatalogRepository
+from app.schemas.auth import AuthUserRead
 from app.services.analysis_service import AnalysisService
 from app.services.auth_service import AuthService
 from app.services.export_service import ExportService
@@ -42,9 +42,12 @@ def get_project_service(session: AsyncSession = Depends(get_db_session)) -> Proj
     )
 
 
-def get_photo_service(session: AsyncSession = Depends(get_db_session)) -> PhotoService:
+def get_photo_service(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> PhotoService:
     repository = PhotoRepository(session)
-    return PhotoService(repository)
+    return PhotoService(repository, work_queue=get_job_queue(request))
 
 
 def get_analysis_service(session: AsyncSession = Depends(get_db_session)) -> AnalysisService:
@@ -90,7 +93,7 @@ def get_job_queue(request: Request):
 def get_redis(request: Request):
     """Return the shared Redis client for caching (R-32), or None if unavailable.
 
-    Reuses the same connection as the job queue â€” key prefixes keep them isolated:
+    Reuses the same connection as the job queue; key prefixes keep them isolated:
       job queue: analysis:jobs
       cache:     cache:*
     """
@@ -157,12 +160,11 @@ async def require_superadmin(
     return current_user
 
 
-# ── Granular RBAC foundation ────────────────────────────────────────────────────
+# Granular RBAC foundation
 #
 # All capabilities currently map to superadmin-only. When per-role permissions
-# are introduced (e.g. from a DB permission table), extend _check() here without
-# changing any route signature.
-
+# are introduced (for example from a DB permission table), extend _check() here
+# without changing any route signature.
 ADMIN_CAPABILITIES: frozenset[str] = frozenset({
     "admin:read",
     "admin:write",
@@ -174,8 +176,9 @@ ADMIN_CAPABILITIES: frozenset[str] = frozenset({
 def require_admin_capability(capability: str):
     """Return a FastAPI dependency that enforces the given admin capability.
 
-    C8: checks the role_permissions table so non-superadmin roles (e.g. manager)
-    can be granted specific capabilities without becoming full superadmin.
+    C8: checks the role_permissions table so non-superadmin roles (for example
+    manager) can be granted specific capabilities without becoming full
+    superadmin.
 
     Superadmin always has all capabilities (enforced before the DB lookup).
     Impersonated tokens are never allowed on admin routes.
@@ -196,13 +199,12 @@ def require_admin_capability(capability: str):
             )
             raise HTTPException(status_code=403, detail="Impersonated tokens cannot access admin routes.")
 
-        # Superadmin always has all capabilities
         if current_user.isSuperAdmin:
             return current_user
 
-        # Check DB-backed role permission
         from sqlalchemy import select as _select
         from app.models import RolePermission
+
         result = await session.execute(
             _select(RolePermission).where(
                 RolePermission.role == current_user.role,
@@ -227,9 +229,9 @@ def require_admin_capability(capability: str):
 def resolve_org_id(current_user: AuthUserRead) -> str | None:
     """Return the effective organization_id for tenant-scoped queries.
 
-    Superadmin → None (intentional cross-tenant bypass, logged at service layer).
-    Regular user → their organizationId.
-    Fail-fast if a non-superadmin user somehow has no organizationId set — this
+    Superadmin -> None (intentional cross-tenant bypass, logged at service layer).
+    Regular user -> their organizationId.
+    Fail fast if a non-superadmin user somehow has no organizationId set. This
     prevents an accidental tenant-isolation bypass caused by a misconfigured user.
     """
     if current_user.isSuperAdmin:
@@ -245,26 +247,14 @@ def resolve_org_id(current_user: AuthUserRead) -> str | None:
 async def require_manager(
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> AuthUserRead:
-    """Manager nebo superadmin. Technician nemá přístup."""
+    """Manager or superadmin. Technician access is not allowed."""
     if current_user.role not in ("manager", "superadmin") and not current_user.isSuperAdmin:
         raise HTTPException(status_code=403, detail="Manager access required.")
     return current_user
 
 
-def get_export_service(session: AsyncSession = Depends(get_db_session)) -> ExportService:
-    return ExportService(ExportRepository(session))
-
-
-def get_job_queue(request: Request):
-    """Return the Redis job queue from app state, or None if unavailable."""
-    return getattr(request.app.state, "job_queue", None)
-
-
-def get_redis(request: Request):
-    """Return the shared Redis client for caching (R-32), or None if unavailable.
-
-    Reuses the same connection as the job queue — key prefixes keep them isolated:
-      job queue: analysis:jobs
-      cache:     cache:*
-    """
-    return getattr(request.app.state, "job_queue", None)
+def get_export_service(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> ExportService:
+    return ExportService(ExportRepository(session), work_queue=get_job_queue(request))

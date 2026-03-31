@@ -124,3 +124,37 @@ class TestPhotoServiceUsesResize:
         # Neither variant should be a copy of the original bytes
         assert written["projects/p/preview/photo.jpg"] != content
         assert written["projects/p/ai/photo.jpg"] != content
+
+    @pytest.mark.asyncio
+    async def test_process_photo_variants_by_id_reads_original_and_marks_ready(self):
+        from app.services.photo_service import PhotoService
+
+        content = _make_jpeg(2200, 1800)
+        written: dict[str, bytes] = {}
+
+        async def fake_write(*, relative_storage_key: str, content: bytes) -> None:
+            written[relative_storage_key] = content
+
+        photo = MagicMock()
+        photo.id = "pho_1"
+        photo.project_id = "prj_1"
+        photo.storage_key = "projects/prj_1/original/photo.jpg"
+        photo.processing_status = "uploaded"
+        photo.preview_storage_key = "projects/prj_1/preview/photo.jpg"
+        photo.ai_input_storage_key = "projects/prj_1/ai/photo.jpg"
+
+        repo = AsyncMock()
+        repo.get_photo_by_id = AsyncMock(return_value=photo)
+        repo.update_photo = AsyncMock(side_effect=lambda p: p)
+        service = PhotoService(repo)
+
+        with (
+            patch("app.services.photo_service.read_storage_file", new=AsyncMock(return_value=content)),
+            patch("app.services.photo_service.write_storage_file", side_effect=fake_write),
+        ):
+            result = await service.process_photo_variants_by_id("pho_1")
+
+        assert result is not None
+        assert result.processingStatus == "ready"
+        assert "projects/prj_1/preview/photo.jpg" in written
+        assert "projects/prj_1/ai/photo.jpg" in written

@@ -111,6 +111,7 @@ class TestMetricsEndpoint:
         assert "novu_duplicate_prevented_count_total" in body
         assert "novu_cache_requests_total" in body
         assert "novu_work_catalog_resolution_duration_seconds" in body
+        assert "novu_work_catalog_resolution_input_rows" in body
         assert "novu_work_catalog_validation_failures_total" in body
 
     @pytest.mark.asyncio
@@ -312,6 +313,7 @@ class TestOperationalMetricsExported:
     async def test_work_catalog_cache_and_validation_metrics_are_exported(self, app_client):
         from app.core.metrics import (
             observe_cache_operation,
+            observe_work_catalog_resolution_input,
             observe_work_catalog_resolution,
             record_work_catalog_validation_failure,
         )
@@ -327,6 +329,11 @@ class TestOperationalMetricsExported:
             outcome="success",
             duration_seconds=0.01,
         )
+        observe_work_catalog_resolution_input(
+            path="tenant_work_type_resolution.batch_inputs",
+            kind="work_types",
+            count=4,
+        )
         record_work_catalog_validation_failure(
             operation="work_catalog.upsert_tenant_setting",
             reason="invalid_effective_configuration",
@@ -334,6 +341,9 @@ class TestOperationalMetricsExported:
 
         resp = await app_client.get(_METRICS_URL)
         assert 'novu_cache_requests_total{namespace="work-catalog",operation="get",outcome="hit"}' in resp.text
+        assert "novu_work_catalog_resolution_input_rows_bucket" in resp.text
+        assert 'path="tenant_work_type_resolution.batch_inputs"' in resp.text
+        assert 'kind="work_types"' in resp.text
         assert (
             'novu_work_catalog_validation_failures_total{operation="work_catalog.upsert_tenant_setting",reason="invalid_effective_configuration"}'
             in resp.text

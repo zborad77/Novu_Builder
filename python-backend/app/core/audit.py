@@ -37,6 +37,17 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+AUDIT_POLICY_OPERATIONAL = "operational"
+AUDIT_POLICY_SECURITY_CRITICAL = "security_critical"
+
+# Security-critical actions either mint cross-user access or rotate credentials.
+# These must fail closed if their audit trail cannot be persisted.
+SECURITY_CRITICAL_AUDIT_ACTIONS: frozenset[str] = frozenset({
+    "admin.impersonate",
+    "admin.user.reset_password",
+    "auth.change_password",
+})
+
 # Actions we want to name explicitly instead of showing raw paths
 _PATH_ACTIONS: dict[tuple[str, str], str] = {
     ("POST", "/auth/login"): "auth.login",
@@ -75,7 +86,8 @@ _SKIP_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc",
                # Middleware would log user_id=None with a generic fallback action — useless.
                # Explicit write_audit_log() calls inside the routes carry the real user_id
                # and semantic action names (password_reset_requested / password_reset).
-               "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password"}
+               "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
+               "/api/v1/auth/change-password"}
 # Admin routes have explicit write_audit_log() calls with richer detail (target_email,
 # target_org, etc.) — middleware logging would create duplicates with less context.
 _SKIP_PREFIXES = ("/mock-storage", "/api/v1/admin")
@@ -94,6 +106,10 @@ class _AuditActor:
     user_email: str | None
     org_id: str | None
     impersonated_by: str | None
+
+
+class SecurityAuditWriteError(RuntimeError):
+    """Raised when a security-critical audit record cannot be persisted."""
 
 
 _request_audit_actor: ContextVar[_AuditActor | None] = ContextVar(
@@ -287,6 +303,7 @@ def _log_audit_write_failure(
     resource_type: str | None = None,
     resource_id: str | None = None,
     user_id: str | None = None,
+    policy: str = AUDIT_POLICY_OPERATIONAL,
 ) -> None:
     AUDIT_WRITE_FAILED_TOTAL.inc()
     logger.warning(
@@ -295,6 +312,7 @@ def _log_audit_write_failure(
         resource_type=resource_type,
         resource_id=resource_id,
         user_id=user_id,
+        policy=policy,
         error_type=type(error).__name__,
         error=str(error),
     )
@@ -361,6 +379,8 @@ async def write_audit_log(
     resource_type: str,
     resource_id: str,
     detail: dict,
+    policy: str = AUDIT_POLICY_OPERATIONAL,
+    commit: bool = True,
 ) -> None:
     """Write a rich AuditLog entry reusing an existing DB session.
 
@@ -387,18 +407,63 @@ async def write_audit_log(
             detail=detail,
             user_id=current_user_id,
         )
-        await session.commit()
+        if commit:
+            await session.commit()
     except Exception as exc:
         await _safe_rollback(session)
-        # SECURITY_EVENT: audit_write_failed
-        # logger.warning
         _log_audit_write_failure(
             error=exc,
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
             user_id=current_user_id,
+            policy=policy,
         )
+        if policy == AUDIT_POLICY_SECURITY_CRITICAL:
+            raise SecurityAuditWriteError(
+                f"Security-critical audit write failed for action={action!r}."
+            ) from exc
+
+
+async def commit_security_critical_audit(
+    session,
+    *,
+    current_user_id: str,
+    action: str,
+    resource_type: str,
+    resource_id: str,
+    detail: dict,
+) -> None:
+    if action not in SECURITY_CRITICAL_AUDIT_ACTIONS:
+        raise ValueError(f"Action {action!r} is not registered as security-critical.")
+
+    try:
+        await write_audit_log(
+            session,
+            current_user_id=current_user_id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            detail=detail,
+            policy=AUDIT_POLICY_SECURITY_CRITICAL,
+            commit=False,
+        )
+        await session.commit()
+    except SecurityAuditWriteError:
+        raise
+    except Exception as exc:
+        await _safe_rollback(session)
+        _log_audit_write_failure(
+            error=exc,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            user_id=current_user_id,
+            policy=AUDIT_POLICY_SECURITY_CRITICAL,
+        )
+        raise SecurityAuditWriteError(
+            f"Security-critical audit commit failed for action={action!r}."
+        ) from exc
 
 
 async def _persist_http_audit_log(
@@ -430,6 +495,7 @@ async def _persist_http_audit_log(
             resource_type=resource_type,
             resource_id=resource_id,
             user_id=actor.user_id if actor else None,
+            policy=AUDIT_POLICY_OPERATIONAL,
         )
 
 

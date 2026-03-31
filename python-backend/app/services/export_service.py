@@ -24,6 +24,7 @@ from app.storage.backend import (
     storage_key_exists,
     write_storage_file,
 )
+from app.worker.heavy_queue import enqueue_heavy_job
 
 logger = structlog.get_logger(__name__)
 
@@ -794,8 +795,9 @@ async def _build_case_zip_bytes(case_detail: ProjectDetail) -> bytes:
 
 
 class ExportService:
-    def __init__(self, repository: ExportRepository):
+    def __init__(self, repository: ExportRepository, *, work_queue=None):
         self.repository = repository
+        self.work_queue = work_queue
 
     async def _artifact_exists(self, storage_key: str | None) -> bool:
         if not storage_key:
@@ -855,6 +857,19 @@ class ExportService:
             created_at=created_at,
             completed_at=None,
             expires_at=_default_export_expires_at(created_at),
+        )
+
+    @staticmethod
+    def _storage_key_for_export(export: ProjectExport) -> str:
+        return (Path("exports") / export.project_id / f"{export.id}-{export.file_name}").as_posix()
+
+    async def _enqueue_export_generation(self, export: ProjectExport) -> None:
+        await enqueue_heavy_job(
+            self.work_queue,
+            job_type="export_generate",
+            project_id=export.project_id,
+            export_id=export.id,
+            max_depth=get_settings().heavy_queue_max_depth,
         )
 
     async def _fail_export(self, export: ProjectExport) -> ExportRead:
@@ -977,6 +992,61 @@ class ExportService:
             completed_at=None,
         )
 
+    async def process_export_by_id(self, export_id: str, *, case_detail: ProjectDetail) -> ExportRead | None:
+        export = await self.repository.get_by_id(export_id)
+        if export is None:
+            return None
+        if export.status == "completed":
+            export = await self._mark_export_failed_if_artifact_missing(export)
+            return _to_export_read(export)
+        if export.status == "failed":
+            return _to_export_read(export)
+
+        export = await self.repository.update_state(
+            export,
+            status="generating",
+            storage_key=None,
+            completed_at=None,
+        )
+        now = datetime.now(UTC)
+        storage_key = self._storage_key_for_export(export)
+        try:
+            if export.export_type == "quote-docx":
+                if case_detail.finalProposal is None:
+                    raise ValueError("Final proposal is required for DOCX export.")
+                content = _build_docx_bytes(case_detail)
+            elif export.export_type == "proposal-docx":
+                if case_detail.proposalDraft is None:
+                    raise ValueError("Proposal draft is required for proposal DOCX export.")
+                content = _build_proposal_docx_bytes(case_detail)
+            elif export.export_type == "quote-pdf":
+                if case_detail.finalProposal is None:
+                    raise ValueError("Final proposal is required for PDF export.")
+                content = _build_pdf_bytes(case_detail)
+            elif export.export_type == "case-zip":
+                content = await _build_case_zip_bytes(case_detail)
+            else:
+                raise ValueError(f"Unsupported export type: {export.export_type!r}")
+        except Exception as exc:
+            logger.error(
+                "export.generation_failed",
+                export_id=export.id,
+                project_id=export.project_id,
+                export_type=export.export_type,
+                error=str(exc),
+                exc_info=True,
+            )
+            return await self._fail_export(export)
+
+        return await self._write_generated_export(
+            export,
+            project_id=export.project_id,
+            export_type=export.export_type,
+            storage_key=storage_key,
+            content=content,
+            now=now,
+        )
+
     async def create_export(self, *, case_id: str, export_type: str) -> ExportRead:
         export_id = f"exp_{uuid4().hex[:8]}"
         now = datetime.now(UTC)
@@ -1003,6 +1073,29 @@ class ExportService:
         now = datetime.now(UTC)
         base_name = sanitize_filename(case_detail.finalProposal.subject or case_detail.title or "nabidka")
         file_name = f"{base_name}.docx"
+        queue_enabled = self.work_queue is not None and get_settings().worker_heavy_concurrency > 0
+        if queue_enabled:
+            export = await self._create_pending_export_record(
+                export_id=export_id,
+                project_id=case_detail.id,
+                export_type="quote-docx",
+                file_name=file_name,
+                created_at=now,
+            )
+            try:
+                await self._enqueue_export_generation(export)
+                return _to_export_read(export)
+            except Exception as exc:
+                logger.warning(
+                    "export.queue_enqueue_failed_falling_back_inline",
+                    export_id=export.id,
+                    project_id=case_detail.id,
+                    export_type="quote-docx",
+                    error=str(exc),
+                    exc_info=True,
+                )
+                return await self.process_export_by_id(export.id, case_detail=case_detail) or _to_export_read(export)
+
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
         return await self._create_storage_backed_export(
             export_id=export_id,
@@ -1022,6 +1115,29 @@ class ExportService:
         now = datetime.now(UTC)
         base_name = sanitize_filename(case_detail.proposalDraft.subject or case_detail.title or "pracovni-navrh")
         file_name = f"{base_name}.docx"
+        queue_enabled = self.work_queue is not None and get_settings().worker_heavy_concurrency > 0
+        if queue_enabled:
+            export = await self._create_pending_export_record(
+                export_id=export_id,
+                project_id=case_detail.id,
+                export_type="proposal-docx",
+                file_name=file_name,
+                created_at=now,
+            )
+            try:
+                await self._enqueue_export_generation(export)
+                return _to_export_read(export)
+            except Exception as exc:
+                logger.warning(
+                    "export.queue_enqueue_failed_falling_back_inline",
+                    export_id=export.id,
+                    project_id=case_detail.id,
+                    export_type="proposal-docx",
+                    error=str(exc),
+                    exc_info=True,
+                )
+                return await self.process_export_by_id(export.id, case_detail=case_detail) or _to_export_read(export)
+
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
         return await self._create_storage_backed_export(
             export_id=export_id,
@@ -1041,6 +1157,29 @@ class ExportService:
         now = datetime.now(UTC)
         base_name = sanitize_filename(case_detail.finalProposal.subject or case_detail.title or "nabidka")
         file_name = f"{base_name}.pdf"
+        queue_enabled = self.work_queue is not None and get_settings().worker_heavy_concurrency > 0
+        if queue_enabled:
+            export = await self._create_pending_export_record(
+                export_id=export_id,
+                project_id=case_detail.id,
+                export_type="quote-pdf",
+                file_name=file_name,
+                created_at=now,
+            )
+            try:
+                await self._enqueue_export_generation(export)
+                return _to_export_read(export)
+            except Exception as exc:
+                logger.warning(
+                    "export.queue_enqueue_failed_falling_back_inline",
+                    export_id=export.id,
+                    project_id=case_detail.id,
+                    export_type="quote-pdf",
+                    error=str(exc),
+                    exc_info=True,
+                )
+                return await self.process_export_by_id(export.id, case_detail=case_detail) or _to_export_read(export)
+
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
         return await self._create_storage_backed_export(
             export_id=export_id,
@@ -1063,6 +1202,29 @@ class ExportService:
         now = datetime.now(UTC)
         base_name = sanitize_filename(case_detail.title or case_detail.id)
         file_name = f"{base_name}.zip"
+        queue_enabled = self.work_queue is not None and get_settings().worker_heavy_concurrency > 0
+        if queue_enabled:
+            export = await self._create_pending_export_record(
+                export_id=export_id,
+                project_id=case_detail.id,
+                export_type="case-zip",
+                file_name=file_name,
+                created_at=now,
+            )
+            try:
+                await self._enqueue_export_generation(export)
+                return _to_export_read(export)
+            except Exception as exc:
+                logger.warning(
+                    "export.queue_enqueue_failed_falling_back_inline",
+                    export_id=export.id,
+                    project_id=case_detail.id,
+                    export_type="case-zip",
+                    error=str(exc),
+                    exc_info=True,
+                )
+                return await self.process_export_by_id(export.id, case_detail=case_detail) or _to_export_read(export)
+
         relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
         export = await self._create_pending_export_record(
             export_id=export_id,

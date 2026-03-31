@@ -1,5 +1,9 @@
 from collections.abc import Sequence
 
+from app.core.analysis_provider_capabilities import (
+    get_analysis_provider_capability,
+)
+from app.ai.pipeline import PipelineOrchestrator
 from app.ai.providers.claude_vision_provider import ClaudeVisionProvider
 from app.ai.providers.mock_vision_provider import MockVisionProvider
 from app.ai.providers.openai_vision_provider import OpenAIVisionProvider
@@ -15,9 +19,13 @@ PROVIDERS = {
 
 
 def get_analysis_provider(provider_key: str):
-    if not provider_key or not provider_key.strip():
-        raise ValueError("AI analysis provider key is not configured (AI_ANALYSIS_PROVIDER is empty)")
-    normalized_key = provider_key.strip().lower()
+    capability = get_analysis_provider_capability(provider_key)
+    if not capability.implemented:
+        raise ValueError(
+            f"AI analysis provider {capability.key!r} is blocked. "
+            f"{capability.startup_block_reason}"
+        )
+    normalized_key = capability.key
     provider = PROVIDERS.get(normalized_key)
     if provider is None:
         raise ValueError(f"Unknown AI analysis provider: {normalized_key}")
@@ -74,42 +82,32 @@ async def run_project_analysis(
     photos: Sequence[ProjectPhoto],
     analysis_config: dict | None = None,
 ) -> dict:
+    """Run the Vision analysis pipeline and return a normalised result dict.
+
+    The pipeline orchestrator selects the appropriate execution path:
+      - Staged path  : provider implements StagedVisionPipeline (detect/extract/map)
+      - Legacy path  : provider implements analyze_project() (current mock & claude)
+
+    The returned dict is identical in structure to the pre-pipeline output so
+    that AnalysisService and the repository require no changes.
+    """
     provider = get_analysis_provider(provider_key)
     load_bytes = provider_key == "claude"
     normalized_photos = await normalize_photo_inputs(photos, load_bytes=load_bytes)
-    result = await provider.analyze_project(
+
+    orchestrator = PipelineOrchestrator(provider)
+    pipeline_result = await orchestrator.run(
         project=project,
         photos=normalized_photos,
         analysis_config=analysis_config,
     )
-    return {
-        "providerKey": result.get("providerKey", provider.key),
-        "jobType": result.get("jobType", "manual_trigger"),
-        "objectType": result.get("objectType"),
-        "surfaceCondition": result.get("surfaceCondition"),
-        "recommendedScope": result.get("recommendedScope"),
-        "estimatedQuantity": result.get("estimatedQuantity", result.get("estimatedAreaSqm")),
-        "estimatedUnit": result.get("estimatedUnit"),
-        "estimatedAreaSqm": result.get("estimatedAreaSqm"),
-        "areaConfidence": result.get("areaConfidence"),
-        "maskPolygon": result.get("maskPolygon"),
-        "materials": result.get("materials"),
-        "workflowSteps": result.get("workflowSteps"),
-        "estimatedTotalDays": result.get("estimatedTotalDays"),
-        "laborHoursTotal": result.get("laborHoursTotal"),
-        "catalogAttributes": result.get("catalogAttributes"),
-        "validationWarnings": result.get("validationWarnings"),
-        "analysisProfileCode": result.get("analysisProfileCode"),
-        "analysisProfileVersion": result.get("analysisProfileVersion"),
-        "resolvedWorkTypeCode": result.get("resolvedWorkTypeCode"),
-        "modelName": result.get("modelName", provider.key),
-        "modelVersion": result.get("modelVersion", "1.0"),
-    }
+    return pipeline_result.to_legacy_dict()
 
 
 def describe_analysis_provider(provider_key: str) -> dict:
+    capability = get_analysis_provider_capability(provider_key)
     provider = get_analysis_provider(provider_key)
     return {
         "providerKey": provider.key,
-        "mode": "development" if provider.key == "mock" else "external",
+        "mode": capability.runtime_mode,
     }

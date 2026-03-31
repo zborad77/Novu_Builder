@@ -1,23 +1,29 @@
 import os
 import pathlib
-import tempfile
+import shutil
+import uuid
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-_TMP_STORAGE = pathlib.Path(tempfile.gettempdir()) / "novu_e2e_test_storage"
+_TESTS_ROOT = pathlib.Path(__file__).resolve().parent
+_TEST_RUNTIME_ROOT = _TESTS_ROOT.parent / ".tmp_test_runtime"
+_TEST_RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
+_TEST_SESSION_ROOT = _TEST_RUNTIME_ROOT / f"session_{uuid.uuid4().hex[:8]}"
+_TEST_SESSION_ROOT.mkdir(parents=True, exist_ok=True)
+_TMP_STORAGE = _TEST_SESSION_ROOT / "storage"
 _TMP_STORAGE.mkdir(parents=True, exist_ok=True)
 
-_TMP_DB_DIR = pathlib.Path(tempfile.gettempdir()) / "novu_e2e_test_db"
+_TMP_DB_DIR = _TEST_SESSION_ROOT / "db"
 _TMP_DB_DIR.mkdir(parents=True, exist_ok=True)
 _TEST_DB_PATH = _TMP_DB_DIR / "test_e2e_tenant.db"
 _TEST_DB_URL = os.environ.get("TEST_DATABASE_URL") or f"sqlite+aiosqlite:///{_TEST_DB_PATH}"
 _USING_LOCAL_SQLITE = "TEST_DATABASE_URL" not in os.environ
 
 if _USING_LOCAL_SQLITE and _TEST_DB_PATH.exists():
-    _TEST_DB_PATH.unlink()
+    _TEST_DB_PATH.unlink(missing_ok=True)
 
 os.environ["DATABASE_URL"] = _TEST_DB_URL
 os.environ["DB_SEED_ON_STARTUP"] = "false"
@@ -52,6 +58,7 @@ async def _setup_test_db():
         await conn.run_sync(Base.metadata.create_all)
     yield
     await _test_engine.dispose()
+    shutil.rmtree(_TEST_SESSION_ROOT, ignore_errors=True)
 
 
 @pytest_asyncio.fixture(scope="session")

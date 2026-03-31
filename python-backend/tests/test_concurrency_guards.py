@@ -40,6 +40,7 @@ def _make_photo(*, is_reference=False, is_primary=False, status="ready"):
 def _make_analysis_service(*, active_job=None, new_job=None):
     mock_repo = AsyncMock()
     mock_repo.get_active_job_for_project = AsyncMock(return_value=active_job)
+    mock_repo.get_active_job_for_project_by_type = AsyncMock(return_value=active_job)
     mock_repo.count_active_jobs_for_organization = AsyncMock(return_value=0)
     mock_repo.create_queued_job = AsyncMock(return_value=new_job)
     return AnalysisService(

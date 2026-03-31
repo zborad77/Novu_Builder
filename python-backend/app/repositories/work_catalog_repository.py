@@ -5,7 +5,7 @@ from collections.abc import Sequence
 
 from sqlalchemy import Select, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.models import PricingProfile, Project, ProjectPhoto
 from app.models.work_catalog import (
@@ -64,6 +64,15 @@ class WorkCatalogRepository:
                 selectinload(WorkType.default_catalog_pricing_profile).selectinload(CatalogPricingProfile.adjustment_rules),
                 selectinload(WorkType.default_catalog_pricing_profile).selectinload(CatalogPricingProfile.labor_assumptions),
                 selectinload(WorkType.default_catalog_pricing_profile).selectinload(CatalogPricingProfile.material_assumptions),
+            )
+        )
+
+    def _work_type_resolution_query(self) -> Select[tuple[WorkType]]:
+        return (
+            select(WorkType)
+            .options(
+                joinedload(WorkType.category),
+                selectinload(WorkType.parameters).selectinload(WorkTypeParameter.options),
             )
         )
 
@@ -145,9 +154,21 @@ class WorkCatalogRepository:
         )
         return result.scalars().all()
 
+    async def list_work_types_for_resolution(self) -> Sequence[WorkType]:
+        result = await self.session.execute(
+            self._work_type_resolution_query().order_by(WorkType.sort_order.asc(), WorkType.code.asc())
+        )
+        return result.scalars().all()
+
     async def get_work_type_by_code(self, work_type_code: str) -> WorkType | None:
         result = await self.session.execute(
             self._work_type_detail_query().where(WorkType.code == work_type_code)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_work_type_by_code_for_resolution(self, work_type_code: str) -> WorkType | None:
+        result = await self.session.execute(
+            self._work_type_resolution_query().where(WorkType.code == work_type_code)
         )
         return result.scalar_one_or_none()
 
@@ -174,6 +195,19 @@ class WorkCatalogRepository:
             )
             .where(TenantWorkTypeSetting.organization_id == organization_id)
         )
+        if work_type_ids:
+            query = query.where(TenantWorkTypeSetting.work_type_id.in_(tuple(work_type_ids)))
+        result = await self.session.execute(query)
+        rows = result.scalars().all()
+        return {row.work_type_id: row for row in rows}
+
+    async def list_tenant_settings_for_resolution_for_org(
+        self,
+        organization_id: str,
+        *,
+        work_type_ids: Sequence[str] | None = None,
+    ) -> dict[str, TenantWorkTypeSetting]:
+        query = select(TenantWorkTypeSetting).where(TenantWorkTypeSetting.organization_id == organization_id)
         if work_type_ids:
             query = query.where(TenantWorkTypeSetting.work_type_id.in_(tuple(work_type_ids)))
         result = await self.session.execute(query)
@@ -229,6 +263,18 @@ class WorkCatalogRepository:
         )
         return result.scalar_one_or_none()
 
+    async def list_analysis_profiles_by_ids(
+        self,
+        profile_ids: Sequence[str],
+    ) -> dict[str, AnalysisProfile]:
+        if not profile_ids:
+            return {}
+        result = await self.session.execute(
+            self._analysis_profile_detail_query().where(AnalysisProfile.id.in_(tuple(profile_ids)))
+        )
+        rows = result.scalars().all()
+        return {row.id: row for row in rows}
+
     async def get_catalog_pricing_profile_by_code(self, code: str) -> CatalogPricingProfile | None:
         result = await self.session.execute(
             self._pricing_profile_detail_query()
@@ -242,6 +288,18 @@ class WorkCatalogRepository:
             self._pricing_profile_detail_query().where(CatalogPricingProfile.id == profile_id)
         )
         return result.scalar_one_or_none()
+
+    async def list_catalog_pricing_profiles_by_ids(
+        self,
+        profile_ids: Sequence[str],
+    ) -> dict[str, CatalogPricingProfile]:
+        if not profile_ids:
+            return {}
+        result = await self.session.execute(
+            self._pricing_profile_detail_query().where(CatalogPricingProfile.id.in_(tuple(profile_ids)))
+        )
+        rows = result.scalars().all()
+        return {row.id: row for row in rows}
 
     async def get_tenant_pricing_profile(
         self,

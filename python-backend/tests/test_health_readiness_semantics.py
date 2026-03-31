@@ -46,6 +46,156 @@ async def test_ready_is_minimal_when_service_is_ready(app_client):
 
 
 @pytest.mark.asyncio
+async def test_processing_ready_returns_strict_ready_when_worker_path_is_healthy(app_client):
+    from app.main import app as fastapi_app
+
+    worker_snapshot = SimpleNamespace(
+        alive=True,
+        last_seen_at="2026-03-31T10:00:00+00:00",
+        alive_instances=1,
+        seen_instances=1,
+    )
+
+    original_job_queue = getattr(fastapi_app.state, "job_queue", None)
+    fastapi_app.state.job_queue = object()
+    try:
+        with (
+            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+        ):
+            response = await app_client.get("/api/v1/ready/processing?strict=1")
+    finally:
+        fastapi_app.state.job_queue = original_job_queue
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "service": "python-backend",
+        "apiReady": True,
+        "jobProcessingReady": True,
+        "workerState": "ready",
+        "queueState": "ready",
+        "graceActive": False,
+        "strict": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_processing_ready_surfaces_degraded_queue_state_when_failover_is_active(app_client):
+    from app.main import app as fastapi_app
+
+    class _DegradedQueue:
+        def runtime_status(self):
+            return SimpleNamespace(
+                state="degraded",
+                mode="failover",
+                candidate_count=2,
+                active_url="redis://:***@secondary:6379/0",
+                degraded=True,
+                last_error="primary down",
+                last_failover_at="2026-03-31T10:00:00+00:00",
+            )
+
+    worker_snapshot = SimpleNamespace(
+        alive=True,
+        last_seen_at="2026-03-31T10:00:00+00:00",
+        alive_instances=1,
+        seen_instances=1,
+    )
+
+    original_job_queue = getattr(fastapi_app.state, "job_queue", None)
+    fastapi_app.state.job_queue = _DegradedQueue()
+    try:
+        with (
+            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+        ):
+            response = await app_client.get("/api/v1/ready/processing?strict=1")
+    finally:
+        fastapi_app.state.job_queue = original_job_queue
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    assert response.json()["queueState"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_processing_ready_uses_grace_window_for_short_worker_gap(app_client):
+    from app.main import app as fastapi_app
+
+    worker_snapshot = SimpleNamespace(
+        alive=False,
+        last_seen_at=None,
+        alive_instances=0,
+        seen_instances=0,
+    )
+    original_started = fastapi_app.state.readiness_started_at_monotonic
+    original_job_queue = getattr(fastapi_app.state, "job_queue", None)
+    fastapi_app.state.readiness_started_at_monotonic = 100.0
+    fastapi_app.state.job_queue = object()
+    try:
+        with (
+            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.api.routes.system._readiness_now", return_value=120.0),
+        ):
+            response = await app_client.get("/api/v1/ready/processing")
+    finally:
+        fastapi_app.state.readiness_started_at_monotonic = original_started
+        fastapi_app.state.job_queue = original_job_queue
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "warming_up",
+        "service": "python-backend",
+        "apiReady": True,
+        "jobProcessingReady": True,
+        "workerState": "missing",
+        "queueState": "ready",
+        "graceActive": True,
+        "strict": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_processing_ready_strict_mode_rejects_stale_worker_even_during_grace(app_client):
+    from app.main import app as fastapi_app
+
+    worker_snapshot = SimpleNamespace(
+        alive=False,
+        last_seen_at="2026-03-31T09:58:00+00:00",
+        alive_instances=0,
+        seen_instances=1,
+    )
+    original_started = fastapi_app.state.readiness_started_at_monotonic
+    original_job_queue = getattr(fastapi_app.state, "job_queue", None)
+    fastapi_app.state.readiness_started_at_monotonic = 100.0
+    fastapi_app.state.job_queue = object()
+    try:
+        with (
+            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.api.routes.system._readiness_now", return_value=120.0),
+        ):
+            response = await app_client.get("/api/v1/ready/processing?strict=1")
+    finally:
+        fastapi_app.state.readiness_started_at_monotonic = original_started
+        fastapi_app.state.job_queue = original_job_queue
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "service": "python-backend",
+        "apiReady": True,
+        "jobProcessingReady": False,
+        "workerState": "stale",
+        "queueState": "ready",
+        "graceActive": True,
+        "strict": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_ready_returns_503_when_startup_checks_are_not_ready(app_client):
     from app.main import app as fastapi_app
 
@@ -137,10 +287,13 @@ async def test_internal_health_returns_503_when_service_is_not_ready():
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
-        mock_session.execute = AsyncMock(return_value=AsyncMock(
-            scalar_one=lambda: 0,
-            scalar_one_or_none=lambda: None,
-        ))
+        mock_session.execute = AsyncMock(side_effect=[
+            AsyncMock(),
+            SimpleNamespace(scalar_one=lambda: 0),
+            SimpleNamespace(scalar_one=lambda: 0),
+            SimpleNamespace(scalar_one_or_none=lambda: None),
+        ])
+        mock_session.scalar = AsyncMock(return_value=None)
         mock_factory.return_value = mock_session
 
         body = await health_internal(
@@ -152,6 +305,8 @@ async def test_internal_health_returns_503_when_service_is_not_ready():
     assert response.status_code == 503
     assert body["status"] == "degraded"
     assert body["ready"] is False
+    assert body["apiReady"] is False
+    assert body["jobProcessingReady"] is False
     assert body["storage"] in {"ok", "error"}
 
 
@@ -166,7 +321,7 @@ async def test_internal_health_omits_debug_flag_and_keeps_internal_details():
         "schema": "ok",
         "storage": "ok",
     }
-    mock_request.app.state.job_queue = None
+    mock_request.app.state.job_queue = object()
     response = Response()
 
     current_user = AuthUserRead(
@@ -180,14 +335,28 @@ async def test_internal_health_omits_debug_flag_and_keeps_internal_details():
         impersonatedBy=None,
     )
 
-    with patch("app.api.routes.system.AsyncSessionFactory") as mock_factory:
+    worker_snapshot = SimpleNamespace(
+        alive=True,
+        last_seen_at="2026-03-31T10:00:00+00:00",
+        alive_instances=1,
+        seen_instances=1,
+    )
+
+    with (
+        patch("app.api.routes.system.AsyncSessionFactory") as mock_factory,
+        patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+        patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+    ):
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
-        mock_session.execute = AsyncMock(return_value=AsyncMock(
-            scalar_one=lambda: 0,
-            scalar_one_or_none=lambda: None,
-        ))
+        mock_session.execute = AsyncMock(side_effect=[
+            AsyncMock(),
+            SimpleNamespace(scalar_one=lambda: 0),
+            SimpleNamespace(scalar_one=lambda: 0),
+            SimpleNamespace(scalar_one_or_none=lambda: None),
+        ])
+        mock_session.scalar = AsyncMock(return_value=None)
         mock_factory.return_value = mock_session
 
         body = await health_internal(
@@ -200,6 +369,8 @@ async def test_internal_health_omits_debug_flag_and_keeps_internal_details():
     assert "debug" not in body
     assert "startupChecks" in body
     assert "worker" in body
+    assert body["apiReady"] is True
+    assert body["jobProcessingReady"] is True
 
 
 @pytest.mark.asyncio
@@ -274,12 +445,16 @@ async def test_ready_reuses_fresh_operational_snapshot_without_extra_db_probe():
         db_alive=True,
         jobs_running=2,
         jobs_queued=3,
+        queue_length=3,
+        processing_jobs=2,
+        job_stuck_max_age_seconds=0.0,
         worker=_WorkerHeartbeatSnapshot(
             alive=True,
             last_seen_at="2026-03-30T00:00:00+00:00",
             alive_instances=1,
             seen_instances=1,
         ),
+        queue_monitoring_available=True,
     )
     operational_cache.expires_at_monotonic = 105.0
     db_probe = AsyncMock(return_value=False)

@@ -649,6 +649,9 @@ class TestDuplicateEnqueueGuard:
 
         enqueue_mock.assert_not_awaited()
         assert response.jobId == "job-existing"
+        assert response.workTypeCode is None
+        assert response.analysisProfileCode is None
+        assert response.analysisProfileVersion is None
 
 
 class TestQueueOverflowGuards:

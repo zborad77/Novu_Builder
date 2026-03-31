@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { AuthApi, TokenStorage } from '../services/api';
+import { AuthApi, ClientConfigurationError, TokenStorage } from '../services/api';
 import type { AuthUser } from '../types';
 
 interface AuthState {
@@ -23,15 +23,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   });
 
   useEffect(() => {
-    TokenStorage.getAccessToken().then((token) => {
-      if (token) {
-        // Token exists — we trust it until first 401
-        // In a real app you'd call /auth/me here
-        setState((s) => ({ ...s, isLoading: false, isAuthenticated: true }));
-      } else {
-        setState((s) => ({ ...s, isLoading: false }));
+    let cancelled = false;
+
+    async function bootstrap() {
+      try {
+        const user = await AuthApi.bootstrapSession();
+        if (cancelled) return;
+        setState({
+          user,
+          isLoading: false,
+          isAuthenticated: Boolean(user),
+        });
+      } catch (err: unknown) {
+        if (cancelled) return;
+        if (!(err instanceof ClientConfigurationError)) {
+          await TokenStorage.clearTokens();
+        }
+        setState({
+          user: null,
+          isLoading: false,
+          isAuthenticated: false,
+        });
       }
-    });
+    }
+
+    void bootstrap();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function login(email: string, password: string) {
@@ -42,7 +61,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function logout() {
     const refreshToken = await TokenStorage.getRefreshToken();
-    if (refreshToken) await AuthApi.logout(refreshToken);
+    if (refreshToken) {
+      await AuthApi.logout(refreshToken);
+    }
     await TokenStorage.clearTokens();
     setState({ user: null, isLoading: false, isAuthenticated: false });
   }

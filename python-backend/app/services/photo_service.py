@@ -12,11 +12,13 @@ from app.storage.backend import (
     delete_storage_file,
     generate_presigned_url,
     get_image_dimensions,
+    read_storage_file,
     resize_image_bytes,
     save_original_photo,
     validate_photo_upload,
     write_storage_file,
 )
+from app.worker.heavy_queue import enqueue_heavy_job
 
 logger = structlog.get_logger(__name__)
 
@@ -68,8 +70,16 @@ def _is_terminal_processing_status(status: str) -> bool:
 
 def to_read_model(photo: ProjectPhoto) -> ProjectPhotoRead:
     original_url = generate_presigned_url(photo.storage_key)
-    preview_url = generate_presigned_url(photo.preview_storage_key) if photo.preview_storage_key else None
-    ai_input_url = generate_presigned_url(photo.ai_input_storage_key) if photo.ai_input_storage_key else None
+    preview_url = (
+        generate_presigned_url(photo.preview_storage_key)
+        if photo.processing_status == "ready" and photo.preview_storage_key
+        else None
+    )
+    ai_input_url = (
+        generate_presigned_url(photo.ai_input_storage_key)
+        if photo.processing_status == "ready" and photo.ai_input_storage_key
+        else None
+    )
     return ProjectPhotoRead(
         id=photo.id,
         projectId=photo.project_id,
@@ -114,8 +124,9 @@ def to_read_model(photo: ProjectPhoto) -> ProjectPhotoRead:
 
 
 class PhotoService:
-    def __init__(self, repository: PhotoRepository):
+    def __init__(self, repository: PhotoRepository, *, work_queue=None):
         self.repository = repository
+        self.work_queue = work_queue
 
     async def _cleanup_storage_keys(self, *storage_keys: str | None) -> None:
         seen: set[str] = set()
@@ -185,6 +196,28 @@ class PhotoService:
             return await self._update_processing_status(photo, "failed")
 
         return await self._update_processing_status(photo, "ready")
+
+    async def process_photo_variants_by_id(self, photo_id: str) -> ProjectPhotoRead | None:
+        photo = await self.repository.get_photo_by_id(photo_id)
+        if not photo:
+            return None
+        if _is_terminal_processing_status(photo.processing_status):
+            return to_read_model(photo)
+
+        original_bytes = await read_storage_file(relative_storage_key=photo.storage_key)
+        if original_bytes is None:
+            logger.error(
+                "photo.variant_processing_source_missing",
+                photo_id=photo.id,
+                project_id=photo.project_id,
+                storage_key=photo.storage_key,
+            )
+            self._clear_failed_variant_metadata(photo)
+            failed = await self._update_processing_status(photo, "failed")
+            return to_read_model(failed)
+
+        processed = await self._process_multipart_photo_variants(photo, original_bytes)
+        return to_read_model(processed)
 
     async def _ensure_analysis_reference(self, project_id: str) -> None:
         photos = list(await self.repository.list_photos_by_project_id(project_id))
@@ -294,6 +327,27 @@ class PhotoService:
             )
             await self._cleanup_storage_keys(storage_key)
             raise
+        queue_processing_enabled = self.work_queue is not None and get_settings().worker_heavy_concurrency > 0
+        if queue_processing_enabled:
+            try:
+                await enqueue_heavy_job(
+                    self.work_queue,
+                    job_type="photo_variant_processing",
+                    project_id=project.id,
+                    organization_id=project.organization_id,
+                    photo_id=created_photo.id,
+                    max_depth=get_settings().heavy_queue_max_depth,
+                )
+                return to_read_model(created_photo)
+            except Exception as exc:
+                logger.warning(
+                    "photo.variant_queue_enqueue_failed_falling_back_inline",
+                    photo_id=created_photo.id,
+                    project_id=project.id,
+                    error=str(exc),
+                    exc_info=True,
+                )
+
         processed_photo = await self._process_multipart_photo_variants(created_photo, content)
         return to_read_model(processed_photo)
 

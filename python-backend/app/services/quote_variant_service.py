@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from app.models import AnalysisJob, QuoteItem, QuoteVariant
 from app.repositories.quote_variant_repository import QuoteVariantRepository
 from app.repositories.work_catalog_repository import WorkCatalogRepository
@@ -11,6 +13,20 @@ def round_currency(value: float) -> float:
 
 def round_measure(value: float) -> float:
     return round(value + 1e-9, 3)
+
+
+@dataclass(frozen=True)
+class QuoteVariantRecalculationResult:
+    variants: list[QuoteVariantRead]
+    source: str
+
+    @property
+    def variant_count(self) -> int:
+        return len(self.variants)
+
+
+class QuoteVariantRecalculationUnavailableError(ValueError):
+    """Raised when quote variants cannot be recalculated from current project state."""
 
 
 def to_job_read(job: AnalysisJob) -> AnalysisJobRead:
@@ -93,14 +109,65 @@ class QuoteVariantService:
         variants = await self.repository.list_quote_variants(project_id)
         return [to_variant_read(variant) for variant in variants]
 
-    async def recalculate_quote_variants(self, project_id: str) -> list[QuoteVariantRead] | None:
+    async def can_recalculate_quote_variants(self, project_id: str) -> bool:
+        project = await self.repository.get_project(project_id)
+        if not project:
+            return False
+        pricing_profile = await self.repository.get_default_pricing_profile(project.organization_id)
+        if not pricing_profile:
+            return False
+
+        project_work_items = list(
+            await self.work_catalog_repository.list_project_work_items(
+                project_id,
+                organization_id=project.organization_id,
+            )
+        )
+        if project_work_items:
+            return True
+
+        analysis = await self.repository.get_latest_analysis(project_id)
+        effective_area_sqm = (
+            analysis.manual_area_sqm
+            if analysis is not None
+            and analysis.final_area_source == "manual"
+            and analysis.manual_area_sqm
+            and analysis.manual_area_sqm > 0
+            else (analysis.estimated_area_sqm if analysis is not None else None)
+        )
+        return bool(analysis and effective_area_sqm)
+
+    async def recalculate_quote_variants(
+        self,
+        project_id: str,
+        *,
+        raise_on_unavailable: bool = False,
+    ) -> list[QuoteVariantRead] | None:
+        result = await self.recalculate_quote_variants_with_context(
+            project_id,
+            raise_on_unavailable=raise_on_unavailable,
+        )
+        return result.variants if result is not None else None
+
+    async def recalculate_quote_variants_with_context(
+        self,
+        project_id: str,
+        *,
+        raise_on_unavailable: bool = False,
+    ) -> QuoteVariantRecalculationResult | None:
         project = await self.repository.get_project(project_id)
         analysis = await self.repository.get_latest_analysis(project_id)
         if not project:
-            return None
+            return self._handle_unavailable(
+                raise_on_unavailable=raise_on_unavailable,
+                message="Quote variants cannot be recalculated because the case does not exist.",
+            )
         pricing_profile = await self.repository.get_default_pricing_profile(project.organization_id)
         if not pricing_profile:
-            return None
+            return self._handle_unavailable(
+                raise_on_unavailable=raise_on_unavailable,
+                message="Quote variants cannot be recalculated because no default pricing profile is configured.",
+            )
 
         project_work_items = list(
             await self.work_catalog_repository.list_project_work_items(
@@ -155,10 +222,16 @@ class QuoteVariantService:
                     pricing_profile=pricing_profile,
                     variants_payload=variants_payload,
                 )
-                return [to_variant_read(variant) for variant in created]
+                return QuoteVariantRecalculationResult(
+                    variants=[to_variant_read(variant) for variant in created],
+                    source="project_work_items",
+                )
 
         if analysis is None:
-            return None
+            return self._handle_unavailable(
+                raise_on_unavailable=raise_on_unavailable,
+                message="Quote variants cannot be recalculated without an analysis result or confirmed project work items.",
+            )
 
         effective_area_sqm = (
             analysis.manual_area_sqm
@@ -166,7 +239,10 @@ class QuoteVariantService:
             else analysis.estimated_area_sqm
         )
         if not effective_area_sqm:
-            return None
+            return self._handle_unavailable(
+                raise_on_unavailable=raise_on_unavailable,
+                message="Quote variants cannot be recalculated because the effective repair area is missing.",
+            )
 
         suggested_materials = self.repository.parse_json_field(analysis.materials_suggestion_json) or []
         material_names = [
@@ -315,7 +391,30 @@ class QuoteVariantService:
             pricing_profile=pricing_profile,
             variants_payload=variants_payload,
         )
-        return [to_variant_read(variant) for variant in created]
+        return QuoteVariantRecalculationResult(
+            variants=[to_variant_read(variant) for variant in created],
+            source="analysis_fallback",
+        )
+
+    @staticmethod
+    def build_recalculation_output_summary(result: QuoteVariantRecalculationResult) -> dict[str, object]:
+        return {
+            "job_type": "quote_recalculation",
+            "variant_count": result.variant_count,
+            "source": result.source,
+            "variant_types": [variant.variantType for variant in result.variants],
+            "totals_inc_vat": [variant.totalIncVat for variant in result.variants],
+        }
+
+    @staticmethod
+    def _handle_unavailable(
+        *,
+        raise_on_unavailable: bool,
+        message: str,
+    ) -> QuoteVariantRecalculationResult | None:
+        if raise_on_unavailable:
+            raise QuoteVariantRecalculationUnavailableError(message)
+        return None
 
     async def update_quote_variant(self, variant_id: str, payload: dict) -> QuoteVariantRead | None:
         variant = await self.repository.get_quote_variant(variant_id)

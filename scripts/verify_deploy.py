@@ -39,6 +39,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Accept readiness 503/not_ready instead of failing the bundle.",
     )
     parser.add_argument(
+        "--skip-processing-ready",
+        action="store_true",
+        help="Skip strict background-job processing verification.",
+    )
+    parser.add_argument(
+        "--allow-processing-grace",
+        action="store_true",
+        help="Accept worker grace on the processing readiness probe during controlled rollouts.",
+    )
+    parser.add_argument(
         "--auth-email",
         default=os.environ.get("SMOKE_EMAIL", ""),
         help="Optional auth smoke email (or SMOKE_EMAIL).",
@@ -76,6 +86,8 @@ def run_deploy_verification(
     require_auth: bool,
     skip_auth: bool,
     skip_api_smoke: bool,
+    skip_processing_ready: bool,
+    allow_processing_grace: bool,
 ) -> list[CheckResult]:
     results: list[CheckResult] = []
 
@@ -83,6 +95,8 @@ def run_deploy_verification(
         base_url=base_url,
         timeout=timeout,
         require_ready=not allow_not_ready,
+        require_processing_ready=not skip_processing_ready,
+        allow_processing_grace=allow_processing_grace,
     )
     results.extend(probe_results)
 
@@ -142,6 +156,8 @@ def main(argv: list[str] | None = None) -> int:
         require_auth=args.require_auth,
         skip_auth=args.skip_auth,
         skip_api_smoke=args.skip_api_smoke,
+        skip_processing_ready=args.skip_processing_ready,
+        allow_processing_grace=args.allow_processing_grace,
     )
     print_results(results, title="Deployment verification")
     return 0 if all_ok(results) else 1

@@ -61,6 +61,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-auth", action="store_true", help="Skip auth smoke and dependent API smoke.")
     parser.add_argument("--skip-api-smoke", action="store_true", help="Skip authenticated core API smoke.")
     parser.add_argument("--allow-not-ready", action="store_true", help="Accept readiness 503/not_ready.")
+    parser.add_argument("--skip-processing-ready", action="store_true", help="Skip strict processing readiness verification.")
+    parser.add_argument("--allow-processing-grace", action="store_true", help="Accept worker grace on processing readiness.")
     return parser
 
 
@@ -79,6 +81,8 @@ def run_release_gate(
     skip_auth: bool,
     skip_api_smoke: bool,
     allow_not_ready: bool,
+    skip_processing_ready: bool = False,
+    allow_processing_grace: bool = False,
 ) -> list[CheckResult]:
     results: list[CheckResult] = []
 
@@ -121,6 +125,8 @@ def run_release_gate(
             require_auth=require_auth,
             skip_auth=skip_auth,
             skip_api_smoke=skip_api_smoke,
+            skip_processing_ready=skip_processing_ready,
+            allow_processing_grace=allow_processing_grace,
         )
     )
     return results
@@ -142,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
         skip_auth=args.skip_auth,
         skip_api_smoke=args.skip_api_smoke,
         allow_not_ready=args.allow_not_ready,
+        skip_processing_ready=args.skip_processing_ready,
+        allow_processing_grace=args.allow_processing_grace,
     )
     print_results(results, title="Release gate verification")
     return 0 if all_ok(results) else 1

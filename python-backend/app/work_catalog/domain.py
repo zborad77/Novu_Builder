@@ -10,6 +10,7 @@ CODE_PATTERN = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 WORK_TYPE_STATES = frozenset({"active", "hidden", "deprecated"})
 WORK_TYPE_PARAMETER_DATA_TYPES = frozenset({"number", "text", "boolean", "option"})
 TENANT_WORK_TYPE_SETTING_STATUSES = frozenset({"inherited", "enabled", "disabled"})
+TENANT_PARAMETER_OVERRIDE_STATUSES = frozenset({"inherited", "required", "optional", "hidden"})
 TENANT_EXTRA_PARAMETER_STATUSES = frozenset({"active", "disabled"})
 PARAMETER_DEFINITION_SCOPES = frozenset({"global", "tenant_extra"})
 PROJECT_WORK_ITEM_STATUSES = frozenset({"draft", "resolved", "accepted", "rejected"})
@@ -360,6 +361,117 @@ def validate_tenant_extra_parameter_definition(
         default_option_code=default_option_code,
         option_codes=option_codes,
     )
+
+
+def validate_resolved_parameter_contract(
+    *,
+    parameter_scope: str,
+    parameter_code: str,
+    slug: str,
+    label: str,
+    effective_label: str,
+    data_type: str,
+    unit: str | None,
+    section: str | None,
+    required: bool,
+    enabled: bool,
+    override_status: str | None,
+    vision_extractable: bool,
+    manual_override_allowed: bool,
+    min_number_value: Any | None = None,
+    max_number_value: Any | None = None,
+    default_text_value: str | None = None,
+    default_number_value: Any | None = None,
+    default_boolean_value: bool | None = None,
+    default_option_code: str | None = None,
+    option_codes: set[str] | None = None,
+) -> None:
+    normalized_scope = normalize_enum(
+        parameter_scope,
+        field_name="parameterScope",
+        allowed=PARAMETER_DEFINITION_SCOPES,
+    )
+    normalized_effective_label = normalize_optional_name(effective_label, field_name="effectiveLabel")
+    if normalized_effective_label is None:
+        raise CatalogValidationError(f"effectiveLabel is required for parameter '{parameter_code}'.")
+    if not isinstance(required, bool):
+        raise CatalogValidationError(f"required must be boolean for parameter '{parameter_code}'.")
+    if not isinstance(enabled, bool):
+        raise CatalogValidationError(f"enabled must be boolean for parameter '{parameter_code}'.")
+
+    if normalized_scope == "global":
+        normalized_override_status = (
+            normalize_enum(
+                override_status,
+                field_name="overrideStatus",
+                allowed=TENANT_PARAMETER_OVERRIDE_STATUSES,
+            )
+            if override_status is not None
+            else None
+        )
+        validate_parameter_definition(
+            parameter_code=parameter_code,
+            slug=slug,
+            label=label,
+            data_type=data_type,
+            unit=unit,
+            section=section,
+            min_number_value=min_number_value,
+            max_number_value=max_number_value,
+            vision_extractable=vision_extractable,
+            manual_override_allowed=manual_override_allowed,
+            default_text_value=default_text_value,
+            default_number_value=default_number_value,
+            default_boolean_value=default_boolean_value,
+            default_option_code=default_option_code,
+            option_codes=option_codes,
+        )
+        if normalized_override_status == "hidden" and enabled:
+            raise CatalogValidationError(
+                f"Hidden parameter '{parameter_code}' cannot resolve as enabled."
+            )
+        if normalized_override_status != "hidden" and not enabled:
+            raise CatalogValidationError(
+                f"Visible parameter '{parameter_code}' cannot resolve as disabled."
+            )
+        if normalized_override_status == "required" and not required:
+            raise CatalogValidationError(
+                f"Required override for parameter '{parameter_code}' must resolve as required."
+            )
+        if normalized_override_status == "optional" and required:
+            raise CatalogValidationError(
+                f"Optional override for parameter '{parameter_code}' must resolve as optional."
+            )
+        return
+
+    normalized_status = normalize_enum(
+        override_status or "active",
+        field_name="status",
+        allowed=TENANT_EXTRA_PARAMETER_STATUSES,
+    )
+    validate_tenant_extra_parameter_definition(
+        parameter_code=parameter_code,
+        slug=slug,
+        label=label,
+        data_type=data_type,
+        unit=unit,
+        section=section,
+        is_required=required,
+        status=normalized_status,
+        vision_extractable=vision_extractable,
+        manual_override_allowed=manual_override_allowed,
+        min_number_value=min_number_value,
+        max_number_value=max_number_value,
+        default_text_value=default_text_value,
+        default_number_value=default_number_value,
+        default_boolean_value=default_boolean_value,
+        default_option_code=default_option_code,
+        option_codes=option_codes,
+    )
+    if enabled != (normalized_status == "active"):
+        raise CatalogValidationError(
+            f"Tenant extra parameter '{parameter_code}' resolved enabled state does not match status '{normalized_status}'."
+        )
 
 
 def coerce_analysis_attribute_value(

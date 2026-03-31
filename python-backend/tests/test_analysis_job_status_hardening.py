@@ -161,7 +161,21 @@ class TestAnalysisServiceFailureGuards:
             provider_key="mock",
         )
 
-        with patch.object(service, "fail_job_before_processing", new=AsyncMock(return_value=True)) as fail_job:
+        job = _make_job()
+        session = AsyncMock()
+        mock_repo = AsyncMock()
+        mock_repo.get_analysis_job = AsyncMock(return_value=job)
+
+        with (
+            patch.object(service, "fail_job_before_processing", new=AsyncMock(return_value=True)) as fail_job,
+            patch("app.services.analysis_service.WorkerAsyncSessionFactory") as factory,
+            patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo),
+        ):
+            ctx = AsyncMock()
+            ctx.__aenter__ = AsyncMock(return_value=session)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            factory.return_value = ctx
+
             with pytest.raises(HTTPException) as exc_info:
                 await service.execute_job(
                     "job_1",
@@ -202,7 +216,7 @@ class TestAnalysisServiceFailureGuards:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_execute_job_invalid_analysis_payload_marks_job_failed(self):
+    async def test_execute_job_invalid_analysis_payload_schedules_retry(self):
         job = _make_job()
         project = _make_project()
         session = AsyncMock()
@@ -216,8 +230,8 @@ class TestAnalysisServiceFailureGuards:
             current_job.started_at = datetime.now(UTC)
             return current_job
 
-        async def _fail_job(current_job, *, message, error_traceback=None):
-            current_job.status = ANALYSIS_JOB_STATUS_FAILED
+        async def _schedule_retry(current_job, *, message, error_traceback=None):
+            current_job.status = ANALYSIS_JOB_STATUS_QUEUED
             current_job.error_message = message
             current_job.error_traceback = error_traceback
             current_job.finished_at = datetime.now(UTC)
@@ -229,7 +243,7 @@ class TestAnalysisServiceFailureGuards:
                 "estimatedAreaSqm must be numeric when provided."
             )
         )
-        mock_repo.fail_job = AsyncMock(side_effect=_fail_job)
+        mock_repo.schedule_job_retry = AsyncMock(side_effect=_schedule_retry)
 
         mock_photo_repo = AsyncMock()
         mock_photo_repo.list_photos_by_project_id = AsyncMock(return_value=[])
@@ -256,8 +270,8 @@ class TestAnalysisServiceFailureGuards:
 
             await service.execute_job("job_1", "proj_1", organization_id="org_1")
 
-        mock_repo.fail_job.assert_awaited_once()
-        assert job.status == ANALYSIS_JOB_STATUS_FAILED
+        mock_repo.schedule_job_retry.assert_awaited_once()
+        assert job.status == ANALYSIS_JOB_STATUS_QUEUED
         assert job.error_message.startswith("Invalid analysis payload:")
 
     @pytest.mark.asyncio
@@ -303,7 +317,7 @@ class TestAnalysisServiceFailureGuards:
         session = AsyncMock()
 
         mock_repo = AsyncMock()
-        mock_repo.get_analysis_job = AsyncMock(side_effect=[job, job])
+        mock_repo.get_analysis_job = AsyncMock(side_effect=[job, job, job])
         mock_repo.get_project_in_org = AsyncMock(return_value=project)
 
         async def _mark_running(current_job, **_kwargs):

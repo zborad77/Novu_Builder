@@ -24,7 +24,7 @@ class QUrl;
 class ApiService
 {
 public:
-    explicit ApiService(QString baseUrl = "http://127.0.0.1:8000/api/v1");
+    explicit ApiService(QString baseUrl = {});
 
     static void setGlobalToken(const QString &bearerToken);
     static void clearGlobalToken();

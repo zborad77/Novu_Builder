@@ -226,6 +226,7 @@ validate_s3_pre_restore_guards() {
 validate_manifest_contract() {
   local manifest_file="$1"
   local backup_file="$2"
+  local backup_scope
 
   grep -q '"backup_contract"'        "$manifest_file" || die "manifest missing backup_contract"
   grep -q '"backup_scope"'           "$manifest_file" || die "manifest missing backup_scope"
@@ -235,8 +236,9 @@ validate_manifest_contract() {
   grep -q '"backup_version"'         "$manifest_file" || die "manifest missing backup_version"
   grep -q '"backup_contract"[[:space:]]*:[[:space:]]*"db-restore-v1"' "$manifest_file" \
     || die "unsupported manifest backup_contract"
-  grep -q '"backup_scope"[[:space:]]*:[[:space:]]*"db-only"' "$manifest_file" \
-    || die "manifest backup_scope must be 'db-only'"
+  backup_scope="$(extract_manifest_string_value "backup_scope" "$manifest_file")"
+  [[ "$backup_scope" == "db-only" ]] \
+    || die "manifest backup_scope '$backup_scope' requires the orchestrated restore flow in ops/restore.sh"
   grep -q '"production_dr_eligible"[[:space:]]*:[[:space:]]*false' "$manifest_file" \
     || die "manifest production_dr_eligible must be false for this DB-only restore flow"
   grep -q "\"db_file\"[[:space:]]*:[[:space:]]*\"$(basename "$backup_file")\"" "$manifest_file" \

@@ -1,8 +1,45 @@
 from unittest.mock import AsyncMock, patch
 
+import builtins
+
 import pytest
 
+from app.core.config import get_settings
+from app.ai.analysis_service import get_analysis_provider
 from app.main import create_app
+
+
+_STRONG_JWT = "a-very-strong-jwt-secret-for-testing-x99-minimum-32chars!"
+_STRONG_REDIS = "redis://:a-strong-redis-password-xyz123@localhost:6379/0"
+_STRONG_METRICS = "a-strong-metrics-token-xyz-for-testing-123456789"
+_STRONG_DB = "postgresql+asyncpg://novu:Str0ngP%40ssw0rd!@localhost:5432/novu_prod"
+_STRONG_BASE_URL = "https://app.novu-builder.com"
+_STRONG_CORS = "https://app.novu-builder.com"
+_STRONG_S3_BUCKET = "my-production-bucket"
+_STRONG_S3_REGION = "eu-central-1"
+
+
+def _set_valid_prod_env(monkeypatch, **overrides):
+    env = {
+        "APP_ENV": "production",
+        "JWT_SECRET": _STRONG_JWT,
+        "REDIS_URL": _STRONG_REDIS,
+        "METRICS_AUTH_TOKEN": _STRONG_METRICS,
+        "METRICS_AUTH_ENABLED": "true",
+        "DATABASE_URL": _STRONG_DB,
+        "APP_BASE_URL": _STRONG_BASE_URL,
+        "CORS_ALLOWED_ORIGINS": _STRONG_CORS,
+        "STORAGE_BACKEND": "s3",
+        "S3_BUCKET": _STRONG_S3_BUCKET,
+        "S3_REGION": _STRONG_S3_REGION,
+    }
+    env.update(overrides)
+    for key, val in env.items():
+        if val is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, val)
+    get_settings.cache_clear()
 
 
 async def test_create_app_lifespan_startup_smoke():
@@ -102,3 +139,65 @@ async def test_cases_list_and_detail_smoke(app_client, token_a, case_a_id):
     detail_body = detail_response.json()
     assert detail_body["id"] == case_a_id
     assert "workflowStatus" in detail_body
+
+
+def test_create_app_fails_fast_when_prometheus_client_missing_in_production(monkeypatch):
+    _set_valid_prod_env(monkeypatch)
+    monkeypatch.setattr("app.main.PROMETHEUS_CLIENT_AVAILABLE", False)
+
+    with pytest.raises(RuntimeError, match=r"^Startup validation failed \[metrics\]:"):
+        create_app()
+
+    get_settings.cache_clear()
+
+
+def test_create_app_fails_fast_when_rate_limit_handler_missing_in_production(monkeypatch):
+    _set_valid_prod_env(monkeypatch)
+    monkeypatch.setattr("app.main._rate_limit_exceeded_handler", None)
+    monkeypatch.setattr("app.main.RateLimitExceeded", None)
+
+    with pytest.raises(RuntimeError, match=r"^Startup validation failed \[rate_limiter\]:"):
+        create_app()
+
+    get_settings.cache_clear()
+
+
+def test_create_app_fails_fast_when_sentry_sdk_missing_in_production(monkeypatch):
+    _set_valid_prod_env(monkeypatch, SENTRY_DSN="https://examplePublicKey@o0.ingest.sentry.io/1")
+    original_import = builtins.__import__
+
+    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "sentry_sdk" or name.startswith("sentry_sdk."):
+            raise ModuleNotFoundError("No module named 'sentry_sdk'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    with pytest.raises(RuntimeError, match=r"^Startup validation failed \[sentry\]:"):
+        create_app()
+
+    get_settings.cache_clear()
+
+
+def test_create_app_tolerates_missing_sentry_sdk_in_development(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("SENTRY_DSN", "https://examplePublicKey@o0.ingest.sentry.io/1")
+    get_settings.cache_clear()
+    original_import = builtins.__import__
+
+    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "sentry_sdk" or name.startswith("sentry_sdk."):
+            raise ModuleNotFoundError("No module named 'sentry_sdk'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    app = create_app()
+
+    assert app is not None
+    get_settings.cache_clear()
+
+
+def test_runtime_provider_lookup_blocks_openai_even_if_startup_guard_is_bypassed():
+    with pytest.raises(ValueError, match="blocked"):
+        get_analysis_provider("openai")

@@ -18,9 +18,10 @@ from app.core.metrics import (
     HTTP_REQUEST_DURATION_SECONDS,
     HTTP_REQUESTS_IN_PROGRESS,
     HTTP_REQUESTS_TOTAL,
+    PROMETHEUS_CLIENT_AVAILABLE,
 )
 from app.core.request_id import sanitize_request_id
-from app.core.redis_client import build_redis_client_from_settings
+from app.core.redis_client import build_queue_redis_client_from_settings
 from app.db.base import Base
 from app.db.bootstrap import ensure_dev_seed
 from app.db.session import AsyncSessionFactory, engine
@@ -38,6 +39,50 @@ except ModuleNotFoundError as exc:
     logger.warning("rate_limiter.handler_disabled", reason="slowapi_not_installed", error=str(exc))
     _rate_limit_exceeded_handler = None
     RateLimitExceeded = None
+
+
+def verify_runtime_dependency_guards(settings):
+    """Fail fast in strict environments when critical runtime dependencies degrade."""
+    strict_environment = _is_strict_startup_environment(settings)
+
+    if strict_environment and not PROMETHEUS_CLIENT_AVAILABLE:
+        raise RuntimeError(
+            startup_failure_message(
+                "metrics",
+                "prometheus_client must be installed so /metrics and operational gauges "
+                "cannot be silently disabled outside development/test.",
+            )
+        )
+
+    if strict_environment and (
+        _rate_limit_exceeded_handler is None or RateLimitExceeded is None
+    ):
+        raise RuntimeError(
+            startup_failure_message(
+                "rate_limiter",
+                "slowapi exception handler must be available so rate-limited requests "
+                "fail predictably outside development/test.",
+            )
+        )
+
+    sentry_sdk = None
+    if settings.sentry_dsn:
+        try:
+            import sentry_sdk as sentry_sdk_module
+        except ImportError as exc:
+            if strict_environment:
+                raise RuntimeError(
+                    startup_failure_message(
+                        "sentry",
+                        "SENTRY_DSN is set but sentry-sdk is not installed. "
+                        "Install sentry-sdk or unset SENTRY_DSN before startup.",
+                    )
+                ) from exc
+            logger.warning("sentry.disabled", reason="sentry-sdk not installed")
+        else:
+            sentry_sdk = sentry_sdk_module
+
+    return sentry_sdk
 
 
 async def verify_database_connectivity() -> None:
@@ -77,7 +122,7 @@ def _is_strict_startup_environment(settings) -> bool:
 
 
 def _build_redis_client(settings):
-    return build_redis_client_from_settings(
+    return build_queue_redis_client_from_settings(
         settings,
         client_name="novu-backend",
     )
@@ -117,6 +162,7 @@ async def initialize_job_queue(settings):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    app.state.readiness_started_at_monotonic = time.monotonic()
     startup_checks = {
         "database": "pending",
         "schema": "pending",
@@ -208,19 +254,16 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_file, settings.log_error_file)
+    sentry_sdk = verify_runtime_dependency_guards(settings)
 
-    if settings.sentry_dsn:
-        try:
-            import sentry_sdk
-            sentry_sdk.init(
-                dsn=settings.sentry_dsn,
-                environment=settings.app_env,
-                traces_sample_rate=0.0,
-                profiles_sample_rate=0.0,
-            )
-            logger.info("sentry.initialized", environment=settings.app_env)
-        except ImportError:
-            logger.warning("sentry.disabled", reason="sentry-sdk not installed")
+    if settings.sentry_dsn and sentry_sdk is not None:
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment=settings.app_env,
+            traces_sample_rate=0.0,
+            profiles_sample_rate=0.0,
+        )
+        logger.info("sentry.initialized", environment=settings.app_env)
 
     docs_url = "/docs" if settings.app_debug else None
     redoc_url = "/redoc" if settings.app_debug else None
@@ -239,6 +282,7 @@ def create_app() -> FastAPI:
         "schema": "pending",
         "storage": "pending",
     }
+    app.state.readiness_started_at_monotonic = time.monotonic()
 
     app.state.limiter = limiter
     if RateLimitExceeded is not None and _rate_limit_exceeded_handler is not None:

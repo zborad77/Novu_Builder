@@ -13,9 +13,19 @@ Implemented by repo scripts:
 - `python-backend/scripts/verify_restore.sh`
 - `python-backend/scripts/restore_db.sh`
 
-This is a DB-only restore contract.
-It is not a full production disaster recovery solution for
-`APP_ENV=production` with `STORAGE_BACKEND=s3`.
+This document now covers two explicit contracts:
+
+- `db-only`
+- `db-plus-s3-media-manifest`
+
+For the operator-facing full-state production DR procedure, use:
+
+- [18_full_state_dr_operator_runbook_2026-03-31.md](./18_full_state_dr_operator_runbook_2026-03-31.md)
+- [19_full_state_dr_incident_checklist_2026-03-31.md](./19_full_state_dr_incident_checklist_2026-03-31.md)
+- [20_full_state_dr_copy_paste_playbook_2026-03-31.md](./20_full_state_dr_copy_paste_playbook_2026-03-31.md)
+- [21_full_state_dr_handoff_template_2026-03-31.md](./21_full_state_dr_handoff_template_2026-03-31.md)
+
+DB-only remains the safe fallback.
 
 ## Artifact Contract
 
@@ -27,13 +37,25 @@ Authoritative write contract produced by `scripts/backup.sh`:
 | `db_YYYYMMDD_HHMMSS.pgdump.sha256` | Mandatory checksum |
 | `db_YYYYMMDD_HHMMSS.json` | Mandatory manifest |
 
-Required manifest semantics:
+Required manifest semantics for `db-only`:
 
 - `backup_contract = "db-restore-v1"`
 - `dr_contract = "variant-a-foundation-v1"`
 - `dr_recovery_point_model = "db-artifact-paired-with-explicit-s3-recovery-point"`
 - `backup_scope = "db-only"`
 - `production_dr_eligible = false`
+
+Required manifest semantics for `db-plus-s3-media-manifest`:
+
+- `backup_contract = "db-restore-v1"`
+- `dr_contract = "s3-full-state-v1"`
+- `dr_recovery_point_model = "db-artifact-paired-with-versioned-s3-object-manifest"`
+- `backup_scope = "db-plus-s3-media-manifest"`
+- `production_dr_eligible = true`
+- `s3_media_manifest_file`
+- `s3_media_manifest_format = "novu-s3-media-manifest-v1"`
+- `s3_media_restore_strategy = "versioned-copy-to-isolated-bucket-v1"`
+- `s3_object_count`
 
 Restore flow also expects:
 
@@ -81,7 +103,7 @@ Meaning:
 - local storage archive is a compatibility artifact for local/dev workflows
 - this is not a production DR claim
 
-### Production + S3
+### Production + S3 DB-Only Fallback
 
 Typical mode:
 
@@ -129,9 +151,33 @@ Minimum future pairing metadata:
 
 Current boundary:
 
-- repo scripts still do not restore S3/object storage
-- repo scripts still do not validate full DB + S3 recovery
+- repo scripts still do not restore S3/object storage in this fallback path
+- repo scripts still do not validate full DB + S3 recovery in this fallback path
 - `production_dr_eligible` therefore remains fail-closed and false
+
+### Production + S3 Full-State Contract
+
+When all of the following are set:
+
+- `APP_ENV=production`
+- `STORAGE_BACKEND=s3`
+- `S3_FULL_COVERAGE_DECLARED=true`
+- `S3_BUCKET`
+- `S3_REGION`
+- `S3_RECOVERY_POINT`
+- `STORAGE_SNAPSHOT_CONSISTENT=true`
+
+`scripts/backup.sh` may produce:
+
+- `backup_scope = "db-plus-s3-media-manifest"`
+- `production_dr_eligible = true`
+- paired `db_*.s3-media.json`
+
+Important boundary:
+
+- this does not mean DR is already verified
+- final truth comes only from `ops/restore.sh`
+- production DR is verified only after isolated media restore plus post-restore validation
 
 ## Backup Procedure
 
@@ -161,6 +207,8 @@ Primary operator entrypoint:
 ```bash
 ./ops/restore.sh /backups/db_YYYYMMDD_HHMMSS.pgdump
 ```
+
+For full-state production DR, use the dedicated runbooks linked at the top of this document.
 
 What `ops/restore.sh` validates:
 

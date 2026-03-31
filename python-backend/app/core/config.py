@@ -9,6 +9,8 @@ _logger = logging.getLogger(__name__)
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.analysis_provider_capabilities import validate_selected_analysis_provider
+
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_JWT_SECRET = "change-me-in-production"
@@ -125,6 +127,46 @@ def _url_scheme(url: str) -> str:
         return ""
 
 
+def _validate_redis_url_candidate(
+    candidate: str,
+    *,
+    label: str,
+    app_env: str,
+    strict: bool,
+) -> str:
+    normalized = candidate.strip()
+    if not normalized:
+        raise ValueError(
+            f"{label} must be non-empty in APP_ENV={app_env!r}."
+        )
+    scheme = _url_scheme(normalized)
+    if scheme not in _REDIS_URL_SCHEMES:
+        raise ValueError(
+            f"{label} must use redis:// or rediss:// in APP_ENV={app_env!r}."
+        )
+    if not _url_hostname(normalized):
+        raise ValueError(
+            f"{label} must include a Redis host in APP_ENV={app_env!r}."
+        )
+    if not strict:
+        return normalized
+
+    password = _url_password(normalized)
+    if password is None or password == "":
+        raise ValueError(
+            f"{label} must include a password in APP_ENV={app_env!r}."
+        )
+    if _is_insecure_placeholder(password):
+        raise ValueError(
+            f"{label} contains an insecure placeholder password in APP_ENV={app_env!r}."
+        )
+    if len(password) < 16:
+        raise ValueError(
+            f"{label} password is too short ({len(password)} chars); minimum 16 characters required outside development/test."
+        )
+    return normalized
+
+
 def _is_sqlite_in_memory_url(url: str) -> bool:
     candidate = url.strip()
     if not _url_scheme(candidate).startswith("sqlite"):
@@ -211,6 +253,7 @@ class Settings(BaseSettings):
     db_pool_timeout: int = Field(default=30, alias="DB_POOL_TIMEOUT")
     db_pool_recycle: int = Field(default=1800, alias="DB_POOL_RECYCLE")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+    redis_failover_urls: str = Field(default="", alias="REDIS_FAILOVER_URLS")
     redis_socket_connect_timeout: float = Field(default=1.0, alias="REDIS_SOCKET_CONNECT_TIMEOUT")
     redis_socket_timeout: float = Field(default=1.0, alias="REDIS_SOCKET_TIMEOUT")
     redis_health_check_interval: int = Field(default=30, alias="REDIS_HEALTH_CHECK_INTERVAL")
@@ -223,9 +266,23 @@ class Settings(BaseSettings):
     storage_root: str = Field(default="", alias="STORAGE_ROOT")
     ai_analysis_provider: str = Field(default="mock", alias="AI_ANALYSIS_PROVIDER")
     worker_concurrency: int = Field(default=1, alias="WORKER_CONCURRENCY")
+    worker_heavy_concurrency: int = Field(default=0, alias="WORKER_HEAVY_CONCURRENCY")
     worker_job_lease_timeout_seconds: int = Field(default=600, alias="WORKER_JOB_LEASE_TIMEOUT_SECONDS")
+    worker_heavy_job_lease_timeout_seconds: int = Field(
+        default=1800,
+        alias="WORKER_HEAVY_JOB_LEASE_TIMEOUT_SECONDS",
+    )
     worker_job_reap_interval_seconds: int = Field(default=30, alias="WORKER_JOB_REAP_INTERVAL_SECONDS")
+    worker_heavy_job_reap_interval_seconds: int = Field(
+        default=30,
+        alias="WORKER_HEAVY_JOB_REAP_INTERVAL_SECONDS",
+    )
+    readiness_processing_grace_seconds: int = Field(
+        default=75,
+        alias="READINESS_PROCESSING_GRACE_SECONDS",
+    )
     analysis_queue_max_depth: int = Field(default=1000, alias="ANALYSIS_QUEUE_MAX_DEPTH", ge=1)
+    heavy_queue_max_depth: int = Field(default=250, alias="HEAVY_QUEUE_MAX_DEPTH", ge=1)
     analysis_job_max_attempts: int = Field(default=3, alias="ANALYSIS_JOB_MAX_ATTEMPTS", ge=1)
     analysis_retry_backoff_base_seconds: int = Field(
         default=30,
@@ -356,7 +413,11 @@ class Settings(BaseSettings):
         """
         if self.worker_db_pool_size > 0:
             return self.worker_db_pool_size
-        return self.worker_concurrency
+        return self.worker_total_concurrency
+
+    @property
+    def worker_total_concurrency(self) -> int:
+        return self.worker_concurrency + self.worker_heavy_concurrency
 
     @property
     def worker_database_engine_kwargs(self) -> dict[str, bool | int]:
@@ -377,6 +438,26 @@ class Settings(BaseSettings):
             pool_recycle=self.db_pool_recycle,
         )
         return kwargs
+
+    @model_validator(mode="after")
+    def _check_ai_provider_configuration(self) -> "Settings":
+        capability = validate_selected_analysis_provider(
+            self.ai_analysis_provider,
+            env_values={
+                "ANTHROPIC_API_KEY": self.anthropic_api_key,
+                "OPENAI_API_KEY": self.openai_api_key,
+            },
+        )
+        self.ai_analysis_provider = capability.key
+
+        if "ANTHROPIC_API_KEY" in capability.required_env_vars:
+            api_key = (self.anthropic_api_key or "").strip()
+            if _is_insecure_placeholder(api_key):
+                raise ValueError(
+                    "ANTHROPIC_API_KEY looks like an unfilled placeholder. "
+                    f"Set a real Anthropic API key when AI_ANALYSIS_PROVIDER={capability.key!r}."
+                )
+        return self
 
     @model_validator(mode="after")
     def _check_debug_in_production(self) -> "Settings":
@@ -448,43 +529,34 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _check_redis_url(self) -> "Settings":
         """Require an authenticated Redis URL in production."""
-        if not _is_strict_environment(self.app_env):
+        strict = _is_strict_environment(self.app_env)
+        if not strict and not self.redis_url.strip():
+            self.redis_failover_urls = ""
             return self
-
-        candidate = self.redis_url.strip()
-        if not candidate:
-            raise ValueError(
-                f"REDIS_URL must be set in APP_ENV={self.app_env!r}. "
-                "Set REDIS_URL=redis://:yourpassword@host:port/db"
+        self.redis_url = _validate_redis_url_candidate(
+            self.redis_url,
+            label="REDIS_URL",
+            app_env=self.app_env,
+            strict=strict,
+        )
+        raw_failovers = [part.strip() for part in self.redis_failover_urls.split(",") if part.strip()]
+        seen_urls: set[str] = {self.redis_url}
+        normalized_failovers: list[str] = []
+        for index, candidate in enumerate(raw_failovers, start=1):
+            normalized = _validate_redis_url_candidate(
+                candidate,
+                label=f"REDIS_FAILOVER_URLS[{index}]",
+                app_env=self.app_env,
+                strict=strict,
             )
-        scheme = _url_scheme(candidate)
-        if scheme not in _REDIS_URL_SCHEMES:
-            raise ValueError(
-                f"REDIS_URL must use redis:// or rediss:// in APP_ENV={self.app_env!r}. "
-                "Set REDIS_URL=redis://:yourpassword@host:port/db"
-            )
-        if not _url_hostname(candidate):
-            raise ValueError(
-                f"REDIS_URL must include a Redis host in APP_ENV={self.app_env!r}. "
-                "Set REDIS_URL=redis://:yourpassword@host:port/db"
-            )
-
-        password = _url_password(candidate)
-        if password is None or password == "":
-            raise ValueError(
-                f"REDIS_URL must include a password in APP_ENV={self.app_env!r}. "
-                "Set REDIS_URL=redis://:yourpassword@host:port/db"
-            )
-        if _is_insecure_placeholder(password):
-            raise ValueError(
-                f"REDIS_URL contains an insecure placeholder password "
-                f"in APP_ENV={self.app_env!r}. Set a strong Redis password."
-            )
-        if len(password) < 16:
-            raise ValueError(
-                f"REDIS_URL password is too short ({len(password)} chars); "
-                "minimum 16 characters required outside development/test."
-            )
+            if normalized in seen_urls:
+                raise ValueError(
+                    f"REDIS_FAILOVER_URLS[{index}] duplicates an existing Redis candidate. "
+                    "Failover endpoints must be explicit and unique."
+                )
+            seen_urls.add(normalized)
+            normalized_failovers.append(normalized)
+        self.redis_failover_urls = ",".join(normalized_failovers)
         return self
 
     @model_validator(mode="after")
@@ -613,13 +685,29 @@ class Settings(BaseSettings):
             raise ValueError(
                 "WORKER_CONCURRENCY must be > 0."
             )
+        if self.worker_heavy_concurrency < 0:
+            raise ValueError(
+                "WORKER_HEAVY_CONCURRENCY must be >= 0."
+            )
         if self.worker_job_lease_timeout_seconds < 60:
             raise ValueError(
                 "WORKER_JOB_LEASE_TIMEOUT_SECONDS must be >= 60."
             )
+        if self.worker_heavy_job_lease_timeout_seconds < 60:
+            raise ValueError(
+                "WORKER_HEAVY_JOB_LEASE_TIMEOUT_SECONDS must be >= 60."
+            )
         if self.worker_job_reap_interval_seconds <= 0:
             raise ValueError(
                 "WORKER_JOB_REAP_INTERVAL_SECONDS must be > 0."
+            )
+        if self.worker_heavy_job_reap_interval_seconds <= 0:
+            raise ValueError(
+                "WORKER_HEAVY_JOB_REAP_INTERVAL_SECONDS must be > 0."
+            )
+        if self.readiness_processing_grace_seconds < 0:
+            raise ValueError(
+                "READINESS_PROCESSING_GRACE_SECONDS must be >= 0."
             )
         if self.analysis_job_max_attempts <= 0:
             raise ValueError(
@@ -680,14 +768,16 @@ class Settings(BaseSettings):
         # Hard fail: explicit pool size smaller than concurrency slots needed.
         # With auto-derive (WORKER_DB_POOL_SIZE=0), effective == WORKER_CONCURRENCY
         # always, so this branch is only reachable with an explicit override.
-        if effective < self.worker_concurrency:
+        required_pool_size = self.worker_total_concurrency
+        if effective < required_pool_size:
             raise ValueError(
                 f"WORKER_DB_POOL_SIZE={self.worker_db_pool_size} is insufficient: "
-                f"WORKER_CONCURRENCY={self.worker_concurrency} requires at least "
-                f"{self.worker_concurrency} connections in the worker pool "
+                f"WORKER_CONCURRENCY={self.worker_concurrency} and "
+                f"WORKER_HEAVY_CONCURRENCY={self.worker_heavy_concurrency} require at least "
+                f"{required_pool_size} connections in the worker pool "
                 f"(max_overflow is always 0 for the worker pool — no overflow safety net). "
-                f"Fix: set WORKER_DB_POOL_SIZE >= {self.worker_concurrency}, "
-                f"or remove WORKER_DB_POOL_SIZE to auto-derive from WORKER_CONCURRENCY."
+                f"Fix: set WORKER_DB_POOL_SIZE >= {required_pool_size}, "
+                "or remove WORKER_DB_POOL_SIZE to auto-derive from worker concurrency."
             )
 
         # Multi-instance: log total connection footprint for operator visibility.

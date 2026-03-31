@@ -82,19 +82,20 @@ async def _seed_storage_consistency_rows(db_session, test_tenants):
 async def test_scan_db_vs_s3_finds_missing_db_objects_and_orphan_storage(monkeypatch, db_session, test_tenants):
     seeded = await _seed_storage_consistency_rows(db_session, test_tenants)
     service = StorageConsistencyService(StorageConsistencyRepository(db_session))
+    orphan_last_modified = datetime.now(UTC) - timedelta(hours=48)
 
-    async def fake_list_storage_keys(*, prefix: str | None = None) -> list[str]:
+    async def fake_list_storage_objects(*, prefix: str | None = None) -> list[dict[str, object]]:
         if prefix == "projects":
             return [
-                seeded["original_key"],
-                seeded["preview_key"],
-                seeded["orphan_key"],
+                {"key": seeded["original_key"], "last_modified_at": datetime.now(UTC)},
+                {"key": seeded["preview_key"], "last_modified_at": datetime.now(UTC)},
+                {"key": seeded["orphan_key"], "last_modified_at": orphan_last_modified},
             ]
         if prefix == "exports":
-            return [seeded["export_file_key"]]
+            return [{"key": seeded["export_file_key"], "last_modified_at": datetime.now(UTC)}]
         raise AssertionError(f"Unexpected prefix {prefix!r}")
 
-    monkeypatch.setattr(storage_consistency_mod, "list_storage_keys", fake_list_storage_keys)
+    monkeypatch.setattr(storage_consistency_mod, "list_storage_objects", fake_list_storage_objects)
 
     result = await service.scan_db_vs_s3()
 
@@ -104,6 +105,9 @@ async def test_scan_db_vs_s3_finds_missing_db_objects_and_orphan_storage(monkeyp
 
     assert [issue.key for issue in result.orphan_storage_objects] == [seeded["orphan_key"]]
     assert result.orphan_storage_objects[0].org_id == test_tenants["org_a"]
+    assert result.orphan_storage_objects[0].last_modified_at == orphan_last_modified.isoformat()
+    assert result.orphan_summary.orphan_count == 1
+    assert result.orphan_summary.eligible_delete_count == 1
     assert seeded["export_file_key"] not in {issue.key for issue in result.orphan_storage_objects}
 
 
@@ -113,18 +117,18 @@ async def test_orphan_detection(monkeypatch, db_session, test_tenants):
     seeded = await _seed_storage_consistency_rows(db_session, test_tenants)
     service = StorageConsistencyService(StorageConsistencyRepository(db_session))
 
-    async def fake_list_storage_keys(*, prefix: str | None = None) -> list[str]:
+    async def fake_list_storage_objects(*, prefix: str | None = None) -> list[dict[str, object]]:
         if prefix == "projects":
             return [
-                seeded["original_key"],
-                seeded["preview_key"],
-                seeded["orphan_key"],
+                {"key": seeded["original_key"], "last_modified_at": datetime.now(UTC)},
+                {"key": seeded["preview_key"], "last_modified_at": datetime.now(UTC)},
+                {"key": seeded["orphan_key"], "last_modified_at": datetime.now(UTC)},
             ]
         if prefix == "exports":
-            return [seeded["export_file_key"]]
+            return [{"key": seeded["export_file_key"], "last_modified_at": datetime.now(UTC)}]
         raise AssertionError(f"Unexpected prefix {prefix!r}")
 
-    monkeypatch.setattr(storage_consistency_mod, "list_storage_keys", fake_list_storage_keys)
+    monkeypatch.setattr(storage_consistency_mod, "list_storage_objects", fake_list_storage_objects)
 
     result = await service.scan_db_vs_s3()
 
@@ -141,14 +145,18 @@ async def test_scan_db_vs_s3_flags_missing_export_artifact_from_db(monkeypatch, 
     seeded = await _seed_storage_consistency_rows(db_session, test_tenants)
     service = StorageConsistencyService(StorageConsistencyRepository(db_session))
 
-    async def fake_list_storage_keys(*, prefix: str | None = None) -> list[str]:
+    async def fake_list_storage_objects(*, prefix: str | None = None) -> list[dict[str, object]]:
         if prefix == "projects":
-            return [seeded["original_key"], seeded["preview_key"], seeded["ai_key"]]
+            return [
+                {"key": seeded["original_key"], "last_modified_at": datetime.now(UTC)},
+                {"key": seeded["preview_key"], "last_modified_at": datetime.now(UTC)},
+                {"key": seeded["ai_key"], "last_modified_at": datetime.now(UTC)},
+            ]
         if prefix == "exports":
             return []
         raise AssertionError(f"Unexpected prefix {prefix!r}")
 
-    monkeypatch.setattr(storage_consistency_mod, "list_storage_keys", fake_list_storage_keys)
+    monkeypatch.setattr(storage_consistency_mod, "list_storage_objects", fake_list_storage_objects)
 
     result = await service.scan_db_vs_s3()
 
@@ -160,6 +168,7 @@ async def test_scan_db_vs_s3_flags_missing_export_artifact_from_db(monkeypatch, 
 async def test_cleanup_orphans_safe_mode_logs_without_deleting(monkeypatch, db_session, test_tenants):
     seeded = await _seed_storage_consistency_rows(db_session, test_tenants)
     service = StorageConsistencyService(StorageConsistencyRepository(db_session))
+    now = datetime.now(UTC)
 
     scan_result = storage_consistency_mod.StorageConsistencyScanResult(
         missing_storage_objects=[],
@@ -170,8 +179,17 @@ async def test_cleanup_orphans_safe_mode_logs_without_deleting(monkeypatch, db_s
                 action="orphan_storage_object",
                 source="storage.scan",
                 project_id=seeded["project_id"],
+                last_modified_at=now.isoformat(),
+                age_seconds=3600,
             )
         ],
+        orphan_summary=storage_consistency_mod.StorageOrphanSummary(
+            orphan_count=1,
+            eligible_delete_count=1,
+            retained_count=0,
+            minimum_age_seconds=0,
+            approval_token="token-1",
+        ),
     )
     mock_logger = MagicMock()
     mock_delete = AsyncMock()
@@ -187,6 +205,8 @@ async def test_cleanup_orphans_safe_mode_logs_without_deleting(monkeypatch, db_s
             org_id=test_tenants["org_a"],
             key=seeded["orphan_key"],
             action="delete_skipped_safe_mode",
+            project_id=seeded["project_id"],
+            age_seconds=3600,
         )
     ]
     mock_delete.assert_not_awaited()
@@ -195,11 +215,75 @@ async def test_cleanup_orphans_safe_mode_logs_without_deleting(monkeypatch, db_s
         org_id=test_tenants["org_a"],
         key=seeded["orphan_key"],
         action="delete_skipped_safe_mode",
+        project_id=seeded["project_id"],
+        age_seconds=3600,
+        minimum_orphan_age_seconds=0,
     )
 
 
 @pytest.mark.asyncio
 async def test_cleanup_orphans_deletes_when_safe_mode_disabled(monkeypatch, db_session, test_tenants):
+    seeded = await _seed_storage_consistency_rows(db_session, test_tenants)
+    service = StorageConsistencyService(StorageConsistencyRepository(db_session))
+    now = datetime.now(UTC)
+
+    scan_result = storage_consistency_mod.StorageConsistencyScanResult(
+        missing_storage_objects=[],
+        orphan_storage_objects=[
+            storage_consistency_mod.StorageConsistencyIssue(
+                org_id=test_tenants["org_a"],
+                key=seeded["orphan_key"],
+                action="orphan_storage_object",
+                source="storage.scan",
+                project_id=seeded["project_id"],
+                last_modified_at=now.isoformat(),
+                age_seconds=48 * 3600,
+            )
+        ],
+        orphan_summary=storage_consistency_mod.StorageOrphanSummary(
+            orphan_count=1,
+            eligible_delete_count=1,
+            retained_count=0,
+            minimum_age_seconds=24 * 3600,
+            approval_token="token-allow",
+        ),
+    )
+    mock_logger = MagicMock()
+    mock_delete = AsyncMock()
+
+    monkeypatch.setattr(service, "scan_db_vs_s3", AsyncMock(return_value=scan_result))
+    monkeypatch.setattr(storage_consistency_mod, "delete_storage_file", mock_delete)
+    monkeypatch.setattr(storage_consistency_mod, "logger", mock_logger)
+
+    actions = await service.cleanup_orphans(
+        safe_mode=False,
+        minimum_orphan_age_seconds=24 * 3600,
+        approval_token="token-allow",
+    )
+
+    assert actions == [
+        storage_consistency_mod.StorageCleanupAction(
+            org_id=test_tenants["org_a"],
+            key=seeded["orphan_key"],
+            action="delete_orphan_storage_object",
+            project_id=seeded["project_id"],
+            age_seconds=48 * 3600,
+        )
+    ]
+    mock_delete.assert_awaited_once_with(relative_storage_key=seeded["orphan_key"])
+    mock_logger.info.assert_called_once_with(
+        "storage.consistency.cleanup",
+        org_id=test_tenants["org_a"],
+        key=seeded["orphan_key"],
+        action="delete_orphan_storage_object",
+        project_id=seeded["project_id"],
+        age_seconds=48 * 3600,
+        minimum_orphan_age_seconds=24 * 3600,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cleanup_orphans_requires_matching_approval_token(monkeypatch, db_session, test_tenants):
     seeded = await _seed_storage_consistency_rows(db_session, test_tenants)
     service = StorageConsistencyService(StorageConsistencyRepository(db_session))
 
@@ -212,29 +296,72 @@ async def test_cleanup_orphans_deletes_when_safe_mode_disabled(monkeypatch, db_s
                 action="orphan_storage_object",
                 source="storage.scan",
                 project_id=seeded["project_id"],
+                age_seconds=96 * 3600,
             )
         ],
+        orphan_summary=storage_consistency_mod.StorageOrphanSummary(
+            orphan_count=1,
+            eligible_delete_count=1,
+            retained_count=0,
+            minimum_age_seconds=24 * 3600,
+            approval_token="token-required",
+        ),
     )
-    mock_logger = MagicMock()
+
+    monkeypatch.setattr(service, "scan_db_vs_s3", AsyncMock(return_value=scan_result))
+    monkeypatch.setattr(storage_consistency_mod, "delete_storage_file", AsyncMock())
+
+    with pytest.raises(storage_consistency_mod.StorageConsistencyApprovalRequiredError):
+        await service.cleanup_orphans(
+            safe_mode=False,
+            minimum_orphan_age_seconds=24 * 3600,
+            approval_token="wrong-token",
+        )
+
+
+@pytest.mark.asyncio
+async def test_cleanup_orphans_retains_young_objects_until_minimum_age(monkeypatch, db_session, test_tenants):
+    seeded = await _seed_storage_consistency_rows(db_session, test_tenants)
+    service = StorageConsistencyService(StorageConsistencyRepository(db_session))
+
+    scan_result = storage_consistency_mod.StorageConsistencyScanResult(
+        missing_storage_objects=[],
+        orphan_storage_objects=[
+            storage_consistency_mod.StorageConsistencyIssue(
+                org_id=test_tenants["org_a"],
+                key=seeded["orphan_key"],
+                action="orphan_storage_object",
+                source="storage.scan",
+                project_id=seeded["project_id"],
+                age_seconds=3600,
+            )
+        ],
+        orphan_summary=storage_consistency_mod.StorageOrphanSummary(
+            orphan_count=1,
+            eligible_delete_count=0,
+            retained_count=1,
+            minimum_age_seconds=24 * 3600,
+            approval_token="token-retain",
+        ),
+    )
     mock_delete = AsyncMock()
 
     monkeypatch.setattr(service, "scan_db_vs_s3", AsyncMock(return_value=scan_result))
     monkeypatch.setattr(storage_consistency_mod, "delete_storage_file", mock_delete)
-    monkeypatch.setattr(storage_consistency_mod, "logger", mock_logger)
 
-    actions = await service.cleanup_orphans(safe_mode=False)
+    actions = await service.cleanup_orphans(
+        safe_mode=False,
+        minimum_orphan_age_seconds=24 * 3600,
+        approval_token="token-retain",
+    )
 
     assert actions == [
         storage_consistency_mod.StorageCleanupAction(
             org_id=test_tenants["org_a"],
             key=seeded["orphan_key"],
-            action="delete_orphan_storage_object",
+            action="delete_retained_minimum_age",
+            project_id=seeded["project_id"],
+            age_seconds=3600,
         )
     ]
-    mock_delete.assert_awaited_once_with(relative_storage_key=seeded["orphan_key"])
-    mock_logger.info.assert_called_once_with(
-        "storage.consistency.cleanup",
-        org_id=test_tenants["org_a"],
-        key=seeded["orphan_key"],
-        action="delete_orphan_storage_object",
-    )
+    mock_delete.assert_not_awaited()

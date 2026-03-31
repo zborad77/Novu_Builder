@@ -178,6 +178,13 @@ extract_manifest_string_value() {
   sed -nE "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\1/p" "$manifest_file" | head -1
 }
 
+extract_manifest_int_value() {
+  local key="$1"
+  local manifest_file="$2"
+
+  sed -nE "s/.*\"${key}\"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p" "$manifest_file" | head -1
+}
+
 S3_PROTECTION_PREREQ_STATUS="NOT EXECUTED"
 S3_PROTECTION_PREREQ_REASON="not required for this restore flow"
 S3_PRE_RESTORE_VALIDATION_STATUS="NOT EXECUTED"
@@ -189,10 +196,15 @@ DB_RESTORE_REASON="restore pipeline has not completed"
 PRODUCTION_DR_STATUS="NOT VERIFIED"
 PRODUCTION_DR_REASON="this restore flow does not verify full production disaster recovery"
 PRODUCTION_S3_MANIFEST=0
+FULL_STATE_S3_MANIFEST=0
 PRODUCTION_DR_ELIGIBLE="false"
 PRODUCTION_DR_ELIGIBILITY_REASON="production DR eligibility has not been computed"
 FULL_STATE_RESTORE_STATUS="NOT VERIFIED"
 FULL_STATE_RESTORE_REASON="full-state restore claim has not been computed"
+MEDIA_TARGET_BUCKET=""
+MEDIA_TARGET_REGION=""
+MEDIA_MANIFEST_PATH=""
+RESTORED_MEDIA_STATE_FILE=""
 PREVERIFY_STATUS="NOT EXECUTED"
 VERIFY_DB_QUERY_USABILITY_STATUS="NOT EXECUTED"
 VERIFY_DB_QUERY_USABILITY_REASON="pre-restore verify has not reported DB query usability"
@@ -356,6 +368,20 @@ emit_final_summary() {
   echo ""
 }
 
+resolve_validation_database_url() {
+  local app_env="$1"
+  local candidate value
+
+  for candidate in DATABASE_URL_SYNC DATABASE_URL; do
+    if value="$(read_runtime_or_env_value "$candidate" "$app_env")"; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 # ── DR claim gating ───────────────────────────────────────────────────────────
 # compute_release_readiness_decision:
 #   Evaluates ALL required conditions and sets RELEASE_READINESS_DECISION.
@@ -394,10 +420,19 @@ compute_release_readiness_decision() {
   if [[ "$VERIFY_APP_MEDIA_SMOKE_STATUS" == "FAILED" ]]; then
     blocked_by="${blocked_by}${blocked_by:+; }application media smoke validation: FAILED"
   fi
+  if [[ $FULL_STATE_S3_MANIFEST -eq 1 && "$(get_step_status MEDIA_RESTORE)" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }media restore step: $(get_step_status MEDIA_RESTORE)"
+  fi
+  if [[ $FULL_STATE_S3_MANIFEST -eq 1 && "$(get_step_status MEDIA_VALIDATION)" != "PASSED" ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }media validation step: $(get_step_status MEDIA_VALIDATION)"
+  fi
 
   if [[ -n "$blocked_by" ]]; then
     set_step_status RELEASE_READINESS_DECISION "FAILED" \
       "release readiness blocked — $blocked_by"
+  elif [[ $FULL_STATE_S3_MANIFEST -eq 1 ]]; then
+    set_step_status RELEASE_READINESS_DECISION "PASSED" \
+      "DB handoff ready and full-state S3 restore validation completed"
   elif [[ $PRODUCTION_S3_MANIFEST -eq 1 ]]; then
     set_step_status RELEASE_READINESS_DECISION "PASSED" \
       "DB handoff ready only; media restore is not implemented and Production DR remains NOT VERIFIED"
@@ -407,17 +442,157 @@ compute_release_readiness_decision() {
   fi
 }
 
-run_storage_consistency_check() {
-  local output status summary
+validate_s3_media_manifest_pairing() {
+  local manifest_file="$1"
+  local backup_file="$2"
+  local media_manifest_path="$3"
+  local source_bucket source_region recovery_point media_backup_file media_manifest_file
+  local media_bucket media_region media_recovery_point media_format media_count manifest_count
 
-  set_step_status STORAGE_CONSISTENCY_CHECK "IN PROGRESS" \
-    "running full DB<->storage consistency check via backend runtime"
+  [[ -f "$media_manifest_path" ]] || fail_restore BACKUP_SET_VALIDATION "S3 media manifest file is missing: $media_manifest_path"
 
+  media_format="$(extract_manifest_string_value "format" "$media_manifest_path")"
+  [[ "$media_format" == "novu-s3-media-manifest-v1" ]] \
+    || fail_restore BACKUP_SET_VALIDATION "unsupported S3 media manifest format in $(basename "$media_manifest_path")"
+
+  source_bucket="$(extract_manifest_string_value "s3_bucket" "$manifest_file")"
+  source_region="$(extract_manifest_string_value "s3_region" "$manifest_file")"
+  recovery_point="$(extract_manifest_string_value "s3_recovery_point" "$manifest_file")"
+  media_backup_file="$(extract_manifest_string_value "db_backup_file" "$media_manifest_path")"
+  media_manifest_file="$(extract_manifest_string_value "db_manifest_file" "$media_manifest_path")"
+  media_bucket="$(extract_manifest_string_value "source_bucket" "$media_manifest_path")"
+  media_region="$(extract_manifest_string_value "source_region" "$media_manifest_path")"
+  media_recovery_point="$(extract_manifest_string_value "declared_recovery_point" "$media_manifest_path")"
+  media_count="$(extract_manifest_int_value "unique_object_count" "$media_manifest_path")"
+  manifest_count="$(extract_manifest_int_value "s3_object_count" "$manifest_file")"
+
+  [[ "$media_backup_file" == "$(basename "$backup_file")" ]] \
+    || fail_restore BACKUP_SET_VALIDATION "S3 media manifest is not paired with this DB backup artifact"
+  [[ "$media_manifest_file" == "$(basename "$manifest_file")" ]] \
+    || fail_restore BACKUP_SET_VALIDATION "S3 media manifest is not paired with this DB manifest"
+  [[ "$media_bucket" == "$source_bucket" ]] \
+    || fail_restore BACKUP_SET_VALIDATION "S3 media manifest bucket does not match the DB manifest"
+  [[ "$media_region" == "$source_region" ]] \
+    || fail_restore BACKUP_SET_VALIDATION "S3 media manifest region does not match the DB manifest"
+  [[ "$media_recovery_point" == "$recovery_point" ]] \
+    || fail_restore BACKUP_SET_VALIDATION "S3 media manifest recovery point does not match the DB manifest"
+  [[ -n "$media_count" && "$media_count" =~ ^[0-9]+$ ]] \
+    || fail_restore BACKUP_SET_VALIDATION "S3 media manifest does not report a valid unique_object_count"
+  [[ "$manifest_count" == "$media_count" ]] \
+    || fail_restore BACKUP_SET_VALIDATION "S3 media manifest object count does not match the DB manifest"
+}
+
+run_media_restore_step() {
+  local helper_script python_bin output status object_count
+
+  set_step_status MEDIA_RESTORE "IN PROGRESS" \
+    "restoring version-pinned media into isolated target bucket ${MEDIA_TARGET_BUCKET}"
+
+  MEDIA_TARGET_BUCKET="${S3_RESTORE_TARGET_BUCKET:-}"
+  [[ -n "$MEDIA_TARGET_BUCKET" ]] \
+    || fail_restore MEDIA_RESTORE "S3_RESTORE_TARGET_BUCKET is required for full-state S3 restore"
+  MEDIA_TARGET_REGION="${S3_RESTORE_TARGET_REGION:-$(extract_manifest_string_value "s3_region" "$MANIFEST_FILE")}"
+  [[ -n "$MEDIA_TARGET_REGION" ]] \
+    || fail_restore MEDIA_RESTORE "target region is required for full-state S3 restore"
+
+  helper_script="${MEDIA_RESTORE_HELPER_OVERRIDE:-$PROJECT_DIR/python-backend/scripts/restore_s3_media.py}"
+  python_bin="${PYTHON_BIN:-python}"
+  [[ -f "$helper_script" ]] || fail_restore MEDIA_RESTORE "media restore helper is missing: $helper_script"
+  command -v "$python_bin" >/dev/null 2>&1 \
+    || fail_restore MEDIA_RESTORE "python interpreter '$python_bin' is required for media restore"
+
+  RESTORED_MEDIA_STATE_FILE="$(mktemp)"
   set +e
-  output="$(docker compose -f "$COMPOSE_FILE" run --rm backend \
-    python scripts/check_storage_consistency.py --mode full --json-only 2>&1)"
+  output="$("$python_bin" "$helper_script" \
+    --media-manifest "$MEDIA_MANIFEST_PATH" \
+    --target-bucket "$MEDIA_TARGET_BUCKET" \
+    --target-region "$MEDIA_TARGET_REGION" \
+    --output "$RESTORED_MEDIA_STATE_FILE" 2>&1)"
   status=$?
   set -e
+  [[ -n "$output" ]] && printf '%s\n' "$output"
+
+  if [[ $status -ne 0 ]]; then
+    fail_restore MEDIA_RESTORE "media restore helper failed with exit $status"
+  fi
+
+  object_count="$(extract_manifest_int_value "object_count" "$RESTORED_MEDIA_STATE_FILE")"
+  [[ -n "$object_count" && "$object_count" =~ ^[0-9]+$ ]] \
+    || fail_restore MEDIA_RESTORE "restored media state file does not report a valid object_count"
+
+  set_step_status MEDIA_RESTORE "PASSED" \
+    "restored ${object_count} version-pinned media objects into isolated bucket ${MEDIA_TARGET_BUCKET}"
+}
+
+run_post_restore_media_validation() {
+  local helper_script python_bin validation_db_url output status
+  local app_env target_bucket target_region
+
+  set_step_status MEDIA_VALIDATION "IN PROGRESS" \
+    "validating restored media accessibility and app-level media semantics in isolated target bucket ${MEDIA_TARGET_BUCKET}"
+
+  helper_script="${MEDIA_VALIDATE_HELPER_OVERRIDE:-$PROJECT_DIR/python-backend/scripts/validate_restored_media.py}"
+  python_bin="${PYTHON_BIN:-python}"
+  [[ -f "$helper_script" ]] || fail_restore MEDIA_VALIDATION "media validation helper is missing: $helper_script"
+  command -v "$python_bin" >/dev/null 2>&1 \
+    || fail_restore MEDIA_VALIDATION "python interpreter '$python_bin' is required for media validation"
+
+  app_env="$(extract_manifest_string_value "app_env" "$MANIFEST_FILE")"
+  [[ -n "$app_env" ]] || app_env="production"
+  validation_db_url="$(resolve_validation_database_url "$app_env")" \
+    || fail_restore MEDIA_VALIDATION "DATABASE_URL_SYNC or DATABASE_URL is required for post-restore media validation"
+
+  target_bucket="$MEDIA_TARGET_BUCKET"
+  target_region="$MEDIA_TARGET_REGION"
+
+  set +e
+  output="$(STORAGE_BACKEND=s3 S3_BUCKET="$target_bucket" S3_REGION="$target_region" \
+    "$python_bin" "$helper_script" \
+      --database-url "$validation_db_url" \
+      --sample-size "${RESTORE_STORAGE_REFERENCE_SAMPLE_SIZE:-3}" 2>&1)"
+  status=$?
+  set -e
+  [[ -n "$output" ]] && printf '%s\n' "$output"
+  capture_verify_validation_output "$output"
+
+  if [[ $status -ne 0 ]]; then
+    fail_restore MEDIA_VALIDATION "restored media validation failed with exit $status"
+  fi
+
+  set_step_status MEDIA_VALIDATION "PASSED" \
+    "restored media validated against isolated bucket ${target_bucket}; signed URLs and read-model smoke succeeded"
+}
+
+run_storage_consistency_check() {
+  local database_url="${1:-}"
+  local storage_bucket="${2:-}"
+  local storage_region="${3:-}"
+  local output status summary python_bin helper_script
+
+  python_bin="${PYTHON_BIN:-python}"
+  helper_script="${STORAGE_CONSISTENCY_HELPER_OVERRIDE:-$PROJECT_DIR/python-backend/scripts/check_storage_consistency.py}"
+
+  if [[ -n "$database_url" ]]; then
+    [[ -f "$helper_script" ]] || fail_restore STORAGE_CONSISTENCY_CHECK "storage consistency helper is missing: $helper_script"
+    command -v "$python_bin" >/dev/null 2>&1 \
+      || fail_restore STORAGE_CONSISTENCY_CHECK "python interpreter '$python_bin' is required for storage consistency validation"
+    set_step_status STORAGE_CONSISTENCY_CHECK "IN PROGRESS" \
+      "running full DB<->storage consistency check against isolated bucket ${storage_bucket}"
+    set +e
+    output="$(STORAGE_BACKEND=s3 S3_BUCKET="$storage_bucket" S3_REGION="$storage_region" \
+      "$python_bin" "$helper_script" \
+        --database-url "$database_url" --mode full --json-only 2>&1)"
+    status=$?
+    set -e
+  else
+    set_step_status STORAGE_CONSISTENCY_CHECK "IN PROGRESS" \
+      "running full DB<->storage consistency check via backend runtime"
+    set +e
+    output="$(docker compose -f "$COMPOSE_FILE" run --rm backend \
+      python scripts/check_storage_consistency.py --mode full --json-only 2>&1)"
+    status=$?
+    set -e
+  fi
 
   [[ -n "$output" ]] && printf '%s\n' "$output"
   summary="$(printf '%s\n' "$output" | grep '^STORAGE_CONSISTENCY_SCAN_STATUS|' | tail -1 || true)"
@@ -436,8 +611,8 @@ run_storage_consistency_check() {
 compute_production_dr_claim_state() {
   local blocked_by=""
 
-  if [[ $PRODUCTION_S3_MANIFEST -ne 1 ]]; then
-    blocked_by="${blocked_by}${blocked_by:+; }authoritative production+s3 restore contract is not declared"
+  if [[ $FULL_STATE_S3_MANIFEST -ne 1 ]]; then
+    blocked_by="${blocked_by}${blocked_by:+; }authoritative full-state S3 restore contract is not declared"
   fi
   if [[ "$(get_step_status BACKUP_SET_VALIDATION)" != "PASSED" ]]; then
     blocked_by="${blocked_by}${blocked_by:+; }backup set validation is not PASSED"
@@ -473,7 +648,7 @@ compute_production_dr_claim_state() {
     blocked_by="${blocked_by}${blocked_by:+; }application media smoke validation is not PASSED"
   fi
   if [[ "$(get_step_status STORAGE_CONSISTENCY_CHECK)" != "PASSED" ]]; then
-    blocked_by="${blocked_by}${blocked_by:+; }no blocker consistency failure is not proven because storage consistency check is not PASSED"
+    blocked_by="${blocked_by}${blocked_by:+; }storage consistency check is not PASSED"
   fi
   if [[ "$(get_step_status MEDIA_RESTORE)" != "PASSED" ]]; then
     blocked_by="${blocked_by}${blocked_by:+; }media restore step is not PASSED"
@@ -524,7 +699,11 @@ emit_dr_claim_decision_block() {
     echo "  [S3 pre-restore guards]"
     echo "    S3 prerequisites:            $S3_PROTECTION_PREREQ_STATUS"
     echo "    S3 pre-restore validation:   $S3_PRE_RESTORE_VALIDATION_STATUS"
-    echo "    Authoritative storage:       NOT VERIFIED / OUT OF SCOPE"
+    if [[ $FULL_STATE_S3_MANIFEST -eq 1 ]]; then
+      echo "    Authoritative storage:       restored into isolated bucket ${MEDIA_TARGET_BUCKET:-unknown}"
+    else
+      echo "    Authoritative storage:       NOT VERIFIED / OUT OF SCOPE"
+    fi
   fi
   echo ""
   echo "  [Production DR eligibility]"
@@ -710,24 +889,55 @@ grep -q '"db_file"'                    "$MANIFEST_FILE" || fail_restore BACKUP_S
 grep -q '"checksum_file"'              "$MANIFEST_FILE" || fail_restore BACKUP_SET_VALIDATION "manifest missing checksum_file"
 grep -q '"backup_version"'             "$MANIFEST_FILE" || fail_restore BACKUP_SET_VALIDATION "manifest missing backup_version"
 grep -q '"backup_contract"[[:space:]]*:[[:space:]]*"db-restore-v1"' "$MANIFEST_FILE" || fail_restore BACKUP_SET_VALIDATION "unsupported manifest backup_contract"
-grep -q '"backup_scope"[[:space:]]*:[[:space:]]*"db-only"'           "$MANIFEST_FILE" || fail_restore BACKUP_SET_VALIDATION "manifest backup_scope must be 'db-only'"
-grep -q '"production_dr_eligible"[[:space:]]*:[[:space:]]*false'     "$MANIFEST_FILE" || fail_restore BACKUP_SET_VALIDATION "manifest production_dr_eligible must be false for this DB-only restore flow"
 grep -q "\"db_file\"[[:space:]]*:[[:space:]]*\"$(basename "$BACKUP_FILE")\"" "$MANIFEST_FILE" \
   || fail_restore BACKUP_SET_VALIDATION "manifest db_file does not match backup artifact"
 grep -q "\"checksum_file\"[[:space:]]*:[[:space:]]*\"$(basename "${BACKUP_FILE}.sha256")\"" "$MANIFEST_FILE" \
   || fail_restore BACKUP_SET_VALIDATION "manifest checksum_file does not match backup artifact"
 PRODUCTION_S3_MANIFEST=0
+FULL_STATE_S3_MANIFEST=0
 VARIANT_A_FOUNDATION_DECLARED=0
 VARIANT_A_FOUNDATION_COMPLETE=0
-if grep -q '"dr_contract"' "$MANIFEST_FILE"; then
-  grep -q '"dr_contract"[[:space:]]*:[[:space:]]*"variant-a-foundation-v1"' "$MANIFEST_FILE" \
-    || fail_restore BACKUP_SET_VALIDATION "unsupported manifest dr_contract"
-  VARIANT_A_FOUNDATION_DECLARED=1
+BACKUP_SCOPE_VALUE="$(extract_manifest_string_value "backup_scope" "$MANIFEST_FILE")"
+DR_CONTRACT_VALUE="$(extract_manifest_string_value "dr_contract" "$MANIFEST_FILE")"
+DR_RECOVERY_POINT_MODEL_VALUE="$(extract_manifest_string_value "dr_recovery_point_model" "$MANIFEST_FILE")"
+if grep -q '"production_dr_eligible"[[:space:]]*:[[:space:]]*true' "$MANIFEST_FILE"; then
+  PRODUCTION_DR_ELIGIBLE="true"
+else
+  PRODUCTION_DR_ELIGIBLE="false"
 fi
-if grep -q '"dr_recovery_point_model"' "$MANIFEST_FILE"; then
-  grep -q '"dr_recovery_point_model"[[:space:]]*:[[:space:]]*"db-artifact-paired-with-explicit-s3-recovery-point"' "$MANIFEST_FILE" \
-    || fail_restore BACKUP_SET_VALIDATION "unsupported manifest dr_recovery_point_model"
-fi
+
+case "$BACKUP_SCOPE_VALUE" in
+  db-only)
+    [[ "$PRODUCTION_DR_ELIGIBLE" == "false" ]] \
+      || fail_restore BACKUP_SET_VALIDATION "manifest production_dr_eligible must be false for the DB-only restore flow"
+    [[ "$DR_CONTRACT_VALUE" == "variant-a-foundation-v1" ]] \
+      || fail_restore BACKUP_SET_VALIDATION "unsupported manifest dr_contract for DB-only scope"
+    [[ "$DR_RECOVERY_POINT_MODEL_VALUE" == "db-artifact-paired-with-explicit-s3-recovery-point" ]] \
+      || fail_restore BACKUP_SET_VALIDATION "unsupported manifest dr_recovery_point_model for DB-only scope"
+    VARIANT_A_FOUNDATION_DECLARED=1
+    ;;
+  db-plus-s3-media-manifest)
+    [[ "$PRODUCTION_DR_ELIGIBLE" == "true" ]] \
+      || fail_restore BACKUP_SET_VALIDATION "full-state S3 restore contract requires production_dr_eligible=true"
+    [[ "$DR_CONTRACT_VALUE" == "s3-full-state-v1" ]] \
+      || fail_restore BACKUP_SET_VALIDATION "unsupported manifest dr_contract for full-state S3 scope"
+    [[ "$DR_RECOVERY_POINT_MODEL_VALUE" == "db-artifact-paired-with-versioned-s3-object-manifest" ]] \
+      || fail_restore BACKUP_SET_VALIDATION "unsupported manifest dr_recovery_point_model for full-state S3 scope"
+    grep -q '"s3_media_manifest_format"[[:space:]]*:[[:space:]]*"novu-s3-media-manifest-v1"' "$MANIFEST_FILE" \
+      || fail_restore BACKUP_SET_VALIDATION "full-state S3 restore contract requires s3_media_manifest_format=novu-s3-media-manifest-v1"
+    grep -q '"s3_media_restore_strategy"[[:space:]]*:[[:space:]]*"versioned-copy-to-isolated-bucket-v1"' "$MANIFEST_FILE" \
+      || fail_restore BACKUP_SET_VALIDATION "full-state S3 restore contract requires s3_media_restore_strategy=versioned-copy-to-isolated-bucket-v1"
+    [[ -n "$(extract_manifest_string_value "s3_media_manifest_file" "$MANIFEST_FILE")" ]] \
+      || fail_restore BACKUP_SET_VALIDATION "full-state S3 restore contract requires s3_media_manifest_file"
+    [[ -n "$(extract_manifest_int_value "s3_object_count" "$MANIFEST_FILE")" ]] \
+      || fail_restore BACKUP_SET_VALIDATION "full-state S3 restore contract requires s3_object_count"
+    FULL_STATE_S3_MANIFEST=1
+    ;;
+  *)
+    fail_restore BACKUP_SET_VALIDATION "unsupported manifest backup_scope"
+    ;;
+esac
+
 if ! grep -q '"storage_backend"[[:space:]]*:[[:space:]]*"s3"' "$MANIFEST_FILE"; then
   if manifest_has_non_null_string "s3_bucket" "$MANIFEST_FILE" \
     || manifest_has_non_null_string "s3_region" "$MANIFEST_FILE" \
@@ -749,15 +959,20 @@ fi
 if grep -q '"app_env"[[:space:]]*:[[:space:]]*"production"' "$MANIFEST_FILE" \
   && grep -q '"storage_backend"[[:space:]]*:[[:space:]]*"s3"' "$MANIFEST_FILE"; then
   PRODUCTION_S3_MANIFEST=1
-  set_step_status MEDIA_RESTORE "NOT IMPLEMENTED" "future Variant A placeholder; this script does not restore S3/media objects"
-  set_step_status MEDIA_VALIDATION "NOT VERIFIED" "future Variant A placeholder; this script does not verify recovered media state"
-  PRODUCTION_DR_REASON="media restore and media validation are not implemented by this restore flow"
-  if grep -q '"storage_archive_included"[[:space:]]*:[[:space:]]*true' "$MANIFEST_FILE"; then
+  if [[ $FULL_STATE_S3_MANIFEST -eq 0 ]]; then
+    set_step_status MEDIA_RESTORE "NOT IMPLEMENTED" "DB-only production+s3 backup set does not include media restore"
+    set_step_status MEDIA_VALIDATION "NOT VERIFIED" "DB-only production+s3 backup set does not include media validation"
+    PRODUCTION_DR_REASON="media restore and media validation are not implemented by this DB-only restore flow"
+  fi
+  if [[ $FULL_STATE_S3_MANIFEST -eq 0 ]] && grep -q '"storage_archive_included"[[:space:]]*:[[:space:]]*true' "$MANIFEST_FILE"; then
     fail_restore BACKUP_SET_VALIDATION "manifest claims storage archive coverage for production+s3 backup. This DB-only restore flow refuses ambiguous production media claims."
   fi
-  if grep -q '"storage_coverage"' "$MANIFEST_FILE" \
+  if [[ $FULL_STATE_S3_MANIFEST -eq 0 ]] && grep -q '"storage_coverage"' "$MANIFEST_FILE" \
     && ! grep -q '"storage_coverage"[[:space:]]*:[[:space:]]*"authoritative-s3-not-covered-by-this-backup"' "$MANIFEST_FILE"; then
     fail_restore BACKUP_SET_VALIDATION "manifest storage_coverage is inconsistent with production+s3 DB-only semantics."
+  fi
+  if [[ $FULL_STATE_S3_MANIFEST -eq 1 ]] && ! grep -q '"storage_coverage"[[:space:]]*:[[:space:]]*"authoritative-s3-media-manifest"' "$MANIFEST_FILE"; then
+    fail_restore BACKUP_SET_VALIDATION "manifest storage_coverage is inconsistent with the full-state production+s3 semantics."
   fi
   if manifest_has_non_null_string "s3_bucket" "$MANIFEST_FILE" \
     && manifest_has_non_null_string "s3_region" "$MANIFEST_FILE" \
@@ -766,10 +981,16 @@ if grep -q '"app_env"[[:space:]]*:[[:space:]]*"production"' "$MANIFEST_FILE" \
     VARIANT_A_FOUNDATION_COMPLETE=1
   fi
   warn "Manifest declares APP_ENV=production with STORAGE_BACKEND=s3."
-  warn "This restore covers database state only. Authoritative S3/object storage remains out of scope."
-  if [[ $VARIANT_A_FOUNDATION_DECLARED -eq 1 && $VARIANT_A_FOUNDATION_COMPLETE -eq 1 ]]; then
+  if [[ $FULL_STATE_S3_MANIFEST -eq 1 ]]; then
+    MEDIA_MANIFEST_PATH="$(dirname "$BACKUP_FILE")/$(extract_manifest_string_value "s3_media_manifest_file" "$MANIFEST_FILE")"
+    validate_s3_media_manifest_pairing "$MANIFEST_FILE" "$BACKUP_FILE" "$MEDIA_MANIFEST_PATH"
+    warn "Full-state S3 restore contract detected. Media restore will run into an isolated target bucket before DB restore continues."
+  else
+    warn "This restore covers database state only. Authoritative S3/object storage remains out of scope."
+  fi
+  if [[ $FULL_STATE_S3_MANIFEST -eq 0 && $VARIANT_A_FOUNDATION_DECLARED -eq 1 && $VARIANT_A_FOUNDATION_COMPLETE -eq 1 ]]; then
     warn "Variant A foundation metadata is present, but this flow does not restore S3/object storage or prove recovered media state."
-  elif [[ $VARIANT_A_FOUNDATION_DECLARED -eq 1 ]]; then
+  elif [[ $FULL_STATE_S3_MANIFEST -eq 0 && $VARIANT_A_FOUNDATION_DECLARED -eq 1 ]]; then
     warn "Variant A foundation contract is present, but required S3 recovery point metadata is incomplete."
   fi
   validate_s3_pre_restore_guards "$MANIFEST_FILE"
@@ -828,6 +1049,10 @@ if [[ "$PREVERIFY_STATUS" == "SKIPPED (operator override)" ]]; then
   set_step_status BACKUP_SET_VALIDATION "PASSED" "manifest and checksum validated; pre-restore verify skipped by operator override"
 else
   set_step_status BACKUP_SET_VALIDATION "PASSED" "manifest, checksum, and pre-restore verify completed"
+fi
+
+if [[ $FULL_STATE_S3_MANIFEST -eq 1 ]]; then
+  run_media_restore_step
 fi
 
 if [[ "$AUTO_YES" != "--yes" ]]; then
@@ -964,22 +1189,46 @@ else
 fi
 
 # ── 8. Summary ─────────────────────────────────────────────────────────────────
-if ! run_storage_consistency_check; then
-  warn "Full DB<->storage consistency validation failed - release readiness will be blocked."
-fi
-
 if [[ $HEALTHY -eq 1 ]]; then
+  if [[ $FULL_STATE_S3_MANIFEST -eq 1 ]]; then
+    run_post_restore_media_validation
+    validation_app_env="$(extract_manifest_string_value "app_env" "$MANIFEST_FILE")"
+    [[ -n "$validation_app_env" ]] || validation_app_env="production"
+    validation_db_url="$(resolve_validation_database_url "$validation_app_env")" \
+      || fail_restore STORAGE_CONSISTENCY_CHECK "DATABASE_URL_SYNC or DATABASE_URL is required for full-state storage consistency validation"
+    if ! run_storage_consistency_check "$validation_db_url" "$MEDIA_TARGET_BUCKET" "$MEDIA_TARGET_REGION"; then
+      warn "Full DB<->storage consistency validation against the isolated restore bucket failed - release readiness will be blocked."
+    fi
+  else
+    if ! run_storage_consistency_check; then
+      warn "Full DB<->storage consistency validation failed - release readiness will be blocked."
+    fi
+  fi
+
   if [[ "$VERIFY_DB_QUERY_USABILITY_STATUS" == "FAILED" \
      || "$VERIFY_SCHEMA_HEAD_ALIGNMENT_STATUS" == "FAILED" \
      || "$VERIFY_REFERENCE_SAMPLE_VALIDATION_STATUS" == "FAILED" \
      || "$VERIFY_SIGNED_URL_VALIDATION_STATUS" == "FAILED" \
      || "$VERIFY_APP_MEDIA_SMOKE_STATUS" == "FAILED" ]]; then
     set_step_status POST_RESTORE_VALIDATION "FAILED" "post-restore validation is blocked by failed verify-reported DB/storage validation steps"
+  elif [[ $FULL_STATE_S3_MANIFEST -eq 1 && "$(get_step_status MEDIA_VALIDATION)" != "PASSED" ]]; then
+    set_step_status POST_RESTORE_VALIDATION "FAILED" \
+      "post-restore validation is blocked because isolated media validation did not complete successfully"
   else
-    set_step_status POST_RESTORE_VALIDATION "PASSED" "DB restore, schema/head validation, backend liveness, and verify-reported DB/storage checks completed"
+    if [[ $FULL_STATE_S3_MANIFEST -eq 1 ]]; then
+      set_step_status POST_RESTORE_VALIDATION "PASSED" \
+        "DB restore, schema/head validation, isolated media validation, backend liveness, and DB<->storage checks completed"
+    else
+      set_step_status POST_RESTORE_VALIDATION "PASSED" \
+        "DB restore, schema/head validation, backend liveness, and verify-reported DB/storage checks completed"
+    fi
   fi
   DB_RESTORE_STATUS="PASSED"
-  DB_RESTORE_REASON="database restore, schema/head validation, and backend liveness completed"
+  if [[ $FULL_STATE_S3_MANIFEST -eq 1 ]]; then
+    DB_RESTORE_REASON="database restore, isolated media restore, schema/head validation, and backend liveness completed"
+  else
+    DB_RESTORE_REASON="database restore, schema/head validation, and backend liveness completed"
+  fi
 else
   set_step_status POST_RESTORE_VALIDATION "FAILED" "backend liveness was not confirmed, so post-restore validation is incomplete"
   DB_RESTORE_STATUS="FAILED"
@@ -1017,16 +1266,29 @@ if [[ $PRODUCTION_S3_MANIFEST -eq 1 ]]; then
   if [[ "$S3_VARIANT_A_READINESS_STATUS" != "PASSED" ]]; then
     echo "  Variant A storage-readiness reason: $S3_VARIANT_A_READINESS_REASON"
   fi
-  echo "  Authoritative S3/object storage recovery: NOT VERIFIED / OUT OF SCOPE"
-  if [[ $VARIANT_A_FOUNDATION_COMPLETE -eq 1 ]]; then
+  if [[ $FULL_STATE_S3_MANIFEST -eq 1 ]]; then
+    echo "  Media restore step: $(get_step_status MEDIA_RESTORE)"
+    echo "  Media validation step: $(get_step_status MEDIA_VALIDATION)"
+    echo "  Authoritative S3/object storage recovery: $FULL_STATE_RESTORE_STATUS"
+    echo "  Restored isolated bucket: ${MEDIA_TARGET_BUCKET:-unknown}"
+  elif [[ $VARIANT_A_FOUNDATION_COMPLETE -eq 1 ]]; then
+    echo "  Authoritative S3/object storage recovery: NOT VERIFIED / OUT OF SCOPE"
     echo "  Variant A foundation contract: metadata recorded only; full DR still not implemented"
   elif [[ $VARIANT_A_FOUNDATION_DECLARED -eq 1 ]]; then
+    echo "  Authoritative S3/object storage recovery: NOT VERIFIED / OUT OF SCOPE"
     echo "  Variant A foundation contract: present but incomplete; full DR still not implemented"
+  else
+    echo "  Authoritative S3/object storage recovery: NOT VERIFIED / OUT OF SCOPE"
   fi
 fi
 echo ""
-echo "This workflow validates DB restore integrity, schema/head alignment, backend liveness, sampled verify_restore media checks, and a mandatory full DB<->storage consistency scan."
-echo "It does NOT prove full media recovery orchestration or authoritative S3/object storage disaster recovery."
+if [[ $FULL_STATE_S3_MANIFEST -eq 1 ]]; then
+  echo "This workflow validates DB restore integrity, schema/head alignment, isolated S3 media restore, media usability, backend liveness, and a mandatory full DB<->storage consistency scan against the isolated restore bucket."
+  echo "Production DR is VERIFIED only when all of those gates pass for the full-state S3 contract."
+else
+  echo "This workflow validates DB restore integrity, schema/head alignment, backend liveness, sampled verify_restore media checks, and a mandatory full DB<->storage consistency scan."
+  echo "It does NOT prove full media recovery orchestration or authoritative S3/object storage disaster recovery."
+fi
 if [[ "$(get_step_status RELEASE_READINESS_DECISION)" != "PASSED" ]]; then
   echo ""
   if [[ $HEALTHY -ne 1 ]]; then
@@ -1037,7 +1299,11 @@ if [[ "$(get_step_status RELEASE_READINESS_DECISION)" != "PASSED" ]]; then
   exit 1
 fi
 echo ""
-echo "Release readiness decision: PASSED (DB handoff ready with validated DB<->storage consistency; Production DR remains NOT VERIFIED)"
+if [[ $FULL_STATE_S3_MANIFEST -eq 1 ]]; then
+  echo "Release readiness decision: PASSED (DB handoff ready with validated isolated media restore and DB<->storage consistency; Production DR: $PRODUCTION_DR_STATUS)"
+else
+  echo "Release readiness decision: PASSED (DB handoff ready with validated DB<->storage consistency; Production DR remains NOT VERIFIED)"
+fi
 echo ""
 echo "Verify data manually:"
 echo "  docker compose exec db psql -U novu novu_builder -c 'SELECT COUNT(*) FROM organizations;'"

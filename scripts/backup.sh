@@ -153,6 +153,30 @@ json_bool_or_null() {
   esac
 }
 
+json_int_or_null() {
+  local value="${1:-}"
+  if [[ -z "$value" ]]; then
+    printf 'null'
+    return 0
+  fi
+  [[ "$value" =~ ^[0-9]+$ ]] || die "Expected integer for JSON field, got: $value"
+  printf '%s' "$value"
+}
+
+resolve_database_url_for_full_state() {
+  local app_env="$1"
+  local candidate
+
+  for candidate in DATABASE_URL_SYNC DATABASE_URL; do
+    if value="$(read_runtime_or_env_value "$candidate" "$app_env")"; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
 POSTGRES_USER="${POSTGRES_USER:-novu}"
 POSTGRES_DB="${POSTGRES_DB:-novu_builder}"
@@ -178,6 +202,16 @@ INCLUDE_STORAGE_ARCHIVE=1
 STORAGE_COVERAGE="local-volume-archive-compatibility-only"
 STORAGE_ARCHIVE_INCLUDED=true
 STORAGE_ARCHIVE_JSON_VALUE="\"storage_${TIMESTAMP}.tar.gz\""
+PRODUCTION_DR_ELIGIBLE=false
+BACKUP_SCOPE="db-only"
+S3_MEDIA_MANIFEST_BASENAME=""
+S3_MEDIA_MANIFEST_FORMAT=""
+S3_MEDIA_RESTORE_STRATEGY=""
+S3_OBJECT_COUNT=""
+S3_MEDIA_MANIFEST_JSON_VALUE="null"
+S3_MEDIA_MANIFEST_FORMAT_JSON_VALUE="null"
+S3_MEDIA_RESTORE_STRATEGY_JSON_VALUE="null"
+S3_OBJECT_COUNT_JSON_VALUE="null"
 
 if [[ "$STORAGE_BACKEND_CURRENT" == "s3" ]]; then
   if value="$(read_runtime_or_env_value S3_BUCKET "$APP_ENV_CURRENT")"; then
@@ -211,13 +245,13 @@ if [[ "$APP_ENV_CURRENT" == "production" && "$STORAGE_BACKEND_CURRENT" == "s3" ]
   STORAGE_ARCHIVE_INCLUDED=false
   STORAGE_ARCHIVE_JSON_VALUE="null"
 
-  if [[ "$S3_FULL_COVERAGE_DECLARED" == "true" ]]; then
-    die "S3_FULL_COVERAGE_DECLARED=true is not supported here. This repo does not implement full S3 recovery coverage in scripts/backup.sh."
-  fi
-
   warn "APP_ENV=production with STORAGE_BACKEND=s3 detected."
-  warn "This backup is DB-only truth. Authoritative S3/object storage is NOT covered by scripts/backup.sh."
-  warn "Do not treat this backup as full production disaster recovery."
+  if [[ "$S3_FULL_COVERAGE_DECLARED" == "true" ]]; then
+    warn "Explicit full-state S3 coverage requested via S3_FULL_COVERAGE_DECLARED=true."
+  else
+    warn "This backup is DB-only truth. Authoritative S3/object storage is NOT covered by scripts/backup.sh."
+    warn "Do not treat this backup as full production disaster recovery."
+  fi
 fi
 
 if [[ "$STORAGE_BACKEND_CURRENT" == "s3" ]]; then
@@ -285,14 +319,59 @@ else
   echo "  → Storage archive: skipped (production+s3 DB-only mode; authoritative S3/object storage not covered)"
 fi
 
+if [[ "$APP_ENV_CURRENT" == "production" && "$STORAGE_BACKEND_CURRENT" == "s3" && "$S3_FULL_COVERAGE_DECLARED" == "true" ]]; then
+  [[ $VARIANT_A_FOUNDATION_MINIMUM -eq 1 ]] || die "Full-state S3 coverage requires S3_BUCKET, S3_REGION, S3_RECOVERY_POINT, and STORAGE_SNAPSHOT_CONSISTENT=true."
+  require_cmd python
+
+  DATABASE_URL_FOR_FULL_STATE="$(resolve_database_url_for_full_state "$APP_ENV_CURRENT")" \
+    || die "Full-state S3 coverage requires DATABASE_URL_SYNC or DATABASE_URL."
+  MEDIA_EXPORT_HELPER="${S3_MEDIA_EXPORT_HELPER_OVERRIDE:-python-backend/scripts/export_s3_recovery_manifest.py}"
+  [[ -f "$MEDIA_EXPORT_HELPER" ]] || die "S3 media export helper not found: $MEDIA_EXPORT_HELPER"
+
+  S3_MEDIA_MANIFEST_FILE="$BACKUP_DIR/${BACKUP_BASENAME}.s3-media.json"
+  echo "  → S3 media manifest: $S3_MEDIA_MANIFEST_FILE"
+  python "$MEDIA_EXPORT_HELPER" \
+    --database-url "$DATABASE_URL_FOR_FULL_STATE" \
+    --output "$S3_MEDIA_MANIFEST_FILE" \
+    --bucket "$S3_BUCKET_CURRENT" \
+    --region "$S3_REGION_CURRENT" \
+    --declared-recovery-point "$S3_RECOVERY_POINT_CURRENT" \
+    --db-backup-file "${BACKUP_BASENAME}.pgdump" \
+    --db-manifest-file "${BACKUP_BASENAME}.json" \
+    >/dev/null
+
+  [[ -s "$S3_MEDIA_MANIFEST_FILE" ]] || die "S3 media manifest was not created or is empty."
+
+  S3_MEDIA_MANIFEST_BASENAME="$(basename "$S3_MEDIA_MANIFEST_FILE")"
+  S3_MEDIA_MANIFEST_FORMAT="$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8')).get('format',''))" "$S3_MEDIA_MANIFEST_FILE")"
+  S3_OBJECT_COUNT="$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8')).get('unique_object_count',''))" "$S3_MEDIA_MANIFEST_FILE")"
+  [[ "$S3_MEDIA_MANIFEST_FORMAT" == "novu-s3-media-manifest-v1" ]] || die "Unexpected S3 media manifest format: $S3_MEDIA_MANIFEST_FORMAT"
+  [[ "$S3_OBJECT_COUNT" =~ ^[0-9]+$ ]] || die "S3 media manifest did not report a valid unique_object_count."
+
+  PRODUCTION_S3_DB_ONLY_MODE=0
+  BACKUP_SCOPE="db-plus-s3-media-manifest"
+  PRODUCTION_DR_ELIGIBLE=true
+  STORAGE_COVERAGE="authoritative-s3-media-manifest"
+  DR_CONTRACT_VERSION="s3-full-state-v1"
+  DR_RECOVERY_POINT_MODEL="db-artifact-paired-with-versioned-s3-object-manifest"
+  S3_MEDIA_RESTORE_STRATEGY="versioned-copy-to-isolated-bucket-v1"
+  S3_MEDIA_MANIFEST_JSON_VALUE="$(json_string_or_null "$S3_MEDIA_MANIFEST_BASENAME")"
+  S3_MEDIA_MANIFEST_FORMAT_JSON_VALUE="$(json_string_or_null "$S3_MEDIA_MANIFEST_FORMAT")"
+  S3_MEDIA_RESTORE_STRATEGY_JSON_VALUE="$(json_string_or_null "$S3_MEDIA_RESTORE_STRATEGY")"
+  S3_OBJECT_COUNT_JSON_VALUE="$(json_int_or_null "$S3_OBJECT_COUNT")"
+fi
+
 # KROK 4: atomic manifest write (temp → mv prevents partial manifest on crash)
 MANIFEST_FILE="$BACKUP_DIR/${BACKUP_BASENAME}.json"
 MANIFEST_TMP="${MANIFEST_FILE}.tmp"
 trap 'rm -f "$MANIFEST_TMP"' EXIT
 # ── production_dr_eligible gating conditions ──────────────────────────────────
 # production_dr_eligible=true requires ALL of the following conditions.
-# This script cannot satisfy any of them — the field is hardcoded to false.
-# ops/restore.sh enforces this: it rejects any manifest with production_dr_eligible=true.
+# DB-only manifests never satisfy them and stay false.
+# Full-state S3 manifests may declare true only when they carry a paired,
+# version-pinned media manifest for the same DB-backed reference set.
+# ops/restore.sh is the authoritative gate that decides whether the claim
+# remains truthful after isolated media restore and validation.
 #
 # Required conditions (none currently implemented):
 #   (1) backup set validation PASSED
@@ -308,8 +387,9 @@ trap 'rm -f "$MANIFEST_TMP"' EXIT
 #   (11) media validation step PASSED
 #   (12) no blocker consistency failure proven via an explicit consistency gate
 #
-# Until ALL conditions above are implemented and verified end-to-end, this field
-# must remain false.  Do not change it without implementing the conditions above.
+# DB-only manifests always keep production_dr_eligible=false. Full-state S3
+# manifests may set production_dr_eligible=true only when they include a
+# version-pinned media manifest generated from the same DB-backed reference set.
 cat > "$MANIFEST_TMP" <<EOF
 {
   "timestamp": "${TIMESTAMP}",
@@ -317,14 +397,18 @@ cat > "$MANIFEST_TMP" <<EOF
   "backup_contract": "db-restore-v1",
   "dr_contract": "${DR_CONTRACT_VERSION}",
   "dr_recovery_point_model": "${DR_RECOVERY_POINT_MODEL}",
-  "backup_scope": "db-only",
-  "production_dr_eligible": false,
+  "backup_scope": "${BACKUP_SCOPE}",
+  "production_dr_eligible": ${PRODUCTION_DR_ELIGIBLE},
   "storage_backend": "${STORAGE_BACKEND_CURRENT}",
   "s3_bucket": ${S3_BUCKET_JSON_VALUE},
   "s3_region": ${S3_REGION_JSON_VALUE},
   "s3_recovery_point": ${S3_RECOVERY_POINT_JSON_VALUE},
   "storage_snapshot_consistent": ${STORAGE_SNAPSHOT_CONSISTENT_JSON_VALUE},
   "storage_coverage": "${STORAGE_COVERAGE}",
+  "s3_media_manifest_file": ${S3_MEDIA_MANIFEST_JSON_VALUE},
+  "s3_media_manifest_format": ${S3_MEDIA_MANIFEST_FORMAT_JSON_VALUE},
+  "s3_media_restore_strategy": ${S3_MEDIA_RESTORE_STRATEGY_JSON_VALUE},
+  "s3_object_count": ${S3_OBJECT_COUNT_JSON_VALUE},
   "storage_archive_included": ${STORAGE_ARCHIVE_INCLUDED},
   "storage_archive_file": ${STORAGE_ARCHIVE_JSON_VALUE},
   "db_file": "${BACKUP_BASENAME}.pgdump",
@@ -348,11 +432,15 @@ find "$BACKUP_DIR" -maxdepth 1 -name "storage_*.tar.gz"   -mtime +"$RETAIN_DAYS"
 
 echo "[$(date -Iseconds)] Backup complete."
 echo "  DB:      $DB_FILE  ($(du -sh "$DB_FILE" | cut -f1))"
-echo "  production_dr_eligible: false"
+echo "  production_dr_eligible: ${PRODUCTION_DR_ELIGIBLE}"
 if [[ $INCLUDE_STORAGE_ARCHIVE -eq 1 ]]; then
   echo "  Storage: $STORAGE_FILE  ($(du -sh "$STORAGE_FILE" | cut -f1))"
   echo "  Meaning: DB restore contract + local compatibility storage archive only"
   echo "  Production DR claim: NOT eligible"
+elif [[ "$PRODUCTION_DR_ELIGIBLE" == "true" ]]; then
+  echo "  Storage: $S3_MEDIA_MANIFEST_FILE"
+  echo "  Meaning: DB backup paired with version-pinned S3 media manifest (${S3_OBJECT_COUNT} objects)"
+  echo "  Production DR claim: eligible only after isolated media restore + validation succeeds"
 else
   echo "  Storage: skipped"
   echo "  Meaning: DB-only backup; authoritative S3/object storage is NOT covered"

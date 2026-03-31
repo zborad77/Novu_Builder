@@ -9,6 +9,13 @@ Worker contract:
     processing list and creates a lease record. Successful processing must ACK
     the lease; crashed workers leave the lease behind and the reaper can safely
     requeue it after the visibility timeout expires.
+
+Redis transport contract:
+    Queue functions operate against a Redis-like client that may be backed by a
+    failover-aware wrapper. Read operations may transparently switch to another
+    candidate endpoint, but mutating operations must never be replayed
+    implicitly after a transport error because lease/enqueue truthfulness takes
+    priority over "hidden HA".
 """
 from __future__ import annotations
 

@@ -1,34 +1,18 @@
 #!/usr/bin/env python
 """
-Storage consistency checker — DB<->S3 reference validation.
+Storage consistency checker for DB <-> storage references.
 
-Two-direction scan
-──────────────────
-  DB→S3  (blockers)  Verifies every DB-referenced storage object exists in the backend.
-                     Missing referenced object = HARD FAIL (exit 1).
-  S3→DB  (warnings)  Identifies storage objects that have no DB reference (orphans).
-                     Orphan object = WARNING, reported but does not block by itself (exit 0).
+Modes:
+  - full   : DB->storage and storage->DB scan
+  - sample : DB->storage sample only
 
-Scan modes
-──────────
-  full    (default)  Both directions.  Requires storage listing capability.
-  sample             DB→S3 only, up to --sample-size references checked individually.
-                     S3→DB direction is marked NOT_EXECUTED — cannot orphan-check a subset.
-                     Output scan_status = "scan_partial" unless a blocker is found.
-
-Exit codes
-──────────
-  0   scan_complete  Both directions clean.
-  0   warning        Orphans found, no blockers.  Caller should inspect the report.
-  1   fail           One or more DB-referenced objects are missing (HARD FAIL).
-  2   scan_partial   Scan could not complete (fail-closed: clean state cannot be confirmed).
-
-Output format
-─────────────
-  STORAGE_CONSISTENCY_SCAN_STATUS|<status>|<detail>
-  STORAGE_CONSISTENCY_BLOCKER|<key>|<source>|<record_id>|<org_id>|<project_id>
-  STORAGE_CONSISTENCY_WARNING|<key>|<source>|<org_id>|<project_id>
-  STORAGE_CONSISTENCY_REPORT_JSON=<json>
+Cleanup:
+  - default is dry-run/report only
+  - destructive orphan cleanup requires:
+      * --cleanup
+      * full scan mode
+      * a matching --approval-token from the dry-run output
+      * orphan age >= --min-orphan-age-hours
 """
 from __future__ import annotations
 
@@ -51,12 +35,12 @@ from app.services.storage_consistency_service import (  # noqa: E402
     ConsistencyReport,
     DbToS3ScanResult,
     S3ToDbScanResult,
+    StorageCleanupAction,
+    StorageConsistencyApprovalRequiredError,
     StorageConsistencyIssue,
     StorageConsistencyService,
 )
 from app.storage.backend import storage_key_exists  # noqa: E402
-
-# ── output protocol ──────────────────────────────────────────────────────────
 
 
 def _sanitize(value: str) -> str:
@@ -88,28 +72,49 @@ def emit_warning(issue: StorageConsistencyIssue) -> None:
     )
 
 
+def emit_orphan_summary(report: ConsistencyReport) -> None:
+    summary = report.s3_to_db.orphan_summary
+    print(
+        f"STORAGE_CONSISTENCY_ORPHAN_SUMMARY"
+        f"|count={summary.orphan_count}"
+        f"|eligible={summary.eligible_delete_count}"
+        f"|retained={summary.retained_count}"
+        f"|min_age_seconds={summary.minimum_age_seconds}"
+        f"|approval_token={_sanitize(summary.approval_token or '')}"
+    )
+
+
+def emit_cleanup_action(action: StorageCleanupAction) -> None:
+    print(
+        f"STORAGE_CONSISTENCY_CLEANUP_ACTION"
+        f"|{_sanitize(action.key)}"
+        f"|{_sanitize(action.action)}"
+        f"|{_sanitize(action.org_id or '')}"
+        f"|{_sanitize(action.project_id or '')}"
+    )
+
+
 def emit_report_json(report: ConsistencyReport) -> None:
     payload = {
         "scan_status": report.scan_status,
         "db_to_s3": {
             "status": report.db_to_s3.status,
             "blocker_count": len(report.db_to_s3.blockers),
-            "blockers": [asdict(b) for b in report.db_to_s3.blockers],
+            "blockers": [asdict(item) for item in report.db_to_s3.blockers],
         },
         "s3_to_db": {
             "status": report.s3_to_db.status,
             "warning_count": len(report.s3_to_db.warnings),
-            "warnings": [asdict(w) for w in report.s3_to_db.warnings],
+            "warnings": [asdict(item) for item in report.s3_to_db.warnings],
+            "orphan_summary": asdict(report.s3_to_db.orphan_summary),
         },
         "error_detail": report.error_detail,
     }
     print("STORAGE_CONSISTENCY_REPORT_JSON=" + json.dumps(payload, separators=(",", ":"), sort_keys=True))
 
 
-# ── human-readable report ─────────────────────────────────────────────────────
-
-
 def print_human_report(report: ConsistencyReport, *, mode: str, sample_size: int | None) -> None:
+    summary = report.s3_to_db.orphan_summary
     sep = "=" * 60
     print(sep)
     print("Storage Consistency Report")
@@ -120,24 +125,37 @@ def print_human_report(report: ConsistencyReport, *, mode: str, sample_size: int
         print(f"  Error detail: {report.error_detail}")
     print()
 
-    print(f"  DB→S3 direction [{report.db_to_s3.status}]")
+    print(f"  DB->storage direction [{report.db_to_s3.status}]")
     if report.db_to_s3.blockers:
-        print(f"    BLOCKERS ({len(report.db_to_s3.blockers)} — HARD FAIL):")
-        for b in report.db_to_s3.blockers:
-            print(f"      key={b.key} source={b.source} record_id={b.record_id} org={b.org_id}")
+        print(f"    BLOCKERS ({len(report.db_to_s3.blockers)} - HARD FAIL):")
+        for blocker in report.db_to_s3.blockers:
+            print(
+                f"      key={blocker.key}"
+                f" source={blocker.source}"
+                f" record_id={blocker.record_id}"
+                f" org={blocker.org_id}"
+            )
     else:
-        print("    No blockers — all checked DB references exist in storage.")
+        print("    No blockers - all checked DB references exist in storage.")
 
     print()
-    print(f"  S3→DB direction [{report.s3_to_db.status}]")
+    print(f"  storage->DB direction [{report.s3_to_db.status}]")
     if report.s3_to_db.warnings:
         print(f"    WARNINGS ({len(report.s3_to_db.warnings)} orphan objects):")
-        for w in report.s3_to_db.warnings:
-            print(f"      key={w.key} org={w.org_id} project={w.project_id}")
-        print("    Orphans are reported only — they do NOT block release without explicit policy.")
-        print("    Future cleanup: run StorageConsistencyService.cleanup_orphans(safe_mode=True)")
+        for warning in report.s3_to_db.warnings:
+            age = f" age={warning.age_seconds}s" if warning.age_seconds is not None else ""
+            print(f"      key={warning.key} org={warning.org_id} project={warning.project_id}{age}")
+        print("    Orphans are warnings only - they do NOT block release without explicit policy.")
+        print(
+            "    Cleanup gate:"
+            f" eligible={summary.eligible_delete_count}"
+            f" retained={summary.retained_count}"
+            f" min_age_seconds={summary.minimum_age_seconds}"
+        )
+        if summary.approval_token:
+            print(f"    Approval token for delete mode: {summary.approval_token}")
     elif report.s3_to_db.status == "not_executed":
-        print("    NOT EXECUTED — S3→DB orphan scan was not run in this mode.")
+        print("    NOT EXECUTED - orphan scan was not run in this mode.")
     else:
         print("    No orphan storage objects found.")
 
@@ -145,58 +163,25 @@ def print_human_report(report: ConsistencyReport, *, mode: str, sample_size: int
     print(sep)
 
 
-# ── sample DB→S3 scan ─────────────────────────────────────────────────────────
-
-
 async def _run_sample_db_to_s3(
     session: AsyncSession,
     sample_size: int,
 ) -> DbToS3ScanResult:
-    """
-    Sample mode: individually checks existence of up to sample_size DB-referenced keys.
-    Deterministic — always samples the first N references ordered by (org, project, id).
-    S3→DB direction is not run; orphan detection cannot be sampled meaningfully.
-    """
     repository = StorageConsistencyRepository(session)
     photo_refs = await repository.list_photo_storage_references()
     export_refs = await repository.list_export_storage_references()
 
     candidates: list[tuple[str, str, str | None, str | None]] = []
     for ref in photo_refs:
-        candidates.append((
-            ref.storage_key,
-            f"db.project_photo.{ref.variant}",
-            ref.photo_id,
-            ref.project_id,
-        ))
+        candidates.append((ref.storage_key, f"db.project_photo.{ref.variant}", ref.photo_id, ref.project_id))
     for ref in export_refs:
-        candidates.append((
-            ref.storage_key,
-            "db.project_export.storage",
-            ref.export_id,
-            ref.project_id,
-        ))
+        candidates.append((ref.storage_key, "db.project_export.storage", ref.export_id, ref.project_id))
 
     sampled = candidates[:sample_size]
     blockers: list[StorageConsistencyIssue] = []
 
     for storage_key, source, record_id, project_id in sampled:
-        try:
-            exists = await storage_key_exists(relative_storage_key=storage_key)
-        except Exception as exc:
-            return DbToS3ScanResult(
-                status="not_executed",
-                blockers=[
-                    StorageConsistencyIssue(
-                        org_id=None,
-                        key=storage_key,
-                        action="missing_storage_object",
-                        source=source,
-                        record_id=record_id,
-                        project_id=project_id,
-                    )
-                ],
-            )
+        exists = await storage_key_exists(relative_storage_key=storage_key)
         if not exists:
             blockers.append(
                 StorageConsistencyIssue(
@@ -212,19 +197,57 @@ async def _run_sample_db_to_s3(
     return DbToS3ScanResult(status="complete", blockers=blockers)
 
 
-# ── scan runners ──────────────────────────────────────────────────────────────
+def _normalize_db_url(url: str) -> str:
+    normalized = url.strip()
+    if not normalized:
+        raise ValueError("database URL is required")
+    for prefix, replacement in (
+        ("postgresql+psycopg://", "postgresql+asyncpg://"),
+        ("postgresql://", "postgresql+asyncpg://"),
+        ("postgres://", "postgresql+asyncpg://"),
+    ):
+        if normalized.startswith(prefix):
+            return normalized.replace(prefix, replacement, 1)
+    if normalized.startswith(("postgresql+asyncpg://", "sqlite+aiosqlite:///")):
+        return normalized
+    raise ValueError(f"unsupported database URL scheme: {normalized!r}")
 
 
-async def _run_full_scan(database_url: str) -> ConsistencyReport:
+async def _run_with_service(database_url: str, coro_factory):
     engine = create_async_engine(_normalize_db_url(database_url), future=True)
     session_factory = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
     try:
         async with session_factory() as session:
             repository = StorageConsistencyRepository(session)
             service = StorageConsistencyService(repository)
-            return await service.build_consistency_report()
+            return await coro_factory(service)
     finally:
         await engine.dispose()
+
+
+async def _run_full_scan(database_url: str, *, minimum_orphan_age_seconds: int) -> ConsistencyReport:
+    return await _run_with_service(
+        database_url,
+        lambda service: service.build_consistency_report(
+            minimum_orphan_age_seconds=minimum_orphan_age_seconds,
+        ),
+    )
+
+
+async def _run_cleanup(
+    database_url: str,
+    *,
+    minimum_orphan_age_seconds: int,
+    approval_token: str,
+) -> list[StorageCleanupAction]:
+    return await _run_with_service(
+        database_url,
+        lambda service: service.cleanup_orphans(
+            safe_mode=False,
+            minimum_orphan_age_seconds=minimum_orphan_age_seconds,
+            approval_token=approval_token,
+        ),
+    )
 
 
 async def _run_sample_scan(database_url: str, sample_size: int) -> ConsistencyReport:
@@ -235,27 +258,30 @@ async def _run_sample_scan(database_url: str, sample_size: int) -> ConsistencyRe
             try:
                 db_to_s3 = await _run_sample_db_to_s3(session, sample_size)
             except Exception as exc:
-                db_to_s3 = DbToS3ScanResult(status="not_executed", blockers=[])
                 return ConsistencyReport(
                     scan_status="scan_partial",
-                    db_to_s3=db_to_s3,
-                    s3_to_db=S3ToDbScanResult(status="not_executed", warnings=[]),
+                    db_to_s3=DbToS3ScanResult(status="not_executed", blockers=[]),
+                    s3_to_db=S3ToDbScanResult(
+                        status="not_executed",
+                        warnings=[],
+                        orphan_summary=StorageConsistencyService._build_orphan_summary(
+                            [],
+                            minimum_orphan_age_seconds=0,
+                        ),
+                    ),
                     error_detail=str(exc),
                 )
 
         s3_to_db = S3ToDbScanResult(
             status="not_executed",
             warnings=[],
+            orphan_summary=StorageConsistencyService._build_orphan_summary(
+                [],
+                minimum_orphan_age_seconds=0,
+            ),
         )
-
-        if db_to_s3.blockers or db_to_s3.status == "not_executed":
-            overall_status = "fail"
-        else:
-            # sample completed without blockers — but orphan check was skipped
-            overall_status = "scan_partial"
-
         return ConsistencyReport(
-            scan_status=overall_status,
+            scan_status="fail" if db_to_s3.blockers else "scan_partial",
             db_to_s3=db_to_s3,
             s3_to_db=s3_to_db,
         )
@@ -263,57 +289,45 @@ async def _run_sample_scan(database_url: str, sample_size: int) -> ConsistencyRe
         await engine.dispose()
 
 
-# ── URL normalisation ─────────────────────────────────────────────────────────
-
-
-def _normalize_db_url(url: str) -> str:
-    url = url.strip()
-    if not url:
-        raise ValueError("database URL is required")
-    for prefix, replacement in (
-        ("postgresql+psycopg://", "postgresql+asyncpg://"),
-        ("postgresql://", "postgresql+asyncpg://"),
-        ("postgres://", "postgresql+asyncpg://"),
-    ):
-        if url.startswith(prefix):
-            return url.replace(prefix, replacement, 1)
-    if url.startswith(("postgresql+asyncpg://", "sqlite+aiosqlite:///")):
-        return url
-    raise ValueError(f"unsupported database URL scheme: {url!r}")
-
-
-# ── CLI ───────────────────────────────────────────────────────────────────────
-
-
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--database-url",
         default=os.getenv("DATABASE_URL") or os.getenv("DATABASE_URL_SYNC"),
-        help="PostgreSQL database URL (defaults to DATABASE_URL env var)",
+        help="Database URL (defaults to DATABASE_URL env var)",
     )
     parser.add_argument(
         "--mode",
         choices=["full", "sample"],
         default="full",
-        help=(
-            "full: both DB→S3 and S3→DB directions (default). "
-            "sample: DB→S3 only, up to --sample-size references."
-        ),
+        help="full scan (default) or DB->storage sample scan",
     )
     parser.add_argument(
         "--sample-size",
         type=int,
         default=int(os.getenv("STORAGE_CONSISTENCY_SAMPLE_SIZE", "10")),
-        help="Number of DB references to check in sample mode (default: 10).",
+        help="Sample size for sample mode",
     )
     parser.add_argument(
         "--json-only",
         action="store_true",
-        help="Suppress human-readable output; emit only protocol lines.",
+        help="Emit only machine-readable protocol lines",
+    )
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="Delete eligible orphan objects after a full scan",
+    )
+    parser.add_argument(
+        "--approval-token",
+        default="",
+        help="Approval token from a previous dry-run orphan summary",
+    )
+    parser.add_argument(
+        "--min-orphan-age-hours",
+        type=int,
+        default=int(os.getenv("STORAGE_ORPHAN_MIN_AGE_HOURS", "24")),
+        help="Minimum orphan age before delete is eligible (default: 24h)",
     )
     return parser
 
@@ -324,19 +338,28 @@ async def _async_main() -> int:
     if not args.database_url:
         print("ERROR: --database-url is required (or set DATABASE_URL)", file=sys.stderr)
         return 2
-
     if args.sample_size <= 0:
         print("ERROR: --sample-size must be > 0", file=sys.stderr)
         return 2
+    if args.min_orphan_age_hours < 0:
+        print("ERROR: --min-orphan-age-hours must be >= 0", file=sys.stderr)
+        return 2
+    if args.cleanup and args.mode != "full":
+        print("ERROR: --cleanup is only supported in --mode full", file=sys.stderr)
+        return 2
 
+    minimum_orphan_age_seconds = args.min_orphan_age_hours * 3600
     if args.mode == "full":
-        report = await _run_full_scan(args.database_url)
+        report = await _run_full_scan(
+            args.database_url,
+            minimum_orphan_age_seconds=minimum_orphan_age_seconds,
+        )
     else:
         report = await _run_sample_scan(args.database_url, args.sample_size)
 
-    # ── emit machine-readable protocol lines ──────────────────────────────────
     blocker_count = len(report.db_to_s3.blockers)
     warning_count = len(report.s3_to_db.warnings)
+    orphan_summary = report.s3_to_db.orphan_summary
 
     detail_parts = [f"db_to_s3={report.db_to_s3.status}"]
     if blocker_count:
@@ -344,29 +367,43 @@ async def _async_main() -> int:
     detail_parts.append(f"s3_to_db={report.s3_to_db.status}")
     if warning_count:
         detail_parts.append(f"warnings={warning_count}")
+    if orphan_summary.orphan_count:
+        detail_parts.append(f"orphan_eligible={orphan_summary.eligible_delete_count}")
+        detail_parts.append(f"orphan_retained={orphan_summary.retained_count}")
     if report.error_detail:
         detail_parts.append(f"error={report.error_detail}")
 
     emit_scan_status(report.scan_status, " ".join(detail_parts))
-
     for blocker in report.db_to_s3.blockers:
         emit_blocker(blocker)
-
     for warning in report.s3_to_db.warnings:
         emit_warning(warning)
-
+    emit_orphan_summary(report)
     emit_report_json(report)
 
-    # ── human-readable report ─────────────────────────────────────────────────
+    cleanup_actions: list[StorageCleanupAction] = []
+    if args.cleanup and report.scan_status in {"scan_complete", "warning"}:
+        try:
+            cleanup_actions = await _run_cleanup(
+                args.database_url,
+                minimum_orphan_age_seconds=minimum_orphan_age_seconds,
+                approval_token=args.approval_token.strip(),
+            )
+        except StorageConsistencyApprovalRequiredError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        for action in cleanup_actions:
+            emit_cleanup_action(action)
+
     if not args.json_only:
         print_human_report(report, mode=args.mode, sample_size=args.sample_size if args.mode == "sample" else None)
+        if cleanup_actions:
+            print(f"Cleanup actions executed: {len(cleanup_actions)}")
 
-    # ── exit code ─────────────────────────────────────────────────────────────
     if report.scan_status == "fail":
         return 1
     if report.scan_status == "scan_partial":
         return 2
-    # scan_complete or warning: exit 0; caller should inspect protocol lines for warnings
     return 0
 
 

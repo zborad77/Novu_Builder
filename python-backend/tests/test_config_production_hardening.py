@@ -98,6 +98,54 @@ def test_metrics_token_not_required_in_development(monkeypatch):
     assert s.metrics_auth_token is None
 
 
+# -- AI_ANALYSIS_PROVIDER ----------------------------------------------------
+
+def test_openai_provider_blocked_in_production(monkeypatch):
+    _set_valid_prod_env(monkeypatch, AI_ANALYSIS_PROVIDER="openai")
+    with pytest.raises(ValidationError, match="OpenAI vision provider is not implemented"):
+        Settings()
+
+
+def test_openai_provider_blocked_in_development(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("AI_ANALYSIS_PROVIDER", "openai")
+    with pytest.raises(ValidationError, match="OpenAI vision provider is not implemented"):
+        Settings()
+
+
+def test_unknown_provider_rejected_even_in_development(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("AI_ANALYSIS_PROVIDER", "mystery")
+    with pytest.raises(ValidationError, match="AI_ANALYSIS_PROVIDER"):
+        Settings()
+
+
+def test_claude_provider_requires_api_key_in_production(monkeypatch):
+    _set_valid_prod_env(monkeypatch, AI_ANALYSIS_PROVIDER="claude", ANTHROPIC_API_KEY=None)
+    with pytest.raises(ValidationError, match="requires ANTHROPIC_API_KEY"):
+        Settings()
+
+
+def test_claude_provider_requires_non_placeholder_api_key(monkeypatch):
+    _set_valid_prod_env(
+        monkeypatch,
+        AI_ANALYSIS_PROVIDER="claude",
+        ANTHROPIC_API_KEY="change-me",
+    )
+    with pytest.raises(ValidationError, match="ANTHROPIC_API_KEY looks like an unfilled placeholder"):
+        Settings()
+
+
+def test_claude_provider_with_api_key_passes_in_production(monkeypatch):
+    _set_valid_prod_env(
+        monkeypatch,
+        AI_ANALYSIS_PROVIDER="CLAUDE",
+        ANTHROPIC_API_KEY="sk-ant-realistic-test-key-1234567890",
+    )
+    s = Settings()
+    assert s.ai_analysis_provider == "claude"
+
+
 # ── REDIS_URL password ────────────────────────────────────────────────────────
 
 def test_redis_no_password_fails_in_production(monkeypatch):

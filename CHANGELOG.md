@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.003 - 2026-03-31
+
+Heavy workload lane separation, multi-pipeline Vision layer, and full-state DR operator documentation pack.
+
+### Heavy Workload Lane Separation (Step 12)
+
+- Added `app/worker/heavy_queue.py` — dedicated Redis-backed queue for export generation and photo variant processing, fully isolated from the analysis queue (`heavy:*` namespace vs `analysis:*`).
+- Extended `WorkerRuntime` with a separate `heavy_concurrency_limiter` semaphore, independent lease timeout (`WORKER_HEAVY_JOB_LEASE_TIMEOUT_SECONDS`, default 1800 s), reap interval, and inflight task set.
+- Added `HeavyWorkerJobExecutor` and `_run_heavy_job_task` in `runner.py` with the same lease-renewal and ack discipline as the analysis lane.
+- Added `_run_heavy_lease_reaper_if_due` — independent reaper for expired heavy leases with requeue/drop semantics.
+- Heavy lane is opt-in via `WORKER_HEAVY_CONCURRENCY` (default 0); setting it > 0 enables the lane without touching the analysis flow.
+- Added `TestHeavyWorkerJobExecutor`, `TestRunHeavyJobTask`, `TestRunHeavyLeaseReaper`, and `TestHeavyWorkerLaneSeparation` test classes (38 tests total).
+
+### Multi-Pipeline Vision Layer (Step 15)
+
+- Added `app/ai/pipeline_contracts.py` with three frozen inter-stage data contracts: `DetectionStageResult`, `ExtractionStageResult`, `WorkCatalogMappingResult`, and the aggregating `PipelineRunResult` with `to_legacy_dict()` for backward compatibility.
+- Added `app/ai/pipeline.py` with `StagedVisionPipeline` (`@runtime_checkable` Protocol), `LegacyProviderAdapter` (wraps existing providers), and `PipelineOrchestrator` with explicit routing: staged path for new providers, legacy path for mock/claude.
+- Updated `app/ai/analysis_service.run_project_analysis()` to run through `PipelineOrchestrator`; downstream code (AnalysisService, repository) is unchanged — output dict is identical.
+- Added `tests/test_vision_pipeline.py` with 39 integration tests covering contract immutability, decomposition safety defaults, routing, end-to-end legacy path with MockVisionProvider, synthetic staged provider path, and `run_project_analysis()` backward compatibility.
+
+### Disaster Recovery Documentation
+
+- Added `docs/18_full_state_dr_operator_runbook_2026-03-31.md` with the detailed operator procedure.
+- Added `docs/19_full_state_dr_incident_checklist_2026-03-31.md` as the 1-page incident checklist.
+- Added `docs/20_full_state_dr_copy_paste_playbook_2026-03-31.md` with exact command sequences.
+- Added `docs/21_full_state_dr_handoff_template_2026-03-31.md` as the operator handoff record template.
+- Added `docs/22_full_state_dr_approval_packet_2026-03-31.md` as the formal audit/compliance approval record.
+- Updated `docs/BACKUP_RESTORE.md` to distinguish `db-only` and `db-plus-s3-media-manifest`.
+
 ## v0.6.002 - 2026-03-30
 
 Work catalog subsystem expansion: analysis profile, pricing profile, tenant override, and runtime workflow subsystems fully wired and hardened.

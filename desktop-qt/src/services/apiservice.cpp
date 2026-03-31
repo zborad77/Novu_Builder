@@ -62,6 +62,12 @@ LoginResultDto ApiService::login(const QString &email, const QString &password, 
     if (errorMessage) {
         errorMessage->clear();
     }
+    if (m_baseUrl.trimmed().isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QString::fromUtf8("Server neni nastaven. Nejdrive nastavte URL firemniho NOVU serveru.");
+        }
+        return {};
+    }
 
     QJsonObject body;
     body["email"] = email;
@@ -495,12 +501,16 @@ QByteArray waitForReply(QNetworkReply *reply, int timeoutMs, QString *errorMessa
 
 void ApiService::setGlobalBaseUrl(const QString &baseUrl)
 {
-    s_globalBaseUrl = baseUrl;
+    QString normalized = baseUrl.trimmed();
+    while (normalized.endsWith('/')) {
+        normalized.chop(1);
+    }
+    s_globalBaseUrl = normalized;
 }
 
 QString ApiService::globalBaseUrl()
 {
-    return s_globalBaseUrl.isEmpty() ? QStringLiteral("http://127.0.0.1:8000/api/v1") : s_globalBaseUrl;
+    return s_globalBaseUrl;
 }
 
 ApiService::ApiService(QString baseUrl)

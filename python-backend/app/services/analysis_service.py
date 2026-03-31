@@ -16,6 +16,8 @@ from app.db.session import (
 )
 from app.models import AnalysisJob, AnalysisResult, Project
 from app.repositories.analysis_repository import (
+    ANALYSIS_JOB_TYPE_MANUAL_TRIGGER,
+    ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
     ANALYSIS_JOB_STATUS_CANCELED,
     ANALYSIS_JOB_STATUS_COMPLETED,
     ANALYSIS_JOB_STATUS_DEAD_LETTER,
@@ -216,12 +218,16 @@ class AnalysisService:
         repository: AnalysisRepository,
         *,
         organization_id: str | None,
+        job_type: str = ANALYSIS_JOB_TYPE_MANUAL_TRIGGER,
     ) -> None:
         if not organization_id:
             return
 
         settings = get_settings()
-        active_jobs = await repository.count_active_jobs_for_organization(organization_id)
+        active_jobs = await repository.count_active_jobs_for_organization(
+            organization_id,
+            job_type=job_type,
+        )
         if active_jobs >= settings.analysis_jobs_per_tenant_limit:
             logger.warning(
                 "worker.tenant_active_job_limit_reached",
@@ -365,7 +371,10 @@ class AnalysisService:
                          parent_job_id: str | None = None, retry_count: int = 0,
                          job_queue=None, work_type_code: str | None = None) -> AnalysisJobCreateResult:
         """Creates a queued job record, or returns an existing active job (idempotent)."""
-        existing = await self.repository.get_active_job_for_project(project.id)
+        existing = await self.repository.get_active_job_for_project_by_type(
+            project.id,
+            job_type=ANALYSIS_JOB_TYPE_MANUAL_TRIGGER,
+        )
         if existing:
             record_duplicate_prevented("active_job_exists")
             logger.info(
@@ -379,6 +388,7 @@ class AnalysisService:
         await self._enforce_tenant_active_job_limit(
             self.repository,
             organization_id=getattr(project, "organization_id", None),
+            job_type=ANALYSIS_JOB_TYPE_MANUAL_TRIGGER,
         )
         await self._enforce_queue_precheck(job_queue)
 
@@ -408,12 +418,307 @@ class AnalysisService:
             user_id=user_id,
             parent_job_id=parent_job_id,
             retry_count=retry_count,
+            job_type=ANALYSIS_JOB_TYPE_MANUAL_TRIGGER,
             requested_work_type_code=resolved_profile.work_type_code if resolved_profile else None,
             analysis_profile_id=resolved_profile.analysis_profile.id if resolved_profile else None,
             resolved_analysis_profile_code=resolved_profile.profile_code if resolved_profile else None,
             resolved_analysis_profile_version=resolved_profile.profile_version if resolved_profile else None,
         )
         return AnalysisJobCreateResult(job=job, created_new=True)
+
+    async def enqueue_quote_recalculation_job(
+        self,
+        *,
+        project_id: str,
+        organization_id: str | None,
+        requested_by_user_id: str | None,
+        parent_job_id: str | None,
+        job_queue,
+        is_superadmin_context: bool,
+        session_factory=AsyncSessionFactory,
+    ) -> AnalysisJobCreateResult:
+        async with session_factory() as session:
+            repo = AnalysisRepository(session)
+            if organization_id is not None:
+                project = await repo.get_project_in_org(project_id, organization_id)
+            else:
+                project = await session.get(Project, project_id)
+
+            if not project:
+                raise HTTPException(status_code=404, detail="Case not found.")
+
+            existing = await repo.get_active_job_for_project_by_type(
+                project_id,
+                job_type=ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
+            )
+            if existing:
+                record_duplicate_prevented("quote_recalculation_active_job_exists")
+                logger.info(
+                    "worker.quote_recalculation_job_already_active",
+                    project_id=project_id,
+                    tenant_id=organization_id,
+                    existing_job_id=existing.id,
+                    status=existing.status,
+                )
+                return AnalysisJobCreateResult(job=existing, created_new=False)
+
+            initial_payload = json.dumps(
+                {
+                    "jobType": ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
+                    "projectId": project_id,
+                    "parentJobId": parent_job_id,
+                },
+                ensure_ascii=False,
+            )
+            job = await repo.create_queued_job(
+                project,
+                user_id=requested_by_user_id,
+                parent_job_id=parent_job_id,
+                retry_count=0,
+                job_type=ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
+                input_payload=initial_payload,
+            )
+
+        if job_queue is None:
+            job.status = ANALYSIS_JOB_STATUS_FAILED
+            job.error_message = "Quote recalculation queue is unavailable."
+            await self.fail_job_before_processing(
+                job.id,
+                message="Quote recalculation queue is unavailable.",
+            )
+            logger.warning(
+                "worker.quote_recalculation_enqueue_failed",
+                job_id=job.id,
+                project_id=project_id,
+                reason="job_queue_unavailable",
+            )
+            return AnalysisJobCreateResult(job=job, created_new=True)
+
+        settings = get_settings()
+        try:
+            await enqueue_analysis_job(
+                job_queue,
+                job_id=job.id,
+                project_id=project_id,
+                organization_id=organization_id,
+                is_superadmin_context=is_superadmin_context,
+                max_depth=settings.analysis_queue_max_depth,
+            )
+        except AnalysisJobQueueCapacityExceededError:
+            job.status = ANALYSIS_JOB_STATUS_FAILED
+            job.error_message = "Quote recalculation queue is full. Please retry later."
+            await self.fail_job_before_processing(
+                job.id,
+                message="Quote recalculation queue is full. Please retry later.",
+            )
+            logger.warning(
+                "worker.quote_recalculation_enqueue_failed",
+                job_id=job.id,
+                project_id=project_id,
+                reason="queue_capacity_reached",
+            )
+        return AnalysisJobCreateResult(job=job, created_new=True)
+
+    async def _execute_quote_recalculation_job(
+        self,
+        job_id: str,
+        project_id: str,
+        organization_id: str | None = None,
+        *,
+        is_superadmin_context: bool = False,
+        lease_token: str | None = None,
+        worker_id: str | None = None,
+    ) -> AnalysisJobExecutionResult:
+        from app.repositories.quote_variant_repository import QuoteVariantRepository
+        from app.services.quote_variant_service import (
+            QuoteVariantRecalculationUnavailableError,
+            QuoteVariantService,
+        )
+
+        log = logger.bind(
+            job_id=job_id,
+            project_id=project_id,
+            tenant_id=organization_id,
+            worker_id=worker_id,
+            job_type=ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
+        )
+        settings = get_settings()
+
+        if organization_id is None and not is_superadmin_context:
+            log.warning(
+                "SECURITY_EVENT: execute_quote_recalculation_missing_org_id",
+                job_id=job_id,
+                project_id=project_id,
+            )
+            await self.fail_job_before_processing(
+                job_id,
+                message="Invalid worker payload: organization_id is required for non-superadmin context.",
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="organization_id is required for non-superadmin context.",
+            )
+
+        async with WorkerAsyncSessionFactory() as session:
+            repo = AnalysisRepository(session)
+            job = await repo.get_analysis_job(job_id)
+            if not job:
+                log.error("worker.quote_recalculation_job_not_found")
+                raise HTTPException(status_code=404, detail="Quote recalculation job not found.")
+
+            if job.status == ANALYSIS_JOB_STATUS_COMPLETED:
+                record_duplicate_prevented("quote_recalculation_already_completed")
+                log.info("worker.quote_recalculation_skipped", reason="already_completed")
+                return AnalysisJobExecutionResult(disposition="skipped")
+
+            if job.status != ANALYSIS_JOB_STATUS_QUEUED:
+                record_duplicate_prevented("quote_recalculation_not_queued")
+                log.warning(
+                    "worker.quote_recalculation_skipped",
+                    reason="not_queued",
+                    current_status=job.status,
+                )
+                return AnalysisJobExecutionResult(disposition="skipped")
+
+            if job.project_id != project_id:
+                await _fail_job_and_raise(
+                    job,
+                    repo,
+                    message=f"Job {job_id} belongs to project {job.project_id}, not {project_id}.",
+                    status_code=403,
+                    detail="Job project mismatch.",
+                )
+
+            if organization_id is not None:
+                project = await repo.get_project_in_org(project_id, organization_id)
+            else:
+                project = await session.get(Project, project_id)
+            if not project:
+                await _fail_job_and_raise(
+                    job,
+                    repo,
+                    message="Project not found.",
+                    status_code=403,
+                    detail="Project not found.",
+                )
+
+            claim_timestamp = datetime.now(UTC)
+            try:
+                await repo.mark_job_running(
+                    job,
+                    lease_token=lease_token,
+                    worker_id=worker_id,
+                    leased_at=claim_timestamp,
+                    heartbeat_at=claim_timestamp,
+                )
+            except InvalidAnalysisJobStatusTransition:
+                record_duplicate_prevented("quote_recalculation_invalid_status_transition")
+                log.warning(
+                    "worker.quote_recalculation_skipped",
+                    reason="invalid_status_transition",
+                    current_status=job.status,
+                )
+                return AnalysisJobExecutionResult(disposition="skipped")
+
+            if lease_token is not None and worker_id is not None:
+                await repo.assert_job_lease_owned(
+                    job,
+                    lease_token=lease_token,
+                    worker_id=worker_id,
+                )
+
+            job.input_payload = json.dumps(
+                {
+                    "jobType": ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
+                    "projectId": project_id,
+                    "organizationId": organization_id,
+                    "parentJobId": job.parent_job_id,
+                },
+                ensure_ascii=False,
+            )
+            await session.commit()
+
+        try:
+            async with WorkerAsyncSessionFactory() as quote_session:
+                result = await QuoteVariantService(
+                    QuoteVariantRepository(quote_session),
+                    WorkCatalogRepository(quote_session),
+                ).recalculate_quote_variants_with_context(
+                    project_id,
+                    raise_on_unavailable=True,
+                )
+        except QuoteVariantRecalculationUnavailableError as exc:
+            failure_message = str(exc)
+        except Exception as exc:
+            failure_message = str(exc)
+            failure_traceback = traceback.format_exc()
+        else:
+            failure_message = None
+            failure_traceback = None
+
+        async with WorkerAsyncSessionFactory() as session:
+            repo = AnalysisRepository(session)
+            job = await repo.get_analysis_job(job_id)
+            if not job:
+                log.error("worker.quote_recalculation_job_disappeared_before_result")
+                return AnalysisJobExecutionResult(disposition="skipped")
+
+            if lease_token is not None and worker_id is not None:
+                try:
+                    await repo.assert_job_lease_owned(
+                        job,
+                        lease_token=lease_token,
+                        worker_id=worker_id,
+                    )
+                except AnalysisJobLeaseOwnershipError:
+                    log.warning(
+                        "worker.quote_recalculation_aborted_lost_db_lease",
+                        job_id=job_id,
+                        lease_token=lease_token,
+                        worker_id=worker_id,
+                    )
+                    raise
+
+            if job.status == ANALYSIS_JOB_STATUS_CANCELED:
+                log.info("worker.quote_recalculation_cancelled_during_processing", job_id=job_id)
+                return AnalysisJobExecutionResult(disposition="skipped")
+
+            if failure_message is not None:
+                try:
+                    return await self._handle_attempt_failure(
+                        repo,
+                        job,
+                        message=failure_message,
+                        error_traceback=failure_traceback,
+                        log=log,
+                        settings=settings,
+                    )
+                except InvalidAnalysisJobStatusTransition:
+                    log.warning(
+                        "worker.quote_recalculation_fail_rejected",
+                        job_id=job_id,
+                        current_status=job.status,
+                    )
+                return AnalysisJobExecutionResult(disposition="skipped")
+
+            await repo.complete_job_without_result(
+                job,
+                output_summary=QuoteVariantService.build_recalculation_output_summary(result),
+            )
+            duration = _job_duration_seconds(job)
+
+        observe_job_outcome(status="completed", duration_seconds=duration)
+        log.info(
+            "worker.quote_recalculation_finished",
+            status="completed",
+            duration_seconds=duration,
+            variant_count=result.variant_count,
+            source=result.source,
+        )
+        return AnalysisJobExecutionResult(
+            disposition="completed",
+            attempt_count=_job_attempt_count(job),
+        )
 
     async def execute_job(
         self,
@@ -424,6 +729,7 @@ class AnalysisService:
         is_superadmin_context: bool = False,
         lease_token: str | None = None,
         worker_id: str | None = None,
+        job_queue=None,
     ) -> AnalysisJobExecutionResult:
         """Runs the analysis in the background using the worker DB pool.
 
@@ -436,6 +742,24 @@ class AnalysisService:
         set is_superadmin_context=True when intentionally omitting organization_id;
         otherwise a 403 is raised to prevent accidental tenant-isolation bypass.
         """
+        async with WorkerAsyncSessionFactory() as session:
+            repo = AnalysisRepository(session)
+            job = await repo.get_analysis_job(job_id)
+            if not job:
+                logger.error("worker.job_not_found", job_id=job_id, project_id=project_id)
+                raise HTTPException(status_code=404, detail="Analysis job not found.")
+            job_type = _optional_str_attr(job, "job_type") or ANALYSIS_JOB_TYPE_MANUAL_TRIGGER
+
+        if job_type == ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION:
+            return await self._execute_quote_recalculation_job(
+                job_id,
+                project_id,
+                organization_id,
+                is_superadmin_context=is_superadmin_context,
+                lease_token=lease_token,
+                worker_id=worker_id,
+            )
+
         log = logger.bind(
             job_id=job_id,
             project_id=project_id,
@@ -814,15 +1138,27 @@ class AnalysisService:
             estimated_area=analysis.get("estimatedAreaSqm"),
         )
 
-        # Non-critical: recalculate quote variants in a dedicated short session.
-        try:
-            async with WorkerAsyncSessionFactory() as qv_session:
-                from app.repositories.quote_variant_repository import QuoteVariantRepository
-                from app.services.quote_variant_service import QuoteVariantService
-                await QuoteVariantService(QuoteVariantRepository(qv_session)).recalculate_quote_variants(project_id)
-            log.info("worker.quote_variants_recalculated")
-        except Exception as qe:
-            log.warning("worker.quote_variants_failed", error=str(qe))
+        quote_job_result = await self.enqueue_quote_recalculation_job(
+            project_id=project_id,
+            organization_id=organization_id,
+            requested_by_user_id=_optional_str_attr(job, "requested_by_user_id"),
+            parent_job_id=job.id,
+            job_queue=job_queue,
+            is_superadmin_context=is_superadmin_context,
+            session_factory=WorkerAsyncSessionFactory,
+        )
+        if quote_job_result.created_new:
+            log.info(
+                "worker.quote_recalculation_job_enqueued",
+                quote_job_id=quote_job_result.job.id,
+                quote_job_status=quote_job_result.job.status,
+            )
+        else:
+            log.info(
+                "worker.quote_recalculation_job_reused",
+                quote_job_id=quote_job_result.job.id,
+                quote_job_status=quote_job_result.job.status,
+            )
         return AnalysisJobExecutionResult(
             disposition="completed",
             attempt_count=job_attempt_count,

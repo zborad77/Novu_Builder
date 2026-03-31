@@ -26,9 +26,10 @@ from app.schemas.company import (
 )
 from app.core.limiter import limiter
 from app.core.security import enforce_password_strength
-from app.core.audit import write_audit_log
+from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit, write_audit_log
 from app.services.analysis_service import AnalysisService, to_job_read
 from app.services.company_service import CompanyService
+from app.services.auth_service import hash_password
 
 import structlog
 
@@ -197,7 +198,6 @@ async def reset_user_password(
     user_id: str,
     payload: ResetPasswordPayload,
     current_user: AuthUserRead = Depends(require_admin_capability("admin:write")),
-    service: CompanyService = Depends(get_company_service),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
@@ -209,14 +209,10 @@ async def reset_user_password(
     if not target:
         raise HTTPException(status_code=404, detail="User not found.")
 
-    updated = await service.patch_user(user_id, AdminUserPatch(password=payload.password))
-    if not updated:
-        raise HTTPException(status_code=404, detail="User not found.")
-
+    target.password_hash = hash_password(payload.password)
     # Invalidate all existing tokens for the target user (R-SEC-08).
     # Without this, stolen tokens remain valid until natural expiry (up to 60 min).
     target.tokens_valid_after = datetime.now(UTC).replace(microsecond=0)
-    await session.commit()
 
     logger.warning(
         "admin.user.reset_password",
@@ -225,14 +221,24 @@ async def reset_user_password(
         target_email=target.email,
     )
 
-    await write_audit_log(
-        session,
-        current_user_id=current_user.id,
-        action="admin.user.reset_password",
-        resource_type="user",
-        resource_id=user_id,
-        detail={"target_email": target.email, "target_org": target.organization_id},
-    )
+    try:
+        await commit_security_critical_audit(
+            session,
+            current_user_id=current_user.id,
+            action="admin.user.reset_password",
+            resource_type="user",
+            resource_id=user_id,
+            detail={"target_email": target.email, "target_org": target.organization_id},
+        )
+    except SecurityAuditWriteError as exc:
+        await session.rollback()
+        logger.error(
+            "admin.user.reset_password_audit_enforcement_failed",
+            admin_id=current_user.id,
+            target_user_id=user_id,
+            error=str(exc),
+        )
+        raise HTTPException(status_code=503, detail="Security audit subsystem unavailable. Retry later.") from exc
 
 
 # ── Analysis Jobs (all orgs) ───────────────────────────────────────────────────
@@ -586,19 +592,29 @@ async def impersonate_user(
         algorithm=settings.jwt_algorithm,
     )
 
-    await write_audit_log(
-        session,
-        current_user_id=current_user.id,
-        action="admin.impersonate",
-        resource_type="user",
-        resource_id=target.id,
-        detail={
-            "impersonated_email": target.email,
-            "impersonated_role": target.role,
-            "impersonated_org": target.organization_id,
-            "expires_minutes": 15,
-        },
-    )
+    try:
+        await commit_security_critical_audit(
+            session,
+            current_user_id=current_user.id,
+            action="admin.impersonate",
+            resource_type="user",
+            resource_id=target.id,
+            detail={
+                "impersonated_email": target.email,
+                "impersonated_role": target.role,
+                "impersonated_org": target.organization_id,
+                "expires_minutes": 15,
+            },
+        )
+    except SecurityAuditWriteError as exc:
+        await session.rollback()
+        logger.error(
+            "admin.impersonate_audit_enforcement_failed",
+            admin_id=current_user.id,
+            target_user_id=target.id,
+            error=str(exc),
+        )
+        raise HTTPException(status_code=503, detail="Security audit subsystem unavailable. Retry later.") from exc
 
     return ImpersonateResponse(
         accessToken=token,

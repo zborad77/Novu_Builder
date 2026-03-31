@@ -14,6 +14,7 @@ Required environment variables when STORAGE_BACKEND=s3:
 """
 
 import asyncio
+from datetime import UTC
 import os
 from pathlib import Path
 from time import time_ns
@@ -189,6 +190,33 @@ def _sync_list_storage_keys(*, prefix: str | None = None) -> list[str]:
     return keys
 
 
+def _sync_list_storage_objects(*, prefix: str | None = None) -> list[dict[str, object]]:
+    client = _get_s3_client()
+    paginator = client.get_paginator("list_objects_v2")
+    objects: list[dict[str, object]] = []
+
+    pagination_kwargs = {"Bucket": _s3_bucket()}
+    if prefix:
+        pagination_kwargs["Prefix"] = prefix
+
+    for page in paginator.paginate(**pagination_kwargs):
+        for item in page.get("Contents", []):
+            key = item.get("Key")
+            if not isinstance(key, str) or not key:
+                continue
+            last_modified = item.get("LastModified")
+            if last_modified is not None and getattr(last_modified, "tzinfo", None) is None:
+                last_modified = last_modified.replace(tzinfo=UTC)
+            objects.append(
+                {
+                    "key": key,
+                    "last_modified_at": last_modified,
+                }
+            )
+    objects.sort(key=lambda item: str(item["key"]))
+    return objects
+
+
 def _sync_delete_storage_file(*, relative_storage_key: str) -> None:
     try:
         client = _get_s3_client()
@@ -259,6 +287,13 @@ async def storage_key_exists(*, relative_storage_key: str) -> bool:
 async def list_storage_keys(*, prefix: str | None = None) -> list[str]:
     return await asyncio.to_thread(
         _sync_list_storage_keys,
+        prefix=prefix,
+    )
+
+
+async def list_storage_objects(*, prefix: str | None = None) -> list[dict[str, object]]:
+    return await asyncio.to_thread(
+        _sync_list_storage_objects,
         prefix=prefix,
     )
 

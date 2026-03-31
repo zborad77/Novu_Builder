@@ -123,6 +123,13 @@ extract_manifest_string_value() {
   sed -nE "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\1/p" "$manifest_file" | head -1
 }
 
+extract_manifest_int_value() {
+  local key="$1"
+  local manifest_file="$2"
+
+  sed -nE "s/.*\"${key}\"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p" "$manifest_file" | head -1
+}
+
 S3_PROTECTION_PREREQ_STATUS="NOT EXECUTED"
 S3_PROTECTION_PREREQ_REASON="not required for this verify flow"
 S3_PRE_RESTORE_VALIDATION_STATUS="NOT EXECUTED"
@@ -139,6 +146,8 @@ SIGNED_URL_VALIDATION_STATUS="NOT EXECUTED"
 SIGNED_URL_VALIDATION_REASON="signed URL/access path validation has not been checked"
 APP_MEDIA_SMOKE_STATUS="NOT EXECUTED"
 APP_MEDIA_SMOKE_REASON="application media smoke validation has not been checked"
+FULL_STATE_S3_MANIFEST=0
+MANIFEST_PRODUCTION_DR_ELIGIBLE="false"
 # Full bi-directional storage consistency check is NOT run by verify_restore.sh.
 # verify_restore.sh covers sampled DB-to-storage reference validation only.
 # For a post-restore full consistency check run:
@@ -324,9 +333,51 @@ validate_s3_pre_restore_guards() {
   fi
 }
 
+validate_s3_media_manifest_pairing() {
+  local manifest_file="$1"
+  local backup_file="$2"
+  local media_manifest_path="$3"
+  local source_bucket source_region recovery_point media_backup_file media_manifest_file
+  local media_bucket media_region media_recovery_point media_format media_count manifest_count
+
+  [[ -f "$media_manifest_path" ]] || die "S3 media manifest file is missing: $media_manifest_path"
+
+  media_format="$(extract_manifest_string_value "format" "$media_manifest_path")"
+  [[ "$media_format" == "novu-s3-media-manifest-v1" ]] \
+    || die "unsupported S3 media manifest format in $(basename "$media_manifest_path")"
+
+  source_bucket="$(extract_manifest_string_value "s3_bucket" "$manifest_file")"
+  source_region="$(extract_manifest_string_value "s3_region" "$manifest_file")"
+  recovery_point="$(extract_manifest_string_value "s3_recovery_point" "$manifest_file")"
+  media_backup_file="$(extract_manifest_string_value "db_backup_file" "$media_manifest_path")"
+  media_manifest_file="$(extract_manifest_string_value "db_manifest_file" "$media_manifest_path")"
+  media_bucket="$(extract_manifest_string_value "source_bucket" "$media_manifest_path")"
+  media_region="$(extract_manifest_string_value "source_region" "$media_manifest_path")"
+  media_recovery_point="$(extract_manifest_string_value "declared_recovery_point" "$media_manifest_path")"
+  media_count="$(extract_manifest_int_value "unique_object_count" "$media_manifest_path")"
+  manifest_count="$(extract_manifest_int_value "s3_object_count" "$manifest_file")"
+
+  [[ "$media_backup_file" == "$(basename "$backup_file")" ]] \
+    || die "S3 media manifest is not paired with this DB backup artifact"
+  [[ "$media_manifest_file" == "$(basename "$manifest_file")" ]] \
+    || die "S3 media manifest is not paired with this DB manifest"
+  [[ "$media_bucket" == "$source_bucket" ]] \
+    || die "S3 media manifest bucket does not match the DB manifest"
+  [[ "$media_region" == "$source_region" ]] \
+    || die "S3 media manifest region does not match the DB manifest"
+  [[ "$media_recovery_point" == "$recovery_point" ]] \
+    || die "S3 media manifest recovery point does not match the DB manifest"
+  [[ -n "$media_count" && "$media_count" =~ ^[0-9]+$ ]] \
+    || die "S3 media manifest does not report a valid unique_object_count"
+  [[ "$manifest_count" == "$media_count" ]] \
+    || die "S3 media manifest object count does not match the DB manifest"
+}
+
 validate_manifest_contract() {
   local manifest_file="$1"
   local backup_file="$2"
+  local backup_scope dr_contract dr_recovery_point_model media_manifest_file
+  local production_dr_eligible
 
   grep -q '"backup_contract"'        "$manifest_file" || die "manifest missing backup_contract"
   grep -q '"backup_scope"'           "$manifest_file" || die "manifest missing backup_scope"
@@ -336,22 +387,51 @@ validate_manifest_contract() {
   grep -q '"backup_version"'         "$manifest_file" || die "manifest missing backup_version"
   grep -q '"backup_contract"[[:space:]]*:[[:space:]]*"db-restore-v1"' "$manifest_file" \
     || die "unsupported manifest backup_contract"
-  grep -q '"backup_scope"[[:space:]]*:[[:space:]]*"db-only"' "$manifest_file" \
-    || die "manifest backup_scope must be 'db-only'"
-  grep -q '"production_dr_eligible"[[:space:]]*:[[:space:]]*false' "$manifest_file" \
-    || die "manifest production_dr_eligible must be false for this DB-only verify flow"
   grep -q "\"db_file\"[[:space:]]*:[[:space:]]*\"$(basename "$backup_file")\"" "$manifest_file" \
     || die "manifest db_file does not match backup artifact"
   grep -q "\"checksum_file\"[[:space:]]*:[[:space:]]*\"$(basename "${backup_file}.sha256")\"" "$manifest_file" \
     || die "manifest checksum_file does not match backup artifact"
-  if grep -q '"dr_contract"' "$manifest_file"; then
-    grep -q '"dr_contract"[[:space:]]*:[[:space:]]*"variant-a-foundation-v1"' "$manifest_file" \
-      || die "unsupported manifest dr_contract"
+  backup_scope="$(extract_manifest_string_value "backup_scope" "$manifest_file")"
+  dr_contract="$(extract_manifest_string_value "dr_contract" "$manifest_file")"
+  dr_recovery_point_model="$(extract_manifest_string_value "dr_recovery_point_model" "$manifest_file")"
+  media_manifest_file="$(extract_manifest_string_value "s3_media_manifest_file" "$manifest_file")"
+  production_dr_eligible="false"
+  if grep -q '"production_dr_eligible"[[:space:]]*:[[:space:]]*true' "$manifest_file"; then
+    production_dr_eligible="true"
   fi
-  if grep -q '"dr_recovery_point_model"' "$manifest_file"; then
-    grep -q '"dr_recovery_point_model"[[:space:]]*:[[:space:]]*"db-artifact-paired-with-explicit-s3-recovery-point"' "$manifest_file" \
-      || die "unsupported manifest dr_recovery_point_model"
-  fi
+  MANIFEST_PRODUCTION_DR_ELIGIBLE="$production_dr_eligible"
+
+  case "$backup_scope" in
+    db-only)
+      [[ "$production_dr_eligible" == "false" ]] \
+        || die "manifest production_dr_eligible must be false for the db-only verify flow"
+      [[ "$dr_contract" == "variant-a-foundation-v1" ]] \
+        || die "unsupported dr_contract for db-only backup scope"
+      [[ "$dr_recovery_point_model" == "db-artifact-paired-with-explicit-s3-recovery-point" ]] \
+        || die "unsupported dr_recovery_point_model for db-only backup scope"
+      ;;
+    db-plus-s3-media-manifest)
+      FULL_STATE_S3_MANIFEST=1
+      [[ "$production_dr_eligible" == "true" ]] \
+        || die "full-state S3 backup scope requires production_dr_eligible=true"
+      [[ "$dr_contract" == "s3-full-state-v1" ]] \
+        || die "unsupported dr_contract for full-state S3 backup scope"
+      [[ "$dr_recovery_point_model" == "db-artifact-paired-with-versioned-s3-object-manifest" ]] \
+        || die "unsupported dr_recovery_point_model for full-state S3 backup scope"
+      [[ -n "$media_manifest_file" ]] \
+        || die "full-state S3 backup scope requires s3_media_manifest_file"
+      grep -q '"s3_media_manifest_format"[[:space:]]*:[[:space:]]*"novu-s3-media-manifest-v1"' "$manifest_file" \
+        || die "full-state S3 backup scope requires s3_media_manifest_format=novu-s3-media-manifest-v1"
+      grep -q '"s3_media_restore_strategy"[[:space:]]*:[[:space:]]*"versioned-copy-to-isolated-bucket-v1"' "$manifest_file" \
+        || die "full-state S3 backup scope requires s3_media_restore_strategy=versioned-copy-to-isolated-bucket-v1"
+      extract_manifest_int_value "s3_object_count" "$manifest_file" >/dev/null \
+        || die "full-state S3 backup scope requires s3_object_count"
+      ;;
+    *)
+      die "unsupported manifest backup_scope"
+      ;;
+  esac
+
   if ! grep -q '"storage_backend"[[:space:]]*:[[:space:]]*"s3"' "$manifest_file"; then
     if manifest_has_non_null_string "s3_bucket" "$manifest_file" \
       || manifest_has_non_null_string "s3_region" "$manifest_file" \
@@ -373,16 +453,23 @@ validate_manifest_contract() {
 
   if grep -q '"app_env"[[:space:]]*:[[:space:]]*"production"' "$manifest_file" \
     && grep -q '"storage_backend"[[:space:]]*:[[:space:]]*"s3"' "$manifest_file"; then
-    if grep -q '"storage_archive_included"[[:space:]]*:[[:space:]]*true' "$manifest_file"; then
+    if [[ "$backup_scope" == "db-only" ]] && grep -q '"storage_archive_included"[[:space:]]*:[[:space:]]*true' "$manifest_file"; then
       die "manifest claims storage archive coverage for production+s3 backup; this DB-only verify flow refuses ambiguous production media claims"
     fi
-    if grep -q '"storage_coverage"' "$manifest_file" \
+    if [[ "$backup_scope" == "db-only" ]] && grep -q '"storage_coverage"' "$manifest_file" \
       && ! grep -q '"storage_coverage"[[:space:]]*:[[:space:]]*"authoritative-s3-not-covered-by-this-backup"' "$manifest_file"; then
       die "manifest storage_coverage is inconsistent with production+s3 DB-only semantics"
     fi
+    if [[ "$backup_scope" == "db-plus-s3-media-manifest" ]] && ! grep -q '"storage_coverage"[[:space:]]*:[[:space:]]*"authoritative-s3-media-manifest"' "$manifest_file"; then
+      die "manifest storage_coverage is inconsistent with full-state production+s3 semantics"
+    fi
     warn "Manifest declares APP_ENV=production with STORAGE_BACKEND=s3."
-    warn "This verify flow covers database state only. Authoritative S3/object storage remains out of scope."
-    if grep -q '"dr_contract"[[:space:]]*:[[:space:]]*"variant-a-foundation-v1"' "$manifest_file"; then
+    if [[ "$backup_scope" == "db-only" ]]; then
+      warn "This verify flow covers database state only. Authoritative S3/object storage remains out of scope."
+    else
+      warn "This verify flow validates pairing and preflight checks for the full-state S3 contract, but it does not restore media."
+    fi
+    if [[ "$dr_contract" == "variant-a-foundation-v1" ]]; then
       if manifest_has_non_null_string "s3_bucket" "$manifest_file" \
         && manifest_has_non_null_string "s3_region" "$manifest_file" \
         && manifest_has_non_null_string "s3_recovery_point" "$manifest_file" \
@@ -415,6 +502,11 @@ MANIFEST_FILE="$(resolve_manifest_file "$BACKUP_FILE")" \
   || die "manifest file missing for $(basename "$BACKUP_FILE")"
 validate_manifest_contract "$MANIFEST_FILE" "$BACKUP_FILE"
 log "Manifest OK: $(basename "$MANIFEST_FILE")"
+if [[ $FULL_STATE_S3_MANIFEST -eq 1 ]]; then
+  MEDIA_MANIFEST_PATH="$(dirname "$BACKUP_FILE")/$(extract_manifest_string_value "s3_media_manifest_file" "$MANIFEST_FILE")"
+  validate_s3_media_manifest_pairing "$MANIFEST_FILE" "$BACKUP_FILE" "$MEDIA_MANIFEST_PATH"
+  log "S3 media manifest pairing OK: $(basename "$MEDIA_MANIFEST_PATH")"
+fi
 
 load_env
 EXPECTED_HEAD="$(detect_expected_head "$BACKEND_DIR/alembic/versions")"
@@ -634,11 +726,19 @@ if [[ $FAILED -eq 0 ]]; then
   echo "Application media smoke detail: $APP_MEDIA_SMOKE_REASON"
   echo "Full DB<->S3 consistency check: $FULL_CONSISTENCY_CHECK_STATUS"
   echo "Full DB<->S3 consistency detail: $FULL_CONSISTENCY_CHECK_REASON"
-  echo "production_dr_eligible: false"
-  echo "Full-state restore claim: NOT VERIFIED"
-  echo "Production DR: NOT VERIFIED"
-  echo "This verifies the DB-only restore contract plus only the explicit sampled media checks emitted above."
-  echo "It does NOT validate runtime startup, service liveness, full media restore, or full S3/object storage recovery."
+  echo "production_dr_eligible (manifest): $MANIFEST_PRODUCTION_DR_ELIGIBLE"
+  if [[ $FULL_STATE_S3_MANIFEST -eq 1 ]]; then
+    echo "Full-state backup contract: DECLARED"
+    echo "Full-state restore claim: NOT VERIFIED"
+    echo "Production DR: NOT VERIFIED"
+    echo "This verifies backup-set pairing and sampled media usability for the full-state S3 contract."
+    echo "It does NOT validate service liveness, isolated media restore execution, or full post-restore S3 recovery."
+  else
+    echo "Full-state restore claim: NOT VERIFIED"
+    echo "Production DR: NOT VERIFIED"
+    echo "This verifies the DB-only restore contract plus only the explicit sampled media checks emitted above."
+    echo "It does NOT validate runtime startup, service liveness, full media restore, or full S3/object storage recovery."
+  fi
 else
   echo "FAIL - DB restore verification failed."
   exit 1

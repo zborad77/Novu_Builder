@@ -1,12 +1,11 @@
-// Dynamická konfigurace — přečte URL z prostředí, pokud je nastavena.
+// Dynamic mobile config.
+// API URL must be explicit - there is no implicit localhost fallback.
 //
-// Produkce:
-//   EXPO_PUBLIC_API_URL=https://api.zborad.cz/api/v1 npx expo start
+// Production / staging:
+//   EXPO_PUBLIC_API_URL=https://api.example.com/api/v1 npx expo start
 //
-// Dev (lokální IP):
-//   npx expo start   (použije hodnotu z app.json → extra.apiUrl)
-//
-// app.json je stále zdrojem pravdy pro veškerou ostatní konfiguraci.
+// Local network dev:
+//   EXPO_PUBLIC_API_URL=http://192.168.x.y:8000/api/v1 npx expo start
 
 const base = require('./app.json');
 

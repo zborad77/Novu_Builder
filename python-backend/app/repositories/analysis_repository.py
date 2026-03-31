@@ -15,6 +15,8 @@ ANALYSIS_JOB_STATUS_COMPLETED = "completed"
 ANALYSIS_JOB_STATUS_FAILED = "failed"
 ANALYSIS_JOB_STATUS_CANCELED = "canceled"
 ANALYSIS_JOB_STATUS_DEAD_LETTER = "dead_letter"
+ANALYSIS_JOB_TYPE_MANUAL_TRIGGER = "manual_trigger"
+ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION = "quote_recalculation"
 
 ANALYSIS_JOB_STATUSES = frozenset({
     ANALYSIS_JOB_STATUS_QUEUED,
@@ -343,7 +345,16 @@ class AnalysisRepository:
 
     async def get_active_job_for_project(self, project_id: str) -> AnalysisJob | None:
         """Return the most recent queued or running job for this project, or None."""
-        result = await self.session.execute(
+        return await self.get_active_job_for_project_by_type(project_id)
+
+    async def get_active_job_for_project_by_type(
+        self,
+        project_id: str,
+        *,
+        job_type: str | None = None,
+    ) -> AnalysisJob | None:
+        """Return the most recent queued or running job for this project and optional job type."""
+        query = (
             select(AnalysisJob)
             .where(
                 AnalysisJob.project_id == project_id,
@@ -355,10 +366,19 @@ class AnalysisRepository:
             .order_by(AnalysisJob.created_at.desc())
             .limit(1)
         )
+        if job_type is not None:
+            query = query.where(AnalysisJob.job_type == job_type)
+
+        result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
-    async def count_active_jobs_for_organization(self, organization_id: str) -> int:
-        result = await self.session.execute(
+    async def count_active_jobs_for_organization(
+        self,
+        organization_id: str,
+        *,
+        job_type: str | None = None,
+    ) -> int:
+        query = (
             select(func.count())
             .select_from(AnalysisJob)
             .join(Project, Project.id == AnalysisJob.project_id)
@@ -372,6 +392,10 @@ class AnalysisRepository:
                 ),
             )
         )
+        if job_type is not None:
+            query = query.where(AnalysisJob.job_type == job_type)
+
+        result = await self.session.execute(query)
         return int(result.scalar_one() or 0)
 
     async def list_analysis_jobs_by_project_id(self, project_id: str) -> list[AnalysisJob]:
@@ -389,6 +413,8 @@ class AnalysisRepository:
         user_id: str | None = None,
         parent_job_id: str | None = None,
         retry_count: int = 0,
+        job_type: str = ANALYSIS_JOB_TYPE_MANUAL_TRIGGER,
+        input_payload: str | None = None,
         requested_work_type_code: str | None = None,
         analysis_profile_id: str | None = None,
         resolved_analysis_profile_code: str | None = None,
@@ -405,7 +431,7 @@ class AnalysisRepository:
             id=f"job_{uuid4().hex[:8]}",
             project_id=project.id,
             status=ANALYSIS_JOB_STATUS_QUEUED,
-            job_type="manual_trigger",
+            job_type=job_type,
             requested_work_type_code=requested_work_type_code,
             analysis_profile_id=analysis_profile_id,
             resolved_analysis_profile_code=resolved_analysis_profile_code,
@@ -421,9 +447,38 @@ class AnalysisRepository:
             started_at=None,
             finished_at=None,
             error_message=None,
+            input_payload=input_payload,
             created_at=timestamp,
         )
         self.session.add(job)
+        await self.session.commit()
+        await self.session.refresh(job)
+        return job
+
+    async def complete_job_without_result(
+        self,
+        job: AnalysisJob,
+        *,
+        output_summary: dict[str, object] | None = None,
+    ) -> AnalysisJob:
+        current_status = normalize_analysis_job_status(job.status)
+        if current_status == ANALYSIS_JOB_STATUS_COMPLETED:
+            await self.session.refresh(job)
+            return job
+
+        timestamp = datetime.now(UTC)
+        self._set_job_status(
+            job,
+            ANALYSIS_JOB_STATUS_COMPLETED,
+            timestamp=timestamp,
+            error_message=None,
+            error_traceback=None,
+        )
+        job.output_summary = (
+            json.dumps(output_summary, ensure_ascii=False)
+            if output_summary is not None
+            else None
+        )
         await self.session.commit()
         await self.session.refresh(job)
         return job

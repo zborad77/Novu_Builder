@@ -212,6 +212,13 @@ WORK_CATALOG_RESOLUTION_DURATION_SECONDS = Histogram(
     buckets=[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5],
 )
 
+WORK_CATALOG_RESOLUTION_INPUT_ROWS = Histogram(
+    "novu_work_catalog_resolution_input_rows",
+    "Work catalog resolution input cardinality by path and input kind",
+    ["path", "kind"],
+    buckets=[1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500],
+)
+
 WORK_CATALOG_VALIDATION_FAILURES_TOTAL = Counter(
     "novu_work_catalog_validation_failures_total",
     "Work catalog validation failures by operation and coarse reason",
@@ -309,6 +316,15 @@ def observe_work_catalog_resolution(
         path=normalized_path,
         outcome=normalized_outcome,
     ).observe(max(0.0, float(duration_seconds)))
+
+
+def observe_work_catalog_resolution_input(*, path: str, kind: str, count: int) -> None:
+    normalized_path = path.strip().lower() or "unknown"
+    normalized_kind = kind.strip().lower() or "unknown"
+    WORK_CATALOG_RESOLUTION_INPUT_ROWS.labels(
+        path=normalized_path,
+        kind=normalized_kind,
+    ).observe(max(0, int(count)))
 
 
 def record_work_catalog_validation_failure(*, operation: str, reason: str) -> None:

@@ -147,3 +147,75 @@ async def test_write_audit_log_rolls_back_on_commit_failure():
     )
 
     session.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_write_audit_log_security_critical_raises_on_commit_failure():
+    from app.core.audit import AUDIT_POLICY_SECURITY_CRITICAL, SecurityAuditWriteError, write_audit_log
+
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=None)
+    session.add = MagicMock()
+    session.commit = AsyncMock(side_effect=RuntimeError("commit failed"))
+    session.rollback = AsyncMock()
+
+    with pytest.raises(SecurityAuditWriteError):
+        await write_audit_log(
+            session,
+            current_user_id="usr-1",
+            action="auth.change_password",
+            resource_type="user",
+            resource_id="usr-1",
+            detail={"field": "password_hash"},
+            policy=AUDIT_POLICY_SECURITY_CRITICAL,
+        )
+
+    session.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_write_audit_log_commit_false_stages_without_committing():
+    from app.core.audit import write_audit_log
+
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=None)
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+
+    await write_audit_log(
+        session,
+        current_user_id="usr-1",
+        action="auth.change_password",
+        resource_type="user",
+        resource_id="usr-1",
+        detail={"field": "password_hash"},
+        commit=False,
+    )
+
+    session.add.assert_called_once()
+    session.commit.assert_not_awaited()
+    session.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_commit_security_critical_audit_fails_closed_on_commit_failure():
+    from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit
+
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=None)
+    session.add = MagicMock()
+    session.commit = AsyncMock(side_effect=RuntimeError("commit failed"))
+    session.rollback = AsyncMock()
+
+    with pytest.raises(SecurityAuditWriteError):
+        await commit_security_critical_audit(
+            session,
+            current_user_id="usr-1",
+            action="auth.change_password",
+            resource_type="user",
+            resource_id="usr-1",
+            detail={"field": "password_hash"},
+        )
+
+    session.rollback.assert_awaited_once()

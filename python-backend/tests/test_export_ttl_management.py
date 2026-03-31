@@ -165,6 +165,64 @@ async def test_export_interruption_marks_generating_export_failed(monkeypatch, d
 
 
 @pytest.mark.asyncio
+async def test_quote_pdf_export_enqueues_heavy_job_when_lane_enabled(monkeypatch, db_session, test_tenants):
+    project_id = await _seed_project(db_session, test_tenants)
+    work_queue = AsyncMock()
+    service = ExportService(ExportRepository(db_session), work_queue=work_queue)
+    case_detail = MagicMock()
+    case_detail.id = project_id
+    case_detail.title = "Queued Quote PDF"
+    case_detail.finalProposal = MagicMock(subject="Nabidka")
+
+    settings = MagicMock()
+    settings.export_ttl_days = 7
+    settings.worker_heavy_concurrency = 1
+    settings.heavy_queue_max_depth = 25
+    monkeypatch.setattr(export_service_mod, "get_settings", lambda: settings)
+    enqueue = AsyncMock()
+    monkeypatch.setattr(export_service_mod, "enqueue_heavy_job", enqueue)
+    monkeypatch.setattr(export_service_mod, "write_storage_file", AsyncMock())
+
+    export = await service.create_quote_pdf_export(case_detail=case_detail)
+
+    row = await db_session.get(ProjectExport, export.id)
+    assert row is not None
+    assert row.status == "pending"
+    assert row.storage_key is None
+    assert export.status == "pending"
+    enqueue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_export_by_id_completes_pending_export(monkeypatch, db_session, test_tenants):
+    project_id = await _seed_project(db_session, test_tenants)
+    service = ExportService(ExportRepository(db_session))
+    case_detail = MagicMock()
+    case_detail.id = project_id
+    case_detail.title = "Worker Quote PDF"
+    case_detail.finalProposal = MagicMock(subject="Nabidka")
+
+    created = await service._create_pending_export_record(
+        export_id=f"exp_{uuid4().hex[:8]}",
+        project_id=project_id,
+        export_type="quote-pdf",
+        file_name="nabidka.pdf",
+        created_at=datetime.now(UTC),
+    )
+    monkeypatch.setattr(export_service_mod, "_build_pdf_bytes", lambda _detail: b"pdf-bytes")
+    monkeypatch.setattr(export_service_mod, "write_storage_file", AsyncMock(return_value=None))
+    monkeypatch.setattr(export_service_mod, "storage_key_exists", AsyncMock(return_value=True))
+
+    export = await service.process_export_by_id(created.id, case_detail=case_detail)
+
+    row = await db_session.get(ProjectExport, created.id)
+    assert export is not None
+    assert row is not None
+    assert row.status == "completed"
+    assert export.status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_get_export_marks_missing_completed_artifact_as_failed(monkeypatch, db_session, test_tenants):
     await db_session.execute(delete(ProjectExport))
     await db_session.commit()

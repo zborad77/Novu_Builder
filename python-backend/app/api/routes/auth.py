@@ -22,7 +22,7 @@ from app.schemas.auth import (
     RefreshRequest,
     ResetPasswordResponse,
 )
-from app.core.audit import write_audit_log
+from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit
 from app.core.email import send_password_reset_email
 from app.models import PasswordResetToken, User
 from app.services.auth_service import AuthService, hash_password
@@ -169,7 +169,24 @@ async def change_password(
     # Truncate to seconds so tokens issued in the same second are not falsely rejected
     # (JWT exp is integer-second precision; microseconds would cause off-by-one)
     user.tokens_valid_after = datetime.now(UTC).replace(microsecond=0)
-    await service.session.commit()
+    try:
+        await commit_security_critical_audit(
+            service.session,
+            current_user_id=current_user.id,
+            action="auth.change_password",
+            resource_type="user",
+            resource_id=current_user.id,
+            detail={"organization_id": current_user.organizationId},
+        )
+    except SecurityAuditWriteError as exc:
+        await service.session.rollback()
+        logger.error(
+            "auth.change_password_audit_enforcement_failed",
+            user_id=current_user.id,
+            organization_id=current_user.organizationId,
+            error=str(exc),
+        )
+        raise HTTPException(status_code=503, detail="Security audit subsystem unavailable. Retry later.") from exc
     logger.info(
         "auth.change_password_completed",
         client_ip=_client_ip(request),

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 import re
 import shutil
 import warnings
@@ -574,9 +575,49 @@ def _sync_list_storage_keys(*, prefix: str | None = None) -> list[str]:
     return keys
 
 
+def _sync_list_storage_objects(*, prefix: str | None = None) -> list[dict[str, object]]:
+    normalized_prefix = None
+    root = _storage_root_resolved()
+    if prefix is not None:
+        normalized_prefix = _normalize_relative_storage_key(prefix)
+        target_root = (root / normalized_prefix).resolve()
+        if not target_root.exists():
+            return []
+        try:
+            target_root.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("Invalid storage key: resolved path escapes STORAGE_ROOT.") from exc
+    else:
+        target_root = root
+
+    objects: list[dict[str, object]] = []
+    if not target_root.exists():
+        return objects
+
+    for path in target_root.rglob("*"):
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        objects.append(
+            {
+                "key": path.relative_to(root).as_posix(),
+                "last_modified_at": datetime.fromtimestamp(stat.st_mtime, tz=UTC),
+            }
+        )
+    objects.sort(key=lambda item: str(item["key"]))
+    return objects
+
+
 async def list_storage_keys(*, prefix: str | None = None) -> list[str]:
     return await asyncio.to_thread(
         _sync_list_storage_keys,
+        prefix=prefix,
+    )
+
+
+async def list_storage_objects(*, prefix: str | None = None) -> list[dict[str, object]]:
+    return await asyncio.to_thread(
+        _sync_list_storage_objects,
         prefix=prefix,
     )
 

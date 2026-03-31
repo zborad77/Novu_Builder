@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import secrets
 import time
 from dataclasses import dataclass
@@ -110,6 +111,58 @@ class _OperationalMetricsSnapshot:
     processing_jobs: int
     job_stuck_max_age_seconds: float
     worker: _WorkerHeartbeatSnapshot
+    queue_monitoring_available: bool = False
+    queue_state: str = "unavailable"
+
+
+@dataclass(frozen=True)
+class _JobProcessingReadinessSnapshot:
+    api_ready: bool
+    job_processing_ready: bool
+    strict_job_processing_ready: bool
+    worker_state: str
+    queue_state: str
+    grace_active: bool
+
+
+def _queue_runtime_state(job_queue) -> str:
+    if job_queue is None:
+        return "unavailable"
+    status_factory = getattr(job_queue, "runtime_status", None)
+    if callable(status_factory):
+        try:
+            status = status_factory()
+            if inspect.isawaitable(status):
+                return "unavailable"
+            state = getattr(status, "state", None)
+            if isinstance(state, str) and state:
+                return state
+        except Exception:
+            return "unavailable"
+    return "ready"
+
+
+def _queue_runtime_details(job_queue) -> dict[str, object] | None:
+    if job_queue is None:
+        return None
+    status_factory = getattr(job_queue, "runtime_status", None)
+    if not callable(status_factory):
+        return None
+    try:
+        status = status_factory()
+        if inspect.isawaitable(status):
+            return None
+    except Exception:
+        return None
+    return {
+        "mode": getattr(status, "mode", "single"),
+        "state": getattr(status, "state", "unknown"),
+        "candidateCount": getattr(status, "candidate_count", None),
+        "activeUrl": getattr(status, "active_url", None),
+        "degraded": getattr(status, "degraded", None),
+        "lastError": getattr(status, "last_error", None),
+        "lastFailoverAt": getattr(status, "last_failover_at", None),
+    }
 
 
 async def _refresh_operational_metrics(request: Request) -> None:
@@ -340,6 +393,8 @@ async def _collect_operational_metrics_snapshot(request: Request) -> _Operationa
     queue_length = 0
     processing_jobs = 0
     job_stuck_max_age_seconds = 0.0
+    queue_monitoring_available = False
+    queue_state = "unavailable"
     try:
         async with AsyncSessionFactory() as session:
             jobs_running, jobs_queued, job_stuck_max_age_seconds = await _query_job_counts(session)
@@ -349,16 +404,19 @@ async def _collect_operational_metrics_snapshot(request: Request) -> _Operationa
 
     _store_readiness_db_cache(request, ready=db_alive)
 
-    try:
-        queue_length, processing_jobs = await get_analysis_job_queue_counts(
-            getattr(request.app.state, "job_queue", None)
-        )
-    except Exception:
-        queue_length = 0
-        processing_jobs = 0
+    job_queue = getattr(request.app.state, "job_queue", None)
+    queue_state = _queue_runtime_state(job_queue)
+    if job_queue is not None:
+        try:
+            queue_length, processing_jobs = await get_analysis_job_queue_counts(job_queue)
+            queue_monitoring_available = True
+        except Exception:
+            queue_length = 0
+            processing_jobs = 0
+            queue_state = "unavailable"
 
     try:
-        worker_snapshot = await _get_worker_heartbeat_snapshot(getattr(request.app.state, "job_queue", None))
+        worker_snapshot = await _get_worker_heartbeat_snapshot(job_queue)
     except Exception:
         worker_snapshot = _WorkerHeartbeatSnapshot(
             alive=None,
@@ -375,6 +433,8 @@ async def _collect_operational_metrics_snapshot(request: Request) -> _Operationa
         processing_jobs=processing_jobs,
         job_stuck_max_age_seconds=job_stuck_max_age_seconds,
         worker=worker_snapshot,
+        queue_monitoring_available=queue_monitoring_available,
+        queue_state=queue_state,
     )
 
 
@@ -451,6 +511,78 @@ async def _is_ready(request: Request) -> bool:
         _startup_ready(request)
         and await _database_ready_cached(request)
         and await _storage_ready_cached(request)
+    )
+
+
+def _processing_grace_active(request: Request, *, now_monotonic: float | None = None) -> bool:
+    settings = get_settings()
+    grace_seconds = max(0, int(settings.readiness_processing_grace_seconds))
+    if grace_seconds == 0:
+        return False
+
+    started_at = getattr(request.app.state, "readiness_started_at_monotonic", None)
+    if not isinstance(started_at, (int, float)):
+        return False
+
+    now = _readiness_now() if now_monotonic is None else now_monotonic
+    return max(0.0, now - float(started_at)) < grace_seconds
+
+
+def _worker_state(snapshot: _WorkerHeartbeatSnapshot) -> str:
+    if snapshot.alive is None:
+        return "unknown"
+    if snapshot.alive:
+        return "ready"
+    if (snapshot.seen_instances or 0) > 0:
+        return "stale"
+    return "missing"
+
+
+def _evaluate_job_processing_readiness(
+    request: Request,
+    *,
+    api_ready: bool,
+    queue_monitoring_available: bool,
+    queue_state: str,
+    worker_snapshot: _WorkerHeartbeatSnapshot,
+    strict: bool,
+    now_monotonic: float | None = None,
+) -> _JobProcessingReadinessSnapshot:
+    strict_job_processing_ready = (
+        api_ready
+        and queue_monitoring_available
+        and queue_state in {"ready", "degraded"}
+        and worker_snapshot.alive is True
+    )
+    grace_active = api_ready and not strict_job_processing_ready and _processing_grace_active(
+        request,
+        now_monotonic=now_monotonic,
+    )
+    job_processing_ready = strict_job_processing_ready or (grace_active and not strict)
+    return _JobProcessingReadinessSnapshot(
+        api_ready=api_ready,
+        job_processing_ready=job_processing_ready,
+        strict_job_processing_ready=strict_job_processing_ready,
+        worker_state=_worker_state(worker_snapshot),
+        queue_state=queue_state if queue_monitoring_available else "unavailable",
+        grace_active=grace_active,
+    )
+
+
+async def _get_job_processing_readiness(
+    request: Request,
+    *,
+    strict: bool,
+) -> _JobProcessingReadinessSnapshot:
+    api_ready = await _is_ready(request)
+    snapshot = await _get_operational_metrics_snapshot_cached(request)
+    return _evaluate_job_processing_readiness(
+        request,
+        api_ready=api_ready,
+        queue_monitoring_available=snapshot.queue_monitoring_available,
+        queue_state=snapshot.queue_state,
+        worker_snapshot=snapshot.worker,
+        strict=strict,
     )
 
 
@@ -532,6 +664,34 @@ async def ready(request: Request, response: Response) -> dict[str, str]:
     return _probe_payload("not_ready")
 
 
+@router.get("/ready/processing")
+async def ready_processing(
+    request: Request,
+    response: Response,
+    strict: bool = False,
+) -> dict[str, object]:
+    """Readiness for background-job processing, separate from API/read readiness."""
+    readiness = await _get_job_processing_readiness(request, strict=strict)
+    _set_readiness_status(response, ready=readiness.job_processing_ready)
+
+    status_value = "ready"
+    if not readiness.job_processing_ready:
+        status_value = "not_ready"
+    elif readiness.grace_active and not readiness.strict_job_processing_ready:
+        status_value = "warming_up"
+
+    return {
+        "status": status_value,
+        "service": _PROBE_SERVICE_NAME,
+        "apiReady": readiness.api_ready,
+        "jobProcessingReady": readiness.job_processing_ready,
+        "workerState": readiness.worker_state,
+        "queueState": readiness.queue_state,
+        "graceActive": readiness.grace_active,
+        "strict": strict,
+    }
+
+
 @router.get("/health/internal", include_in_schema=False)
 async def health_internal(
     request: Request,
@@ -593,9 +753,11 @@ async def health_internal(
 
     try:
         queue_length, processing_jobs = await get_analysis_job_queue_counts(getattr(request.app.state, "job_queue", None))
+        queue_monitoring_available = getattr(request.app.state, "job_queue", None) is not None
     except Exception:
         queue_length = 0
         processing_jobs = 0
+        queue_monitoring_available = False
 
     worker_snapshot = _WorkerHeartbeatSnapshot(
         alive=None,
@@ -614,13 +776,25 @@ async def health_internal(
         )
 
     storage_live = await _storage_ready_cached(request)
-    ready = startup_ready and db_live and storage_live
+    api_ready = startup_ready and db_live and storage_live
+    job_processing = _evaluate_job_processing_readiness(
+        request,
+        api_ready=api_ready,
+        queue_monitoring_available=queue_monitoring_available,
+        queue_state=_queue_runtime_state(getattr(request.app.state, "job_queue", None)),
+        worker_snapshot=worker_snapshot,
+        strict=True,
+    )
+    ready = api_ready and job_processing.strict_job_processing_ready
     _set_readiness_status(response, ready=ready)
 
     return {
         "status": "ok" if ready else "degraded",
         "service": _PROBE_SERVICE_NAME,
         "ready": ready,
+        "apiReady": api_ready,
+        "jobProcessingReady": job_processing.strict_job_processing_ready,
+        "jobProcessingGraceActive": job_processing.grace_active,
         "startupChecks": request.app.state.startup_checks,
         "db": "ok" if db_live else "error",
         "storage": "ok" if storage_live else "error",
@@ -632,11 +806,16 @@ async def health_internal(
             "maxRunningAgeSeconds": round(max_running_age_seconds, 1),
             "lastCompletedAt": last_completed_at,
         },
+        "queue": _queue_runtime_details(getattr(request.app.state, "job_queue", None)),
         "worker": {
             "alive": worker_snapshot.alive,
+            "state": job_processing.worker_state,
             "lastSeenAt": worker_snapshot.last_seen_at,
             "aliveInstances": worker_snapshot.alive_instances,
             "seenInstances": worker_snapshot.seen_instances,
+        },
+        "queue": {
+            "state": job_processing.queue_state,
         },
         "timestamp": datetime.now(UTC).isoformat(),
     }

@@ -69,6 +69,7 @@ from app.work_catalog.domain import (
     PROJECT_WORK_ITEM_SOURCE_TYPES,
     PROJECT_WORK_ITEM_STATUSES,
     PROJECT_WORK_ITEM_VALUE_CONFIRMATION_STATUSES,
+    TENANT_PARAMETER_OVERRIDE_STATUSES,
     TENANT_WORK_TYPE_SETTING_STATUSES,
     VISION_DETECTION_STATUSES,
     WORK_TYPE_PARAMETER_DATA_TYPES,
@@ -367,14 +368,15 @@ def _resolved_parameter_read(
     )
 
 
-def _tenant_setting_read(setting) -> TenantWorkTypeSettingRead | None:
+def _tenant_setting_read(resolved: ResolvedTenantWorkTypeConfiguration) -> TenantWorkTypeSettingRead | None:
+    setting = resolved.tenant_setting
     if setting is None:
         return None
     return TenantWorkTypeSettingRead(
         status=setting.status,
         customDisplayName=setting.custom_display_name,
-        analysisProfileCode=setting.analysis_profile.code if setting.analysis_profile else None,
-        catalogPricingProfileCode=setting.catalog_pricing_profile.code if setting.catalog_pricing_profile else None,
+        analysisProfileCode=resolved.tenant_analysis_profile_code,
+        catalogPricingProfileCode=resolved.tenant_catalog_pricing_profile_code,
         tenantPricingProfileId=setting.tenant_pricing_profile_id,
         isBillableOverride=setting.is_billable_override,
         sortOrderOverride=setting.sort_order_override,
@@ -437,6 +439,46 @@ def _tenant_extra_parameter_read(
         ],
         configVersion=parameter.config_version,
         updatedAt=parameter.updated_at,
+    )
+
+
+def _resolved_extra_parameter_read(
+    parameter: ResolvedParameterDefinition,
+) -> TenantWorkTypeExtraParameterRead:
+    return TenantWorkTypeExtraParameterRead(
+        parameterDefinitionId=parameter.parameter_definition_id,
+        parameterScope=parameter.parameter_scope,
+        status=parameter.override_status or "active",
+        code=parameter.code,
+        slug=parameter.slug,
+        label=parameter.label,
+        description=parameter.description,
+        dataType=parameter.data_type,
+        unit=parameter.unit,
+        section=parameter.section,
+        sectionLabel=parameter.section_label,
+        required=parameter.required,
+        enabled=parameter.enabled,
+        sortOrder=parameter.sort_order,
+        minNumberValue=parameter.min_number_value,
+        maxNumberValue=parameter.max_number_value,
+        visionExtractable=parameter.vision_extractable,
+        manualOverrideAllowed=parameter.manual_override_allowed,
+        defaultTextValue=parameter.default_text_value,
+        defaultNumberValue=parameter.default_number_value,
+        defaultBooleanValue=parameter.default_boolean_value,
+        defaultOptionCode=parameter.default_option_code,
+        enumOptions=[
+            WorkTypeParameterOptionRead(
+                code=option.code,
+                label=option.label,
+                sortOrder=option.sort_order,
+                isActive=option.is_active,
+            )
+            for option in parameter.enum_options
+        ],
+        configVersion=parameter.setting_version,
+        updatedAt=None,
     )
 
 
@@ -783,11 +825,7 @@ class WorkCatalogService:
             description=work_type.description,
             state=work_type.state,
             isEnabled=resolved.is_enabled,
-            effectiveDisplayName=(
-                setting.custom_display_name
-                if setting and setting.custom_display_name
-                else work_type.name
-            ),
+            effectiveDisplayName=resolved.effective_display_name,
             category=_category_read(category),
             defaultUnit=work_type.default_unit,
             measurementKind=work_type.measurement_kind,
@@ -798,55 +836,14 @@ class WorkCatalogService:
             tenantPricingProfileId=resolved.tenant_pricing_profile_id,
             parameters=parameter_reads,
             parameterSections=self._build_parameter_sections(parameter_reads),
-            tenantSetting=_tenant_setting_read(setting),
+            tenantSetting=_tenant_setting_read(resolved),
             parameterOverrides=[
                 _tenant_parameter_override_read(override)
-                for override in sorted(
-                    resolved.parameter_overrides,
-                    key=lambda item: (
-                        item.sort_order_override if item.sort_order_override is not None else 10_000,
-                        item.parameter.code if item.parameter else item.work_type_parameter_id,
-                    ),
-                )
+                for override in resolved.sorted_parameter_overrides
             ],
             extraParameters=[
-                TenantWorkTypeExtraParameterRead(
-                    parameterDefinitionId=parameter.parameter_definition_id,
-                    parameterScope=parameter.parameter_scope,
-                    status=parameter.override_status or "active",
-                    code=parameter.code,
-                    slug=parameter.slug,
-                    label=parameter.label,
-                    description=parameter.description,
-                    dataType=parameter.data_type,
-                    unit=parameter.unit,
-                    section=parameter.section,
-                    sectionLabel=parameter.section_label,
-                    required=parameter.required,
-                    enabled=parameter.enabled,
-                    sortOrder=parameter.sort_order,
-                    minNumberValue=parameter.min_number_value,
-                    maxNumberValue=parameter.max_number_value,
-                    visionExtractable=parameter.vision_extractable,
-                    manualOverrideAllowed=parameter.manual_override_allowed,
-                    defaultTextValue=parameter.default_text_value,
-                    defaultNumberValue=parameter.default_number_value,
-                    defaultBooleanValue=parameter.default_boolean_value,
-                    defaultOptionCode=parameter.default_option_code,
-                    enumOptions=[
-                        WorkTypeParameterOptionRead(
-                            code=option.code,
-                            label=option.label,
-                            sortOrder=option.sort_order,
-                            isActive=option.is_active,
-                        )
-                        for option in parameter.enum_options
-                    ],
-                    configVersion=parameter.setting_version,
-                    updatedAt=None,
-                )
-                for parameter in resolved.parameters
-                if parameter.parameter_scope == "tenant_extra"
+                _resolved_extra_parameter_read(parameter)
+                for parameter in resolved.extra_parameter_definitions
             ],
         )
 
@@ -1089,6 +1086,46 @@ class WorkCatalogService:
             )
         return self._to_effective_read(resolved)
 
+    @staticmethod
+    def _validate_unique_parameter_override_payloads(
+        *,
+        work_type_code: str,
+        override_payloads: list,
+    ) -> None:
+        seen_codes: set[str] = set()
+        for override_payload in override_payloads:
+            parameter_code = normalize_machine_code(
+                override_payload.parameterCode,
+                field_name="parameterCode",
+            )
+            if parameter_code in seen_codes:
+                raise CatalogValidationError(
+                    f"Duplicate parameter override payload for '{parameter_code}' on work type '{work_type_code}'."
+                )
+            seen_codes.add(parameter_code)
+
+    @staticmethod
+    def _validate_unique_extra_parameter_payloads(
+        *,
+        work_type_code: str,
+        extra_payloads: list,
+    ) -> None:
+        seen_codes: set[str] = set()
+        seen_slugs: set[str] = set()
+        for extra_payload in extra_payloads:
+            parameter_code = normalize_machine_code(extra_payload.code, field_name="code")
+            parameter_slug = normalize_machine_code(extra_payload.slug, field_name="slug")
+            if parameter_code in seen_codes:
+                raise CatalogValidationError(
+                    f"Duplicate tenant extra parameter code '{parameter_code}' on work type '{work_type_code}'."
+                )
+            if parameter_slug in seen_slugs:
+                raise CatalogValidationError(
+                    f"Duplicate tenant extra parameter slug '{parameter_slug}' on work type '{work_type_code}'."
+                )
+            seen_codes.add(parameter_code)
+            seen_slugs.add(parameter_slug)
+
     async def upsert_tenant_setting(
         self,
         *,
@@ -1170,6 +1207,10 @@ class WorkCatalogService:
         updated.catalog_pricing_profile = catalog_pricing_profile
 
         parameter_map = {parameter.code: parameter for parameter in (work_type.parameters or [])}
+        self._validate_unique_parameter_override_payloads(
+            work_type_code=work_type.code,
+            override_payloads=list(getattr(payload, "parameterOverrides", [])),
+        )
         override_payload_rows: list[dict] = []
         for override_payload in getattr(payload, "parameterOverrides", []):
             parameter_code = normalize_machine_code(
@@ -1184,7 +1225,7 @@ class WorkCatalogService:
             override_status = normalize_enum(
                 override_payload.overrideStatus,
                 field_name="overrideStatus",
-                allowed={"inherited", "required", "optional", "hidden"},
+                allowed=TENANT_PARAMETER_OVERRIDE_STATUSES,
             )
             typed_defaults = coerce_parameter_value(
                 data_type=parameter.data_type,
@@ -1244,6 +1285,10 @@ class WorkCatalogService:
                 overrides_payload=override_payload_rows,
             )
 
+        self._validate_unique_extra_parameter_payloads(
+            work_type_code=work_type.code,
+            extra_payloads=list(getattr(payload, "extraParameters", [])),
+        )
         extra_payload_rows: list[dict] = []
         for extra_payload in getattr(payload, "extraParameters", []):
             parameter_code = normalize_machine_code(extra_payload.code, field_name="code")

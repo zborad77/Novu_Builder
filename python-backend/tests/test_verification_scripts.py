@@ -80,6 +80,42 @@ def test_verify_http_probes_success_for_ready_service(stub_server):
     server.RequestHandlerClass.routes = {
         ("GET", "/api/v1/health"): (200, {"status": "ok", "service": "python-backend"}),
         ("GET", "/api/v1/ready"): (200, {"status": "ready", "service": "python-backend"}),
+        ("GET", "/api/v1/ready/processing?strict=1"): (
+            200,
+            {
+                "status": "ready",
+                "service": "python-backend",
+                "apiReady": True,
+                "jobProcessingReady": True,
+                "workerState": "ready",
+                "queueState": "ready",
+                "graceActive": False,
+                "strict": True,
+            },
+        ),
+    }
+
+    assert verify_http_probes.main(["--base-url", base_url]) == 0
+
+
+def test_verify_http_probes_accepts_degraded_queue_state_when_processing_is_ready(stub_server):
+    server, base_url = stub_server
+    server.RequestHandlerClass.routes = {
+        ("GET", "/api/v1/health"): (200, {"status": "ok", "service": "python-backend"}),
+        ("GET", "/api/v1/ready"): (200, {"status": "ready", "service": "python-backend"}),
+        ("GET", "/api/v1/ready/processing?strict=1"): (
+            200,
+            {
+                "status": "ready",
+                "service": "python-backend",
+                "apiReady": True,
+                "jobProcessingReady": True,
+                "workerState": "ready",
+                "queueState": "degraded",
+                "graceActive": False,
+                "strict": True,
+            },
+        ),
     }
 
     assert verify_http_probes.main(["--base-url", base_url]) == 0
@@ -90,10 +126,69 @@ def test_verify_http_probes_fails_when_readiness_is_not_ready(stub_server):
     server.RequestHandlerClass.routes = {
         ("GET", "/api/v1/health"): (200, {"status": "ok", "service": "python-backend"}),
         ("GET", "/api/v1/ready"): (503, {"status": "not_ready", "service": "python-backend"}),
+        ("GET", "/api/v1/ready/processing?strict=1"): (
+            200,
+            {
+                "status": "ready",
+                "service": "python-backend",
+                "apiReady": True,
+                "jobProcessingReady": True,
+                "workerState": "ready",
+                "queueState": "ready",
+                "graceActive": False,
+                "strict": True,
+            },
+        ),
     }
 
     assert verify_http_probes.main(["--base-url", base_url]) == 1
     assert verify_http_probes.main(["--base-url", base_url, "--allow-not-ready"]) == 0
+
+
+def test_verify_http_probes_fails_when_processing_path_is_not_ready(stub_server):
+    server, base_url = stub_server
+    server.RequestHandlerClass.routes = {
+        ("GET", "/api/v1/health"): (200, {"status": "ok", "service": "python-backend"}),
+        ("GET", "/api/v1/ready"): (200, {"status": "ready", "service": "python-backend"}),
+        ("GET", "/api/v1/ready/processing?strict=1"): (
+            503,
+            {
+                "status": "not_ready",
+                "service": "python-backend",
+                "apiReady": True,
+                "jobProcessingReady": False,
+                "workerState": "stale",
+                "queueState": "ready",
+                "graceActive": False,
+                "strict": True,
+            },
+        ),
+    }
+
+    assert verify_http_probes.main(["--base-url", base_url]) == 1
+
+
+def test_verify_http_probes_accepts_processing_grace_when_requested(stub_server):
+    server, base_url = stub_server
+    server.RequestHandlerClass.routes = {
+        ("GET", "/api/v1/health"): (200, {"status": "ok", "service": "python-backend"}),
+        ("GET", "/api/v1/ready"): (200, {"status": "ready", "service": "python-backend"}),
+        ("GET", "/api/v1/ready/processing"): (
+            200,
+            {
+                "status": "warming_up",
+                "service": "python-backend",
+                "apiReady": True,
+                "jobProcessingReady": True,
+                "workerState": "missing",
+                "queueState": "ready",
+                "graceActive": True,
+                "strict": False,
+            },
+        ),
+    }
+
+    assert verify_http_probes.main(["--base-url", base_url, "--allow-processing-grace"]) == 0
 
 
 def test_verify_auth_smoke_returns_skip_without_credentials():
