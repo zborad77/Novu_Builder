@@ -437,6 +437,43 @@ async def admin_retry_job(
     return {"newJobId": new_job.id, "status": new_job.status, "retryCount": new_job.retry_count}
 
 
+@router.post("/jobs/{job_id}/reprocess", response_model=dict, status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit(get_settings().rate_limit_admin_write)
+async def admin_reprocess_dead_letter_job(
+    request: Request,
+    job_id: str,
+    current_user: AuthUserRead = Depends(require_admin_capability("admin:jobs")),
+    analysis_service: AnalysisService = Depends(get_analysis_service),
+    session: AsyncSession = Depends(get_db_session),
+    job_queue=Depends(get_job_queue),
+) -> dict:
+    settings = get_settings()
+    try:
+        job = await analysis_service.reprocess_dead_letter_job(
+            job_id,
+            organization_id=None,
+            is_superadmin_context=True,
+            job_queue=job_queue,
+        )
+    except AnalysisJobQueueCapacityExceededError:
+        raise HTTPException(status_code=429, detail="Analysis queue is full. Please retry later.")
+
+    await write_audit_log(
+        session,
+        current_user_id=current_user.id,
+        action="admin.job.reprocess",
+        resource_type="analysis_job",
+        resource_id=job_id,
+        detail={
+            "status": job.status,
+            "attempt_count": job.attempt_count,
+            "queue_max_depth": settings.analysis_queue_max_depth,
+        },
+    )
+
+    return {"jobId": job.id, "status": job.status, "attemptCount": job.attempt_count}
+
+
 # ── Logs ───────────────────────────────────────────────────────────────────────
 
 @router.get("/logs", response_model=list[str])

@@ -5,7 +5,7 @@ from app.api.deps import get_analysis_service, get_current_user, get_job_queue, 
 from app.core.audit import log_cross_tenant_denied
 from app.core.config import get_settings
 from app.core.limiter import limiter
-from app.schemas.analysis import AnalysisTriggerResponse
+from app.schemas.analysis import AnalysisJobCreateRequest, AnalysisTriggerResponse
 from app.schemas.auth import AuthUserRead
 from app.services.analysis_service import AnalysisService
 from app.services.project_service import ProjectService
@@ -21,6 +21,7 @@ router = APIRouter(tags=["analysis-jobs"])
 async def create_analysis_job(
     case_id: str,
     request: Request,
+    body: AnalysisJobCreateRequest | None = None,
     current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
@@ -35,6 +36,7 @@ async def create_analysis_job(
         project,
         user_id=current_user.id,
         job_queue=job_queue,
+        work_type_code=body.workTypeCode if body else None,
     )
     job = create_result.job
     if job_queue is not None and create_result.created_new:
@@ -57,6 +59,9 @@ async def create_analysis_job(
     return AnalysisTriggerResponse(
         jobId=job.id,
         status=job.status,
+        workTypeCode=getattr(job, "requested_work_type_code", None),
+        analysisProfileCode=getattr(job, "resolved_analysis_profile_code", None),
+        analysisProfileVersion=getattr(job, "resolved_analysis_profile_version", None),
         provider=analysis_service.provider_key,
     )
 
@@ -197,5 +202,8 @@ async def retry_analysis_job(
     return AnalysisTriggerResponse(
         jobId=new_job.id,
         status=new_job.status,
+        workTypeCode=getattr(new_job, "requested_work_type_code", None),
+        analysisProfileCode=getattr(new_job, "resolved_analysis_profile_code", None),
+        analysisProfileVersion=getattr(new_job, "resolved_analysis_profile_version", None),
         provider=analysis_service.provider_key,
     )

@@ -88,7 +88,7 @@ class ClaudeVisionProvider:
                 "Přidej ANTHROPIC_API_KEY=sk-ant-... do python-backend/.env"
             )
 
-    def _build_content(self, project: dict, photos: list[dict]) -> list[dict]:
+    def _build_content(self, project: dict, photos: list[dict], analysis_config: dict | None = None) -> list[dict]:
         """Sestaví content pole pro Messages API (text + obrázky)."""
         content: list[dict] = []
 
@@ -150,7 +150,13 @@ class ClaudeVisionProvider:
             text = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
         return json.loads(text)
 
-    async def analyze_project(self, *, project: dict, photos: list[dict]) -> dict:
+    async def analyze_project(
+        self,
+        *,
+        project: dict,
+        photos: list[dict],
+        analysis_config: dict | None = None,
+    ) -> dict:
         self._check_ready()
 
         try:
@@ -162,7 +168,7 @@ class ClaudeVisionProvider:
             ) from exc
 
         client = anthropic.AsyncAnthropic(api_key=self._api_key, timeout=_HTTP_TIMEOUT)
-        content = self._build_content(project, photos)
+        content = self._build_content(project, photos, analysis_config)
 
         logger.info(
             "claude.vision.analyze",

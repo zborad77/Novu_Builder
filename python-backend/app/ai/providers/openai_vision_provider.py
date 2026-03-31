@@ -15,7 +15,13 @@ class OpenAIVisionProvider:
     def __init__(self) -> None:
         self._api_key: str | None = os.getenv("OPENAI_API_KEY")
 
-    async def analyze_project(self, *, project: dict, photos: list[dict]) -> dict:
+    async def analyze_project(
+        self,
+        *,
+        project: dict,
+        photos: list[dict],
+        analysis_config: dict | None = None,
+    ) -> dict:
         if not self._api_key:
             raise RuntimeError(
                 "AI_ANALYSIS_PROVIDER is set to 'openai' but OPENAI_API_KEY is not configured. "

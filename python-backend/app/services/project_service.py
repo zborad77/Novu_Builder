@@ -144,9 +144,14 @@ def _build_latest_analysis_dict(project: Project) -> dict | None:
     mask_polygon_raw = _parse_json(latest.mask_polygon_json)
     return {
         "id": latest.id,
+        "workTypeCode": latest.resolved_work_type_code,
+        "analysisProfileCode": latest.resolved_analysis_profile_code,
+        "analysisProfileVersion": latest.resolved_analysis_profile_version,
         "objectType": latest.object_type,
         "surfaceCondition": latest.surface_condition,
         "recommendedScope": latest.recommended_scope,
+        "estimatedQuantity": latest.estimated_quantity,
+        "estimatedUnit": latest.estimated_unit,
         "estimatedAreaSqm": latest.estimated_area_sqm,
         "areaConfidence": latest.area_confidence,
         "manualAreaSqm": latest.manual_area_sqm,

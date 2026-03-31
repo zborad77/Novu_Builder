@@ -1,0 +1,2202 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+
+def _required_input(
+    *,
+    code: str,
+    label: str,
+    source_key: str,
+    description: str | None = None,
+    source_type: str = "parameter",
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "label": label,
+        "description": description,
+        "source_type": source_type,
+        "source_key": source_key,
+        "is_required": True,
+    }
+
+
+def _labor_assumption(
+    *,
+    code: str,
+    label: str,
+    quantity_source_key: str,
+    hours_per_unit: float,
+    description: str | None = None,
+    quantity_source_type: str = "parameter",
+    crew_size: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "label": label,
+        "description": description,
+        "quantity_source_type": quantity_source_type,
+        "quantity_source_key": quantity_source_key,
+        "hours_per_unit": hours_per_unit,
+        "crew_size": crew_size,
+    }
+
+
+def _material_assumption(
+    *,
+    code: str,
+    label: str,
+    quantity_source_key: str,
+    quantity_per_unit: float,
+    unit: str,
+    default_unit_cost: float | None,
+    description: str | None = None,
+    quantity_source_type: str = "parameter",
+    waste_factor_pct: float | None = None,
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "label": label,
+        "description": description,
+        "quantity_source_type": quantity_source_type,
+        "quantity_source_key": quantity_source_key,
+        "quantity_per_unit": quantity_per_unit,
+        "unit": unit,
+        "default_unit_cost": default_unit_cost,
+        "waste_factor_pct": waste_factor_pct,
+    }
+
+
+def _base_rule(
+    *,
+    code: str,
+    label: str,
+    line_type: str,
+    calculation_method: str,
+    quantity_source_type: str,
+    quantity_multiplier: float,
+    unit: str,
+    rate_source: str,
+    quantity_source_key: str | None = None,
+    rate_value: float | None = None,
+    description: str | None = None,
+    labor_assumption_code: str | None = None,
+    material_assumption_code: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "label": label,
+        "description": description,
+        "line_type": line_type,
+        "calculation_method": calculation_method,
+        "quantity_source_type": quantity_source_type,
+        "quantity_source_key": quantity_source_key,
+        "quantity_multiplier": quantity_multiplier,
+        "unit": unit,
+        "rate_source": rate_source,
+        "rate_value": rate_value,
+        "labor_assumption_code": labor_assumption_code,
+        "material_assumption_code": material_assumption_code,
+    }
+
+
+def _adjustment_rule(
+    *,
+    code: str,
+    label: str,
+    target_scope: str,
+    target_line_type: str | None,
+    operation: str,
+    adjustment_value: float,
+    condition_source_key: str,
+    condition_operator: str,
+    description: str | None = None,
+    target_base_rule_code: str | None = None,
+    condition_source_type: str = "parameter",
+    condition_text_value: str | None = None,
+    condition_number_value: float | None = None,
+    condition_boolean_value: bool | None = None,
+    condition_option_code: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "label": label,
+        "description": description,
+        "target_scope": target_scope,
+        "target_line_type": target_line_type,
+        "target_base_rule_code": target_base_rule_code,
+        "operation": operation,
+        "adjustment_value": adjustment_value,
+        "condition_source_type": condition_source_type,
+        "condition_source_key": condition_source_key,
+        "condition_operator": condition_operator,
+        "condition_text_value": condition_text_value,
+        "condition_number_value": condition_number_value,
+        "condition_boolean_value": condition_boolean_value,
+        "condition_option_code": condition_option_code,
+    }
+
+
+def _access_adjustments(access_param: str) -> list[dict[str, Any]]:
+    return [
+        _adjustment_rule(
+            code=f"{access_param}-scaffold",
+            label="Scaffold Access Surcharge",
+            target_scope="line_type",
+            target_line_type="labor",
+            operation="multiply",
+            adjustment_value=1.10,
+            condition_source_key=access_param,
+            condition_operator="eq",
+            condition_option_code="scaffold-access",
+        ),
+        _adjustment_rule(
+            code=f"{access_param}-mobile-lift",
+            label="Mobile Lift Surcharge",
+            target_scope="line_type",
+            target_line_type="labor",
+            operation="multiply",
+            adjustment_value=1.16,
+            condition_source_key=access_param,
+            condition_operator="eq",
+            condition_option_code="mobile-lift",
+        ),
+        _adjustment_rule(
+            code=f"{access_param}-rope-access",
+            label="Rope Access Surcharge",
+            target_scope="line_type",
+            target_line_type="labor",
+            operation="multiply",
+            adjustment_value=1.24,
+            condition_source_key=access_param,
+            condition_operator="eq",
+            condition_option_code="rope-access",
+        ),
+        _adjustment_rule(
+            code=f"{access_param}-crane-assisted",
+            label="Crane Assisted Surcharge",
+            target_scope="line_type",
+            target_line_type="other",
+            operation="add_flat",
+            adjustment_value=2800,
+            condition_source_key=access_param,
+            condition_operator="eq",
+            condition_option_code="crane-assisted",
+        ),
+        _adjustment_rule(
+            code=f"{access_param}-confined-space",
+            label="Confined Space Surcharge",
+            target_scope="line_type",
+            target_line_type="labor",
+            operation="multiply",
+            adjustment_value=1.15,
+            condition_source_key=access_param,
+            condition_operator="eq",
+            condition_option_code="confined-space",
+        ),
+        _adjustment_rule(
+            code=f"{access_param}-occupied",
+            label="Occupied Site Surcharge",
+            target_scope="line_type",
+            target_line_type="labor",
+            operation="multiply",
+            adjustment_value=1.08,
+            condition_source_key=access_param,
+            condition_operator="eq",
+            condition_option_code="occupied-space",
+        ),
+        _adjustment_rule(
+            code=f"{access_param}-off-hours",
+            label="Out Of Hours Surcharge",
+            target_scope="line_type",
+            target_line_type="labor",
+            operation="multiply",
+            adjustment_value=1.12,
+            condition_source_key=access_param,
+            condition_operator="eq",
+            condition_option_code="out-of-hours",
+        ),
+        _adjustment_rule(
+            code=f"{access_param}-protected-zone",
+            label="Protected Finish Zone Surcharge",
+            target_scope="line_type",
+            target_line_type="labor",
+            operation="multiply",
+            adjustment_value=1.08,
+            condition_source_key=access_param,
+            condition_operator="eq",
+            condition_option_code="protected-finish-zone",
+        ),
+        _adjustment_rule(
+            code=f"{access_param}-roof-ladder",
+            label="Roof Ladder Surcharge",
+            target_scope="line_type",
+            target_line_type="labor",
+            operation="multiply",
+            adjustment_value=1.06,
+            condition_source_key=access_param,
+            condition_operator="eq",
+            condition_option_code="roof-ladder",
+        ),
+        _adjustment_rule(
+            code=f"{access_param}-ladder",
+            label="Ladder Access Surcharge",
+            target_scope="line_type",
+            target_line_type="labor",
+            operation="multiply",
+            adjustment_value=1.05,
+            condition_source_key=access_param,
+            condition_operator="eq",
+            condition_option_code="ladder-access",
+        ),
+        _adjustment_rule(
+            code=f"{access_param}-live-utility",
+            label="Live Utility Zone Surcharge",
+            target_scope="line_type",
+            target_line_type="labor",
+            operation="multiply",
+            adjustment_value=1.18,
+            condition_source_key=access_param,
+            condition_operator="eq",
+            condition_option_code="live-utility-zone",
+        ),
+        _adjustment_rule(
+            code=f"{access_param}-occupied-interior",
+            label="Occupied Interior Surcharge",
+            target_scope="line_type",
+            target_line_type="labor",
+            operation="multiply",
+            adjustment_value=1.08,
+            condition_source_key=access_param,
+            condition_operator="eq",
+            condition_option_code="occupied-interior",
+        ),
+    ]
+
+
+def _severity_adjustments(severity_param: str = "severity-band") -> list[dict[str, Any]]:
+    return [
+        _adjustment_rule(
+            code=f"{severity_param}-moderate",
+            label="Moderate Severity Surcharge",
+            target_scope="line_type",
+            target_line_type="labor",
+            operation="multiply",
+            adjustment_value=1.10,
+            condition_source_key=severity_param,
+            condition_operator="eq",
+            condition_option_code="moderate",
+        ),
+        _adjustment_rule(
+            code=f"{severity_param}-major-labor",
+            label="Major Severity Labor Surcharge",
+            target_scope="line_type",
+            target_line_type="labor",
+            operation="multiply",
+            adjustment_value=1.22,
+            condition_source_key=severity_param,
+            condition_operator="eq",
+            condition_option_code="major",
+        ),
+        _adjustment_rule(
+            code=f"{severity_param}-major-material",
+            label="Major Severity Material Surcharge",
+            target_scope="line_type",
+            target_line_type="material",
+            operation="multiply",
+            adjustment_value=1.08,
+            condition_source_key=severity_param,
+            condition_operator="eq",
+            condition_option_code="major",
+        ),
+    ]
+
+
+def _zone_adjustment(zone_param: str, *, threshold: float, surcharge: float) -> list[dict[str, Any]]:
+    return [
+        _adjustment_rule(
+            code=f"{zone_param}-multi-zone",
+            label="Multi Zone Handling",
+            target_scope="line_type",
+            target_line_type="other",
+            operation="add_flat",
+            adjustment_value=surcharge,
+            condition_source_key=zone_param,
+            condition_operator="gte",
+            condition_number_value=threshold,
+        )
+    ]
+
+
+def _boolean_addon(boolean_param: str, *, label: str, amount: float, line_type: str = "other") -> list[dict[str, Any]]:
+    return [
+        _adjustment_rule(
+            code=f"{boolean_param}-addon",
+            label=label,
+            target_scope="line_type",
+            target_line_type=line_type,
+            operation="add_flat",
+            adjustment_value=amount,
+            condition_source_key=boolean_param,
+            condition_operator="true",
+        )
+    ]
+
+
+def _condition_adjustments(
+    condition_param: str,
+    *,
+    moderate_option: str | None = None,
+    moderate_multiplier: float | None = None,
+    major_option: str | None = None,
+    major_multiplier: float | None = None,
+    extra_flat_option: str | None = None,
+    extra_flat_amount: float | None = None,
+) -> list[dict[str, Any]]:
+    adjustments: list[dict[str, Any]] = []
+    if moderate_option and moderate_multiplier:
+        adjustments.append(
+            _adjustment_rule(
+                code=f"{condition_param}-{moderate_option}",
+                label=f"{condition_param.replace('-', ' ').title()} Prep",
+                target_scope="line_type",
+                target_line_type="labor",
+                operation="multiply",
+                adjustment_value=moderate_multiplier,
+                condition_source_key=condition_param,
+                condition_operator="eq",
+                condition_option_code=moderate_option,
+            )
+        )
+    if major_option and major_multiplier:
+        adjustments.append(
+            _adjustment_rule(
+                code=f"{condition_param}-{major_option}",
+                label=f"{condition_param.replace('-', ' ').title()} Major Prep",
+                target_scope="line_type",
+                target_line_type="labor",
+                operation="multiply",
+                adjustment_value=major_multiplier,
+                condition_source_key=condition_param,
+                condition_operator="eq",
+                condition_option_code=major_option,
+            )
+        )
+    if extra_flat_option and extra_flat_amount:
+        adjustments.append(
+            _adjustment_rule(
+                code=f"{condition_param}-{extra_flat_option}-flat",
+                label=f"{condition_param.replace('-', ' ').title()} Extra Scope",
+                target_scope="line_type",
+                target_line_type="other",
+                operation="add_flat",
+                adjustment_value=extra_flat_amount,
+                condition_source_key=condition_param,
+                condition_operator="eq",
+                condition_option_code=extra_flat_option,
+            )
+        )
+    return adjustments
+
+
+def _profile(
+    *,
+    name: str,
+    pricing_basis: str,
+    min_job_price: float,
+    required_inputs: list[dict[str, Any]],
+    labor_assumptions: list[dict[str, Any]],
+    material_assumptions: list[dict[str, Any]],
+    base_rules: list[dict[str, Any]],
+    adjustment_rules: list[dict[str, Any]],
+    default_margin_pct: float = 18,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status": "active",
+        "pricing_basis": pricing_basis,
+        "currency": "CZK",
+        "pricing_strategy": "catalog_formula",
+        "labor_rate_source": "tenant_default",
+        "material_pricing_source": "catalog_default",
+        "default_margin_pct": default_margin_pct,
+        "default_markup_pct": 0,
+        "min_job_price": min_job_price,
+        "required_inputs": required_inputs,
+        "labor_assumptions": labor_assumptions,
+        "material_assumptions": material_assumptions,
+        "base_rules": base_rules,
+        "adjustment_rules": adjustment_rules,
+        "metadata": metadata or {},
+    }
+
+
+def _area_installation_profile(
+    *,
+    name: str,
+    primary_input: str,
+    labor_hours_per_unit: float,
+    material_rate: float,
+    fixed_charge: float,
+    min_job_price: float,
+    condition_param: str,
+    access_param: str,
+    zone_param: str,
+    material_label: str,
+    metadata: dict[str, Any] | None = None,
+    default_margin_pct: float = 18,
+) -> dict[str, Any]:
+    required_inputs = [
+        _required_input(code="basis-quantity", label="Basis Quantity", source_key=primary_input),
+        _required_input(code="condition", label="Condition", source_key=condition_param),
+        _required_input(code="access", label="Access", source_key=access_param),
+        _required_input(code="zones", label="Zones", source_key=zone_param),
+    ]
+    labor_assumptions = [
+        _labor_assumption(
+            code="installation-crew-hours",
+            label="Installation Crew Productivity",
+            quantity_source_key=primary_input,
+            hours_per_unit=labor_hours_per_unit,
+            crew_size=2,
+        )
+    ]
+    material_assumptions = [
+        _material_assumption(
+            code="installation-material-allowance",
+            label=material_label,
+            quantity_source_key=primary_input,
+            quantity_per_unit=1,
+            unit="basis-unit",
+            default_unit_cost=material_rate,
+            waste_factor_pct=6,
+        )
+    ]
+    base_rules = [
+        _base_rule(
+            code="labor-production",
+            label="Installation Labor",
+            line_type="labor",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key=primary_input,
+            quantity_multiplier=labor_hours_per_unit,
+            unit="hr",
+            rate_source="tenant_hourly_rate",
+            labor_assumption_code="installation-crew-hours",
+        ),
+        _base_rule(
+            code="material-allowance",
+            label="Material Allowance",
+            line_type="material",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key=primary_input,
+            quantity_multiplier=1,
+            unit="basis-unit",
+            rate_source="catalog_unit_rate",
+            rate_value=material_rate,
+            material_assumption_code="installation-material-allowance",
+        ),
+        _base_rule(
+            code="mobilization",
+            label="Mobilization",
+            line_type="other",
+            calculation_method="fixed",
+            quantity_source_type="constant",
+            quantity_multiplier=1,
+            unit="job",
+            rate_source="catalog_flat_rate",
+            rate_value=fixed_charge,
+        ),
+    ]
+    adjustment_rules = [
+        *_access_adjustments(access_param),
+        *_condition_adjustments(
+            condition_param,
+            moderate_option="minor-prep",
+            moderate_multiplier=1.08,
+            major_option="major-prep",
+            major_multiplier=1.18,
+            extra_flat_option="moisture-affected",
+            extra_flat_amount=1400,
+        ),
+        *_zone_adjustment(zone_param, threshold=4, surcharge=1200),
+    ]
+    return _profile(
+        name=name,
+        pricing_basis="area",
+        min_job_price=min_job_price,
+        required_inputs=required_inputs,
+        labor_assumptions=labor_assumptions,
+        material_assumptions=material_assumptions,
+        base_rules=base_rules,
+        adjustment_rules=adjustment_rules,
+        default_margin_pct=default_margin_pct,
+        metadata=metadata,
+    )
+
+
+def _area_repair_profile(
+    *,
+    name: str,
+    primary_input: str,
+    labor_hours_per_unit: float,
+    material_rate: float,
+    fixed_charge: float,
+    min_job_price: float,
+    severity_param: str,
+    access_param: str,
+    zone_param: str,
+    material_label: str,
+    metadata: dict[str, Any] | None = None,
+    default_margin_pct: float = 18,
+) -> dict[str, Any]:
+    required_inputs = [
+        _required_input(code="basis-quantity", label="Basis Quantity", source_key=primary_input),
+        _required_input(code="severity", label="Severity", source_key=severity_param),
+        _required_input(code="access", label="Access", source_key=access_param),
+        _required_input(code="zones", label="Zones", source_key=zone_param),
+    ]
+    labor_assumptions = [
+        _labor_assumption(
+            code="repair-crew-hours",
+            label="Repair Crew Productivity",
+            quantity_source_key=primary_input,
+            hours_per_unit=labor_hours_per_unit,
+            crew_size=2,
+        )
+    ]
+    material_assumptions = [
+        _material_assumption(
+            code="repair-material-allowance",
+            label=material_label,
+            quantity_source_key=primary_input,
+            quantity_per_unit=1,
+            unit="basis-unit",
+            default_unit_cost=material_rate,
+            waste_factor_pct=10,
+        )
+    ]
+    base_rules = [
+        _base_rule(
+            code="labor-repair",
+            label="Repair Labor",
+            line_type="labor",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key=primary_input,
+            quantity_multiplier=labor_hours_per_unit,
+            unit="hr",
+            rate_source="tenant_hourly_rate",
+            labor_assumption_code="repair-crew-hours",
+        ),
+        _base_rule(
+            code="material-repair",
+            label="Repair Material Allowance",
+            line_type="material",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key=primary_input,
+            quantity_multiplier=1,
+            unit="basis-unit",
+            rate_source="catalog_unit_rate",
+            rate_value=material_rate,
+            material_assumption_code="repair-material-allowance",
+        ),
+        _base_rule(
+            code="site-setup",
+            label="Site Setup",
+            line_type="other",
+            calculation_method="fixed",
+            quantity_source_type="constant",
+            quantity_multiplier=1,
+            unit="job",
+            rate_source="catalog_flat_rate",
+            rate_value=fixed_charge,
+        ),
+    ]
+    adjustment_rules = [
+        *_severity_adjustments(severity_param),
+        *_access_adjustments(access_param),
+        *_zone_adjustment(zone_param, threshold=3, surcharge=950),
+    ]
+    return _profile(
+        name=name,
+        pricing_basis="area",
+        min_job_price=min_job_price,
+        required_inputs=required_inputs,
+        labor_assumptions=labor_assumptions,
+        material_assumptions=material_assumptions,
+        base_rules=base_rules,
+        adjustment_rules=adjustment_rules,
+        default_margin_pct=default_margin_pct,
+        metadata=metadata,
+    )
+
+
+def _count_installation_profile(
+    *,
+    name: str,
+    labor_hours_per_unit: float,
+    material_rate: float,
+    fixed_charge: float,
+    min_job_price: float,
+    opening_condition_param: str,
+    access_param: str,
+    removal_param: str,
+    material_label: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    required_inputs = [
+        _required_input(code="quantity", label="Quantity", source_key="quantity"),
+        _required_input(code="opening-condition", label="Opening Condition", source_key=opening_condition_param),
+        _required_input(code="access", label="Access", source_key=access_param),
+        _required_input(code="existing-unit-removal", label="Existing Unit Removal", source_key=removal_param),
+    ]
+    labor_assumptions = [
+        _labor_assumption(
+            code="installation-hours-per-unit",
+            label="Installation Hours Per Unit",
+            quantity_source_key="quantity",
+            hours_per_unit=labor_hours_per_unit,
+            crew_size=2,
+        )
+    ]
+    material_assumptions = [
+        _material_assumption(
+            code="installation-kit-per-unit",
+            label=material_label,
+            quantity_source_key="quantity",
+            quantity_per_unit=1,
+            unit="pcs",
+            default_unit_cost=material_rate,
+            waste_factor_pct=4,
+        )
+    ]
+    base_rules = [
+        _base_rule(
+            code="labor-install-units",
+            label="Unit Installation Labor",
+            line_type="labor",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key="quantity",
+            quantity_multiplier=labor_hours_per_unit,
+            unit="hr",
+            rate_source="tenant_hourly_rate",
+            labor_assumption_code="installation-hours-per-unit",
+        ),
+        _base_rule(
+            code="material-install-kits",
+            label="Unit Material Package",
+            line_type="material",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key="quantity",
+            quantity_multiplier=1,
+            unit="pcs",
+            rate_source="catalog_unit_rate",
+            rate_value=material_rate,
+            material_assumption_code="installation-kit-per-unit",
+        ),
+        _base_rule(
+            code="site-delivery",
+            label="Delivery And Setup",
+            line_type="other",
+            calculation_method="fixed",
+            quantity_source_type="constant",
+            quantity_multiplier=1,
+            unit="job",
+            rate_source="catalog_flat_rate",
+            rate_value=fixed_charge,
+        ),
+    ]
+    adjustment_rules = [
+        *_access_adjustments(access_param),
+        *_condition_adjustments(
+            opening_condition_param,
+            moderate_option="minor-adjustment",
+            moderate_multiplier=1.08,
+            major_option="structural-rework",
+            major_multiplier=1.22,
+            extra_flat_option="moisture-damaged",
+            extra_flat_amount=1600,
+        ),
+        *_boolean_addon(removal_param, label="Existing Unit Removal", amount=1400, line_type="other"),
+    ]
+    return _profile(
+        name=name,
+        pricing_basis="count",
+        min_job_price=min_job_price,
+        required_inputs=required_inputs,
+        labor_assumptions=labor_assumptions,
+        material_assumptions=material_assumptions,
+        base_rules=base_rules,
+        adjustment_rules=adjustment_rules,
+        metadata=metadata,
+    )
+
+
+def _count_repair_profile(
+    *,
+    name: str,
+    labor_hours_per_unit: float,
+    material_rate: float,
+    fixed_charge: float,
+    min_job_price: float,
+    severity_param: str,
+    access_param: str,
+    temporary_fix_param: str,
+    material_label: str,
+    basis: str = "count",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    required_inputs = [
+        _required_input(code="quantity", label="Quantity", source_key="quantity"),
+        _required_input(code="severity", label="Severity", source_key=severity_param),
+        _required_input(code="access", label="Access", source_key=access_param),
+        _required_input(code="temporary-fix", label="Temporary Fix", source_key=temporary_fix_param),
+    ]
+    labor_assumptions = [
+        _labor_assumption(
+            code="repair-hours-per-incident",
+            label="Repair Hours Per Incident",
+            quantity_source_key="quantity",
+            hours_per_unit=labor_hours_per_unit,
+            crew_size=1,
+        )
+    ]
+    material_assumptions = [
+        _material_assumption(
+            code="repair-kit-per-incident",
+            label=material_label,
+            quantity_source_key="quantity",
+            quantity_per_unit=1,
+            unit="pcs",
+            default_unit_cost=material_rate,
+            waste_factor_pct=8,
+        )
+    ]
+    base_rules = [
+        _base_rule(
+            code="labor-repair-incidents",
+            label="Repair Labor",
+            line_type="labor",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key="quantity",
+            quantity_multiplier=labor_hours_per_unit,
+            unit="hr",
+            rate_source="tenant_hourly_rate",
+            labor_assumption_code="repair-hours-per-incident",
+        ),
+        _base_rule(
+            code="material-repair-kit",
+            label="Repair Kit",
+            line_type="material",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key="quantity",
+            quantity_multiplier=1,
+            unit="pcs",
+            rate_source="catalog_unit_rate",
+            rate_value=material_rate,
+            material_assumption_code="repair-kit-per-incident",
+        ),
+        _base_rule(
+            code="dispatch",
+            label="Dispatch And Diagnostics",
+            line_type="other",
+            calculation_method="fixed",
+            quantity_source_type="constant",
+            quantity_multiplier=1,
+            unit="job",
+            rate_source="catalog_flat_rate",
+            rate_value=fixed_charge,
+        ),
+    ]
+    adjustment_rules = [
+        *_severity_adjustments(severity_param),
+        *_access_adjustments(access_param),
+        *_boolean_addon(temporary_fix_param, label="Temporary Stabilization", amount=950),
+    ]
+    return _profile(
+        name=name,
+        pricing_basis=basis,
+        min_job_price=min_job_price,
+        required_inputs=required_inputs,
+        labor_assumptions=labor_assumptions,
+        material_assumptions=material_assumptions,
+        base_rules=base_rules,
+        adjustment_rules=adjustment_rules,
+        metadata=metadata,
+    )
+
+
+def _length_installation_profile(
+    *,
+    name: str,
+    labor_hours_per_meter: float,
+    material_rate_per_meter: float,
+    fixed_charge: float,
+    min_job_price: float,
+    condition_param: str,
+    access_param: str,
+    run_param: str,
+    material_label: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    required_inputs = [
+        _required_input(code="length", label="Length", source_key="length-m"),
+        _required_input(code="condition", label="Condition", source_key=condition_param),
+        _required_input(code="access", label="Access", source_key=access_param),
+        _required_input(code="runs", label="Runs", source_key=run_param),
+    ]
+    labor_assumptions = [
+        _labor_assumption(
+            code="hours-per-meter",
+            label="Installation Hours Per Meter",
+            quantity_source_key="length-m",
+            hours_per_unit=labor_hours_per_meter,
+            crew_size=2,
+        )
+    ]
+    material_assumptions = [
+        _material_assumption(
+            code="material-per-meter",
+            label=material_label,
+            quantity_source_key="length-m",
+            quantity_per_unit=1,
+            unit="m",
+            default_unit_cost=material_rate_per_meter,
+            waste_factor_pct=5,
+        )
+    ]
+    base_rules = [
+        _base_rule(
+            code="labor-run-installation",
+            label="Run Installation Labor",
+            line_type="labor",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key="length-m",
+            quantity_multiplier=labor_hours_per_meter,
+            unit="hr",
+            rate_source="tenant_hourly_rate",
+            labor_assumption_code="hours-per-meter",
+        ),
+        _base_rule(
+            code="material-run-package",
+            label="Run Material Package",
+            line_type="material",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key="length-m",
+            quantity_multiplier=1,
+            unit="m",
+            rate_source="catalog_unit_rate",
+            rate_value=material_rate_per_meter,
+            material_assumption_code="material-per-meter",
+        ),
+        _base_rule(
+            code="site-setup",
+            label="Site Setup",
+            line_type="other",
+            calculation_method="fixed",
+            quantity_source_type="constant",
+            quantity_multiplier=1,
+            unit="job",
+            rate_source="catalog_flat_rate",
+            rate_value=fixed_charge,
+        ),
+    ]
+    adjustment_rules = [
+        *_access_adjustments(access_param),
+        *_condition_adjustments(
+            condition_param,
+            moderate_option="minor-prep",
+            moderate_multiplier=1.08,
+            major_option="major-prep",
+            major_multiplier=1.18,
+            extra_flat_option="failed",
+            extra_flat_amount=1600,
+        ),
+        *_zone_adjustment(run_param, threshold=3, surcharge=1100),
+    ]
+    return _profile(
+        name=name,
+        pricing_basis="length",
+        min_job_price=min_job_price,
+        required_inputs=required_inputs,
+        labor_assumptions=labor_assumptions,
+        material_assumptions=material_assumptions,
+        base_rules=base_rules,
+        adjustment_rules=adjustment_rules,
+        metadata=metadata,
+    )
+
+
+def _length_repair_profile(
+    *,
+    name: str,
+    labor_hours_per_meter: float,
+    material_rate_per_meter: float,
+    fixed_charge: float,
+    min_job_price: float,
+    severity_param: str,
+    access_param: str,
+    joints_param: str,
+    material_label: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    required_inputs = [
+        _required_input(code="length", label="Length", source_key="length-m"),
+        _required_input(code="severity", label="Severity", source_key=severity_param),
+        _required_input(code="access", label="Access", source_key=access_param),
+        _required_input(code="joints", label="Joints", source_key=joints_param),
+    ]
+    labor_assumptions = [
+        _labor_assumption(
+            code="repair-hours-per-meter",
+            label="Repair Hours Per Meter",
+            quantity_source_key="length-m",
+            hours_per_unit=labor_hours_per_meter,
+            crew_size=1,
+        )
+    ]
+    material_assumptions = [
+        _material_assumption(
+            code="repair-material-per-meter",
+            label=material_label,
+            quantity_source_key="length-m",
+            quantity_per_unit=1,
+            unit="m",
+            default_unit_cost=material_rate_per_meter,
+            waste_factor_pct=7,
+        )
+    ]
+    base_rules = [
+        _base_rule(
+            code="labor-repair-length",
+            label="Repair Labor",
+            line_type="labor",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key="length-m",
+            quantity_multiplier=labor_hours_per_meter,
+            unit="hr",
+            rate_source="tenant_hourly_rate",
+            labor_assumption_code="repair-hours-per-meter",
+        ),
+        _base_rule(
+            code="material-repair-length",
+            label="Repair Material",
+            line_type="material",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key="length-m",
+            quantity_multiplier=1,
+            unit="m",
+            rate_source="catalog_unit_rate",
+            rate_value=material_rate_per_meter,
+            material_assumption_code="repair-material-per-meter",
+        ),
+        _base_rule(
+            code="site-dispatch",
+            label="Dispatch",
+            line_type="other",
+            calculation_method="fixed",
+            quantity_source_type="constant",
+            quantity_multiplier=1,
+            unit="job",
+            rate_source="catalog_flat_rate",
+            rate_value=fixed_charge,
+        ),
+    ]
+    adjustment_rules = [
+        *_severity_adjustments(severity_param),
+        *_access_adjustments(access_param),
+        *_zone_adjustment(joints_param, threshold=5, surcharge=700),
+    ]
+    return _profile(
+        name=name,
+        pricing_basis="length",
+        min_job_price=min_job_price,
+        required_inputs=required_inputs,
+        labor_assumptions=labor_assumptions,
+        material_assumptions=material_assumptions,
+        base_rules=base_rules,
+        adjustment_rules=adjustment_rules,
+        metadata=metadata,
+    )
+
+
+def _volume_profile(
+    *,
+    name: str,
+    labor_hours_per_m3: float,
+    material_rate_per_m3: float,
+    fixed_charge: float,
+    min_job_price: float,
+    ground_param: str,
+    access_param: str,
+    pour_zone_param: str,
+    material_label: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    required_inputs = [
+        _required_input(code="volume", label="Volume", source_key="volume-m3"),
+        _required_input(code="ground", label="Ground Condition", source_key=ground_param),
+        _required_input(code="access", label="Access", source_key=access_param),
+        _required_input(code="pour-zones", label="Pour Zones", source_key=pour_zone_param),
+    ]
+    labor_assumptions = [
+        _labor_assumption(
+            code="crew-hours-per-m3",
+            label="Crew Hours Per Cubic Meter",
+            quantity_source_key="volume-m3",
+            hours_per_unit=labor_hours_per_m3,
+            crew_size=3,
+        )
+    ]
+    material_assumptions = [
+        _material_assumption(
+            code="foundation-material-package",
+            label=material_label,
+            quantity_source_key="volume-m3",
+            quantity_per_unit=1,
+            unit="m3",
+            default_unit_cost=material_rate_per_m3,
+            waste_factor_pct=5,
+        )
+    ]
+    base_rules = [
+        _base_rule(
+            code="labor-foundation",
+            label="Foundation Labor",
+            line_type="labor",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key="volume-m3",
+            quantity_multiplier=labor_hours_per_m3,
+            unit="hr",
+            rate_source="tenant_hourly_rate",
+            labor_assumption_code="crew-hours-per-m3",
+        ),
+        _base_rule(
+            code="material-foundation",
+            label="Foundation Material Package",
+            line_type="material",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key="volume-m3",
+            quantity_multiplier=1,
+            unit="m3",
+            rate_source="catalog_unit_rate",
+            rate_value=material_rate_per_m3,
+            material_assumption_code="foundation-material-package",
+        ),
+        _base_rule(
+            code="plant-and-setup",
+            label="Plant And Setup",
+            line_type="other",
+            calculation_method="fixed",
+            quantity_source_type="constant",
+            quantity_multiplier=1,
+            unit="job",
+            rate_source="catalog_flat_rate",
+            rate_value=fixed_charge,
+        ),
+    ]
+    adjustment_rules = [
+        *_access_adjustments(access_param),
+        *_condition_adjustments(
+            ground_param,
+            moderate_option="wet-soil",
+            moderate_multiplier=1.12,
+            major_option="rocky-ground",
+            major_multiplier=1.24,
+            extra_flat_option="restricted-dig",
+            extra_flat_amount=2800,
+        ),
+        *_zone_adjustment(pour_zone_param, threshold=3, surcharge=1800),
+    ]
+    return _profile(
+        name=name,
+        pricing_basis="volume",
+        min_job_price=min_job_price,
+        required_inputs=required_inputs,
+        labor_assumptions=labor_assumptions,
+        material_assumptions=material_assumptions,
+        base_rules=base_rules,
+        adjustment_rules=adjustment_rules,
+        metadata=metadata,
+    )
+
+
+def _scope_installation_profile(
+    *,
+    name: str,
+    route_param: str,
+    route_hours_per_unit: float,
+    endpoint_param: str,
+    endpoint_hours_per_unit: float,
+    material_rate_per_route_unit: float,
+    endpoint_material_rate: float,
+    fixed_charge: float,
+    min_job_price: float,
+    condition_param: str,
+    access_param: str,
+    endpoint_label: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    required_inputs = [
+        _required_input(code="route", label="Route Quantity", source_key=route_param),
+        _required_input(code="endpoint", label=endpoint_label, source_key=endpoint_param),
+        _required_input(code="condition", label="Site Condition", source_key=condition_param),
+        _required_input(code="access", label="Access", source_key=access_param),
+    ]
+    labor_assumptions = [
+        _labor_assumption(
+            code="route-hours",
+            label="Route Production Hours",
+            quantity_source_key=route_param,
+            hours_per_unit=route_hours_per_unit,
+            crew_size=2,
+        ),
+        _labor_assumption(
+            code="endpoint-hours",
+            label="Endpoint Handling Hours",
+            quantity_source_key=endpoint_param,
+            hours_per_unit=endpoint_hours_per_unit,
+            crew_size=1,
+        ),
+    ]
+    material_assumptions = [
+        _material_assumption(
+            code="route-materials",
+            label="Route Materials",
+            quantity_source_key=route_param,
+            quantity_per_unit=1,
+            unit="basis-unit",
+            default_unit_cost=material_rate_per_route_unit,
+            waste_factor_pct=5,
+        ),
+        _material_assumption(
+            code="endpoint-materials",
+            label="Endpoint Materials",
+            quantity_source_key=endpoint_param,
+            quantity_per_unit=1,
+            unit="pcs",
+            default_unit_cost=endpoint_material_rate,
+            waste_factor_pct=3,
+        ),
+    ]
+    base_rules = [
+        _base_rule(
+            code="labor-route",
+            label="Route Labor",
+            line_type="labor",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key=route_param,
+            quantity_multiplier=route_hours_per_unit,
+            unit="hr",
+            rate_source="tenant_hourly_rate",
+            labor_assumption_code="route-hours",
+        ),
+        _base_rule(
+            code="labor-endpoints",
+            label="Endpoint Labor",
+            line_type="labor",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key=endpoint_param,
+            quantity_multiplier=endpoint_hours_per_unit,
+            unit="hr",
+            rate_source="tenant_hourly_rate",
+            labor_assumption_code="endpoint-hours",
+        ),
+        _base_rule(
+            code="material-route",
+            label="Route Materials",
+            line_type="material",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key=route_param,
+            quantity_multiplier=1,
+            unit="basis-unit",
+            rate_source="catalog_unit_rate",
+            rate_value=material_rate_per_route_unit,
+            material_assumption_code="route-materials",
+        ),
+        _base_rule(
+            code="material-endpoints",
+            label="Endpoint Materials",
+            line_type="material",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key=endpoint_param,
+            quantity_multiplier=1,
+            unit="pcs",
+            rate_source="catalog_unit_rate",
+            rate_value=endpoint_material_rate,
+            material_assumption_code="endpoint-materials",
+        ),
+        _base_rule(
+            code="setup",
+            label="Setup And Testing",
+            line_type="other",
+            calculation_method="fixed",
+            quantity_source_type="constant",
+            quantity_multiplier=1,
+            unit="job",
+            rate_source="catalog_flat_rate",
+            rate_value=fixed_charge,
+        ),
+    ]
+    adjustment_rules = [
+        *_access_adjustments(access_param),
+        *_condition_adjustments(
+            condition_param,
+            moderate_option="occupied-space",
+            moderate_multiplier=1.08,
+            major_option="confined-space",
+            major_multiplier=1.18,
+            extra_flat_option="live-utility-zone",
+            extra_flat_amount=2200,
+        ),
+    ]
+    return _profile(
+        name=name,
+        pricing_basis="scope",
+        min_job_price=min_job_price,
+        required_inputs=required_inputs,
+        labor_assumptions=labor_assumptions,
+        material_assumptions=material_assumptions,
+        base_rules=base_rules,
+        adjustment_rules=adjustment_rules,
+        metadata=metadata,
+    )
+
+
+def _inspection_profile(
+    *,
+    name: str,
+    min_job_price: float,
+    access_param: str,
+    report_param: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    required_inputs = [
+        _required_input(code="visits", label="Visit Count", source_key="quantity"),
+        _required_input(code="inspection-area", label="Inspection Area", source_key="inspection-area-sqm"),
+        _required_input(code="access", label="Access", source_key=access_param),
+        _required_input(code="formal-report", label="Formal Report", source_key=report_param),
+    ]
+    labor_assumptions = [
+        _labor_assumption(
+            code="visit-hours",
+            label="Inspection Visit Hours",
+            quantity_source_key="quantity",
+            hours_per_unit=1.2,
+            crew_size=1,
+        ),
+        _labor_assumption(
+            code="area-review-hours",
+            label="Area Review Hours",
+            quantity_source_key="inspection-area-sqm",
+            hours_per_unit=0.015,
+            crew_size=1,
+        ),
+    ]
+    base_rules = [
+        _base_rule(
+            code="labor-visit",
+            label="Inspection Visit",
+            line_type="labor",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key="quantity",
+            quantity_multiplier=1.2,
+            unit="hr",
+            rate_source="tenant_hourly_rate",
+            labor_assumption_code="visit-hours",
+        ),
+        _base_rule(
+            code="labor-area-review",
+            label="Area Review",
+            line_type="labor",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key="inspection-area-sqm",
+            quantity_multiplier=0.015,
+            unit="hr",
+            rate_source="tenant_hourly_rate",
+            labor_assumption_code="area-review-hours",
+        ),
+        _base_rule(
+            code="basic-reporting",
+            label="Basic Reporting",
+            line_type="other",
+            calculation_method="fixed",
+            quantity_source_type="constant",
+            quantity_multiplier=1,
+            unit="job",
+            rate_source="catalog_flat_rate",
+            rate_value=950,
+        ),
+    ]
+    adjustment_rules = [
+        *_access_adjustments(access_param),
+        *_boolean_addon(report_param, label="Formal Report Package", amount=1200),
+    ]
+    return _profile(
+        name=name,
+        pricing_basis="inspection",
+        min_job_price=min_job_price,
+        required_inputs=required_inputs,
+        labor_assumptions=labor_assumptions,
+        material_assumptions=[],
+        base_rules=base_rules,
+        adjustment_rules=adjustment_rules,
+        default_margin_pct=14,
+        metadata=metadata,
+    )
+
+
+def _service_profile(
+    *,
+    name: str,
+    min_job_price: float,
+    access_param: str,
+    duration_param: str,
+    consumables_param: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    required_inputs = [
+        _required_input(code="duration", label="Service Duration", source_key=duration_param),
+        _required_input(code="access", label="Access", source_key=access_param),
+        _required_input(code="consumables", label="Consumables Included", source_key=consumables_param),
+    ]
+    labor_assumptions = [
+        _labor_assumption(
+            code="service-hours",
+            label="Service Technician Hours",
+            quantity_source_key=duration_param,
+            hours_per_unit=1,
+            crew_size=1,
+        )
+    ]
+    material_assumptions = [
+        _material_assumption(
+            code="consumables-package",
+            label="Consumables Package",
+            quantity_source_key=duration_param,
+            quantity_per_unit=0,
+            unit="job",
+            default_unit_cost=450,
+        )
+    ]
+    base_rules = [
+        _base_rule(
+            code="labor-service",
+            label="Service Labor",
+            line_type="labor",
+            calculation_method="per_unit",
+            quantity_source_type="parameter",
+            quantity_source_key=duration_param,
+            quantity_multiplier=1,
+            unit="hr",
+            rate_source="tenant_hourly_rate",
+            labor_assumption_code="service-hours",
+        ),
+        _base_rule(
+            code="dispatch",
+            label="Dispatch",
+            line_type="other",
+            calculation_method="fixed",
+            quantity_source_type="constant",
+            quantity_multiplier=1,
+            unit="job",
+            rate_source="catalog_flat_rate",
+            rate_value=950,
+        ),
+    ]
+    adjustment_rules = [
+        *_access_adjustments(access_param),
+        *_boolean_addon(consumables_param, label="Consumables Package", amount=450, line_type="material"),
+    ]
+    return _profile(
+        name=name,
+        pricing_basis="service",
+        min_job_price=min_job_price,
+        required_inputs=required_inputs,
+        labor_assumptions=labor_assumptions,
+        material_assumptions=material_assumptions,
+        base_rules=base_rules,
+        adjustment_rules=adjustment_rules,
+        default_margin_pct=15,
+        metadata=metadata,
+    )
+
+
+def _emergency_profile(
+    *,
+    name: str,
+    min_job_price: float,
+    access_param: str,
+    response_param: str,
+    severity_param: str,
+    stabilization_param: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    profile = _count_repair_profile(
+        name=name,
+        labor_hours_per_unit=3.4,
+        material_rate=650,
+        fixed_charge=2800,
+        min_job_price=min_job_price,
+        severity_param=severity_param,
+        access_param=access_param,
+        temporary_fix_param=stabilization_param,
+        material_label="Emergency Repair Kit",
+        basis="incident",
+        metadata=metadata,
+    )
+    profile["required_inputs"].append(
+        _required_input(code="response-time", label="Response Time", source_key=response_param)
+    )
+    profile["adjustment_rules"].extend(
+        [
+            _adjustment_rule(
+                code="response-under-4h",
+                label="Rapid Response Surcharge",
+                target_scope="line_type",
+                target_line_type="other",
+                operation="add_flat",
+                adjustment_value=1800,
+                condition_source_key=response_param,
+                condition_operator="lte",
+                condition_number_value=4,
+            ),
+            _adjustment_rule(
+                code="response-under-2h",
+                label="Immediate Dispatch Premium",
+                target_scope="line_type",
+                target_line_type="other",
+                operation="add_flat",
+                adjustment_value=2200,
+                condition_source_key=response_param,
+                condition_operator="lte",
+                condition_number_value=2,
+            ),
+        ]
+    )
+    return profile
+
+
+_PROFILE_BLUEPRINTS: dict[str, dict[str, Any]] = {
+    "chimney-renovation": _area_repair_profile(
+        name="Chimney Renovation Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=1.60,
+        material_rate=820,
+        fixed_charge=3200,
+        min_job_price=12500,
+        severity_param="severity-band",
+        access_param="access-method",
+        zone_param="repair-zones-count",
+        material_label="Chimney Repair Materials",
+        metadata={"family": "masonry-repair", "regionalGroup": "cz-standard"},
+    ),
+    "chimney-new-build": _count_installation_profile(
+        name="Chimney New Build Pricing",
+        labor_hours_per_unit=16.0,
+        material_rate=9800,
+        fixed_charge=4800,
+        min_job_price=32000,
+        opening_condition_param="opening-condition",
+        access_param="access-method",
+        removal_param="existing-unit-removal-required",
+        material_label="Chimney Build Package",
+        metadata={"family": "masonry-new-build", "regionalGroup": "cz-standard"},
+    ),
+    "wall-construction": _area_installation_profile(
+        name="Wall Construction Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=1.15,
+        material_rate=920,
+        fixed_charge=2600,
+        min_job_price=14000,
+        condition_param="substrate-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Wall Construction Materials",
+        metadata={"family": "masonry-installation", "regionalGroup": "cz-standard"},
+    ),
+    "wall-demolition": _area_repair_profile(
+        name="Wall Demolition Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=1.35,
+        material_rate=240,
+        fixed_charge=3500,
+        min_job_price=14500,
+        severity_param="severity-band",
+        access_param="access-method",
+        zone_param="repair-zones-count",
+        material_label="Waste Handling Allowance",
+        metadata={"family": "demolition", "regionalGroup": "cz-standard"},
+    ),
+    "plastering": _area_installation_profile(
+        name="Plastering Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.72,
+        material_rate=210,
+        fixed_charge=1800,
+        min_job_price=7800,
+        condition_param="substrate-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Plaster System Materials",
+        metadata={"family": "surface-finishing", "regionalGroup": "cz-standard"},
+    ),
+    "facade-installation": _area_installation_profile(
+        name="Facade Installation Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=1.45,
+        material_rate=1250,
+        fixed_charge=4200,
+        min_job_price=26000,
+        condition_param="substrate-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Facade System Materials",
+        metadata={"family": "facade", "regionalGroup": "cz-standard"},
+    ),
+    "insulation-installation": _area_installation_profile(
+        name="Insulation Installation Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.68,
+        material_rate=610,
+        fixed_charge=2500,
+        min_job_price=12000,
+        condition_param="substrate-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Insulation Materials",
+        metadata={"family": "thermal-envelope", "regionalGroup": "cz-standard"},
+    ),
+    "foundation-work": _volume_profile(
+        name="Foundation Work Pricing",
+        labor_hours_per_m3=6.5,
+        material_rate_per_m3=4200,
+        fixed_charge=9500,
+        min_job_price=42000,
+        ground_param="ground-condition",
+        access_param="site-access-method",
+        pour_zone_param="pour-zone-count",
+        material_label="Concrete And Reinforcement Package",
+        metadata={"family": "foundation", "regionalGroup": "cz-standard"},
+    ),
+    "pedestal-paving": _area_installation_profile(
+        name="Pedestal Paving Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.95,
+        material_rate=780,
+        fixed_charge=2500,
+        min_job_price=16000,
+        condition_param="substrate-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Pedestal Paving Package",
+        metadata={"family": "external-paving", "regionalGroup": "cz-standard"},
+    ),
+    "tile-installation": _area_installation_profile(
+        name="Tile Installation Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=1.05,
+        material_rate=690,
+        fixed_charge=2100,
+        min_job_price=11000,
+        condition_param="substrate-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Tile Adhesive And Trim Package",
+        metadata={"family": "floor-wall-finish", "regionalGroup": "cz-standard"},
+    ),
+    "floor-renovation": _area_repair_profile(
+        name="Floor Renovation Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=1.20,
+        material_rate=520,
+        fixed_charge=2400,
+        min_job_price=13500,
+        severity_param="severity-band",
+        access_param="access-method",
+        zone_param="repair-zones-count",
+        material_label="Floor Repair Materials",
+        metadata={"family": "floor-repair", "regionalGroup": "cz-standard"},
+    ),
+    "vinyl-floor-installation": _area_installation_profile(
+        name="Vinyl Floor Installation Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.58,
+        material_rate=540,
+        fixed_charge=1800,
+        min_job_price=9000,
+        condition_param="substrate-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Vinyl Floor Materials",
+        metadata={"family": "floor-installation", "regionalGroup": "cz-standard"},
+    ),
+    "wood-floor-installation": _area_installation_profile(
+        name="Wood Floor Installation Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.88,
+        material_rate=760,
+        fixed_charge=2200,
+        min_job_price=13000,
+        condition_param="substrate-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Wood Floor Installation Materials",
+        metadata={"family": "floor-installation", "regionalGroup": "cz-standard"},
+    ),
+    "concrete-floor": _area_installation_profile(
+        name="Concrete Floor Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.95,
+        material_rate=850,
+        fixed_charge=3800,
+        min_job_price=22000,
+        condition_param="substrate-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Concrete Floor Materials",
+        metadata={"family": "concrete-floors", "regionalGroup": "cz-standard"},
+    ),
+    "roof-installation": _area_installation_profile(
+        name="Roof Installation Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=1.25,
+        material_rate=1480,
+        fixed_charge=5200,
+        min_job_price=28000,
+        condition_param="deck-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Roof Covering Materials",
+        metadata={"family": "roofing", "regionalGroup": "cz-standard"},
+    ),
+    "roof-repair": _area_repair_profile(
+        name="Roof Repair Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=1.10,
+        material_rate=690,
+        fixed_charge=3200,
+        min_job_price=15000,
+        severity_param="severity-band",
+        access_param="access-method",
+        zone_param="repair-zones-count",
+        material_label="Roof Repair Materials",
+        metadata={"family": "roofing-repair", "regionalGroup": "cz-standard"},
+    ),
+    "roof-insulation": _area_installation_profile(
+        name="Roof Insulation Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.82,
+        material_rate=620,
+        fixed_charge=2900,
+        min_job_price=14500,
+        condition_param="roof-deck-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Roof Insulation Materials",
+        metadata={"family": "roofing-insulation", "regionalGroup": "cz-standard"},
+    ),
+    "gutter-installation": _length_installation_profile(
+        name="Gutter Installation Pricing",
+        labor_hours_per_meter=0.42,
+        material_rate_per_meter=220,
+        fixed_charge=1900,
+        min_job_price=6500,
+        condition_param="fascia-condition",
+        access_param="access-method",
+        run_param="run-count",
+        material_label="Gutter Installation Materials",
+        metadata={"family": "roof-drainage", "regionalGroup": "cz-standard"},
+    ),
+    "gutter-repair": _length_repair_profile(
+        name="Gutter Repair Pricing",
+        labor_hours_per_meter=0.55,
+        material_rate_per_meter=120,
+        fixed_charge=2100,
+        min_job_price=7800,
+        severity_param="severity-band",
+        access_param="access-method",
+        joints_param="joint-count",
+        material_label="Gutter Repair Materials",
+        metadata={"family": "roof-drainage-repair", "regionalGroup": "cz-standard"},
+    ),
+    "roof-inspection": _inspection_profile(
+        name="Roof Inspection Pricing",
+        min_job_price=3500,
+        access_param="access-method",
+        report_param="formal-report-required",
+        metadata={"family": "inspection", "regionalGroup": "cz-standard"},
+    ),
+    "window-installation": _count_installation_profile(
+        name="Window Installation Pricing",
+        labor_hours_per_unit=6.5,
+        material_rate=8900,
+        fixed_charge=2600,
+        min_job_price=18500,
+        opening_condition_param="opening-condition",
+        access_param="access-method",
+        removal_param="existing-unit-removal-required",
+        material_label="Window Installation Package",
+        metadata={"family": "openings", "regionalGroup": "cz-standard"},
+    ),
+    "window-replacement": _count_repair_profile(
+        name="Window Replacement Pricing",
+        labor_hours_per_unit=4.5,
+        material_rate=4200,
+        fixed_charge=2100,
+        min_job_price=12500,
+        severity_param="severity-band",
+        access_param="access-method",
+        temporary_fix_param="temporary-fix-required",
+        material_label="Window Replacement Materials",
+        metadata={"family": "openings-repair", "regionalGroup": "cz-standard"},
+    ),
+    "door-installation": _count_installation_profile(
+        name="Door Installation Pricing",
+        labor_hours_per_unit=5.8,
+        material_rate=7600,
+        fixed_charge=2200,
+        min_job_price=16500,
+        opening_condition_param="opening-condition",
+        access_param="access-method",
+        removal_param="existing-unit-removal-required",
+        material_label="Door Installation Package",
+        metadata={"family": "openings", "regionalGroup": "cz-standard"},
+    ),
+    "door-repair": _count_repair_profile(
+        name="Door Repair Pricing",
+        labor_hours_per_unit=3.2,
+        material_rate=1800,
+        fixed_charge=1800,
+        min_job_price=7800,
+        severity_param="severity-band",
+        access_param="access-method",
+        temporary_fix_param="temporary-fix-required",
+        material_label="Door Repair Materials",
+        metadata={"family": "openings-repair", "regionalGroup": "cz-standard"},
+    ),
+    "electrical-installation": _scope_installation_profile(
+        name="Electrical Installation Pricing",
+        route_param="route-length-m",
+        route_hours_per_unit=0.45,
+        endpoint_param="circuit-count",
+        endpoint_hours_per_unit=0.90,
+        material_rate_per_route_unit=135,
+        endpoint_material_rate=420,
+        fixed_charge=2400,
+        min_job_price=9800,
+        condition_param="site-condition",
+        access_param="access-method",
+        endpoint_label="Circuit Count",
+        metadata={"family": "electrical", "regionalGroup": "cz-standard"},
+    ),
+    "electrical-repair": _count_repair_profile(
+        name="Electrical Repair Pricing",
+        labor_hours_per_unit=2.6,
+        material_rate=780,
+        fixed_charge=1700,
+        min_job_price=6200,
+        severity_param="severity-band",
+        access_param="access-method",
+        temporary_fix_param="temporary-fix-required",
+        material_label="Electrical Repair Materials",
+        metadata={"family": "electrical-repair", "regionalGroup": "cz-standard"},
+    ),
+    "plumbing-installation": _scope_installation_profile(
+        name="Plumbing Installation Pricing",
+        route_param="route-length-m",
+        route_hours_per_unit=0.52,
+        endpoint_param="fixture-count",
+        endpoint_hours_per_unit=1.10,
+        material_rate_per_route_unit=165,
+        endpoint_material_rate=580,
+        fixed_charge=2600,
+        min_job_price=11800,
+        condition_param="site-condition",
+        access_param="access-method",
+        endpoint_label="Fixture Count",
+        metadata={"family": "plumbing", "regionalGroup": "cz-standard"},
+    ),
+    "plumbing-repair": _count_repair_profile(
+        name="Plumbing Repair Pricing",
+        labor_hours_per_unit=2.8,
+        material_rate=950,
+        fixed_charge=1900,
+        min_job_price=6900,
+        severity_param="severity-band",
+        access_param="access-method",
+        temporary_fix_param="temporary-fix-required",
+        material_label="Plumbing Repair Materials",
+        metadata={"family": "plumbing-repair", "regionalGroup": "cz-standard"},
+    ),
+    "heating-installation": _scope_installation_profile(
+        name="Heating Installation Pricing",
+        route_param="heated-area-sqm",
+        route_hours_per_unit=0.07,
+        endpoint_param="heating-zone-count",
+        endpoint_hours_per_unit=4.0,
+        material_rate_per_route_unit=210,
+        endpoint_material_rate=1750,
+        fixed_charge=4200,
+        min_job_price=22000,
+        condition_param="site-condition",
+        access_param="access-method",
+        endpoint_label="Heating Zones",
+        metadata={"family": "heating", "regionalGroup": "cz-standard"},
+    ),
+    "boiler-installation": _count_installation_profile(
+        name="Boiler Installation Pricing",
+        labor_hours_per_unit=10.5,
+        material_rate=18500,
+        fixed_charge=4200,
+        min_job_price=36000,
+        opening_condition_param="plantroom-condition",
+        access_param="access-method",
+        removal_param="existing-unit-removal-required",
+        material_label="Boiler Installation Package",
+        metadata={"family": "heating-plant", "regionalGroup": "cz-standard"},
+    ),
+    "radiator-installation": _count_installation_profile(
+        name="Radiator Installation Pricing",
+        labor_hours_per_unit=4.2,
+        material_rate=5200,
+        fixed_charge=2100,
+        min_job_price=9800,
+        opening_condition_param="wall-condition",
+        access_param="access-method",
+        removal_param="existing-unit-removal-required",
+        material_label="Radiator Installation Package",
+        metadata={"family": "heating-emitter", "regionalGroup": "cz-standard"},
+    ),
+    "painting": _area_installation_profile(
+        name="Painting Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.42,
+        material_rate=160,
+        fixed_charge=1200,
+        min_job_price=5200,
+        condition_param="surface-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Painting Materials",
+        metadata={"family": "coating", "regionalGroup": "cz-standard"},
+        default_margin_pct=15,
+    ),
+    "interior-finishing": _area_installation_profile(
+        name="Interior Finishing Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.74,
+        material_rate=240,
+        fixed_charge=1500,
+        min_job_price=6800,
+        condition_param="substrate-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Interior Finishing Materials",
+        metadata={"family": "interior-finishing", "regionalGroup": "cz-standard"},
+    ),
+    "drywall-installation": _area_installation_profile(
+        name="Drywall Installation Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.78,
+        material_rate=430,
+        fixed_charge=1900,
+        min_job_price=9500,
+        condition_param="frame-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Drywall Materials",
+        metadata={"family": "interior-systems", "regionalGroup": "cz-standard"},
+    ),
+    "ceiling-installation": _area_installation_profile(
+        name="Ceiling Installation Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.82,
+        material_rate=510,
+        fixed_charge=2100,
+        min_job_price=10800,
+        condition_param="plenum-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Ceiling System Materials",
+        metadata={"family": "interior-systems", "regionalGroup": "cz-standard"},
+    ),
+    "terrace-construction": _area_installation_profile(
+        name="Terrace Construction Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=1.15,
+        material_rate=980,
+        fixed_charge=4200,
+        min_job_price=24000,
+        condition_param="base-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Terrace Construction Materials",
+        metadata={"family": "exterior-structures", "regionalGroup": "cz-standard"},
+    ),
+    "fence-installation": _length_installation_profile(
+        name="Fence Installation Pricing",
+        labor_hours_per_meter=0.58,
+        material_rate_per_meter=740,
+        fixed_charge=2600,
+        min_job_price=12500,
+        condition_param="ground-condition",
+        access_param="access-method",
+        run_param="run-count",
+        material_label="Fence Installation Materials",
+        metadata={"family": "external-boundary", "regionalGroup": "cz-standard"},
+    ),
+    "driveway-paving": _area_installation_profile(
+        name="Driveway Paving Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.86,
+        material_rate=930,
+        fixed_charge=3600,
+        min_job_price=21000,
+        condition_param="sub-base-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Driveway Paving Materials",
+        metadata={"family": "external-paving", "regionalGroup": "cz-standard"},
+    ),
+    "garden-landscaping": _area_installation_profile(
+        name="Garden Landscaping Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.48,
+        material_rate=250,
+        fixed_charge=1800,
+        min_job_price=7200,
+        condition_param="site-condition",
+        access_param="access-method",
+        zone_param="zone-count",
+        material_label="Landscaping Materials",
+        metadata={"family": "landscaping", "regionalGroup": "cz-standard"},
+    ),
+    "inspection": _inspection_profile(
+        name="Inspection Pricing",
+        min_job_price=2900,
+        access_param="access-method",
+        report_param="formal-report-required",
+        metadata={"family": "inspection", "regionalGroup": "cz-standard"},
+    ),
+    "maintenance": _service_profile(
+        name="Maintenance Pricing",
+        min_job_price=2500,
+        access_param="access-method",
+        duration_param="service-duration-hours",
+        consumables_param="consumables-included",
+        metadata={"family": "service", "regionalGroup": "cz-standard"},
+    ),
+    "cleaning-after-construction": _area_installation_profile(
+        name="Post Construction Cleaning Pricing",
+        primary_input="work-area-sqm",
+        labor_hours_per_unit=0.22,
+        material_rate=38,
+        fixed_charge=900,
+        min_job_price=3200,
+        condition_param="contamination-level",
+        access_param="access-method",
+        zone_param="waste-bag-count",
+        material_label="Cleaning Supplies",
+        metadata={"family": "cleaning", "regionalGroup": "cz-standard"},
+        default_margin_pct=14,
+    ),
+    "emergency-repair": _emergency_profile(
+        name="Emergency Repair Pricing",
+        min_job_price=8900,
+        access_param="access-method",
+        response_param="response-time-hours",
+        severity_param="severity-band",
+        stabilization_param="temporary-stabilization-required",
+        metadata={"family": "emergency", "regionalGroup": "cz-standard"},
+    ),
+}
+
+
+def build_pricing_profile_catalog(
+    *,
+    work_types: list[dict[str, Any]],
+    parameters: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    work_type_by_code = {row["code"]: row for row in work_types}
+    if set(work_type_by_code) != set(_PROFILE_BLUEPRINTS):
+        missing = sorted(set(work_type_by_code) - set(_PROFILE_BLUEPRINTS))
+        extra = sorted(set(_PROFILE_BLUEPRINTS) - set(work_type_by_code))
+        raise AssertionError(
+            f"Pricing profile coverage mismatch. Missing={missing}, extra={extra}"
+        )
+
+    parameter_codes_by_work_type: dict[str, set[str]] = {}
+    for row in parameters:
+        parameter_codes_by_work_type.setdefault(row["work_type_id"], set()).add(row["code"])
+
+    profiles: list[dict[str, Any]] = []
+    required_inputs: list[dict[str, Any]] = []
+    base_rules: list[dict[str, Any]] = []
+    adjustment_rules: list[dict[str, Any]] = []
+    labor_assumptions: list[dict[str, Any]] = []
+    material_assumptions: list[dict[str, Any]] = []
+
+    for work_type_code, blueprint in _PROFILE_BLUEPRINTS.items():
+        work_type = work_type_by_code[work_type_code]
+        work_type_snake = work_type_code.replace("-", "_")
+        profile_id = f"cpp_{work_type_snake}_pricing_v1"
+
+        profiles.append(
+            {
+                "id": profile_id,
+                "code": f"{work_type_code}-pricing",
+                "name": blueprint["name"],
+                "status": blueprint["status"],
+                "pricing_basis": blueprint["pricing_basis"],
+                "currency": blueprint["currency"],
+                "pricing_strategy": blueprint["pricing_strategy"],
+                "labor_rate_source": blueprint["labor_rate_source"],
+                "material_pricing_source": blueprint["material_pricing_source"],
+                "default_margin_pct": blueprint["default_margin_pct"],
+                "default_markup_pct": blueprint["default_markup_pct"],
+                "min_job_price": blueprint["min_job_price"],
+                "metadata_json": json.dumps(blueprint["metadata"], sort_keys=True),
+                "is_active": True,
+                "profile_version": 1,
+            }
+        )
+
+        for index, row in enumerate(blueprint["required_inputs"], start=1):
+            required_inputs.append(
+                {
+                    "id": f"cppri_{work_type_snake}_{row['code'].replace('-', '_')}",
+                    "catalog_pricing_profile_id": profile_id,
+                    "code": row["code"],
+                    "label": row["label"],
+                    "description": row.get("description"),
+                    "source_type": row["source_type"],
+                    "source_key": row["source_key"],
+                    "is_required": row.get("is_required", True),
+                    "sort_order": index * 10,
+                }
+            )
+
+        for index, row in enumerate(blueprint["labor_assumptions"], start=1):
+            labor_assumptions.append(
+                {
+                    "id": f"cppla_{work_type_snake}_{row['code'].replace('-', '_')}",
+                    "catalog_pricing_profile_id": profile_id,
+                    "code": row["code"],
+                    "label": row["label"],
+                    "description": row.get("description"),
+                    "quantity_source_type": row["quantity_source_type"],
+                    "quantity_source_key": row.get("quantity_source_key"),
+                    "hours_per_unit": row["hours_per_unit"],
+                    "crew_size": row.get("crew_size"),
+                    "sort_order": index * 10,
+                }
+            )
+
+        for index, row in enumerate(blueprint["material_assumptions"], start=1):
+            material_assumptions.append(
+                {
+                    "id": f"cppma_{work_type_snake}_{row['code'].replace('-', '_')}",
+                    "catalog_pricing_profile_id": profile_id,
+                    "code": row["code"],
+                    "label": row["label"],
+                    "description": row.get("description"),
+                    "quantity_source_type": row["quantity_source_type"],
+                    "quantity_source_key": row.get("quantity_source_key"),
+                    "quantity_per_unit": row["quantity_per_unit"],
+                    "unit": row["unit"],
+                    "default_unit_cost": row.get("default_unit_cost"),
+                    "waste_factor_pct": row.get("waste_factor_pct"),
+                    "sort_order": index * 10,
+                }
+            )
+
+        for index, row in enumerate(blueprint["base_rules"], start=1):
+            base_rules.append(
+                {
+                    "id": f"cppbr_{work_type_snake}_{row['code'].replace('-', '_')}",
+                    "catalog_pricing_profile_id": profile_id,
+                    "code": row["code"],
+                    "label": row["label"],
+                    "description": row.get("description"),
+                    "line_type": row["line_type"],
+                    "calculation_method": row["calculation_method"],
+                    "quantity_source_type": row["quantity_source_type"],
+                    "quantity_source_key": row.get("quantity_source_key"),
+                    "quantity_multiplier": row["quantity_multiplier"],
+                    "unit": row["unit"],
+                    "rate_source": row["rate_source"],
+                    "rate_value": row.get("rate_value"),
+                    "labor_assumption_code": row.get("labor_assumption_code"),
+                    "material_assumption_code": row.get("material_assumption_code"),
+                    "sort_order": index * 10,
+                }
+            )
+
+        for index, row in enumerate(blueprint["adjustment_rules"], start=1):
+            adjustment_rules.append(
+                {
+                    "id": f"cppar_{work_type_snake}_{row['code'].replace('-', '_')}",
+                    "catalog_pricing_profile_id": profile_id,
+                    "code": row["code"],
+                    "label": row["label"],
+                    "description": row.get("description"),
+                    "target_scope": row["target_scope"],
+                    "target_line_type": row.get("target_line_type"),
+                    "target_base_rule_code": row.get("target_base_rule_code"),
+                    "operation": row["operation"],
+                    "adjustment_value": row["adjustment_value"],
+                    "condition_source_type": row["condition_source_type"],
+                    "condition_source_key": row["condition_source_key"],
+                    "condition_operator": row["condition_operator"],
+                    "condition_text_value": row.get("condition_text_value"),
+                    "condition_number_value": row.get("condition_number_value"),
+                    "condition_boolean_value": row.get("condition_boolean_value"),
+                    "condition_option_code": row.get("condition_option_code"),
+                    "sort_order": index * 10,
+                }
+            )
+
+        work_type["default_catalog_pricing_profile_id"] = profile_id
+
+        unknown_parameters = {
+            row["source_key"]
+            for row in blueprint["required_inputs"]
+            if row["source_type"] == "parameter"
+        } - parameter_codes_by_work_type.get(work_type["id"], set())
+        if unknown_parameters:
+            raise AssertionError(
+                f"Pricing profile {profile_id!r} references unknown parameters {sorted(unknown_parameters)}"
+            )
+
+    return {
+        "catalog_pricing_profiles": profiles,
+        "pricing_profile_required_inputs": required_inputs,
+        "pricing_profile_base_rules": base_rules,
+        "pricing_profile_adjustment_rules": adjustment_rules,
+        "pricing_profile_labor_assumptions": labor_assumptions,
+        "pricing_profile_material_assumptions": material_assumptions,
+    }

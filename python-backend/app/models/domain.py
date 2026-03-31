@@ -220,7 +220,7 @@ class AnalysisJob(Base):
     __tablename__ = "analysis_jobs"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('queued', 'running', 'completed', 'failed', 'canceled')",
+            "status IN ('queued', 'running', 'completed', 'failed', 'canceled', 'dead_letter')",
             name="ck_analysis_jobs_status",
         ),
         Index(
@@ -242,9 +242,16 @@ class AnalysisJob(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    requested_work_type_code: Mapped[str | None] = mapped_column(String(64))
+    analysis_profile_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_analysis_profiles.id", ondelete="SET NULL")
+    )
+    resolved_analysis_profile_code: Mapped[str | None] = mapped_column(String(64))
+    resolved_analysis_profile_version: Mapped[int | None] = mapped_column(Integer)
     requested_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     parent_job_id: Mapped[str | None] = mapped_column(String(64))   # set when this is a retry
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     lease_token: Mapped[str | None] = mapped_column(String(128))
     worker_id: Mapped[str | None] = mapped_column(String(255))
     leased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -282,10 +289,18 @@ class AnalysisResult(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     analysis_job_id: Mapped[str | None] = mapped_column(ForeignKey("analysis_jobs.id", ondelete="SET NULL"))
+    resolved_work_type_code: Mapped[str | None] = mapped_column(String(64))
+    analysis_profile_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_analysis_profiles.id", ondelete="SET NULL")
+    )
+    resolved_analysis_profile_code: Mapped[str | None] = mapped_column(String(64))
+    resolved_analysis_profile_version: Mapped[int | None] = mapped_column(Integer)
     reference_photo_id: Mapped[str | None] = mapped_column(ForeignKey("project_photos.id", ondelete="SET NULL"))
     object_type: Mapped[str | None] = mapped_column(String(64))
     surface_condition: Mapped[str | None] = mapped_column(String(64))
     recommended_scope: Mapped[str | None] = mapped_column(String(64))
+    estimated_quantity: Mapped[float | None] = mapped_column(Float)
+    estimated_unit: Mapped[str | None] = mapped_column(String(32))
     estimated_area_sqm: Mapped[float | None] = mapped_column(Float)
     area_confidence: Mapped[float | None] = mapped_column(Float)
     selected_repair_polygon_json: Mapped[str | None] = mapped_column(Text)
@@ -412,6 +427,14 @@ class SupplierMaterialPrice(TimestampMixin, Base):
 
 class QuoteVariant(TimestampMixin, Base):
     __tablename__ = "quote_variants"
+    __table_args__ = (
+        Index(
+            "idx_quote_variants_project_created_id",
+            "project_id",
+            "created_at",
+            "id",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
@@ -425,6 +448,9 @@ class QuoteVariant(TimestampMixin, Base):
     total_ex_vat: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
     vat_amount: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
     total_inc_vat: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False)
+    vat_pct: Mapped[float] = mapped_column(Numeric(14, 4), default=21, nullable=False)
+    pricing_summary_json: Mapped[str | None] = mapped_column(Text)
 
     project: Mapped["Project"] = relationship(back_populates="quote_variants")
     analysis_result: Mapped["AnalysisResult | None"] = relationship(back_populates="quote_variants")
@@ -434,9 +460,39 @@ class QuoteVariant(TimestampMixin, Base):
 
 class QuoteItem(TimestampMixin, Base):
     __tablename__ = "quote_items"
+    __table_args__ = (
+        Index(
+            "idx_quote_items_quote_variant_sort",
+            "quote_variant_id",
+            "sort_order",
+            "id",
+        ),
+        Index(
+            "idx_quote_items_project_work_item",
+            "project_work_item_id",
+            "sort_order",
+            "id",
+        ),
+        Index(
+            "idx_quote_items_pricing_rule_lookup",
+            "catalog_pricing_profile_id",
+            "catalog_pricing_rule_code",
+            "work_type_code",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     quote_variant_id: Mapped[str] = mapped_column(ForeignKey("quote_variants.id", ondelete="CASCADE"), nullable=False)
+    project_work_item_id: Mapped[str | None] = mapped_column(
+        ForeignKey("project_work_items.id", ondelete="SET NULL")
+    )
+    catalog_pricing_profile_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_pricing_profiles.id", ondelete="SET NULL")
+    )
+    work_type_code: Mapped[str | None] = mapped_column(String(64))
+    resolved_catalog_pricing_profile_code: Mapped[str | None] = mapped_column(String(64))
+    resolved_catalog_pricing_profile_version: Mapped[int | None] = mapped_column(Integer)
+    catalog_pricing_rule_code: Mapped[str | None] = mapped_column(String(64))
     item_type: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)

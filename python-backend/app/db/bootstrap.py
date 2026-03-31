@@ -7,7 +7,18 @@ from app.models import (
     AnalysisJob,
     AnalysisResult,
     AnalysisProfile,
+    AnalysisProfileConfidenceThreshold,
+    AnalysisProfileExtractionRule,
+    AnalysisProfileIgnoredObject,
+    AnalysisProfileOutputMapping,
+    AnalysisProfileTargetObject,
+    AnalysisProfileValidationRule,
     CatalogPricingProfile,
+    CatalogPricingProfileAdjustmentRule,
+    CatalogPricingProfileBaseRule,
+    CatalogPricingProfileLaborAssumption,
+    CatalogPricingProfileMaterialAssumption,
+    CatalogPricingProfileRequiredInput,
     Client,
     MaterialCatalog,
     Organization,
@@ -20,6 +31,8 @@ from app.models import (
     QuoteVariant,
     Supplier,
     SupplierMaterialPrice,
+    TenantWorkTypeExtraParameter,
+    TenantWorkTypeExtraParameterOption,
     TenantWorkTypeParameterOverride,
     TenantWorkTypeSetting,
     User,
@@ -84,8 +97,41 @@ async def _seed_global_work_catalog(session: AsyncSession) -> None:
     for row in GLOBAL_WORK_CATALOG_SEED["analysis_profiles"]:
         await _upsert_seed_row(AnalysisProfile, row)
 
+    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profile_target_objects"]:
+        await _upsert_seed_row(AnalysisProfileTargetObject, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profile_ignored_objects"]:
+        await _upsert_seed_row(AnalysisProfileIgnoredObject, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profile_extraction_rules"]:
+        await _upsert_seed_row(AnalysisProfileExtractionRule, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profile_validation_rules"]:
+        await _upsert_seed_row(AnalysisProfileValidationRule, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profile_confidence_thresholds"]:
+        await _upsert_seed_row(AnalysisProfileConfidenceThreshold, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profile_output_mappings"]:
+        await _upsert_seed_row(AnalysisProfileOutputMapping, row)
+
     for row in GLOBAL_WORK_CATALOG_SEED["catalog_pricing_profiles"]:
         await _upsert_seed_row(CatalogPricingProfile, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["pricing_profile_required_inputs"]:
+        await _upsert_seed_row(CatalogPricingProfileRequiredInput, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["pricing_profile_base_rules"]:
+        await _upsert_seed_row(CatalogPricingProfileBaseRule, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["pricing_profile_adjustment_rules"]:
+        await _upsert_seed_row(CatalogPricingProfileAdjustmentRule, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["pricing_profile_labor_assumptions"]:
+        await _upsert_seed_row(CatalogPricingProfileLaborAssumption, row)
+
+    for row in GLOBAL_WORK_CATALOG_SEED["pricing_profile_material_assumptions"]:
+        await _upsert_seed_row(CatalogPricingProfileMaterialAssumption, row)
 
     for row in GLOBAL_WORK_CATALOG_SEED["work_types"]:
         await _upsert_seed_row(WorkType, row)
@@ -443,6 +489,10 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
                 project_id="prj_1",
                 status="completed",
                 job_type="vision_mock",
+                requested_work_type_code="roof-repair",
+                analysis_profile_id="ap_roof_repair_vision_v1",
+                resolved_analysis_profile_code="roof-repair-vision",
+                resolved_analysis_profile_version=1,
                 requested_by_user_id="usr_1",
             )
         )
@@ -454,10 +504,16 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
                 id="ana_1",
                 project_id="prj_1",
                 analysis_job_id="job_1",
+                resolved_work_type_code="roof-repair",
+                analysis_profile_id="ap_roof_repair_vision_v1",
+                resolved_analysis_profile_code="roof-repair-vision",
+                resolved_analysis_profile_version=1,
                 reference_photo_id="pho_1",
                 object_type="facade",
                 surface_condition="requires_attention",
                 recommended_scope="local_repair",
+                estimated_quantity=54.9,
+                estimated_unit="m2",
                 estimated_area_sqm=54.9,
                 area_confidence=0.77,
                 selected_repair_polygon_json='[{"x":0.18,"y":0.22},{"x":0.58,"y":0.24},{"x":0.56,"y":0.68},{"x":0.2,"y":0.7}]',
@@ -480,8 +536,8 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
                 organization_id="org_1",
                 work_type_id="wt_roof_repair",
                 tenant_work_type_setting_id="twts_org_1_roof_repair",
-                analysis_profile_id="ap_surface_damage_v1",
-                catalog_pricing_profile_id="cpp_surface_repair_standard_v1",
+                analysis_profile_id="ap_roof_repair_vision_v1",
+                catalog_pricing_profile_id="cpp_roof_repair_pricing_v1",
                 tenant_pricing_profile_id="price_default",
                 title="Oprava strechy",
                 status="resolved",
@@ -490,6 +546,10 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
                 resolved_display_name="Oprava strechy",
                 resolved_work_type_code="roof-repair",
                 resolved_category_code="roofing",
+                resolved_analysis_profile_code="roof-repair-vision",
+                resolved_analysis_profile_version=1,
+                resolved_catalog_pricing_profile_code="roof-repair-pricing",
+                resolved_catalog_pricing_profile_version=1,
                 resolved_unit="m2",
                 resolved_catalog_version=1,
                 resolved_setting_version=1,
@@ -542,7 +602,7 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
                 project_work_item_id="pwi_1",
                 analysis_job_id="job_1",
                 work_type_id="wt_roof_repair",
-                analysis_profile_id="ap_surface_damage_v1",
+                analysis_profile_id="ap_roof_repair_vision_v1",
                 reference_photo_id="pho_1",
                 detection_key="roof-repair-pho-1-001",
                 status="linked",
@@ -558,6 +618,8 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
                 bbox_bottom=0.70,
                 geometry_json='[{"x":0.18,"y":0.22},{"x":0.58,"y":0.24},{"x":0.56,"y":0.68},{"x":0.2,"y":0.7}]',
                 resolved_work_type_code="roof-repair",
+                resolved_analysis_profile_code="roof-repair-vision",
+                resolved_analysis_profile_version=1,
                 source_provider="mock-vision",
                 source_model="mock-vision",
                 source_model_version="0.2",

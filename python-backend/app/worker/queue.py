@@ -21,9 +21,11 @@ from redis.asyncio import Redis
 
 QUEUE_KEY = "analysis:jobs"
 PROCESSING_QUEUE_KEY = "analysis:processing"
+RETRY_QUEUE_KEY = "analysis:retry"
 LEASE_KEY_PREFIX = "analysis:lease:"
 LEASE_EXPIRY_ZSET_KEY = "analysis:lease_expiry"
 LEASE_SEQUENCE_KEY = "analysis:lease_sequence"
+DLQ_KEY_PREFIX = "analysis:dlq:"
 
 _LEASE_JOB_SCRIPT = """
 local raw = redis.call('LPOP', KEYS[1])
@@ -114,6 +116,32 @@ redis.call('ZADD', KEYS[2], expires_at_ms, token)
 return 1
 """
 
+_SCHEDULE_RETRY_SCRIPT = """
+local lease_key = KEYS[1] .. ARGV[1]
+if redis.call('EXISTS', lease_key) == 0 then
+    return 0
+end
+
+local owner = redis.call('HGET', lease_key, 'worker_id')
+if owner ~= ARGV[2] then
+    return -1
+end
+
+local actual_leased_at_ms = redis.call('HGET', lease_key, 'leased_at_ms')
+if actual_leased_at_ms ~= ARGV[3] then
+    return 0
+end
+
+local raw = redis.call('HGET', lease_key, 'raw')
+if raw then
+    redis.call('LREM', KEYS[2], 1, raw)
+    redis.call('ZADD', KEYS[4], ARGV[4], raw)
+end
+redis.call('DEL', lease_key)
+redis.call('ZREM', KEYS[3], ARGV[1])
+return 1
+"""
+
 _FINALIZE_EXPIRED_LEASE_SCRIPT = """
 local token = ARGV[1]
 local expected_leased_at_ms = ARGV[2]
@@ -141,6 +169,44 @@ redis.call('ZREM', KEYS[3], token)
 return 1
 """
 
+_MOVE_TO_DLQ_SCRIPT = """
+local lease_key = KEYS[1] .. ARGV[1]
+if redis.call('EXISTS', lease_key) == 0 then
+    return 0
+end
+
+local owner = redis.call('HGET', lease_key, 'worker_id')
+if owner ~= ARGV[2] then
+    return -1
+end
+
+local actual_leased_at_ms = redis.call('HGET', lease_key, 'leased_at_ms')
+if actual_leased_at_ms ~= ARGV[3] then
+    return 0
+end
+
+local raw = redis.call('HGET', lease_key, 'raw')
+if raw then
+    redis.call('LREM', KEYS[2], 1, raw)
+end
+redis.call('SET', KEYS[4], ARGV[4])
+redis.call('DEL', lease_key)
+redis.call('ZREM', KEYS[3], ARGV[1])
+return 1
+"""
+
+_PROMOTE_RETRY_SCRIPT = """
+local due = redis.call('ZRANGEBYSCORE', KEYS[2], 0, ARGV[1], 'LIMIT', 0, ARGV[2])
+local moved = 0
+for _, raw in ipairs(due) do
+    if redis.call('ZREM', KEYS[2], raw) == 1 then
+        redis.call('RPUSH', KEYS[1], raw)
+        moved = moved + 1
+    end
+end
+return moved
+"""
+
 
 class InvalidAnalysisJobPayloadError(ValueError):
     """Raised when a Redis queue item cannot be decoded into the expected payload."""
@@ -161,6 +227,10 @@ class AnalysisJobQueueCapacityExceededError(RuntimeError):
         self.queued = queued
         self.processing = processing
         self.max_depth = max_depth
+
+
+def _build_dlq_key(job_id: str) -> str:
+    return f"{DLQ_KEY_PREFIX}{job_id}"
 
 
 class AnalysisJobQueuePayload(BaseModel):
@@ -252,6 +322,81 @@ def _parse_raw_payload(raw: str) -> dict:
     return validate_analysis_job_payload(payload).model_dump()
 
 
+def _serialize_dlq_payload(
+    lease: "LeasedAnalysisJob",
+    *,
+    attempt_count: int,
+    reason: str | None = None,
+    now: datetime | None = None,
+) -> str:
+    payload = {
+        "job_id": lease.job_id,
+        "project_id": lease.project_id,
+        "organization_id": lease.organization_id,
+        "is_superadmin_context": bool(lease.payload.get("is_superadmin_context", False)),
+        "raw_payload": lease.raw_payload,
+        "attempt_count": max(0, int(attempt_count)),
+        "reason": reason,
+        "moved_at_ms": _utc_now_ms(now),
+    }
+    return json.dumps(payload)
+
+
+def _parse_dlq_payload(raw: str) -> dict:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise InvalidAnalysisJobPayloadError(
+            "Invalid analysis job DLQ payload: malformed JSON."
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise InvalidAnalysisJobPayloadError(
+            "Invalid analysis job DLQ payload: expected a JSON object."
+        )
+
+    raw_payload = payload.get("raw_payload")
+    if not isinstance(raw_payload, str) or not raw_payload.strip():
+        raise InvalidAnalysisJobPayloadError(
+            "Invalid analysis job DLQ payload: missing raw_payload."
+        )
+
+    _parse_raw_payload(raw_payload)
+    return payload
+
+
+async def _enqueue_raw_payload(
+    redis: Redis,
+    raw_payload: str,
+    *,
+    max_depth: int | None = None,
+) -> None:
+    if max_depth is None:
+        await redis.rpush(QUEUE_KEY, raw_payload)
+        return
+
+    result = await redis.eval(
+        _ENQUEUE_WITH_LIMIT_SCRIPT,
+        2,
+        QUEUE_KEY,
+        PROCESSING_QUEUE_KEY,
+        raw_payload,
+        str(max(1, int(max_depth))),
+    )
+    if (
+        not isinstance(result, (list, tuple))
+        or len(result) != 3
+        or int(_decode_text(result[0])) != 1
+    ):
+        queued = int(_decode_text(result[1])) if isinstance(result, (list, tuple)) and len(result) > 1 else 0
+        processing = int(_decode_text(result[2])) if isinstance(result, (list, tuple)) and len(result) > 2 else 0
+        raise AnalysisJobQueueCapacityExceededError(
+            queued=queued,
+            processing=processing,
+            max_depth=max(1, int(max_depth)),
+        )
+
+
 def validate_analysis_job_payload(payload: object) -> AnalysisJobQueuePayload:
     try:
         return AnalysisJobQueuePayload.model_validate(payload)
@@ -305,31 +450,11 @@ async def enqueue_analysis_job(
             "is_superadmin_context": is_superadmin_context,
         }
     )
-    raw = json.dumps(payload.model_dump())
-    if max_depth is None:
-        await redis.rpush(QUEUE_KEY, raw)
-        return
-
-    result = await redis.eval(
-        _ENQUEUE_WITH_LIMIT_SCRIPT,
-        2,
-        QUEUE_KEY,
-        PROCESSING_QUEUE_KEY,
-        raw,
-        str(max(1, int(max_depth))),
+    await _enqueue_raw_payload(
+        redis,
+        json.dumps(payload.model_dump()),
+        max_depth=max_depth,
     )
-    if (
-        not isinstance(result, (list, tuple))
-        or len(result) != 3
-        or int(_decode_text(result[0])) != 1
-    ):
-        queued = int(_decode_text(result[1])) if isinstance(result, (list, tuple)) and len(result) > 1 else 0
-        processing = int(_decode_text(result[2])) if isinstance(result, (list, tuple)) and len(result) > 2 else 0
-        raise AnalysisJobQueueCapacityExceededError(
-            queued=queued,
-            processing=processing,
-            max_depth=max(1, int(max_depth)),
-        )
 
 
 async def get_analysis_job_queue_counts(redis: Redis) -> tuple[int, int]:
@@ -424,6 +549,50 @@ async def renew_analysis_job_lease(
     )
 
 
+async def schedule_analysis_job_retry(
+    redis: Redis,
+    lease: LeasedAnalysisJob,
+    *,
+    retry_at: datetime,
+) -> bool:
+    """Move a worker-owned lease into the scheduled retry queue."""
+    result = await redis.eval(
+        _SCHEDULE_RETRY_SCRIPT,
+        4,
+        LEASE_KEY_PREFIX,
+        PROCESSING_QUEUE_KEY,
+        LEASE_EXPIRY_ZSET_KEY,
+        RETRY_QUEUE_KEY,
+        lease.token,
+        lease.worker_id,
+        str(lease.leased_at_ms),
+        str(_utc_now_ms(retry_at)),
+    )
+    if int(result) == -1:
+        raise LostAnalysisJobLeaseError(
+            f"Lease {lease.token} is no longer owned by worker {lease.worker_id!r}."
+        )
+    return int(result) == 1
+
+
+async def promote_scheduled_analysis_jobs(
+    redis: Redis,
+    *,
+    now: datetime | None = None,
+    limit: int = 100,
+) -> int:
+    """Promote due scheduled retries back into the durable queue."""
+    result = await redis.eval(
+        _PROMOTE_RETRY_SCRIPT,
+        2,
+        QUEUE_KEY,
+        RETRY_QUEUE_KEY,
+        str(_utc_now_ms(now)),
+        str(max(1, int(limit))),
+    )
+    return int(result or 0)
+
+
 async def get_expired_analysis_job_leases(
     redis: Redis,
     *,
@@ -483,6 +652,69 @@ async def requeue_expired_analysis_job(redis: Redis, lease: LeasedAnalysisJob) -
         "requeue",
     )
     return int(result) == 1
+
+
+async def move_analysis_job_to_dlq(
+    redis: Redis,
+    lease: LeasedAnalysisJob,
+    *,
+    attempt_count: int,
+    reason: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Remove a leased job from processing and store its payload in the DLQ."""
+    result = await redis.eval(
+        _MOVE_TO_DLQ_SCRIPT,
+        4,
+        LEASE_KEY_PREFIX,
+        PROCESSING_QUEUE_KEY,
+        LEASE_EXPIRY_ZSET_KEY,
+        _build_dlq_key(lease.job_id),
+        lease.token,
+        lease.worker_id,
+        str(lease.leased_at_ms),
+        _serialize_dlq_payload(
+            lease,
+            attempt_count=attempt_count,
+            reason=reason,
+            now=now,
+        ),
+    )
+    if int(result) == -1:
+        raise LostAnalysisJobLeaseError(
+            f"Lease {lease.token} is no longer owned by worker {lease.worker_id!r}."
+        )
+    return int(result) == 1
+
+
+async def get_dlq_job(redis: Redis, job_id: str) -> dict | None:
+    """Return the stored DLQ payload for a job, or None if absent."""
+    raw = await redis.get(_build_dlq_key(job_id))
+    if raw is None:
+        return None
+    return _parse_dlq_payload(_decode_text(raw))
+
+
+async def requeue_dlq_job(
+    redis: Redis,
+    *,
+    job_id: str,
+    max_depth: int | None = None,
+) -> dict | None:
+    """Requeue a DLQ job by id and remove it from DLQ on success."""
+    dlq_key = _build_dlq_key(job_id)
+    raw = await redis.get(dlq_key)
+    if raw is None:
+        return None
+
+    payload = _parse_dlq_payload(_decode_text(raw))
+    await _enqueue_raw_payload(
+        redis,
+        payload["raw_payload"],
+        max_depth=max_depth,
+    )
+    await redis.delete(dlq_key)
+    return payload
 
 
 async def drop_expired_analysis_job(redis: Redis, lease: LeasedAnalysisJob) -> bool:

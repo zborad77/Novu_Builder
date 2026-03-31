@@ -50,11 +50,19 @@ class AnalysisProfile(TimestampMixin, Base):
     """Immutable-ish global analysis execution contract referenced by work types."""
     __tablename__ = "catalog_analysis_profiles"
     __table_args__ = (
-        UniqueConstraint("code", name="uq_catalog_analysis_profiles_code"),
-        Index("idx_catalog_analysis_profiles_active_code", "is_active", "code"),
+        UniqueConstraint("code", "profile_version", name="uq_catalog_analysis_profiles_code_version"),
+        Index("idx_catalog_analysis_profiles_active_code", "is_active", "code", "profile_version"),
         CheckConstraint(
             "task_type IN ('classification', 'detection', 'measurement', 'hybrid')",
             name="ck_catalog_analysis_profiles_task_type",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'active', 'deprecated', 'archived')",
+            name="ck_catalog_analysis_profiles_status",
+        ),
+        CheckConstraint(
+            "fallback_mode IN ('manual_review', 'request_more_photos', 'return_partial')",
+            name="ck_catalog_analysis_profiles_fallback_mode",
         ),
     )
 
@@ -68,6 +76,13 @@ class AnalysisProfile(TimestampMixin, Base):
     max_detections_per_photo: Mapped[int] = mapped_column(Integer, default=25, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     profile_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    scope_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    scope_description: Mapped[str | None] = mapped_column(Text)
+    fallback_mode: Mapped[str] = mapped_column(String(32), default="manual_review", nullable=False)
+    fallback_instructions: Mapped[str | None] = mapped_column(Text)
+    fallback_requires_manual_review: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     work_types: Mapped[list["WorkType"]] = relationship(
         back_populates="default_analysis_profile",
@@ -77,16 +92,216 @@ class AnalysisProfile(TimestampMixin, Base):
         back_populates="analysis_profile",
         foreign_keys="TenantWorkTypeSetting.analysis_profile_id",
     )
+    target_objects: Mapped[list["AnalysisProfileTargetObject"]] = relationship(
+        back_populates="analysis_profile",
+        cascade="all, delete-orphan",
+        order_by="AnalysisProfileTargetObject.sort_order",
+    )
+    ignored_objects: Mapped[list["AnalysisProfileIgnoredObject"]] = relationship(
+        back_populates="analysis_profile",
+        cascade="all, delete-orphan",
+        order_by="AnalysisProfileIgnoredObject.sort_order",
+    )
+    extraction_rules: Mapped[list["AnalysisProfileExtractionRule"]] = relationship(
+        back_populates="analysis_profile",
+        cascade="all, delete-orphan",
+        order_by="AnalysisProfileExtractionRule.sort_order",
+    )
+    validation_rules: Mapped[list["AnalysisProfileValidationRule"]] = relationship(
+        back_populates="analysis_profile",
+        cascade="all, delete-orphan",
+        order_by="AnalysisProfileValidationRule.sort_order",
+    )
+    confidence_thresholds: Mapped[list["AnalysisProfileConfidenceThreshold"]] = relationship(
+        back_populates="analysis_profile",
+        cascade="all, delete-orphan",
+        order_by="AnalysisProfileConfidenceThreshold.sort_order",
+    )
+    output_mappings: Mapped[list["AnalysisProfileOutputMapping"]] = relationship(
+        back_populates="analysis_profile",
+        cascade="all, delete-orphan",
+        order_by="AnalysisProfileOutputMapping.sort_order",
+    )
+
+
+class AnalysisProfileTargetObject(TimestampMixin, Base):
+    __tablename__ = "catalog_analysis_profile_target_objects"
+    __table_args__ = (
+        UniqueConstraint("analysis_profile_id", "code", name="uq_analysis_profile_target_objects_code"),
+        Index("idx_analysis_profile_target_objects_profile_sort", "analysis_profile_id", "sort_order", "code"),
+        CheckConstraint(
+            "object_role IN ('primary', 'secondary', 'context')",
+            name="ck_analysis_profile_target_objects_role",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    analysis_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_analysis_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    object_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    analysis_profile: Mapped["AnalysisProfile"] = relationship(back_populates="target_objects")
+
+
+class AnalysisProfileIgnoredObject(TimestampMixin, Base):
+    __tablename__ = "catalog_analysis_profile_ignored_objects"
+    __table_args__ = (
+        UniqueConstraint("analysis_profile_id", "code", name="uq_analysis_profile_ignored_objects_code"),
+        Index("idx_analysis_profile_ignored_objects_profile_sort", "analysis_profile_id", "sort_order", "code"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    analysis_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_analysis_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    analysis_profile: Mapped["AnalysisProfile"] = relationship(back_populates="ignored_objects")
+
+
+class AnalysisProfileExtractionRule(TimestampMixin, Base):
+    __tablename__ = "catalog_analysis_profile_extraction_rules"
+    __table_args__ = (
+        UniqueConstraint("analysis_profile_id", "attribute_code", name="uq_analysis_profile_extraction_rules_attribute"),
+        Index("idx_analysis_profile_extraction_rules_profile_sort", "analysis_profile_id", "sort_order", "attribute_code"),
+        CheckConstraint(
+            "data_type IN ('number', 'text', 'boolean', 'option')",
+            name="ck_analysis_profile_extraction_rules_data_type",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    analysis_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_analysis_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    attribute_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    data_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    unit: Mapped[str | None] = mapped_column(String(32))
+    target_parameter_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_object_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    manual_review_on_missing: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    analysis_profile: Mapped["AnalysisProfile"] = relationship(back_populates="extraction_rules")
+
+
+class AnalysisProfileValidationRule(TimestampMixin, Base):
+    __tablename__ = "catalog_analysis_profile_validation_rules"
+    __table_args__ = (
+        UniqueConstraint("analysis_profile_id", "code", name="uq_analysis_profile_validation_rules_code"),
+        Index("idx_analysis_profile_validation_rules_profile_sort", "analysis_profile_id", "sort_order", "code"),
+        CheckConstraint(
+            "rule_type IN ('min_photos', 'required_attribute', 'numeric_range', 'confidence_gate')",
+            name="ck_analysis_profile_validation_rules_type",
+        ),
+        CheckConstraint(
+            "severity IN ('warning', 'blocking')",
+            name="ck_analysis_profile_validation_rules_severity",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    analysis_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_analysis_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    rule_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    severity: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_attribute_code: Mapped[str | None] = mapped_column(String(64))
+    target_parameter_code: Mapped[str | None] = mapped_column(String(64))
+    min_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    max_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    analysis_profile: Mapped["AnalysisProfile"] = relationship(back_populates="validation_rules")
+
+
+class AnalysisProfileConfidenceThreshold(TimestampMixin, Base):
+    __tablename__ = "catalog_analysis_profile_confidence_thresholds"
+    __table_args__ = (
+        UniqueConstraint("analysis_profile_id", "attribute_code", name="uq_analysis_profile_confidence_thresholds_attribute"),
+        Index("idx_analysis_profile_confidence_thresholds_profile_sort", "analysis_profile_id", "sort_order", "attribute_code"),
+        CheckConstraint(
+            "action_below_threshold IN ('manual_review', 'drop_attribute', 'fail_analysis')",
+            name="ck_analysis_profile_confidence_thresholds_action",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    analysis_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_analysis_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    attribute_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_object_code: Mapped[str | None] = mapped_column(String(64))
+    min_confidence: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False)
+    preferred_confidence: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False)
+    action_below_threshold: Mapped[str] = mapped_column(String(32), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    analysis_profile: Mapped["AnalysisProfile"] = relationship(back_populates="confidence_thresholds")
+
+
+class AnalysisProfileOutputMapping(TimestampMixin, Base):
+    __tablename__ = "catalog_analysis_profile_output_mappings"
+    __table_args__ = (
+        UniqueConstraint("analysis_profile_id", "code", name="uq_analysis_profile_output_mappings_code"),
+        Index("idx_analysis_profile_output_mappings_profile_sort", "analysis_profile_id", "sort_order", "code"),
+        CheckConstraint(
+            "target_entity IN ('analysis_result', 'project_work_item', 'project_work_item_value', 'vision_detection')",
+            name="ck_analysis_profile_output_mappings_target_entity",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    analysis_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_analysis_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_entity: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_field: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_attribute_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_parameter_code: Mapped[str | None] = mapped_column(String(64))
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    analysis_profile: Mapped["AnalysisProfile"] = relationship(back_populates="output_mappings")
 
 
 class CatalogPricingProfile(TimestampMixin, Base):
     """Global pricing strategy profile, distinct from tenant pricebooks."""
     __tablename__ = "catalog_pricing_profiles"
     __table_args__ = (
-        UniqueConstraint("code", name="uq_catalog_pricing_profiles_code"),
-        Index("idx_catalog_pricing_profiles_active_code", "is_active", "code"),
+        UniqueConstraint("code", "profile_version", name="uq_catalog_pricing_profiles_code_version"),
+        Index("idx_catalog_pricing_profiles_active_code", "is_active", "code", "profile_version"),
         CheckConstraint(
-            "pricing_strategy IN ('tenant_pricebook', 'fixed_formula', 'manual_review')",
+            "status IN ('draft', 'active', 'deprecated', 'archived')",
+            name="ck_catalog_pricing_profiles_status",
+        ),
+        CheckConstraint(
+            "pricing_basis IN ('area', 'length', 'count', 'volume', 'scope', 'inspection', 'service', 'incident')",
+            name="ck_catalog_pricing_profiles_basis",
+        ),
+        CheckConstraint(
+            "pricing_strategy IN ('tenant_pricebook', 'catalog_formula', 'fixed_formula', 'manual_review')",
             name="ck_catalog_pricing_profiles_strategy",
         ),
         CheckConstraint(
@@ -102,11 +317,16 @@ class CatalogPricingProfile(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    pricing_basis: Mapped[str] = mapped_column(String(32), nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False)
     pricing_strategy: Mapped[str] = mapped_column(String(32), nullable=False)
     labor_rate_source: Mapped[str] = mapped_column(String(32), nullable=False)
     material_pricing_source: Mapped[str] = mapped_column(String(32), nullable=False)
     default_margin_pct: Mapped[float | None] = mapped_column(Numeric(14, 4))
     default_markup_pct: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    min_job_price: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    metadata_json: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     profile_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
@@ -118,6 +338,246 @@ class CatalogPricingProfile(TimestampMixin, Base):
         back_populates="catalog_pricing_profile",
         foreign_keys="TenantWorkTypeSetting.catalog_pricing_profile_id",
     )
+    required_inputs: Mapped[list["CatalogPricingProfileRequiredInput"]] = relationship(
+        back_populates="catalog_pricing_profile",
+        cascade="all, delete-orphan",
+        order_by="CatalogPricingProfileRequiredInput.sort_order",
+    )
+    base_rules: Mapped[list["CatalogPricingProfileBaseRule"]] = relationship(
+        back_populates="catalog_pricing_profile",
+        cascade="all, delete-orphan",
+        order_by="CatalogPricingProfileBaseRule.sort_order",
+    )
+    adjustment_rules: Mapped[list["CatalogPricingProfileAdjustmentRule"]] = relationship(
+        back_populates="catalog_pricing_profile",
+        cascade="all, delete-orphan",
+        order_by="CatalogPricingProfileAdjustmentRule.sort_order",
+    )
+    labor_assumptions: Mapped[list["CatalogPricingProfileLaborAssumption"]] = relationship(
+        back_populates="catalog_pricing_profile",
+        cascade="all, delete-orphan",
+        order_by="CatalogPricingProfileLaborAssumption.sort_order",
+    )
+    material_assumptions: Mapped[list["CatalogPricingProfileMaterialAssumption"]] = relationship(
+        back_populates="catalog_pricing_profile",
+        cascade="all, delete-orphan",
+        order_by="CatalogPricingProfileMaterialAssumption.sort_order",
+    )
+
+
+class CatalogPricingProfileRequiredInput(TimestampMixin, Base):
+    __tablename__ = "catalog_pricing_profile_required_inputs"
+    __table_args__ = (
+        UniqueConstraint("catalog_pricing_profile_id", "code", name="uq_catalog_pricing_profile_required_inputs_code"),
+        Index(
+            "idx_catalog_pricing_profile_required_inputs_profile_sort",
+            "catalog_pricing_profile_id",
+            "sort_order",
+            "code",
+        ),
+        CheckConstraint(
+            "source_type IN ('parameter', 'work_item_field')",
+            name="ck_catalog_pricing_profile_required_inputs_source",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    catalog_pricing_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_pricing_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    catalog_pricing_profile: Mapped["CatalogPricingProfile"] = relationship(back_populates="required_inputs")
+
+
+class CatalogPricingProfileLaborAssumption(TimestampMixin, Base):
+    __tablename__ = "catalog_pricing_profile_labor_assumptions"
+    __table_args__ = (
+        UniqueConstraint("catalog_pricing_profile_id", "code", name="uq_catalog_pricing_profile_labor_assumptions_code"),
+        Index(
+            "idx_catalog_pricing_profile_labor_assumptions_profile_sort",
+            "catalog_pricing_profile_id",
+            "sort_order",
+            "code",
+        ),
+        CheckConstraint(
+            "quantity_source_type IN ('parameter', 'work_item_field', 'constant')",
+            name="ck_catalog_pricing_profile_labor_assumptions_quantity_source",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    catalog_pricing_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_pricing_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    quantity_source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    quantity_source_key: Mapped[str | None] = mapped_column(String(64))
+    hours_per_unit: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
+    crew_size: Mapped[int | None] = mapped_column(Integer)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    catalog_pricing_profile: Mapped["CatalogPricingProfile"] = relationship(back_populates="labor_assumptions")
+
+
+class CatalogPricingProfileMaterialAssumption(TimestampMixin, Base):
+    __tablename__ = "catalog_pricing_profile_material_assumptions"
+    __table_args__ = (
+        UniqueConstraint("catalog_pricing_profile_id", "code", name="uq_catalog_pricing_profile_material_assumptions_code"),
+        Index(
+            "idx_catalog_pricing_profile_material_assumptions_profile_sort",
+            "catalog_pricing_profile_id",
+            "sort_order",
+            "code",
+        ),
+        CheckConstraint(
+            "quantity_source_type IN ('parameter', 'work_item_field', 'constant')",
+            name="ck_catalog_pricing_profile_material_assumptions_quantity_source",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    catalog_pricing_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_pricing_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    quantity_source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    quantity_source_key: Mapped[str | None] = mapped_column(String(64))
+    quantity_per_unit: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
+    unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    default_unit_cost: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    waste_factor_pct: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    catalog_pricing_profile: Mapped["CatalogPricingProfile"] = relationship(back_populates="material_assumptions")
+
+
+class CatalogPricingProfileBaseRule(TimestampMixin, Base):
+    __tablename__ = "catalog_pricing_profile_base_rules"
+    __table_args__ = (
+        UniqueConstraint("catalog_pricing_profile_id", "code", name="uq_catalog_pricing_profile_base_rules_code"),
+        Index(
+            "idx_catalog_pricing_profile_base_rules_profile_sort",
+            "catalog_pricing_profile_id",
+            "sort_order",
+            "code",
+        ),
+        CheckConstraint(
+            "line_type IN ('labor', 'material', 'other')",
+            name="ck_catalog_pricing_profile_base_rules_line_type",
+        ),
+        CheckConstraint(
+            "calculation_method IN ('per_unit', 'fixed')",
+            name="ck_catalog_pricing_profile_base_rules_calculation_method",
+        ),
+        CheckConstraint(
+            "quantity_source_type IN ('parameter', 'work_item_field', 'constant')",
+            name="ck_catalog_pricing_profile_base_rules_quantity_source",
+        ),
+        CheckConstraint(
+            "rate_source IN ('tenant_hourly_rate', 'tenant_daily_rate', 'catalog_unit_rate', 'catalog_flat_rate')",
+            name="ck_catalog_pricing_profile_base_rules_rate_source",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    catalog_pricing_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_pricing_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    line_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    calculation_method: Mapped[str] = mapped_column(String(32), nullable=False)
+    quantity_source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    quantity_source_key: Mapped[str | None] = mapped_column(String(64))
+    quantity_multiplier: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
+    unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    rate_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    rate_value: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    labor_assumption_code: Mapped[str | None] = mapped_column(String(64))
+    material_assumption_code: Mapped[str | None] = mapped_column(String(64))
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    catalog_pricing_profile: Mapped["CatalogPricingProfile"] = relationship(back_populates="base_rules")
+
+
+class CatalogPricingProfileAdjustmentRule(TimestampMixin, Base):
+    __tablename__ = "catalog_pricing_profile_adjustment_rules"
+    __table_args__ = (
+        UniqueConstraint("catalog_pricing_profile_id", "code", name="uq_catalog_pricing_profile_adjustment_rules_code"),
+        Index(
+            "idx_catalog_pricing_profile_adjustment_rules_profile_sort",
+            "catalog_pricing_profile_id",
+            "sort_order",
+            "code",
+        ),
+        CheckConstraint(
+            "target_scope IN ('profile_total', 'line_type', 'base_rule')",
+            name="ck_catalog_pricing_profile_adjustment_rules_target_scope",
+        ),
+        CheckConstraint(
+            "target_line_type IS NULL OR target_line_type IN ('labor', 'material', 'other')",
+            name="ck_catalog_pricing_profile_adjustment_rules_target_line_type",
+        ),
+        CheckConstraint(
+            "operation IN ('multiply', 'add_flat')",
+            name="ck_catalog_pricing_profile_adjustment_rules_operation",
+        ),
+        CheckConstraint(
+            "condition_source_type IN ('parameter', 'work_item_field')",
+            name="ck_catalog_pricing_profile_adjustment_rules_condition_source",
+        ),
+        CheckConstraint(
+            "condition_operator IN ('eq', 'gte', 'lte', 'true')",
+            name="ck_catalog_pricing_profile_adjustment_rules_operator",
+        ),
+        CheckConstraint(
+            "(CASE WHEN condition_text_value IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN condition_number_value IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN condition_boolean_value IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN condition_option_code IS NOT NULL THEN 1 ELSE 0 END) <= 1",
+            name="ck_catalog_pricing_profile_adjustment_rules_single_condition_value",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    catalog_pricing_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_pricing_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    target_scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_line_type: Mapped[str | None] = mapped_column(String(32))
+    target_base_rule_code: Mapped[str | None] = mapped_column(String(64))
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    adjustment_value: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
+    condition_source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    condition_source_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    condition_operator: Mapped[str] = mapped_column(String(32), nullable=False)
+    condition_text_value: Mapped[str | None] = mapped_column(Text)
+    condition_number_value: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    condition_boolean_value: Mapped[bool | None] = mapped_column(Boolean)
+    condition_option_code: Mapped[str | None] = mapped_column(String(64))
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    catalog_pricing_profile: Mapped["CatalogPricingProfile"] = relationship(back_populates="adjustment_rules")
 
 
 class WorkType(TimestampMixin, Base):
@@ -126,6 +586,7 @@ class WorkType(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("code", name="uq_work_types_code"),
         UniqueConstraint("slug", name="uq_work_types_slug"),
+        Index("idx_work_types_catalog_sort", "sort_order", "code"),
         Index("idx_work_types_category_state_sort", "category_id", "state", "sort_order", "code"),
         Index(
             "idx_work_types_analysis_profile_resolution",
@@ -348,6 +809,11 @@ class TenantWorkTypeSetting(TimestampMixin, Base):
         cascade="all, delete-orphan",
         order_by="TenantWorkTypeParameterOverride.sort_order_override",
     )
+    extra_parameters: Mapped[list["TenantWorkTypeExtraParameter"]] = relationship(
+        back_populates="tenant_work_type_setting",
+        cascade="all, delete-orphan",
+        order_by="TenantWorkTypeExtraParameter.sort_order",
+    )
 
 
 class TenantWorkTypeParameterOverride(TimestampMixin, Base):
@@ -408,6 +874,149 @@ class TenantWorkTypeParameterOverride(TimestampMixin, Base):
     parameter: Mapped["WorkTypeParameter"] = relationship(back_populates="tenant_overrides")
 
 
+class TenantWorkTypeExtraParameter(TimestampMixin, Base):
+    """Tenant-controlled extension parameter layered on top of the global work type."""
+    __tablename__ = "tenant_work_type_extra_parameters"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_work_type_setting_id",
+            "code",
+            name="uq_tenant_extra_parameters_setting_code",
+        ),
+        UniqueConstraint(
+            "tenant_work_type_setting_id",
+            "slug",
+            name="uq_tenant_extra_parameters_setting_slug",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "work_type_id",
+            "code",
+            name="uq_tenant_extra_parameters_org_work_type_code",
+        ),
+        Index(
+            "idx_tenant_extra_parameters_org_work_type_status",
+            "organization_id",
+            "work_type_id",
+            "status",
+            "sort_order",
+        ),
+        Index(
+            "idx_tenant_extra_parameters_setting_section_sort",
+            "tenant_work_type_setting_id",
+            "section",
+            "sort_order",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'disabled')",
+            name="ck_tenant_extra_parameters_status",
+        ),
+        CheckConstraint(
+            "data_type IN ('number', 'text', 'boolean', 'option')",
+            name="ck_tenant_extra_parameters_data_type",
+        ),
+        CheckConstraint(
+            "section IN ("
+            "'dimensions', 'materials', 'condition_or_damage', "
+            "'access_and_complexity', 'quantity_scope', 'optional_notes')",
+            name="ck_tenant_extra_parameters_section",
+        ),
+        CheckConstraint(
+            "min_number_value IS NULL OR max_number_value IS NULL OR min_number_value <= max_number_value",
+            name="ck_tenant_extra_parameters_number_bounds_order",
+        ),
+        CheckConstraint(
+            "(CASE WHEN default_text_value IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN default_number_value IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN default_boolean_value IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN default_option_code IS NOT NULL THEN 1 ELSE 0 END) <= 1",
+            name="ck_tenant_extra_parameters_single_default_value",
+        ),
+        CheckConstraint(
+            "data_type = 'text' OR default_text_value IS NULL",
+            name="ck_tenant_extra_parameters_default_text_type",
+        ),
+        CheckConstraint(
+            "data_type = 'number' OR (default_number_value IS NULL AND min_number_value IS NULL AND max_number_value IS NULL)",
+            name="ck_tenant_extra_parameters_default_number_type",
+        ),
+        CheckConstraint(
+            "data_type = 'boolean' OR default_boolean_value IS NULL",
+            name="ck_tenant_extra_parameters_default_boolean_type",
+        ),
+        CheckConstraint(
+            "data_type = 'option' OR default_option_code IS NULL",
+            name="ck_tenant_extra_parameters_default_option_type",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_work_type_setting_id: Mapped[str] = mapped_column(
+        ForeignKey("tenant_work_type_settings.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    work_type_id: Mapped[str] = mapped_column(ForeignKey("work_types.id", ondelete="CASCADE"), nullable=False)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    slug: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    data_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    unit: Mapped[str | None] = mapped_column(String(32))
+    section: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    min_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    max_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    vision_extractable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    manual_override_allowed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    default_text_value: Mapped[str | None] = mapped_column(Text)
+    default_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
+    default_boolean_value: Mapped[bool | None] = mapped_column(Boolean)
+    default_option_code: Mapped[str | None] = mapped_column(String(64))
+    config_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    updated_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+    tenant_work_type_setting: Mapped["TenantWorkTypeSetting"] = relationship(back_populates="extra_parameters")
+    work_type: Mapped["WorkType"] = relationship()
+    options: Mapped[list["TenantWorkTypeExtraParameterOption"]] = relationship(
+        back_populates="parameter",
+        cascade="all, delete-orphan",
+        order_by="TenantWorkTypeExtraParameterOption.sort_order",
+    )
+
+
+class TenantWorkTypeExtraParameterOption(TimestampMixin, Base):
+    """Allowed option values for tenant extra parameters."""
+    __tablename__ = "tenant_work_type_extra_parameter_options"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_work_type_extra_parameter_id",
+            "code",
+            name="uq_tenant_extra_parameter_options_parameter_code",
+        ),
+        Index(
+            "idx_tenant_extra_parameter_options_parameter_sort",
+            "tenant_work_type_extra_parameter_id",
+            "sort_order",
+            "code",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_work_type_extra_parameter_id: Mapped[str] = mapped_column(
+        ForeignKey("tenant_work_type_extra_parameters.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    parameter: Mapped["TenantWorkTypeExtraParameter"] = relationship(back_populates="options")
+
+
 class ProjectWorkItem(TimestampMixin, Base):
     """Runtime immutable-ish projection of an effective work type into a project."""
     __tablename__ = "project_work_items"
@@ -420,10 +1029,24 @@ class ProjectWorkItem(TimestampMixin, Base):
         ),
         Index("idx_project_work_items_org_project_status", "organization_id", "project_id", "status", "item_sequence"),
         Index("idx_project_work_items_project_work_type", "project_id", "work_type_id", "item_sequence"),
+        Index("idx_project_work_items_analysis_profile", "project_id", "analysis_profile_id", "resolved_work_type_code"),
+        Index(
+            "idx_project_work_items_pricing_profile",
+            "project_id",
+            "catalog_pricing_profile_id",
+            "resolved_work_type_code",
+        ),
         Index(
             "idx_project_work_items_org_status_updated",
             "organization_id",
             "status",
+            "updated_at",
+            "id",
+        ),
+        Index(
+            "idx_project_work_items_project_confirmation",
+            "project_id",
+            "confirmation_status",
             "updated_at",
             "id",
         ),
@@ -432,8 +1055,12 @@ class ProjectWorkItem(TimestampMixin, Base):
             name="ck_project_work_items_status",
         ),
         CheckConstraint(
-            "source_type IN ('manual', 'vision', 'import', 'system')",
+            "source_type IN ('manual', 'vision', 'import', 'imported', 'system', 'default')",
             name="ck_project_work_items_source_type",
+        ),
+        CheckConstraint(
+            "confirmation_status IN ('pending', 'mixed', 'confirmed')",
+            name="ck_project_work_items_confirmation_status",
         ),
     )
 
@@ -456,16 +1083,23 @@ class ProjectWorkItem(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
     source_type: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)
+    confirmation_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     item_sequence: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     resolved_display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     resolved_work_type_code: Mapped[str] = mapped_column(String(64), nullable=False)
     resolved_category_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    resolved_analysis_profile_code: Mapped[str | None] = mapped_column(String(64))
+    resolved_analysis_profile_version: Mapped[int | None] = mapped_column(Integer)
+    resolved_catalog_pricing_profile_code: Mapped[str | None] = mapped_column(String(64))
+    resolved_catalog_pricing_profile_version: Mapped[int | None] = mapped_column(Integer)
     resolved_unit: Mapped[str] = mapped_column(String(32), nullable=False)
     resolved_catalog_version: Mapped[int] = mapped_column(Integer, nullable=False)
     resolved_setting_version: Mapped[int | None] = mapped_column(Integer)
     measured_quantity: Mapped[float | None] = mapped_column(Numeric(18, 4))
     measured_unit: Mapped[str | None] = mapped_column(String(32))
     notes: Mapped[str | None] = mapped_column(Text)
+    confirmed_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
     work_type: Mapped["WorkType"] = relationship()
@@ -491,15 +1125,46 @@ class ProjectWorkItemValue(TimestampMixin, Base):
             "work_type_parameter_id",
             name="uq_project_work_item_values_item_parameter",
         ),
+        UniqueConstraint(
+            "project_work_item_id",
+            "tenant_work_type_extra_parameter_id",
+            name="uq_project_work_item_values_item_extra_parameter",
+        ),
         Index("idx_project_work_item_values_item", "project_work_item_id", "resolved_parameter_code"),
+        Index(
+            "idx_project_work_item_values_item_confirmation",
+            "project_work_item_id",
+            "confirmation_status",
+            "resolved_parameter_code",
+        ),
         Index("idx_project_work_item_values_parameter_lookup", "work_type_parameter_id", "resolved_parameter_code"),
+        Index(
+            "idx_project_work_item_values_extra_parameter_lookup",
+            "tenant_work_type_extra_parameter_id",
+            "resolved_parameter_code",
+        ),
         CheckConstraint(
-            "source_type IN ('manual', 'vision', 'import', 'system')",
+            "source_type IN ('manual', 'vision', 'import', 'imported', 'system', 'default')",
             name="ck_project_work_item_values_source_type",
+        ),
+        CheckConstraint(
+            "confirmation_status IN ('pending', 'confirmed', 'corrected', 'defaulted')",
+            name="ck_project_work_item_values_confirmation_status",
+        ),
+        CheckConstraint(
+            "resolved_parameter_scope IN ('global', 'tenant_extra')",
+            name="ck_project_work_item_values_parameter_scope",
         ),
         CheckConstraint(
             "resolved_data_type IN ('number', 'text', 'boolean', 'option')",
             name="ck_project_work_item_values_data_type",
+        ),
+        CheckConstraint(
+            "("
+            "(resolved_parameter_scope = 'global' AND work_type_parameter_id IS NOT NULL AND tenant_work_type_extra_parameter_id IS NULL) OR "
+            "(resolved_parameter_scope = 'tenant_extra' AND tenant_work_type_extra_parameter_id IS NOT NULL AND work_type_parameter_id IS NULL)"
+            ")",
+            name="ck_project_work_item_values_definition_binding",
         ),
         CheckConstraint(
             "("
@@ -517,11 +1182,25 @@ class ProjectWorkItemValue(TimestampMixin, Base):
         ForeignKey("project_work_items.id", ondelete="CASCADE"),
         nullable=False,
     )
-    work_type_parameter_id: Mapped[str] = mapped_column(
+    work_type_parameter_id: Mapped[str | None] = mapped_column(
         ForeignKey("work_type_parameters.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
+    )
+    tenant_work_type_extra_parameter_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tenant_work_type_extra_parameters.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    source_detection_id: Mapped[str | None] = mapped_column(
+        ForeignKey("vision_detections.id", ondelete="SET NULL"),
+        nullable=True,
     )
     source_type: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)
+    source_confidence: Mapped[float | None] = mapped_column(Numeric(8, 4))
+    confirmation_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    confirmed_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    operator_note: Mapped[str | None] = mapped_column(Text)
+    resolved_parameter_scope: Mapped[str] = mapped_column(String(32), default="global", nullable=False)
     resolved_parameter_code: Mapped[str] = mapped_column(String(64), nullable=False)
     resolved_parameter_name: Mapped[str] = mapped_column(String(255), nullable=False)
     resolved_data_type: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -532,7 +1211,9 @@ class ProjectWorkItemValue(TimestampMixin, Base):
     value_option_code: Mapped[str | None] = mapped_column(String(64))
 
     project_work_item: Mapped["ProjectWorkItem"] = relationship(back_populates="values")
-    parameter: Mapped["WorkTypeParameter"] = relationship()
+    parameter: Mapped["WorkTypeParameter | None"] = relationship()
+    tenant_extra_parameter: Mapped["TenantWorkTypeExtraParameter | None"] = relationship()
+    source_detection: Mapped["VisionDetection | None"] = relationship(foreign_keys=[source_detection_id])
 
 
 class VisionDetection(Base):
@@ -544,6 +1225,7 @@ class VisionDetection(Base):
         Index("idx_vision_detections_project_work_item", "project_work_item_id", "created_at"),
         Index("idx_vision_detections_analysis_job_status", "analysis_job_id", "status", "created_at"),
         Index("idx_vision_detections_reference_photo", "reference_photo_id", "created_at"),
+        Index("idx_vision_detections_profile_lookup", "project_id", "analysis_profile_id", "resolved_work_type_code"),
         CheckConstraint(
             "status IN ('pending', 'accepted', 'rejected', 'linked')",
             name="ck_vision_detections_status",
@@ -578,6 +1260,8 @@ class VisionDetection(Base):
     bbox_bottom: Mapped[float | None] = mapped_column(Numeric(10, 4))
     geometry_json: Mapped[str | None] = mapped_column(Text)
     resolved_work_type_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    resolved_analysis_profile_code: Mapped[str | None] = mapped_column(String(64))
+    resolved_analysis_profile_version: Mapped[int | None] = mapped_column(Integer)
     source_provider: Mapped[str | None] = mapped_column(String(64))
     source_model: Mapped[str | None] = mapped_column(String(128))
     source_model_version: Mapped[str | None] = mapped_column(String(64))

@@ -10,7 +10,13 @@ class MockVisionProvider:
             {"x": 0.14, "y": 0.87},
         ]
 
-    async def analyze_project(self, *, project: dict, photos: list[dict]) -> dict:
+    async def analyze_project(
+        self,
+        *,
+        project: dict,
+        photos: list[dict],
+        analysis_config: dict | None = None,
+    ) -> dict:
         description = str(project.get("description") or "").lower()
         address = str(project.get("address_label") or "").lower()
         normalized_text = f"{description} {address}"
@@ -24,8 +30,11 @@ class MockVisionProvider:
             for photo in photos
         )
         has_wide_coverage = landscape_count >= 2 or photo_count >= 3
-        is_roof = "strecha" in normalized_text
+        is_roof = "strecha" in normalized_text or (analysis_config or {}).get("workTypeCode") == "roof-repair"
         is_cleaning = any(term in normalized_text for term in ("cisteni", "ocisteni", "myti"))
+        analysis_profile = ((analysis_config or {}).get("analysisProfile") or {})
+        extraction_rules = analysis_profile.get("extractionRules") or []
+        default_unit = (analysis_config or {}).get("defaultUnit") or "m2"
 
         object_type = "roof" if is_roof else "facade"
         recommended_scope = (
@@ -141,6 +150,43 @@ class MockVisionProvider:
 
         total_hours = sum(step["estimatedHours"] for step in workflow_steps)
         estimated_total_days = round(total_hours / 8, 1)
+        catalog_attributes: dict[str, dict] = {}
+        for rule in extraction_rules:
+            attribute_code = rule.get("attributeCode")
+            data_type = rule.get("dataType")
+            if not attribute_code or not data_type:
+                continue
+            if data_type == "number":
+                base_value = estimated_area
+                if attribute_code.endswith("deg"):
+                    base_value = 18 if is_roof else 2
+                elif attribute_code.endswith("count") or attribute_code == "quantity":
+                    base_value = max(1, min(photo_count, 4))
+                catalog_attributes[attribute_code] = {
+                    "value": round(base_value, 1),
+                    "confidence": area_confidence,
+                    "sourceObjectCode": rule.get("sourceObjectCode"),
+                }
+            elif data_type == "option":
+                allowed_option_codes = rule.get("allowedOptionCodes") or []
+                preferred_option = allowed_option_codes[0] if allowed_option_codes else "moderate"
+                catalog_attributes[attribute_code] = {
+                    "value": preferred_option,
+                    "confidence": max(area_confidence - 0.08, 0.45),
+                    "sourceObjectCode": rule.get("sourceObjectCode"),
+                }
+            elif data_type == "boolean":
+                catalog_attributes[attribute_code] = {
+                    "value": True,
+                    "confidence": max(area_confidence - 0.05, 0.5),
+                    "sourceObjectCode": rule.get("sourceObjectCode"),
+                }
+            else:
+                catalog_attributes[attribute_code] = {
+                    "value": f"Mock extraction for {attribute_code}",
+                    "confidence": max(area_confidence - 0.12, 0.42),
+                    "sourceObjectCode": rule.get("sourceObjectCode"),
+                }
 
         return {
             "providerKey": "mock",
@@ -148,6 +194,8 @@ class MockVisionProvider:
             "objectType": object_type,
             "surfaceCondition": "requires_attention",
             "recommendedScope": recommended_scope,
+            "estimatedQuantity": estimated_area,
+            "estimatedUnit": default_unit,
             "estimatedAreaSqm": estimated_area,
             "areaConfidence": area_confidence,
             "maskPolygon": self.build_mock_mask(),
@@ -155,6 +203,10 @@ class MockVisionProvider:
             "workflowSteps": workflow_steps,
             "estimatedTotalDays": estimated_total_days,
             "laborHoursTotal": total_hours,
+            "catalogAttributes": catalog_attributes,
+            "analysisProfileCode": analysis_profile.get("code"),
+            "analysisProfileVersion": analysis_profile.get("version"),
+            "resolvedWorkTypeCode": (analysis_config or {}).get("workTypeCode"),
             "modelName": "mock-vision",
             "modelVersion": "0.3",
         }

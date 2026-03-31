@@ -1,6 +1,8 @@
 from app.models import AnalysisJob, QuoteItem, QuoteVariant
 from app.repositories.quote_variant_repository import QuoteVariantRepository
+from app.repositories.work_catalog_repository import WorkCatalogRepository
 from app.schemas.quote_variant import AnalysisJobRead, QuoteItemRead, QuoteVariantRead
+from app.services.pricing_profile_service import PricingProfileResolutionError, PricingProfileService
 
 
 def round_currency(value: float) -> float:
@@ -29,6 +31,11 @@ def to_item_read(item: QuoteItem) -> QuoteItemRead:
     return QuoteItemRead(
         id=item.id,
         quoteVariantId=item.quote_variant_id,
+        projectWorkItemId=getattr(item, "project_work_item_id", None),
+        workTypeCode=getattr(item, "work_type_code", None),
+        catalogPricingProfileCode=getattr(item, "resolved_catalog_pricing_profile_code", None),
+        catalogPricingProfileVersion=getattr(item, "resolved_catalog_pricing_profile_version", None),
+        catalogPricingRuleCode=getattr(item, "catalog_pricing_rule_code", None),
         itemType=item.item_type,
         name=item.name,
         description=item.description,
@@ -56,6 +63,8 @@ def to_variant_read(variant: QuoteVariant) -> QuoteVariantRead:
         projectId=variant.project_id,
         analysisResultId=variant.analysis_result_id,
         pricingProfileId=variant.pricing_profile_id,
+        currency=getattr(variant, "currency", None),
+        vatPct=float(variant.vat_pct) if getattr(variant, "vat_pct", None) is not None else None,
         variantType=variant.variant_type,
         laborCost=variant.labor_cost,
         materialCost=variant.material_cost,
@@ -71,8 +80,10 @@ def to_variant_read(variant: QuoteVariant) -> QuoteVariantRead:
 
 
 class QuoteVariantService:
-    def __init__(self, repository: QuoteVariantRepository):
+    def __init__(self, repository: QuoteVariantRepository, work_catalog_repository: WorkCatalogRepository):
         self.repository = repository
+        self.work_catalog_repository = work_catalog_repository
+        self.pricing_profile_service = PricingProfileService(work_catalog_repository)
 
     async def get_analysis_job(self, job_id: str) -> AnalysisJobRead | None:
         job = await self.repository.get_analysis_job(job_id)
@@ -85,9 +96,68 @@ class QuoteVariantService:
     async def recalculate_quote_variants(self, project_id: str) -> list[QuoteVariantRead] | None:
         project = await self.repository.get_project(project_id)
         analysis = await self.repository.get_latest_analysis(project_id)
+        if not project:
+            return None
         pricing_profile = await self.repository.get_default_pricing_profile(project.organization_id)
+        if not pricing_profile:
+            return None
 
-        if not project or not analysis or not pricing_profile:
+        project_work_items = list(
+            await self.work_catalog_repository.list_project_work_items(
+                project_id,
+                organization_id=project.organization_id,
+            )
+        )
+        if project_work_items:
+            work_item_results: list[dict] = []
+            for work_item in project_work_items:
+                if not work_item.catalog_pricing_profile_id:
+                    continue
+                try:
+                    resolved = await self.pricing_profile_service.resolve_for_snapshot(
+                        organization_id=project.organization_id,
+                        work_type_code=work_item.resolved_work_type_code,
+                        catalog_pricing_profile_id=work_item.catalog_pricing_profile_id,
+                        tenant_pricing_profile_id=work_item.tenant_pricing_profile_id,
+                    )
+                except PricingProfileResolutionError:
+                    continue
+                work_item_results.append(
+                    self.pricing_profile_service.calculate_project_work_item(
+                        work_item=work_item,
+                        resolved=resolved,
+                    )
+                )
+
+            if work_item_results:
+                variants_payload, _summary = self.pricing_profile_service.build_quote_variants(
+                    work_item_results=work_item_results,
+                    pricing_profile=pricing_profile,
+                )
+                for variant_payload in variants_payload:
+                    variant_payload["id"] = self.repository.build_id("qv")
+                    items_with_ids = []
+                    for index, item_payload in enumerate(variant_payload["items"], start=1):
+                        item_row = dict(item_payload)
+                        item_row["id"] = self.repository.build_id("qi")
+                        item_row["material_catalog_id"] = None
+                        item_row["supplier_id"] = None
+                        item_row["is_manual_override"] = False
+                        item_row["ai_suggested_unit_price"] = None
+                        item_row["supplier_reference_unit_price"] = None
+                        item_row["company_default_unit_price"] = item_row["unit_price"]
+                        item_row["sort_order"] = index
+                        items_with_ids.append(item_row)
+                    variant_payload["items"] = items_with_ids
+                created = await self.repository.replace_project_variants(
+                    project=project,
+                    analysis=analysis,
+                    pricing_profile=pricing_profile,
+                    variants_payload=variants_payload,
+                )
+                return [to_variant_read(variant) for variant in created]
+
+        if analysis is None:
             return None
 
         effective_area_sqm = (

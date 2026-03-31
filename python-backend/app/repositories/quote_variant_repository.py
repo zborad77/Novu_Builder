@@ -81,7 +81,7 @@ class QuoteVariantRepository:
         self,
         *,
         project: Project,
-        analysis: AnalysisResult,
+        analysis: AnalysisResult | None,
         pricing_profile: PricingProfile,
         variants_payload: list[dict],
     ) -> list[QuoteVariant]:
@@ -99,7 +99,7 @@ class QuoteVariantRepository:
             variant = QuoteVariant(
                 id=variant_payload["id"],
                 project_id=project.id,
-                analysis_result_id=analysis.id,
+                analysis_result_id=analysis.id if analysis else None,
                 pricing_profile_id=pricing_profile.id,
                 variant_type=variant_payload["variant_type"],
                 labor_cost=variant_payload["labor_cost"],
@@ -109,6 +109,9 @@ class QuoteVariantRepository:
                 total_ex_vat=variant_payload["total_ex_vat"],
                 vat_amount=variant_payload["vat_amount"],
                 total_inc_vat=variant_payload["total_inc_vat"],
+                currency=variant_payload.get("currency", pricing_profile.currency),
+                vat_pct=variant_payload.get("vat_pct", pricing_profile.vat_pct),
+                pricing_summary_json=variant_payload.get("pricing_summary_json"),
                 created_at=timestamp,
                 updated_at=timestamp,
             )
@@ -120,6 +123,12 @@ class QuoteVariantRepository:
                     QuoteItem(
                         id=item_payload["id"],
                         quote_variant_id=variant.id,
+                        project_work_item_id=item_payload.get("project_work_item_id"),
+                        catalog_pricing_profile_id=item_payload.get("catalog_pricing_profile_id"),
+                        work_type_code=item_payload.get("work_type_code"),
+                        resolved_catalog_pricing_profile_code=item_payload.get("resolved_catalog_pricing_profile_code"),
+                        resolved_catalog_pricing_profile_version=item_payload.get("resolved_catalog_pricing_profile_version"),
+                        catalog_pricing_rule_code=item_payload.get("catalog_pricing_rule_code"),
                         item_type=item_payload["item_type"],
                         name=item_payload["name"],
                         description=item_payload.get("description"),

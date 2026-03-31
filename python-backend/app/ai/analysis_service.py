@@ -67,17 +67,29 @@ async def normalize_photo_inputs(photos: Sequence[ProjectPhoto], *, load_bytes: 
     return normalized_inputs
 
 
-async def run_project_analysis(*, provider_key: str, project: dict, photos: Sequence[ProjectPhoto]) -> dict:
+async def run_project_analysis(
+    *,
+    provider_key: str,
+    project: dict,
+    photos: Sequence[ProjectPhoto],
+    analysis_config: dict | None = None,
+) -> dict:
     provider = get_analysis_provider(provider_key)
     load_bytes = provider_key == "claude"
     normalized_photos = await normalize_photo_inputs(photos, load_bytes=load_bytes)
-    result = await provider.analyze_project(project=project, photos=normalized_photos)
+    result = await provider.analyze_project(
+        project=project,
+        photos=normalized_photos,
+        analysis_config=analysis_config,
+    )
     return {
         "providerKey": result.get("providerKey", provider.key),
         "jobType": result.get("jobType", "manual_trigger"),
         "objectType": result.get("objectType"),
         "surfaceCondition": result.get("surfaceCondition"),
         "recommendedScope": result.get("recommendedScope"),
+        "estimatedQuantity": result.get("estimatedQuantity", result.get("estimatedAreaSqm")),
+        "estimatedUnit": result.get("estimatedUnit"),
         "estimatedAreaSqm": result.get("estimatedAreaSqm"),
         "areaConfidence": result.get("areaConfidence"),
         "maskPolygon": result.get("maskPolygon"),
@@ -85,6 +97,11 @@ async def run_project_analysis(*, provider_key: str, project: dict, photos: Sequ
         "workflowSteps": result.get("workflowSteps"),
         "estimatedTotalDays": result.get("estimatedTotalDays"),
         "laborHoursTotal": result.get("laborHoursTotal"),
+        "catalogAttributes": result.get("catalogAttributes"),
+        "validationWarnings": result.get("validationWarnings"),
+        "analysisProfileCode": result.get("analysisProfileCode"),
+        "analysisProfileVersion": result.get("analysisProfileVersion"),
+        "resolvedWorkTypeCode": result.get("resolvedWorkTypeCode"),
         "modelName": result.get("modelName", provider.key),
         "modelVersion": result.get("modelVersion", "1.0"),
     }

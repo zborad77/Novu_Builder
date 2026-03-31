@@ -2,6 +2,84 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.6.002 - 2026-03-30
+
+Work catalog subsystem expansion: analysis profile, pricing profile, tenant override, and runtime workflow subsystems fully wired and hardened.
+
+### Analysis Profile Subsystem
+
+- Added first-class versioned analysis profile subsystem with migration `20260331_0032`.
+- Introduced structured target objects, extraction rules, validation guards, confidence thresholds, fallback behavior, and output mappings tied to analyzable work types.
+- Added `analysis_profile_service.py` and `analysis_profile_seed_data.py` with profiles for all supported work types.
+- Wired analysis jobs to carry work type plus resolved profile/version audit snapshots.
+- Extended analysis results with generic quantity/unit fields for non-area work types.
+- Updated AI vision providers (Claude, OpenAI, Mock) to consume catalog-driven analysis profiles.
+
+### Pricing Profile Subsystem
+
+- Added first-class versioned pricing profile subsystem with migration `20260331_0033`.
+- Introduced structured required inputs, base rules, adjustment rules, labor assumptions, and material assumptions for all 43 seeded work types.
+- Added `pricing_profile_service.py` and `pricing_profile_seed_data.py`.
+- Added catalog-driven pricing execution service resolving effective pricing from work type + tenant override + runtime snapshot, validating required inputs, and returning explainable priced line items.
+- Reworked quote variant recalculation to prefer runtime work items and catalog pricing rules, persisting pricing-rule audit metadata on quote items and pricing execution summaries on quote variants.
+
+### Tenant Work Type Override Subsystem
+
+- Added tenant-level work type settings and extra parameter override subsystem with migration `20260331_0034`.
+- Added `TenantWorkTypeResolutionService` composing effective work type reads, runtime work item validation, analysis profile resolution, and pricing profile resolution from a single service.
+- Added controlled tenant extra parameters with explicit definitions and option tables using `tenant.*` machine-readable codes to avoid collisions with the global catalog.
+- Added runtime one-of binding so `project_work_item_values` can reference either a global parameter or a tenant extra parameter without ambiguity.
+- Materialized tenant defaults into runtime value rows with normalized `source_type = default` semantics.
+- Added tenant override subsystem documentation and new tests for tenant isolation, global fallback resolution, extra-parameter defaults, and collision guards.
+
+### Runtime Workflow States
+
+- Added migration `20260331_0035` for runtime workflow state tracking on project work items.
+- Extended runtime rows with confirmation audit fields and source-detection linkage for pricing and downstream workflows.
+- Added normalized runtime read/write operations: work item detail fetch, partial value update, value merge, and operator confirmation.
+- Expanded runtime work item workflow with value-level source tracking, confidence, confirmation state, operator correction flow, and detection-backed merge semantics.
+
+### Work Catalog Hot Path Hardening
+
+- Added migration `20260331_0036` with dedicated global work type sort index and hot path composite indexes.
+- Added `work_catalog/cache.py` with versioned shared cache keys, longer-lived Redis payload caches for stable catalog reads, and explicit tenant-effective invalidation helpers.
+- Added in-process memoization for tenant-effective, analysis profile, and pricing profile resolution so repeated workflow reads do not rebuild the same catalog graph multiple times.
+- Removed duplicated eager-load pressure from tenant setting resolution queries.
+- Added work catalog cache hit/miss/error instrumentation plus resolution timing and validation failure metrics for Prometheus.
+
+### Analysis Job Retry And DLQ
+
+- Added migration `20260330_0027` for analysis job retry attempts and dead-letter queue status.
+- Hardened worker runner and queue for DLQ routing, retry backoff, and dead job isolation.
+
+### API And Route Expansion
+
+- Added first-class global catalog read APIs for categories, work type list/detail, and parameter schema detail.
+- Added project-scoped effective configuration API returning effective work type plus explicit vision and pricing dependency surfaces for workflow bootstrap.
+- Reworked project work item detail API to return runtime snapshot, current effective configuration, and derived workflow hints.
+- Added route-level cache coverage for global catalog reads and tenant-effective workflow bootstrap reads.
+- Added `deps.py` dependency wiring for all new services.
+
+### Documentation
+
+- Added `docs/analysis_profile_subsystem.md` — architecture and contract reference.
+- Added `docs/pricing_profile_subsystem.md` — pricing rule structure and extension guide.
+- Added `docs/tenant_override_subsystem.md` — sparse delta model, collision guard rules.
+- Added `docs/runtime_workflow_subsystem.md` — value lifecycle, source types, and confirmation flow.
+
+### Tests
+
+- Added `test_analysis_profile_subsystem.py`, `test_pricing_profile_subsystem.py` integration tests.
+- Added `test_work_catalog_api_flow.py` for route/service API flow coverage.
+- Added `test_work_catalog_operational_hardening.py` for seed bootstrap smoke, hot path resolution, and tenant cache invalidation.
+- Added `test_retry_system.py` for DLQ routing and retry backoff behaviour.
+- Updated existing queue, cache, and metrics tests for new service wiring.
+
+### Notes
+
+- All new subsystems are backwards compatible with the v0.6.001 work catalog foundation.
+- Six new Alembic migrations (0027, 0032–0036) extend the schema; apply in order.
+
 ## v0.6.001 - 2026-03-30
 
 Current release snapshot of the repository state prepared for GitHub versioning.
@@ -26,6 +104,30 @@ Current release snapshot of the repository state prepared for GitHub versioning.
 - Added import-time guards for schema section coverage, parameter definition integrity, and enum completeness, plus DB-level integrity constraints for parameter defaults and runtime typed-value shape in `20260330_0031`.
 - Made global catalog seeding canonical and idempotent by upserting source-of-truth catalog rows instead of inserting only missing definitions.
 - Added subsystem integration tests and architecture documentation for long-term maintainability.
+- Added a first-class versioned analysis profile subsystem with structured target objects, extraction rules, validation guards, confidence thresholds, fallback behavior, and output mappings tied to analyzable work types.
+- Wired analysis jobs to carry work type plus resolved profile/version audit snapshots, and extended analysis results with generic quantity/unit fields for non-area work types.
+- Added catalog-driven analysis profile resolution and output validation/mapping so vision orchestration can consume work type contracts without per-type branching in the service layer.
+- Expanded catalog pricing into a first-class versioned pricing profile subsystem with structured required inputs, base rules, adjustment rules, labor assumptions, and material assumptions for all 43 seeded work types.
+- Added a catalog-driven pricing execution service that resolves effective pricing configuration from work type + tenant override + runtime work item snapshot, validates required inputs, and returns explainable priced line items.
+- Reworked quote variant recalculation to prefer runtime work items and catalog pricing rules, persisting pricing-rule audit metadata on quote items and pricing execution summaries on quote variants.
+- Added a central `TenantWorkTypeResolutionService` so effective work type reads, runtime work item validation, analysis profile resolution, and pricing profile resolution all compose the same tenant-effective configuration.
+- Added controlled tenant extra parameters with explicit definitions and option tables, using `tenant.*` machine-readable codes to avoid collisions with the global catalog.
+- Added runtime one-of binding so `project_work_item_values` can reference either a global parameter definition or a tenant extra parameter definition without ambiguity.
+- Materialized tenant defaults into runtime value rows with normalized `source_type = default` semantics, keeping backward-compatible alias handling for legacy `system` values.
+- Added tenant override subsystem documentation and new tests for tenant isolation, global fallback resolution, extra-parameter defaults, and collision guards.
+- Expanded runtime work item workflow with value-level source tracking, confidence, confirmation state, operator correction flow, and detection-backed merge semantics.
+- Added normalized runtime read/write operations for work item detail fetch, partial value update, value merge, and operator confirmation.
+- Extended runtime rows with confirmation audit fields and source-detection linkage so pricing and downstream workflows can consume stable normalized work item facts.
+- Added first-class global catalog read APIs for categories, work type list/detail, and parameter schema detail so backend, mobile, and operator clients can consume the source-of-truth model directly.
+- Added project-scoped effective configuration API that returns effective work type plus explicit vision and pricing dependency surfaces for workflow bootstrap.
+- Reworked project work item detail API to return runtime snapshot, current effective configuration, and derived workflow hints instead of a flat runtime row only.
+- Added route-level cache coverage for global catalog reads and tenant-effective workflow bootstrap reads, while keeping runtime work item reads uncached for correctness.
+- Added route/service API flow tests for global catalog reads, effective configuration bootstrap, runtime create/detail/confirm flow, and tenant isolation on the new endpoints.
+- Hardened work catalog hot paths with versioned shared cache keys, longer-lived Redis payload caches for stable catalog reads, and explicit tenant-effective invalidation helpers.
+- Added in-process memoization for tenant-effective, analysis profile, and pricing profile resolution so repeated workflow reads do not rebuild the same catalog graph multiple times.
+- Removed duplicated eager-load pressure from tenant setting resolution queries and added a dedicated global work type sort index in `20260331_0036`.
+- Added work catalog cache hit/miss/error instrumentation plus resolution timing and validation failure metrics for Prometheus.
+- Added operational hardening tests for seed bootstrap smoke, repeated resolution hot paths, and tenant cache invalidation.
 
 ### Observability And Operations
 

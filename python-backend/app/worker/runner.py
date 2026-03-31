@@ -55,8 +55,11 @@ from app.worker.queue import (
     dequeue_analysis_job,
     drop_expired_analysis_job,
     get_expired_analysis_job_leases,
+    move_analysis_job_to_dlq,
+    promote_scheduled_analysis_jobs,
     renew_analysis_job_lease,
     requeue_expired_analysis_job,
+    schedule_analysis_job_retry,
     validate_analysis_job_payload,
 )
 
@@ -191,13 +194,13 @@ class WorkerJobExecutor:
         log.info("worker.dequeued", organization_id=job.organization_id)
         service = self._new_service()
         try:
-            await service.execute_job(
+            result = await service.execute_job(
                 job.job_id,
                 job.project_id,
                 job.organization_id,
                 is_superadmin_context=job.is_superadmin_context,
             )
-            log.info("worker.job_done")
+            log.info("worker.job_done", status=result.disposition)
         except HTTPException as exc:
             log.warning(
                 "worker.job_rejected_by_policy",
@@ -212,7 +215,7 @@ class WorkerJobExecutor:
                 cause=exc,
             ) from exc
 
-    async def execute_lease(self, lease: LeasedAnalysisJob) -> None:
+    async def execute_lease(self, lease: LeasedAnalysisJob):
         job = await self._parse_job_spec(lease.payload)
         if job is None:
             return
@@ -227,7 +230,7 @@ class WorkerJobExecutor:
         log.info("worker.dequeued", organization_id=job.organization_id)
         service = self._new_service()
         try:
-            await service.execute_job(
+            result = await service.execute_job(
                 job.job_id,
                 job.project_id,
                 job.organization_id,
@@ -235,7 +238,8 @@ class WorkerJobExecutor:
                 lease_token=lease.token,
                 worker_id=lease.worker_id,
             )
-            log.info("worker.job_done", status="completed")
+            log.info("worker.job_done", status=result.disposition)
+            return result
         except HTTPException as exc:
             log.warning(
                 "worker.job_rejected_by_policy",
@@ -440,10 +444,21 @@ async def _renew_job_lease_loop(runtime: WorkerRuntime, lease: LeasedAnalysisJob
 
 async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> None:
     renewal_task = asyncio.create_task(_renew_job_lease_loop(runtime, lease))
-    should_ack = False
+    finalize_action = "none"
+    retry_at: datetime | None = None
+    dlq_reason: str | None = None
+    attempt_count = 0
     try:
-        await runtime.job_executor.execute_lease(lease)
-        should_ack = True
+        result = await runtime.job_executor.execute_lease(lease)
+        finalize_action = "ack"
+        if result is not None:
+            attempt_count = int(getattr(result, "attempt_count", 0) or 0)
+            retry_at = getattr(result, "retry_at", None)
+            dlq_reason = getattr(result, "failure_reason", None)
+            if result.disposition == "retry_scheduled":
+                finalize_action = "retry"
+            elif result.disposition == "dead_lettered":
+                finalize_action = "dlq"
     except asyncio.CancelledError:
         raise
     except AnalysisJobLeaseOwnershipError as exc:
@@ -479,7 +494,7 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
             error=str(exc),
             lease_token=lease.token,
         )
-        should_ack = True
+        finalize_action = "ack"
     except Exception as exc:
         logger.error(
             "worker.job_task_error",
@@ -496,7 +511,7 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
     finally:
         renewal_task.cancel()
         await asyncio.gather(renewal_task, return_exceptions=True)
-        if should_ack:
+        if finalize_action == "ack":
             try:
                 acked = await ack_analysis_job(runtime.redis, lease)
                 if not acked:
@@ -519,6 +534,75 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
             except Exception as exc:
                 logger.error(
                     "worker.job_ack_failed",
+                    job_id=lease.job_id,
+                    tenant_id=lease.organization_id,
+                    lease_token=lease.token,
+                    worker_id=lease.worker_id,
+                    error=str(exc),
+                )
+        elif finalize_action == "retry" and retry_at is not None:
+            try:
+                scheduled = await schedule_analysis_job_retry(
+                    runtime.redis,
+                    lease,
+                    retry_at=retry_at,
+                )
+                if not scheduled:
+                    logger.error(
+                        "worker.job_retry_schedule_failed",
+                        job_id=lease.job_id,
+                        tenant_id=lease.organization_id,
+                        lease_token=lease.token,
+                        worker_id=lease.worker_id,
+                        retry_at=retry_at.isoformat(),
+                    )
+            except LostAnalysisJobLeaseError as exc:
+                logger.error(
+                    "worker.job_retry_lost_lease",
+                    job_id=lease.job_id,
+                    tenant_id=lease.organization_id,
+                    lease_token=lease.token,
+                    worker_id=lease.worker_id,
+                    error=str(exc),
+                )
+            except Exception as exc:
+                logger.error(
+                    "worker.job_retry_schedule_error",
+                    job_id=lease.job_id,
+                    tenant_id=lease.organization_id,
+                    lease_token=lease.token,
+                    worker_id=lease.worker_id,
+                    retry_at=retry_at.isoformat(),
+                    error=str(exc),
+                )
+        elif finalize_action == "dlq":
+            try:
+                moved = await move_analysis_job_to_dlq(
+                    runtime.redis,
+                    lease,
+                    attempt_count=attempt_count,
+                    reason=dlq_reason,
+                )
+                if not moved:
+                    logger.error(
+                        "worker.job_dlq_move_failed",
+                        job_id=lease.job_id,
+                        tenant_id=lease.organization_id,
+                        lease_token=lease.token,
+                        worker_id=lease.worker_id,
+                    )
+            except LostAnalysisJobLeaseError as exc:
+                logger.error(
+                    "worker.job_dlq_lost_lease",
+                    job_id=lease.job_id,
+                    tenant_id=lease.organization_id,
+                    lease_token=lease.token,
+                    worker_id=lease.worker_id,
+                    error=str(exc),
+                )
+            except Exception as exc:
+                logger.error(
+                    "worker.job_dlq_move_error",
                     job_id=lease.job_id,
                     tenant_id=lease.organization_id,
                     lease_token=lease.token,
@@ -625,6 +709,10 @@ async def _run_one_iteration(runtime: WorkerRuntime) -> None:
     await _write_heartbeat_if_due(runtime)
     await _drain_finished_tasks(runtime)
     await _run_lease_reaper_if_due(runtime)
+    await promote_scheduled_analysis_jobs(
+        runtime.redis,
+        limit=max(runtime.worker_concurrency * 4, 10),
+    )
 
     acquired_slot = await _acquire_job_slot(runtime)
     if not acquired_slot:

@@ -14,6 +14,7 @@ ANALYSIS_JOB_STATUS_RUNNING = "running"
 ANALYSIS_JOB_STATUS_COMPLETED = "completed"
 ANALYSIS_JOB_STATUS_FAILED = "failed"
 ANALYSIS_JOB_STATUS_CANCELED = "canceled"
+ANALYSIS_JOB_STATUS_DEAD_LETTER = "dead_letter"
 
 ANALYSIS_JOB_STATUSES = frozenset({
     ANALYSIS_JOB_STATUS_QUEUED,
@@ -21,26 +22,31 @@ ANALYSIS_JOB_STATUSES = frozenset({
     ANALYSIS_JOB_STATUS_COMPLETED,
     ANALYSIS_JOB_STATUS_FAILED,
     ANALYSIS_JOB_STATUS_CANCELED,
+    ANALYSIS_JOB_STATUS_DEAD_LETTER,
 })
 ANALYSIS_JOB_FINAL_STATUSES = frozenset({
     ANALYSIS_JOB_STATUS_COMPLETED,
     ANALYSIS_JOB_STATUS_FAILED,
     ANALYSIS_JOB_STATUS_CANCELED,
+    ANALYSIS_JOB_STATUS_DEAD_LETTER,
 })
 _ALLOWED_ANALYSIS_JOB_TRANSITIONS = {
     ANALYSIS_JOB_STATUS_QUEUED: frozenset({
         ANALYSIS_JOB_STATUS_RUNNING,
         ANALYSIS_JOB_STATUS_FAILED,
         ANALYSIS_JOB_STATUS_CANCELED,
+        ANALYSIS_JOB_STATUS_DEAD_LETTER,
     }),
     ANALYSIS_JOB_STATUS_RUNNING: frozenset({
         ANALYSIS_JOB_STATUS_COMPLETED,
         ANALYSIS_JOB_STATUS_FAILED,
         ANALYSIS_JOB_STATUS_CANCELED,
+        ANALYSIS_JOB_STATUS_DEAD_LETTER,
     }),
     ANALYSIS_JOB_STATUS_COMPLETED: frozenset(),
     ANALYSIS_JOB_STATUS_FAILED: frozenset(),
     ANALYSIS_JOB_STATUS_CANCELED: frozenset(),
+    ANALYSIS_JOB_STATUS_DEAD_LETTER: frozenset(),
 }
 _UNSET = object()
 
@@ -154,6 +160,23 @@ def _coerce_float(
         ) from exc
 
 
+def _coerce_int(
+    payload: Mapping[str, object],
+    key: str,
+    *,
+    default: int | None,
+) -> int | None:
+    value = payload.get(key, default)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise InvalidAnalysisResultPayloadError(
+            f"{key} must be an integer when provided."
+        ) from exc
+
+
 def _optional_json(value: object, field_name: str) -> str | None:
     if value is None:
         return None
@@ -168,14 +191,19 @@ def _optional_json(value: object, field_name: str) -> str | None:
 def _prepare_analysis_result_values(analysis: object) -> dict[str, object]:
     payload = _require_analysis_mapping(analysis)
     return {
+        "resolved_work_type_code": _optional_string(payload, "resolvedWorkTypeCode"),
+        "analysis_profile_code": _optional_string(payload, "analysisProfileCode"),
+        "analysis_profile_version": _coerce_int(payload, "analysisProfileVersion", default=None),
         "reference_photo_id": _optional_string(payload, "referencePhotoId"),
         "object_type": _optional_string(payload, "objectType", default="facade") or "facade",
         "surface_condition": _optional_string(payload, "surfaceCondition", default="requires_attention")
         or "requires_attention",
         "recommended_scope": _optional_string(payload, "recommendedScope", default="local_repair")
         or "local_repair",
-        "estimated_area_sqm": _coerce_float(payload, "estimatedAreaSqm", default=0.0) or 0.0,
-        "area_confidence": _coerce_float(payload, "areaConfidence", default=0.0) or 0.0,
+        "estimated_quantity": _coerce_float(payload, "estimatedQuantity", default=None),
+        "estimated_unit": _optional_string(payload, "estimatedUnit", default=None),
+        "estimated_area_sqm": _coerce_float(payload, "estimatedAreaSqm", default=None),
+        "area_confidence": _coerce_float(payload, "areaConfidence", default=None),
         "selected_repair_polygon_json": _optional_json(
             payload.get("selectedRepairPolygon"),
             "selectedRepairPolygon",
@@ -196,10 +224,16 @@ def _build_output_summary(analysis: object, *, duration_seconds: float | None) -
     payload = _require_analysis_mapping(analysis)
     summary = {
         "provider": payload.get("providerKey"),
+        "work_type_code": payload.get("resolvedWorkTypeCode"),
+        "analysis_profile_code": payload.get("analysisProfileCode"),
+        "analysis_profile_version": payload.get("analysisProfileVersion"),
         "model_name": payload.get("modelName"),
         "object_type": payload.get("objectType"),
+        "estimated_quantity": payload.get("estimatedQuantity"),
+        "estimated_unit": payload.get("estimatedUnit"),
         "estimated_area_sqm": payload.get("estimatedAreaSqm"),
         "area_confidence": payload.get("areaConfidence"),
+        "validation_warnings": payload.get("validationWarnings"),
         "duration_seconds": duration_seconds,
     }
     return json.dumps(summary, ensure_ascii=False)
@@ -355,6 +389,10 @@ class AnalysisRepository:
         user_id: str | None = None,
         parent_job_id: str | None = None,
         retry_count: int = 0,
+        requested_work_type_code: str | None = None,
+        analysis_profile_id: str | None = None,
+        resolved_analysis_profile_code: str | None = None,
+        resolved_analysis_profile_version: int | None = None,
     ) -> AnalysisJob:
         resolved_user_id = user_id or project.created_by_user_id
         if resolved_user_id is None:
@@ -368,9 +406,14 @@ class AnalysisRepository:
             project_id=project.id,
             status=ANALYSIS_JOB_STATUS_QUEUED,
             job_type="manual_trigger",
+            requested_work_type_code=requested_work_type_code,
+            analysis_profile_id=analysis_profile_id,
+            resolved_analysis_profile_code=resolved_analysis_profile_code,
+            resolved_analysis_profile_version=resolved_analysis_profile_version,
             requested_by_user_id=resolved_user_id,
             parent_job_id=parent_job_id,
             retry_count=retry_count,
+            attempt_count=0,
             lease_token=None,
             worker_id=None,
             leased_at=None,
@@ -432,10 +475,20 @@ class AnalysisRepository:
             id=f"ana_{uuid4().hex[:8]}",
             project_id=project.id,
             analysis_job_id=job.id,
+            resolved_work_type_code=result_values["resolved_work_type_code"] or job.requested_work_type_code,
+            analysis_profile_id=job.analysis_profile_id,
+            resolved_analysis_profile_code=result_values["analysis_profile_code"] or job.resolved_analysis_profile_code,
+            resolved_analysis_profile_version=(
+                int(result_values["analysis_profile_version"])
+                if result_values["analysis_profile_version"] is not None
+                else job.resolved_analysis_profile_version
+            ),
             reference_photo_id=result_values["reference_photo_id"],
             object_type=result_values["object_type"],
             surface_condition=result_values["surface_condition"],
             recommended_scope=result_values["recommended_scope"],
+            estimated_quantity=result_values["estimated_quantity"],
+            estimated_unit=result_values["estimated_unit"],
             estimated_area_sqm=result_values["estimated_area_sqm"],
             area_confidence=result_values["area_confidence"],
             selected_repair_polygon_json=result_values["selected_repair_polygon_json"],
@@ -479,7 +532,17 @@ class AnalysisRepository:
             project_id=project.id,
             status=terminal_status,
             job_type=job_type,
+            requested_work_type_code=result_values["resolved_work_type_code"],
+            analysis_profile_id=None,
+            resolved_analysis_profile_code=result_values["analysis_profile_code"],
+            resolved_analysis_profile_version=(
+                int(result_values["analysis_profile_version"])
+                if result_values["analysis_profile_version"] is not None
+                else None
+            ),
             requested_by_user_id=project.created_by_user_id,
+            retry_count=0,
+            attempt_count=1,
             lease_token=None,
             worker_id=None,
             leased_at=None,
@@ -496,10 +559,20 @@ class AnalysisRepository:
             id=f"ana_{uuid4().hex[:8]}",
             project_id=project.id,
             analysis_job_id=job.id,
+            resolved_work_type_code=result_values["resolved_work_type_code"],
+            analysis_profile_id=job.analysis_profile_id,
+            resolved_analysis_profile_code=result_values["analysis_profile_code"],
+            resolved_analysis_profile_version=(
+                int(result_values["analysis_profile_version"])
+                if result_values["analysis_profile_version"] is not None
+                else None
+            ),
             reference_photo_id=result_values["reference_photo_id"],
             object_type=result_values["object_type"],
             surface_condition=result_values["surface_condition"],
             recommended_scope=result_values["recommended_scope"],
+            estimated_quantity=result_values["estimated_quantity"],
+            estimated_unit=result_values["estimated_unit"],
             estimated_area_sqm=result_values["estimated_area_sqm"],
             area_confidence=result_values["area_confidence"],
             selected_repair_polygon_json=result_values["selected_repair_polygon_json"],
@@ -585,6 +658,7 @@ class AnalysisRepository:
                 status=ANALYSIS_JOB_STATUS_RUNNING,
                 started_at=func.coalesce(AnalysisJob.started_at, timestamp),
                 finished_at=None,
+                attempt_count=func.coalesce(AnalysisJob.attempt_count, 0) + 1,
                 lease_token=lease_token,
                 worker_id=worker_id,
                 leased_at=lease_timestamp,
@@ -673,6 +747,94 @@ class AnalysisRepository:
                 finished_at=None,
                 error_message=None,
                 error_traceback=None,
+            )
+        )
+        if getattr(result, "rowcount", 0) != 1:
+            await self.session.refresh(job)
+            raise InvalidAnalysisJobStatusTransition(
+                f"Cannot transition analysis job from '{job.status}' to '{ANALYSIS_JOB_STATUS_QUEUED}'."
+            )
+        await self.session.commit()
+        await self.session.refresh(job)
+        return job
+
+    async def schedule_job_retry(
+        self,
+        job: AnalysisJob,
+        *,
+        message: str,
+        error_traceback: str | None = None,
+    ) -> AnalysisJob:
+        result = await self.session.execute(
+            update(AnalysisJob)
+            .where(
+                AnalysisJob.id == job.id,
+                AnalysisJob.status == ANALYSIS_JOB_STATUS_RUNNING,
+            )
+            .values(
+                status=ANALYSIS_JOB_STATUS_QUEUED,
+                started_at=None,
+                finished_at=None,
+                error_message=message,
+                error_traceback=error_traceback,
+                output_summary=None,
+                lease_token=None,
+                worker_id=None,
+                leased_at=None,
+                heartbeat_at=None,
+            )
+        )
+        if getattr(result, "rowcount", 0) != 1:
+            await self.session.refresh(job)
+            raise InvalidAnalysisJobStatusTransition(
+                f"Cannot transition analysis job from '{job.status}' to '{ANALYSIS_JOB_STATUS_QUEUED}'."
+            )
+        await self.session.commit()
+        await self.session.refresh(job)
+        return job
+
+    async def mark_job_dead_letter(
+        self,
+        job: AnalysisJob,
+        *,
+        message: str,
+        error_traceback: str | None = None,
+    ) -> AnalysisJob:
+        self._set_job_status(
+            job,
+            ANALYSIS_JOB_STATUS_DEAD_LETTER,
+            error_message=message,
+            error_traceback=error_traceback,
+        )
+        await self.session.commit()
+        await self.session.refresh(job)
+        return job
+
+    async def requeue_dead_letter_job(self, job: AnalysisJob) -> AnalysisJob:
+        current_status = normalize_analysis_job_status(job.status)
+        if current_status != ANALYSIS_JOB_STATUS_DEAD_LETTER:
+            raise InvalidAnalysisJobStatusTransition(
+                f"Cannot transition analysis job from '{job.status}' to '{ANALYSIS_JOB_STATUS_QUEUED}'."
+            )
+
+        result = await self.session.execute(
+            update(AnalysisJob)
+            .where(
+                AnalysisJob.id == job.id,
+                AnalysisJob.status == ANALYSIS_JOB_STATUS_DEAD_LETTER,
+            )
+            .values(
+                status=ANALYSIS_JOB_STATUS_QUEUED,
+                attempt_count=0,
+                started_at=None,
+                finished_at=None,
+                error_message=None,
+                error_traceback=None,
+                output_summary=None,
+                lease_token=None,
+                worker_id=None,
+                leased_at=None,
+                heartbeat_at=None,
             )
         )
         if getattr(result, "rowcount", 0) != 1:

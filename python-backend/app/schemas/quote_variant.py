@@ -6,6 +6,11 @@ from pydantic import BaseModel
 class QuoteItemRead(BaseModel):
     id: str
     quoteVariantId: str
+    projectWorkItemId: str | None = None
+    workTypeCode: str | None = None
+    catalogPricingProfileCode: str | None = None
+    catalogPricingProfileVersion: int | None = None
+    catalogPricingRuleCode: str | None = None
     itemType: str
     name: str
     description: str | None = None
@@ -30,6 +35,8 @@ class QuoteVariantRead(BaseModel):
     projectId: str
     analysisResultId: str | None = None
     pricingProfileId: str | None = None
+    currency: str | None = None
+    vatPct: float | None = None
     variantType: str
     laborCost: float
     materialCost: float

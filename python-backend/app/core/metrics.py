@@ -192,6 +192,32 @@ UPLOAD_REJECTIONS_TOTAL = Counter(
     ["reason", "status_code"],
 )
 
+CACHE_REQUESTS_TOTAL = Counter(
+    "novu_cache_requests_total",
+    "Cache operations by namespace, operation, and outcome",
+    ["namespace", "operation", "outcome"],
+)
+
+CACHE_OPERATION_DURATION_SECONDS = Histogram(
+    "novu_cache_operation_duration_seconds",
+    "Cache operation latency in seconds by namespace, operation, and outcome",
+    ["namespace", "operation", "outcome"],
+    buckets=[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+)
+
+WORK_CATALOG_RESOLUTION_DURATION_SECONDS = Histogram(
+    "novu_work_catalog_resolution_duration_seconds",
+    "Work catalog resolution latency by path and outcome",
+    ["path", "outcome"],
+    buckets=[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5],
+)
+
+WORK_CATALOG_VALIDATION_FAILURES_TOTAL = Counter(
+    "novu_work_catalog_validation_failures_total",
+    "Work catalog validation failures by operation and coarse reason",
+    ["operation", "reason"],
+)
+
 _JOB_DURATION_WINDOW = deque(maxlen=200)
 _JOB_DURATION_LOCK = Lock()
 _JOB_OUTCOME_COUNTS: dict[str, int] = {"completed": 0, "failed": 0}
@@ -246,6 +272,52 @@ def record_reaper_requeues(count: int = 1) -> None:
 def record_duplicate_prevented(reason: str) -> None:
     normalized_reason = reason.strip().lower() or "unknown"
     DUPLICATE_PREVENTED_COUNT.labels(reason=normalized_reason).inc()
+
+
+def observe_cache_operation(
+    *,
+    namespace: str,
+    operation: str,
+    outcome: str,
+    duration_seconds: float | None = None,
+) -> None:
+    normalized_namespace = namespace.strip().lower() or "unknown"
+    normalized_operation = operation.strip().lower() or "unknown"
+    normalized_outcome = outcome.strip().lower() or "unknown"
+    CACHE_REQUESTS_TOTAL.labels(
+        namespace=normalized_namespace,
+        operation=normalized_operation,
+        outcome=normalized_outcome,
+    ).inc()
+    if duration_seconds is not None:
+        CACHE_OPERATION_DURATION_SECONDS.labels(
+            namespace=normalized_namespace,
+            operation=normalized_operation,
+            outcome=normalized_outcome,
+        ).observe(max(0.0, float(duration_seconds)))
+
+
+def observe_work_catalog_resolution(
+    *,
+    path: str,
+    outcome: str,
+    duration_seconds: float,
+) -> None:
+    normalized_path = path.strip().lower() or "unknown"
+    normalized_outcome = outcome.strip().lower() or "unknown"
+    WORK_CATALOG_RESOLUTION_DURATION_SECONDS.labels(
+        path=normalized_path,
+        outcome=normalized_outcome,
+    ).observe(max(0.0, float(duration_seconds)))
+
+
+def record_work_catalog_validation_failure(*, operation: str, reason: str) -> None:
+    normalized_operation = operation.strip().lower() or "unknown"
+    normalized_reason = reason.strip().lower() or "unknown"
+    WORK_CATALOG_VALIDATION_FAILURES_TOTAL.labels(
+        operation=normalized_operation,
+        reason=normalized_reason,
+    ).inc()
 
 
 def refresh_job_observability_gauges() -> None:

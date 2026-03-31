@@ -226,6 +226,17 @@ class Settings(BaseSettings):
     worker_job_lease_timeout_seconds: int = Field(default=600, alias="WORKER_JOB_LEASE_TIMEOUT_SECONDS")
     worker_job_reap_interval_seconds: int = Field(default=30, alias="WORKER_JOB_REAP_INTERVAL_SECONDS")
     analysis_queue_max_depth: int = Field(default=1000, alias="ANALYSIS_QUEUE_MAX_DEPTH", ge=1)
+    analysis_job_max_attempts: int = Field(default=3, alias="ANALYSIS_JOB_MAX_ATTEMPTS", ge=1)
+    analysis_retry_backoff_base_seconds: int = Field(
+        default=30,
+        alias="ANALYSIS_RETRY_BACKOFF_BASE_SECONDS",
+        ge=1,
+    )
+    analysis_retry_backoff_max_seconds: int = Field(
+        default=300,
+        alias="ANALYSIS_RETRY_BACKOFF_MAX_SECONDS",
+        ge=1,
+    )
     analysis_jobs_per_tenant_limit: int = Field(
         default=10,
         alias="ANALYSIS_JOBS_PER_TENANT_LIMIT",
@@ -609,6 +620,18 @@ class Settings(BaseSettings):
         if self.worker_job_reap_interval_seconds <= 0:
             raise ValueError(
                 "WORKER_JOB_REAP_INTERVAL_SECONDS must be > 0."
+            )
+        if self.analysis_job_max_attempts <= 0:
+            raise ValueError(
+                "ANALYSIS_JOB_MAX_ATTEMPTS must be > 0."
+            )
+        if self.analysis_retry_backoff_base_seconds <= 0:
+            raise ValueError(
+                "ANALYSIS_RETRY_BACKOFF_BASE_SECONDS must be > 0."
+            )
+        if self.analysis_retry_backoff_max_seconds < self.analysis_retry_backoff_base_seconds:
+            raise ValueError(
+                "ANALYSIS_RETRY_BACKOFF_MAX_SECONDS must be >= ANALYSIS_RETRY_BACKOFF_BASE_SECONDS."
             )
         return self
 

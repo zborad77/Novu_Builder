@@ -14,10 +14,15 @@ class AnalysisResultRead(BaseModel):
     id: str
     projectId: str
     analysisJobId: str | None = None
+    workTypeCode: str | None = None
+    analysisProfileCode: str | None = None
+    analysisProfileVersion: int | None = None
     referencePhotoId: str | None = None
     objectType: str | None = None
     surfaceCondition: str | None = None
     recommendedScope: str | None = None
+    estimatedQuantity: float | None = None
+    estimatedUnit: str | None = None
     estimatedAreaSqm: float | None = None
     areaConfidence: float | None = None
     selectedRepairPolygon: list[PolygonPoint] | None = None
@@ -36,9 +41,16 @@ class AnalysisResultRead(BaseModel):
 class AnalysisTriggerResponse(BaseModel):
     jobId: str
     status: str
+    workTypeCode: str | None = None
+    analysisProfileCode: str | None = None
+    analysisProfileVersion: int | None = None
     provider: str | None = None
     modelName: str | None = None
     modelVersion: str | None = None
+
+
+class AnalysisJobCreateRequest(BaseModel):
+    workTypeCode: str | None = None
 
 
 class AnalysisPatch(BaseModel):

@@ -16,6 +16,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.core.cache import _k, delete_cached, get_cached, set_cached
+from app.work_catalog.cache import (
+    effective_work_type_item_key,
+    effective_work_type_list_key,
+    invalidate_tenant_effective_cache,
+    tenant_effective_cache_keys,
+)
 
 
 # ── cache.py unit tests ───────────────────────────────────────────────────────
@@ -88,6 +94,46 @@ class TestDeleteCached:
         redis = AsyncMock()
         await delete_cached(redis)
         redis.delete.assert_not_called()
+
+
+class TestWorkCatalogCacheKeys:
+    def test_tenant_effective_cache_keys_are_tenant_safe(self):
+        keys_a = set(
+            tenant_effective_cache_keys(
+                organization_id="org-a",
+                work_type_codes={"roof-repair"},
+            )
+        )
+        keys_b = set(
+            tenant_effective_cache_keys(
+                organization_id="org-b",
+                work_type_codes={"roof-repair"},
+            )
+        )
+        assert keys_a != keys_b
+        assert effective_work_type_list_key("org-a") in keys_a
+        assert effective_work_type_item_key("org-a", "roof-repair") in keys_a
+        assert effective_work_type_list_key("org-b") in keys_b
+
+    @pytest.mark.asyncio
+    async def test_tenant_effective_cache_invalidation_deletes_all_expected_keys(self):
+        redis = AsyncMock()
+
+        await invalidate_tenant_effective_cache(
+            redis,
+            organization_id="org-a",
+            work_type_codes={"roof-repair", "painting"},
+        )
+
+        deleted = set(redis.delete.await_args.args)
+        expected = {
+            _k(key)
+            for key in tenant_effective_cache_keys(
+                organization_id="org-a",
+                work_type_codes={"roof-repair", "painting"},
+            )
+        }
+        assert expected == deleted
 
 
 # ── tenant isolation ──────────────────────────────────────────────────────────

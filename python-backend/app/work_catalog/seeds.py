@@ -31,74 +31,34 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.work_catalog.domain import validate_parameter_definition
+from app.work_catalog.domain import (
+    validate_analysis_profile_definition,
+    validate_parameter_definition,
+    validate_pricing_profile_definition,
+)
+from app.work_catalog.analysis_profile_seed_data import build_analysis_profile_catalog
 from app.work_catalog.parameter_seed_data import (
     WORK_TYPE_PARAMETER_SCHEMAS,
     build_parameter_catalog,
 )
+from app.work_catalog.pricing_profile_seed_data import build_pricing_profile_catalog
 
 
 # ---------------------------------------------------------------------------
 # Analysis profiles — global AI execution contracts
 # ---------------------------------------------------------------------------
 
-_ANALYSIS_PROFILES: list[dict[str, Any]] = [
-    {
-        "id": "ap_surface_damage_v1",
-        "code": "surface-damage-v1",
-        "name": "Surface Damage Detection",
-        "provider_family": "vision",
-        "task_type": "hybrid",
-        "output_contract_version": 1,
-        "confidence_threshold": 0.55,
-        "max_detections_per_photo": 25,
-        "profile_version": 1,
-    },
-    {
-        "id": "ap_coating_scope_v1",
-        "code": "coating-scope-v1",
-        "name": "Coating Scope Analysis",
-        "provider_family": "vision",
-        "task_type": "measurement",
-        "output_contract_version": 1,
-        "confidence_threshold": 0.50,
-        "max_detections_per_photo": 20,
-        "profile_version": 1,
-    },
-]
+_ANALYSIS_PROFILES: list[dict[str, Any]] = []
 
 # ---------------------------------------------------------------------------
 # Catalog pricing profiles — global pricing strategy contracts
 # ---------------------------------------------------------------------------
 
-_CATALOG_PRICING_PROFILES: list[dict[str, Any]] = [
-    {
-        "id": "cpp_surface_repair_standard_v1",
-        "code": "surface-repair-standard-v1",
-        "name": "Surface Repair Standard",
-        "pricing_strategy": "tenant_pricebook",
-        "labor_rate_source": "tenant_default",
-        "material_pricing_source": "tenant_pricebook",
-        "default_margin_pct": 18,
-        "default_markup_pct": 0,
-        "profile_version": 1,
-    },
-    {
-        "id": "cpp_coating_standard_v1",
-        "code": "coating-standard-v1",
-        "name": "Coating Standard",
-        "pricing_strategy": "tenant_pricebook",
-        "labor_rate_source": "tenant_default",
-        "material_pricing_source": "tenant_pricebook",
-        "default_margin_pct": 15,
-        "default_markup_pct": 0,
-        "profile_version": 1,
-    },
-]
+_CATALOG_PRICING_PROFILES: list[dict[str, Any]] = []
 
 # Short aliases for use inside _WORK_TYPES entries — avoids repetition.
-_AP_DAMAGE = "ap_surface_damage_v1"
-_AP_COATING = "ap_coating_scope_v1"
+_AP_DAMAGE = "__replace_with_damage_profile__"
+_AP_COATING = "__replace_with_coating_profile__"
 _CPP_REPAIR = "cpp_surface_repair_standard_v1"
 _CPP_COATING = "cpp_coating_standard_v1"
 
@@ -1188,6 +1148,45 @@ _PARAMETER_OPTIONS: list[dict[str, Any]] = [
 
 # Canonical parametric schema replaces the legacy thin helper seed above.
 _PARAMETERS, _PARAMETER_OPTIONS = build_parameter_catalog()
+_ANALYSIS_PROFILE_CATALOG = build_analysis_profile_catalog(
+    work_types=_WORK_TYPES,
+    parameters=_PARAMETERS,
+)
+_ANALYSIS_PROFILES = _ANALYSIS_PROFILE_CATALOG["analysis_profiles"]
+_ANALYSIS_PROFILE_TARGET_OBJECTS = _ANALYSIS_PROFILE_CATALOG["analysis_profile_target_objects"]
+_ANALYSIS_PROFILE_IGNORED_OBJECTS = _ANALYSIS_PROFILE_CATALOG["analysis_profile_ignored_objects"]
+_ANALYSIS_PROFILE_EXTRACTION_RULES = _ANALYSIS_PROFILE_CATALOG["analysis_profile_extraction_rules"]
+_ANALYSIS_PROFILE_VALIDATION_RULES = _ANALYSIS_PROFILE_CATALOG["analysis_profile_validation_rules"]
+_ANALYSIS_PROFILE_CONFIDENCE_THRESHOLDS = _ANALYSIS_PROFILE_CATALOG["analysis_profile_confidence_thresholds"]
+_ANALYSIS_PROFILE_OUTPUT_MAPPINGS = _ANALYSIS_PROFILE_CATALOG["analysis_profile_output_mappings"]
+_PRICING_PROFILE_CATALOG = build_pricing_profile_catalog(
+    work_types=_WORK_TYPES,
+    parameters=_PARAMETERS,
+)
+_CATALOG_PRICING_PROFILES = _PRICING_PROFILE_CATALOG["catalog_pricing_profiles"]
+_PRICING_PROFILE_REQUIRED_INPUTS = _PRICING_PROFILE_CATALOG["pricing_profile_required_inputs"]
+_PRICING_PROFILE_BASE_RULES = _PRICING_PROFILE_CATALOG["pricing_profile_base_rules"]
+_PRICING_PROFILE_ADJUSTMENT_RULES = _PRICING_PROFILE_CATALOG["pricing_profile_adjustment_rules"]
+_PRICING_PROFILE_LABOR_ASSUMPTIONS = _PRICING_PROFILE_CATALOG["pricing_profile_labor_assumptions"]
+_PRICING_PROFILE_MATERIAL_ASSUMPTIONS = _PRICING_PROFILE_CATALOG["pricing_profile_material_assumptions"]
+
+_DEFAULT_ANALYSIS_PROFILE_BY_WORK_TYPE_ID = {
+    "wt_chimney_renovation": "ap_chimney_renovation_vision_v1",
+    "wt_wall_demolition": "ap_wall_demolition_vision_v1",
+    "wt_plastering": "ap_plastering_vision_v1",
+    "wt_facade_installation": "ap_facade_installation_vision_v1",
+    "wt_floor_renovation": "ap_floor_renovation_vision_v1",
+    "wt_roof_repair": "ap_roof_repair_vision_v1",
+    "wt_gutter_repair": "ap_gutter_repair_vision_v1",
+    "wt_window_replacement": "ap_window_replacement_vision_v1",
+    "wt_door_repair": "ap_door_repair_vision_v1",
+    "wt_painting": "ap_painting_vision_v1",
+    "wt_interior_finishing": "ap_interior_finishing_vision_v1",
+    "wt_emergency_repair": "ap_emergency_repair_vision_v1",
+}
+for _work_type in _WORK_TYPES:
+    if _work_type["id"] in _DEFAULT_ANALYSIS_PROFILE_BY_WORK_TYPE_ID:
+        _work_type["default_analysis_profile_id"] = _DEFAULT_ANALYSIS_PROFILE_BY_WORK_TYPE_ID[_work_type["id"]]
 
 # ---------------------------------------------------------------------------
 # Import-time catalog integrity guard
@@ -1251,6 +1250,8 @@ def _validate_catalog_seed() -> None:
     param_keys: list[tuple[str, str]] = []
     section_coverage: dict[str, set[str]] = {}
     option_codes_by_parameter_id: dict[str, set[str]] = {}
+    parameter_codes_by_work_type: dict[str, set[str]] = {}
+    extractable_parameter_codes_by_work_type: dict[str, set[str]] = {}
 
     schema_work_type_ids = {f"wt_{wt_id}" for wt_id in WORK_TYPE_PARAMETER_SCHEMAS}
     if schema_work_type_ids != work_type_ids:
@@ -1275,6 +1276,9 @@ def _validate_catalog_seed() -> None:
                 f"Parameter {p['code']!r} references unknown work_type_id {p['work_type_id']!r}"
             )
         section_coverage.setdefault(p["work_type_id"], set()).add(p["section"])
+        parameter_codes_by_work_type.setdefault(p["work_type_id"], set()).add(p["code"])
+        if p.get("vision_extractable"):
+            extractable_parameter_codes_by_work_type.setdefault(p["work_type_id"], set()).add(p["code"])
 
     option_ids: set[str] = set()
     option_keys: set[tuple[str, str]] = set()
@@ -1331,6 +1335,100 @@ def _validate_catalog_seed() -> None:
             option_codes=option_codes_by_parameter_id.get(parameter["id"], set()),
         )
 
+    target_objects_by_profile_id: dict[str, list[dict[str, Any]]] = {}
+    ignored_objects_by_profile_id: dict[str, list[dict[str, Any]]] = {}
+    extraction_rules_by_profile_id: dict[str, list[dict[str, Any]]] = {}
+    validation_rules_by_profile_id: dict[str, list[dict[str, Any]]] = {}
+    confidence_thresholds_by_profile_id: dict[str, list[dict[str, Any]]] = {}
+    output_mappings_by_profile_id: dict[str, list[dict[str, Any]]] = {}
+    work_type_id_by_profile_id = {
+        profile_id: work_type_id
+        for work_type_id, profile_id in _DEFAULT_ANALYSIS_PROFILE_BY_WORK_TYPE_ID.items()
+    }
+
+    for row in _ANALYSIS_PROFILE_TARGET_OBJECTS:
+        target_objects_by_profile_id.setdefault(row["analysis_profile_id"], []).append(row)
+    for row in _ANALYSIS_PROFILE_IGNORED_OBJECTS:
+        ignored_objects_by_profile_id.setdefault(row["analysis_profile_id"], []).append(row)
+    for row in _ANALYSIS_PROFILE_EXTRACTION_RULES:
+        extraction_rules_by_profile_id.setdefault(row["analysis_profile_id"], []).append(row)
+    for row in _ANALYSIS_PROFILE_VALIDATION_RULES:
+        validation_rules_by_profile_id.setdefault(row["analysis_profile_id"], []).append(row)
+    for row in _ANALYSIS_PROFILE_CONFIDENCE_THRESHOLDS:
+        confidence_thresholds_by_profile_id.setdefault(row["analysis_profile_id"], []).append(row)
+    for row in _ANALYSIS_PROFILE_OUTPUT_MAPPINGS:
+        output_mappings_by_profile_id.setdefault(row["analysis_profile_id"], []).append(row)
+
+    for profile in _ANALYSIS_PROFILES:
+        work_type_id = work_type_id_by_profile_id.get(profile["id"])
+        if work_type_id is None:
+            raise AssertionError(
+                f"Analysis profile {profile['id']!r} is not assigned to any seeded work type."
+            )
+        validate_analysis_profile_definition(
+            code=profile["code"],
+            version=profile["profile_version"],
+            status=profile["status"],
+            provider_family=profile["provider_family"],
+            task_type=profile["task_type"],
+            scope_code=profile["scope_code"],
+            target_objects=target_objects_by_profile_id.get(profile["id"], []),
+            ignored_objects=ignored_objects_by_profile_id.get(profile["id"], []),
+            extraction_rules=extraction_rules_by_profile_id.get(profile["id"], []),
+            validation_rules=validation_rules_by_profile_id.get(profile["id"], []),
+            confidence_thresholds=confidence_thresholds_by_profile_id.get(profile["id"], []),
+            output_mappings=output_mappings_by_profile_id.get(profile["id"], []),
+            fallback_mode=profile["fallback_mode"],
+            fallback_instructions=profile.get("fallback_instructions"),
+            parameter_codes=parameter_codes_by_work_type.get(work_type_id, set()),
+            extractable_parameter_codes=extractable_parameter_codes_by_work_type.get(work_type_id, set()),
+        )
+
+    required_inputs_by_profile_id: dict[str, list[dict[str, Any]]] = {}
+    base_rules_by_profile_id: dict[str, list[dict[str, Any]]] = {}
+    adjustment_rules_by_profile_id: dict[str, list[dict[str, Any]]] = {}
+    labor_assumptions_by_profile_id: dict[str, list[dict[str, Any]]] = {}
+    material_assumptions_by_profile_id: dict[str, list[dict[str, Any]]] = {}
+    pricing_work_type_id_by_profile_id: dict[str, str] = {
+        work_type["default_catalog_pricing_profile_id"]: work_type["id"]
+        for work_type in _WORK_TYPES
+        if work_type.get("default_catalog_pricing_profile_id")
+    }
+    for row in _PRICING_PROFILE_REQUIRED_INPUTS:
+        required_inputs_by_profile_id.setdefault(row["catalog_pricing_profile_id"], []).append(row)
+    for row in _PRICING_PROFILE_BASE_RULES:
+        base_rules_by_profile_id.setdefault(row["catalog_pricing_profile_id"], []).append(row)
+    for row in _PRICING_PROFILE_ADJUSTMENT_RULES:
+        adjustment_rules_by_profile_id.setdefault(row["catalog_pricing_profile_id"], []).append(row)
+    for row in _PRICING_PROFILE_LABOR_ASSUMPTIONS:
+        labor_assumptions_by_profile_id.setdefault(row["catalog_pricing_profile_id"], []).append(row)
+    for row in _PRICING_PROFILE_MATERIAL_ASSUMPTIONS:
+        material_assumptions_by_profile_id.setdefault(row["catalog_pricing_profile_id"], []).append(row)
+
+    for profile in _CATALOG_PRICING_PROFILES:
+        work_type_id = pricing_work_type_id_by_profile_id.get(profile["id"])
+        if work_type_id is None:
+            raise AssertionError(
+                f"Catalog pricing profile {profile['id']!r} is not assigned to any seeded work type."
+            )
+        validate_pricing_profile_definition(
+            code=profile["code"],
+            version=profile["profile_version"],
+            status=profile["status"],
+            pricing_basis=profile["pricing_basis"],
+            currency=profile["currency"],
+            pricing_strategy=profile["pricing_strategy"],
+            labor_rate_source=profile["labor_rate_source"],
+            material_pricing_source=profile["material_pricing_source"],
+            min_job_price=profile.get("min_job_price"),
+            required_inputs=required_inputs_by_profile_id.get(profile["id"], []),
+            base_rules=base_rules_by_profile_id.get(profile["id"], []),
+            adjustment_rules=adjustment_rules_by_profile_id.get(profile["id"], []),
+            labor_assumptions=labor_assumptions_by_profile_id.get(profile["id"], []),
+            material_assumptions=material_assumptions_by_profile_id.get(profile["id"], []),
+            parameter_codes=parameter_codes_by_work_type.get(work_type_id, set()),
+        )
+
 
 # Run validation immediately on import — fail fast before any DB operation.
 _validate_catalog_seed()
@@ -1348,7 +1446,7 @@ _DEV_TENANT_SETTINGS: list[dict[str, Any]] = [
         "work_type_id": "wt_roof_repair",
         "status": "enabled",
         "custom_display_name": "Oprava strechy",
-        "catalog_pricing_profile_id": "cpp_surface_repair_standard_v1",
+        "catalog_pricing_profile_id": "cpp_roof_repair_pricing_v1",
         "tenant_pricing_profile_id": "price_default",
         "config_version": 1,
     },
@@ -1358,7 +1456,7 @@ _DEV_TENANT_SETTINGS: list[dict[str, Any]] = [
         "work_type_id": "wt_painting",
         "status": "enabled",
         "custom_display_name": "Malovani",
-        "catalog_pricing_profile_id": "cpp_coating_standard_v1",
+        "catalog_pricing_profile_id": "cpp_painting_pricing_v1",
         "tenant_pricing_profile_id": "price_default",
         "config_version": 1,
     },
@@ -1386,7 +1484,18 @@ _DEV_TENANT_PARAMETER_OVERRIDES: list[dict[str, Any]] = [
 CATALOG_SEED: dict[str, list[dict[str, Any]]] = {
     "categories": _CATEGORIES,
     "analysis_profiles": _ANALYSIS_PROFILES,
+    "analysis_profile_target_objects": _ANALYSIS_PROFILE_TARGET_OBJECTS,
+    "analysis_profile_ignored_objects": _ANALYSIS_PROFILE_IGNORED_OBJECTS,
+    "analysis_profile_extraction_rules": _ANALYSIS_PROFILE_EXTRACTION_RULES,
+    "analysis_profile_validation_rules": _ANALYSIS_PROFILE_VALIDATION_RULES,
+    "analysis_profile_confidence_thresholds": _ANALYSIS_PROFILE_CONFIDENCE_THRESHOLDS,
+    "analysis_profile_output_mappings": _ANALYSIS_PROFILE_OUTPUT_MAPPINGS,
     "catalog_pricing_profiles": _CATALOG_PRICING_PROFILES,
+    "pricing_profile_required_inputs": _PRICING_PROFILE_REQUIRED_INPUTS,
+    "pricing_profile_base_rules": _PRICING_PROFILE_BASE_RULES,
+    "pricing_profile_adjustment_rules": _PRICING_PROFILE_ADJUSTMENT_RULES,
+    "pricing_profile_labor_assumptions": _PRICING_PROFILE_LABOR_ASSUMPTIONS,
+    "pricing_profile_material_assumptions": _PRICING_PROFILE_MATERIAL_ASSUMPTIONS,
     "work_types": _WORK_TYPES,
     "parameters": _PARAMETERS,
     "parameter_options": _PARAMETER_OPTIONS,

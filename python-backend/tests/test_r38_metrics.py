@@ -62,6 +62,19 @@ def _reset_metrics_state():
     metrics_module.JOB_FAIL_RATE.set(0)
     metrics_module.JOB_DURATION_SECONDS_AVG.set(0)
     metrics_module.JOB_DURATION_SECONDS_P95.set(0)
+    metrics_module.CACHE_REQUESTS_TOTAL.labels(
+        namespace="test_reset",
+        operation="noop",
+        outcome="noop",
+    ).inc(0)
+    metrics_module.WORK_CATALOG_VALIDATION_FAILURES_TOTAL.labels(
+        operation="test_reset",
+        reason="noop",
+    ).inc(0)
+    metrics_module.WORK_CATALOG_RESOLUTION_DURATION_SECONDS.labels(
+        path="test_reset",
+        outcome="noop",
+    ).observe(0)
 
     yield
 
@@ -96,6 +109,9 @@ class TestMetricsEndpoint:
         assert "novu_job_fail_rate" in body
         assert "novu_reaper_requeues_total" in body
         assert "novu_duplicate_prevented_count_total" in body
+        assert "novu_cache_requests_total" in body
+        assert "novu_work_catalog_resolution_duration_seconds" in body
+        assert "novu_work_catalog_validation_failures_total" in body
 
     @pytest.mark.asyncio
     async def test_alive_request_appears_in_metrics(self, app_client):
@@ -291,6 +307,40 @@ class TestOperationalMetricsExported:
         UPLOAD_REJECTIONS_TOTAL.labels(reason="invalid_upload", status_code="400").inc()
         resp = await app_client.get(_METRICS_URL)
         assert 'novu_upload_rejections_total{reason="invalid_upload",status_code="400"}' in resp.text
+
+    @pytest.mark.asyncio
+    async def test_work_catalog_cache_and_validation_metrics_are_exported(self, app_client):
+        from app.core.metrics import (
+            observe_cache_operation,
+            observe_work_catalog_resolution,
+            record_work_catalog_validation_failure,
+        )
+
+        observe_cache_operation(
+            namespace="work-catalog",
+            operation="get",
+            outcome="hit",
+            duration_seconds=0.002,
+        )
+        observe_work_catalog_resolution(
+            path="work_catalog.get_effective_work_type",
+            outcome="success",
+            duration_seconds=0.01,
+        )
+        record_work_catalog_validation_failure(
+            operation="work_catalog.upsert_tenant_setting",
+            reason="invalid_effective_configuration",
+        )
+
+        resp = await app_client.get(_METRICS_URL)
+        assert 'novu_cache_requests_total{namespace="work-catalog",operation="get",outcome="hit"}' in resp.text
+        assert (
+            'novu_work_catalog_validation_failures_total{operation="work_catalog.upsert_tenant_setting",reason="invalid_effective_configuration"}'
+            in resp.text
+        )
+        assert "novu_work_catalog_resolution_duration_seconds_bucket" in resp.text
+        assert 'path="work_catalog.get_effective_work_type"' in resp.text
+        assert 'outcome="success"' in resp.text
 
     @pytest.mark.asyncio
     async def test_operational_metrics_cache_hits_within_ttl(self):

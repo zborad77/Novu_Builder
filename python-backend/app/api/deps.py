@@ -52,12 +52,16 @@ def get_analysis_service(session: AsyncSession = Depends(get_db_session)) -> Ana
     return AnalysisService(
         repository=AnalysisRepository(session),
         photo_repository=PhotoRepository(session),
+        work_catalog_repository=WorkCatalogRepository(session),
         provider_key=settings.ai_analysis_provider,
     )
 
 
 def get_quote_variant_service(session: AsyncSession = Depends(get_db_session)) -> QuoteVariantService:
-    return QuoteVariantService(QuoteVariantRepository(session))
+    return QuoteVariantService(
+        QuoteVariantRepository(session),
+        WorkCatalogRepository(session),
+    )
 
 
 def get_pricebook_service(session: AsyncSession = Depends(get_db_session)) -> PricebookService:
@@ -78,8 +82,26 @@ def get_storage_consistency_service(
     return StorageConsistencyService(StorageConsistencyRepository(session))
 
 
-def get_work_catalog_service(session: AsyncSession = Depends(get_db_session)) -> WorkCatalogService:
-    return WorkCatalogService(WorkCatalogRepository(session))
+def get_job_queue(request: Request):
+    """Return the Redis job queue from app state, or None if unavailable."""
+    return getattr(request.app.state, "job_queue", None)
+
+
+def get_redis(request: Request):
+    """Return the shared Redis client for caching (R-32), or None if unavailable.
+
+    Reuses the same connection as the job queue â€” key prefixes keep them isolated:
+      job queue: analysis:jobs
+      cache:     cache:*
+    """
+    return getattr(request.app.state, "job_queue", None)
+
+
+def get_work_catalog_service(
+    session: AsyncSession = Depends(get_db_session),
+    redis=Depends(get_redis),
+) -> WorkCatalogService:
+    return WorkCatalogService(WorkCatalogRepository(session), redis=redis)
 
 
 def get_auth_service(session: AsyncSession = Depends(get_db_session)) -> AuthService:
