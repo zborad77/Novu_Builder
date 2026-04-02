@@ -8,9 +8,11 @@ Coverage:
 5. Legacy single-worker heartbeat key remains readable during rollout
 """
 import inspect
+import os
 from datetime import UTC, datetime
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -36,7 +38,17 @@ def _redis_with_heartbeats(values_by_key: dict[object, bytes | None]):
 
     redis.get = AsyncMock(side_effect=_get)
     redis.mget = AsyncMock(side_effect=lambda keys: [values_by_key.get(key) for key in keys])
+    redis.llen = AsyncMock(return_value=0)
     redis.scan_iter = lambda match=None: _scan_iter(*pattern_keys)
+    redis.runtime_status = lambda: SimpleNamespace(
+        state="ready",
+        mode="single",
+        candidate_count=1,
+        active_url="redis://:***@localhost:6379/0",
+        degraded=False,
+        last_error=None,
+        last_failover_at=None,
+    )
     return redis
 
 
@@ -122,6 +134,7 @@ async def test_write_local_worker_heartbeat_updates_local_file(monkeypatch):
 
     payload = json.loads(worker_local_health_path().read_text(encoding="utf-8"))
     assert payload["instance_id"] == "worker-a"
+    assert payload["pid"] == os.getpid()
     assert local_worker_heartbeat_is_fresh(now=datetime.now(UTC)) is True
 
 
@@ -148,6 +161,57 @@ def test_local_worker_heartbeat_stale_when_timestamp_too_old(monkeypatch):
     )
 
     assert local_worker_heartbeat_is_fresh(now=datetime.now(UTC)) is False
+
+
+def test_local_worker_heartbeat_rejects_missing_or_dead_worker_pid(monkeypatch):
+    from app.worker.heartbeat import (
+        local_worker_heartbeat_is_fresh,
+        worker_local_health_path,
+    )
+
+    heartbeat_path = Path("d:/Novu_Hub/Novu_Builder/python-backend/.tmp_test_runtime/heartbeat-test-dead-pid.json")
+    heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+    heartbeat_path.unlink(missing_ok=True)
+    monkeypatch.setenv("WORKER_HEALTH_PATH", str(heartbeat_path))
+    worker_local_health_path().write_text(
+        json.dumps(
+            {
+                "instance_id": "worker-a",
+                "pid": 999999,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert local_worker_heartbeat_is_fresh(now=datetime.now(UTC), require_process=True) is False
+
+
+def test_worker_compose_healthcheck_restarts_stale_worker_via_pid1_signal():
+    compose = Path("d:/Novu_Hub/Novu_Builder/docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "WORKER_HEALTH_PATH: /tmp/novu-worker-heartbeat.json" in compose
+    assert 'python -m app.worker.healthcheck || (echo \'worker unhealthy; terminating PID 1 for restart\'' in compose
+    assert "kill -TERM 1" in compose
+
+
+def test_worker_healthcheck_main_returns_zero_for_fresh_worker():
+    from app.worker import healthcheck
+
+    with patch("app.worker.healthcheck.local_worker_heartbeat_status", return_value=(True, "fresh")):
+        assert healthcheck.main() == 0
+
+
+def test_worker_healthcheck_main_returns_one_for_unhealthy_worker(capsys):
+    from app.worker import healthcheck
+
+    with (
+        patch("app.worker.healthcheck.local_worker_heartbeat_status", return_value=(False, "worker_process_unhealthy")),
+        patch("app.worker.healthcheck.worker_local_health_path", return_value=Path("/tmp/novu-worker-heartbeat.json")),
+    ):
+        assert healthcheck.main() == 1
+
+    assert "worker_process_unhealthy" in capsys.readouterr().err
 
 
 class TestHealthInternalWorkerSection:
@@ -183,6 +247,7 @@ class TestHealthInternalWorkerSection:
         mock_request = MagicMock()
         mock_request.app.state.startup_checks = {"db": "ok"}
         mock_request.app.state.job_queue = mock_redis
+        mock_request.app.state.auth_token_store = None
 
         mock_current_user = AuthUserRead(
             id="sa-1", email="sa@test.com", fullName="SA", role="superadmin",
@@ -207,6 +272,8 @@ class TestHealthInternalWorkerSection:
         assert result["worker"]["alive"] is True
         assert result["worker"]["aliveInstances"] == 1
         assert result["worker"]["seenInstances"] == 2
+        assert result["security"]["authProtection"]["state"] == "ready"
+        assert result["security"]["authProtection"]["enforced"] is True
 
     @pytest.mark.asyncio
     async def test_worker_dead_when_no_heartbeat_key(self):
@@ -219,6 +286,7 @@ class TestHealthInternalWorkerSection:
         mock_request = MagicMock()
         mock_request.app.state.startup_checks = {"db": "ok"}
         mock_request.app.state.job_queue = mock_redis
+        mock_request.app.state.auth_token_store = None
 
         mock_current_user = AuthUserRead(
             id="sa-1", email="sa@test.com", fullName="SA", role="superadmin",
@@ -244,6 +312,38 @@ class TestHealthInternalWorkerSection:
         assert result["worker"]["seenInstances"] == 0
 
     @pytest.mark.asyncio
+    async def test_health_internal_reports_auth_protection_unavailable_when_redis_monitoring_is_missing(self):
+        from app.api.routes.system import health_internal
+        from app.schemas.auth import AuthUserRead
+
+        mock_request = MagicMock()
+        mock_request.app.state.startup_checks = {"db": "ok"}
+        mock_request.app.state.job_queue = None
+        mock_request.app.state.auth_token_store = None
+
+        mock_current_user = AuthUserRead(
+            id="sa-1", email="sa@test.com", fullName="SA", role="superadmin",
+            isActive=True, organizationId="org-1", isSuperAdmin=True, impersonatedBy=None,
+        )
+
+        with patch("app.api.routes.system.AsyncSessionFactory") as mock_factory:
+            mock_session = AsyncMock()
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=False)
+            mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one=lambda: 0, scalar_one_or_none=lambda: None))
+            mock_factory.return_value = mock_session
+            response = Response()
+
+            result = await health_internal(
+                request=mock_request,
+                response=response,
+                _=mock_current_user,
+            )
+
+        assert result["security"]["authProtection"]["state"] == "unavailable"
+        assert result["security"]["authProtection"]["enforced"] is False
+
+    @pytest.mark.asyncio
     async def test_worker_alive_with_legacy_single_worker_heartbeat_key(self):
         """Legacy single-worker heartbeat key remains readable during rollout."""
         from app.api.routes.system import health_internal
@@ -255,6 +355,7 @@ class TestHealthInternalWorkerSection:
         mock_request = MagicMock()
         mock_request.app.state.startup_checks = {"db": "ok"}
         mock_request.app.state.job_queue = mock_redis
+        mock_request.app.state.auth_token_store = None
 
         mock_current_user = AuthUserRead(
             id="sa-1", email="sa@test.com", fullName="SA", role="superadmin",
@@ -288,6 +389,7 @@ class TestHealthInternalWorkerSection:
         mock_request = MagicMock()
         mock_request.app.state.startup_checks = {"db": "ok"}
         mock_request.app.state.job_queue = None  # Redis not available
+        mock_request.app.state.auth_token_store = None
 
         mock_current_user = AuthUserRead(
             id="sa-1", email="sa@test.com", fullName="SA", role="superadmin",

@@ -21,15 +21,22 @@ HEAVY_PROCESSING_QUEUE_KEY = "heavy:processing"
 HEAVY_LEASE_KEY_PREFIX = "heavy:lease:"
 HEAVY_LEASE_EXPIRY_ZSET_KEY = "heavy:lease_expiry"
 HEAVY_LEASE_SEQUENCE_KEY = "heavy:lease_sequence"
+_JOB_PRIORITY_STANDARD = "standard"
+_JOB_PRIORITY_CRITICAL = "critical"
 
 _LEASE_JOB_SCRIPT = """
+local total_processing = redis.call('LLEN', KEYS[2]) + redis.call('LLEN', KEYS[3])
+if total_processing >= tonumber(ARGV[4]) then
+    return {'__backpressure__', tostring(total_processing)}
+end
+
 local raw = redis.call('LPOP', KEYS[1])
 if not raw then
     return nil
 end
 
-local token = tostring(redis.call('INCR', KEYS[5]))
-local lease_key = KEYS[4] .. token
+local token = tostring(redis.call('INCR', KEYS[6]))
+local lease_key = KEYS[5] .. token
 local leased_at_ms = ARGV[1]
 local worker_id = ARGV[2]
 local lease_timeout_ms = ARGV[3]
@@ -46,7 +53,7 @@ redis.call(
     'lease_timeout_ms', lease_timeout_ms,
     'expires_at_ms', expires_at_ms
 )
-redis.call('ZADD', KEYS[3], expires_at_ms, token)
+redis.call('ZADD', KEYS[4], expires_at_ms, token)
 return {token, raw, worker_id, leased_at_ms, lease_timeout_ms, expires_at_ms}
 """
 
@@ -54,12 +61,20 @@ _ENQUEUE_WITH_LIMIT_SCRIPT = """
 local queue_depth = redis.call('LLEN', KEYS[1])
 local processing_depth = redis.call('LLEN', KEYS[2])
 local max_depth = tonumber(ARGV[2])
+local global_queued = queue_depth + redis.call('LLEN', KEYS[3])
 if (queue_depth + processing_depth + 1) > max_depth then
-    return {0, queue_depth, processing_depth}
+    return {0, queue_depth, processing_depth, global_queued}
+end
+if (global_queued + 1) > tonumber(ARGV[3]) then
+    return {-2, queue_depth, processing_depth, global_queued}
 end
 
-redis.call('RPUSH', KEYS[1], ARGV[1])
-return {1, queue_depth + 1, processing_depth}
+if ARGV[4] == 'critical' then
+    redis.call('LPUSH', KEYS[1], ARGV[1])
+else
+    redis.call('RPUSH', KEYS[1], ARGV[1])
+end
+return {1, queue_depth + 1, processing_depth, global_queued + 1}
 """
 
 _ACK_JOB_SCRIPT = """
@@ -117,19 +132,34 @@ local expected_leased_at_ms = ARGV[2]
 local action = ARGV[3]
 local lease_key = KEYS[1] .. token
 if redis.call('EXISTS', lease_key) == 0 then
-    return 0
+    return -3
 end
 
 local actual_leased_at_ms = redis.call('HGET', lease_key, 'leased_at_ms')
 if actual_leased_at_ms ~= expected_leased_at_ms then
-    return 0
+    return -3
 end
 
 local raw = redis.call('HGET', lease_key, 'raw')
 if raw then
+    if action == 'requeue' then
+        local queue_depth = redis.call('LLEN', KEYS[4])
+        local processing_depth = redis.call('LLEN', KEYS[2])
+        local global_queued = queue_depth + redis.call('LLEN', KEYS[5])
+        if (queue_depth + processing_depth) > tonumber(ARGV[4]) then
+            return 0
+        end
+        if (global_queued + 1) > tonumber(ARGV[5]) then
+            return -2
+        end
+    end
     redis.call('LREM', KEYS[2], 1, raw)
     if action == 'requeue' then
-        redis.call('RPUSH', KEYS[4], raw)
+        if ARGV[6] == 'critical' then
+            redis.call('LPUSH', KEYS[4], raw)
+        else
+            redis.call('RPUSH', KEYS[4], raw)
+        end
     end
 end
 
@@ -150,14 +180,31 @@ class LostHeavyJobLeaseError(RuntimeError):
 class HeavyJobQueueCapacityExceededError(RuntimeError):
     """Raised when enqueue would push the heavy queue beyond the configured cap."""
 
-    def __init__(self, *, queued: int, processing: int, max_depth: int) -> None:
+    def __init__(
+        self,
+        *,
+        queued: int,
+        processing: int,
+        max_depth: int,
+        scope: str = "lane",
+        global_queued: int | None = None,
+        max_global_queued: int | None = None,
+    ) -> None:
         total = queued + processing
-        super().__init__(
-            f"Heavy queue is full ({total}/{max_depth}; queued={queued}, processing={processing})."
-        )
+        if scope == "global" and global_queued is not None and max_global_queued is not None:
+            super().__init__(
+                f"Heavy queue rejected by global backpressure ({global_queued}/{max_global_queued} queued)."
+            )
+        else:
+            super().__init__(
+                f"Heavy queue is full ({total}/{max_depth}; queued={queued}, processing={processing})."
+            )
         self.queued = queued
         self.processing = processing
         self.max_depth = max_depth
+        self.scope = scope
+        self.global_queued = global_queued
+        self.max_global_queued = max_global_queued
 
 
 class HeavyJobQueuePayload(BaseModel):
@@ -168,6 +215,7 @@ class HeavyJobQueuePayload(BaseModel):
     organization_id: str | None = None
     export_id: str | None = None
     photo_id: str | None = None
+    priority: str = _JOB_PRIORITY_STANDARD
 
     @field_validator("job_type")
     @classmethod
@@ -193,6 +241,14 @@ class HeavyJobQueuePayload(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("must be a non-empty string when provided")
+        return normalized
+
+    @field_validator("priority")
+    @classmethod
+    def _validate_priority(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {_JOB_PRIORITY_STANDARD, _JOB_PRIORITY_CRITICAL}:
+            raise ValueError("must be one of: standard, critical")
         return normalized
 
     @model_validator(mode="after")
@@ -242,6 +298,30 @@ class LeasedHeavyJob:
     def photo_id(self) -> str | None:
         value = self.payload.get("photo_id")
         return None if value is None else str(value)
+
+    @property
+    def priority(self) -> str:
+        return str(self.payload.get("priority", _JOB_PRIORITY_STANDARD))
+
+
+@dataclass(frozen=True)
+class HeavyJobTransportSnapshot:
+    queued: tuple[tuple[str, str, str | None, str | None, str], ...]
+    processing: tuple[LeasedHeavyJob, ...]
+
+    def has_export(self, export_id: str) -> bool:
+        normalized = str(export_id)
+        return any(
+            queued_export_id == normalized
+            for _, _, queued_export_id, _, _ in self.queued
+        ) or any(lease.export_id == normalized for lease in self.processing)
+
+    def has_photo(self, photo_id: str) -> bool:
+        normalized = str(photo_id)
+        return any(
+            queued_photo_id == normalized
+            for _, _, _, queued_photo_id, _ in self.queued
+        ) or any(lease.photo_id == normalized for lease in self.processing)
 
 
 def _utc_now_ms(now: datetime | None = None) -> int:
@@ -310,31 +390,130 @@ async def _enqueue_raw_payload(
     raw_payload: str,
     *,
     max_depth: int | None = None,
+    max_global_queued: int | None = None,
+    priority: str = _JOB_PRIORITY_STANDARD,
 ) -> None:
+    normalized_priority = (
+        _JOB_PRIORITY_CRITICAL
+        if priority == _JOB_PRIORITY_CRITICAL
+        else _JOB_PRIORITY_STANDARD
+    )
     if max_depth is None:
-        await redis.rpush(HEAVY_QUEUE_KEY, raw_payload)
+        if normalized_priority == _JOB_PRIORITY_CRITICAL:
+            await redis.lpush(HEAVY_QUEUE_KEY, raw_payload)
+        else:
+            await redis.rpush(HEAVY_QUEUE_KEY, raw_payload)
         return
 
     result = await redis.eval(
         _ENQUEUE_WITH_LIMIT_SCRIPT,
-        2,
+        3,
         HEAVY_QUEUE_KEY,
         HEAVY_PROCESSING_QUEUE_KEY,
+        "analysis:jobs",
         raw_payload,
         str(max(1, int(max_depth))),
+        str(max(1, int(max_global_queued or 1_000_000))),
+        normalized_priority,
     )
     if (
         not isinstance(result, (list, tuple))
-        or len(result) != 3
+        or len(result) != 4
         or int(_decode_text(result[0])) != 1
     ):
         queued = int(_decode_text(result[1])) if isinstance(result, (list, tuple)) and len(result) > 1 else 0
         processing = int(_decode_text(result[2])) if isinstance(result, (list, tuple)) and len(result) > 2 else 0
+        global_queued = int(_decode_text(result[3])) if isinstance(result, (list, tuple)) and len(result) > 3 else None
+        status = int(_decode_text(result[0])) if isinstance(result, (list, tuple)) and len(result) > 0 else 0
         raise HeavyJobQueueCapacityExceededError(
             queued=queued,
             processing=processing,
             max_depth=max(1, int(max_depth)),
+            scope="global" if status == -2 else "lane",
+            global_queued=global_queued,
+            max_global_queued=max(1, int(max_global_queued or 1_000_000)),
         )
+
+
+async def inspect_heavy_job_transport(redis: Redis | None) -> HeavyJobTransportSnapshot:
+    if redis is None:
+        return HeavyJobTransportSnapshot(queued=(), processing=())
+
+    queued_entries: list[tuple[str, str, str | None, str | None, str]] = []
+    for raw in await redis.lrange(HEAVY_QUEUE_KEY, 0, -1):
+        raw_payload = _decode_text(raw)
+        try:
+            payload = _parse_raw_payload(raw_payload)
+        except InvalidHeavyJobPayloadError:
+            continue
+        queued_entries.append(
+            (
+                str(payload["job_type"]),
+                str(payload["project_id"]),
+                payload.get("export_id"),
+                payload.get("photo_id"),
+                raw_payload,
+            )
+        )
+
+    processing_entries: list[LeasedHeavyJob] = []
+    processing_tokens = await redis.zrange(HEAVY_LEASE_EXPIRY_ZSET_KEY, 0, -1)
+    lease_payloads: dict[str, dict[str, str]] = {}
+    for raw_token in processing_tokens:
+        token = _decode_text(raw_token)
+        values = await redis.hgetall(f"{HEAVY_LEASE_KEY_PREFIX}{token}")
+        if not values:
+            continue
+        lease_payloads[token] = {_decode_text(key): _decode_text(value) for key, value in values.items()}
+
+    for raw in await redis.lrange(HEAVY_PROCESSING_QUEUE_KEY, 0, -1):
+        raw_payload = _decode_text(raw)
+        try:
+            payload = _parse_raw_payload(raw_payload)
+        except InvalidHeavyJobPayloadError:
+            continue
+
+        matching_token = None
+        matching_values: dict[str, str] | None = None
+        for token, values in lease_payloads.items():
+            if values.get("raw") == raw_payload:
+                matching_token = token
+                matching_values = values
+                break
+
+        if matching_values is None:
+            processing_entries.append(
+                LeasedHeavyJob(
+                    token="",
+                    payload=payload,
+                    raw_payload=raw_payload,
+                    worker_id="",
+                    leased_at_ms=0,
+                    lease_timeout_ms=0,
+                    expires_at_ms=0,
+                )
+            )
+            continue
+
+        try:
+            processing_entries.append(
+                LeasedHeavyJob(
+                    token=matching_token or "",
+                    payload=payload,
+                    raw_payload=raw_payload,
+                    worker_id=matching_values.get("worker_id", ""),
+                    leased_at_ms=int(matching_values.get("leased_at_ms", "0")),
+                    lease_timeout_ms=int(matching_values.get("lease_timeout_ms", "0")),
+                    expires_at_ms=int(matching_values.get("expires_at_ms", "0")),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+
+    return HeavyJobTransportSnapshot(
+        queued=tuple(queued_entries),
+        processing=tuple(processing_entries),
+    )
 
 
 async def enqueue_heavy_job(
@@ -346,6 +525,8 @@ async def enqueue_heavy_job(
     export_id: str | None = None,
     photo_id: str | None = None,
     max_depth: int | None = None,
+    max_global_queued: int | None = None,
+    priority: str = _JOB_PRIORITY_STANDARD,
 ) -> None:
     payload = validate_heavy_job_payload(
         {
@@ -354,12 +535,15 @@ async def enqueue_heavy_job(
             "organization_id": organization_id,
             "export_id": export_id,
             "photo_id": photo_id,
+            "priority": priority,
         }
     )
     await _enqueue_raw_payload(
         redis,
         json.dumps(payload.model_dump()),
         max_depth=max_depth,
+        max_global_queued=max_global_queued,
+        priority=payload.priority,
     )
 
 
@@ -376,22 +560,31 @@ async def dequeue_heavy_job(
     *,
     worker_id: str,
     lease_timeout_seconds: int,
+    max_concurrent_jobs: int | None = None,
     now: datetime | None = None,
 ) -> LeasedHeavyJob | None:
     lease_timeout_ms = max(1, int(lease_timeout_seconds)) * 1000
     result = await redis.eval(
         _LEASE_JOB_SCRIPT,
-        5,
+        6,
         HEAVY_QUEUE_KEY,
         HEAVY_PROCESSING_QUEUE_KEY,
+        "analysis:processing",
         HEAVY_LEASE_EXPIRY_ZSET_KEY,
         HEAVY_LEASE_KEY_PREFIX,
         HEAVY_LEASE_SEQUENCE_KEY,
         str(_utc_now_ms(now)),
         worker_id,
         str(lease_timeout_ms),
+        str(max(1, int(max_concurrent_jobs or 1_000_000))),
     )
     if result is None:
+        return None
+    if (
+        isinstance(result, (list, tuple))
+        and len(result) == 2
+        and _decode_text(result[0]) == "__backpressure__"
+    ):
         return None
     return _leased_job_from_redis_result(result)
 
@@ -488,31 +681,55 @@ async def get_expired_heavy_job_leases(
     return leases
 
 
-async def requeue_expired_heavy_job(redis: Redis, lease: LeasedHeavyJob) -> bool:
+async def requeue_expired_heavy_job(
+    redis: Redis,
+    lease: LeasedHeavyJob,
+    *,
+    max_depth: int,
+    max_global_queued: int | None = None,
+) -> bool:
     result = await redis.eval(
         _FINALIZE_EXPIRED_LEASE_SCRIPT,
-        4,
+        5,
         HEAVY_LEASE_KEY_PREFIX,
         HEAVY_PROCESSING_QUEUE_KEY,
         HEAVY_LEASE_EXPIRY_ZSET_KEY,
         HEAVY_QUEUE_KEY,
+        "analysis:jobs",
         lease.token,
         str(lease.leased_at_ms),
         "requeue",
+        str(max(1, int(max_depth))),
+        str(max(1, int(max_global_queued or 1_000_000))),
+        lease.priority,
     )
-    return int(result) == 1
+    numeric = int(result)
+    if numeric in {0, -2}:
+        raise HeavyJobQueueCapacityExceededError(
+            queued=int(await redis.llen(HEAVY_QUEUE_KEY)),
+            processing=int(await redis.llen(HEAVY_PROCESSING_QUEUE_KEY)),
+            max_depth=max(1, int(max_depth)),
+            scope="global" if numeric == -2 else "lane",
+            global_queued=int(await redis.llen(HEAVY_QUEUE_KEY)) + int(await redis.llen("analysis:jobs")),
+            max_global_queued=max(1, int(max_global_queued or 1_000_000)),
+        )
+    return numeric == 1
 
 
 async def drop_expired_heavy_job(redis: Redis, lease: LeasedHeavyJob) -> bool:
     result = await redis.eval(
         _FINALIZE_EXPIRED_LEASE_SCRIPT,
-        4,
+        5,
         HEAVY_LEASE_KEY_PREFIX,
         HEAVY_PROCESSING_QUEUE_KEY,
         HEAVY_LEASE_EXPIRY_ZSET_KEY,
         HEAVY_QUEUE_KEY,
+        "analysis:jobs",
         lease.token,
         str(lease.leased_at_ms),
         "drop",
+        "1",
+        "1",
+        lease.priority,
     )
     return int(result) == 1

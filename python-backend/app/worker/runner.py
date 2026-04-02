@@ -26,12 +26,21 @@ from datetime import UTC, datetime
 import structlog
 from fastapi import HTTPException
 
+from app.core.backpressure import (
+    analysis_job_priority_for_type,
+    heavy_job_priority_for_type,
+)
 from app.core.config import get_settings, startup_failure_message
 from app.core.logging import configure_logging
 from app.core.metrics import PROMETHEUS_CLIENT_AVAILABLE, record_reaper_requeues
 from app.core.redis_client import build_queue_redis_client_from_settings
 from app.db.session import WorkerAsyncSessionFactory
-from app.repositories.analysis_repository import AnalysisJobLeaseOwnershipError
+from app.repositories.analysis_repository import (
+    ANALYSIS_JOB_STATUS_QUEUED,
+    ANALYSIS_JOB_STATUS_RUNNING,
+    AnalysisJobLeaseOwnershipError,
+    AnalysisRepository,
+)
 from app.repositories.export_repository import ExportRepository
 from app.repositories.final_proposal_repository import FinalProposalRepository
 from app.repositories.photo_repository import PhotoRepository
@@ -48,7 +57,9 @@ from app.worker.heavy_queue import (
     ack_heavy_job,
     dequeue_heavy_job,
     drop_expired_heavy_job,
+    enqueue_heavy_job,
     get_expired_heavy_job_leases,
+    inspect_heavy_job_transport,
     requeue_expired_heavy_job,
     renew_heavy_job_lease,
     validate_heavy_job_payload,
@@ -61,20 +72,26 @@ from app.worker.heartbeat import (
     WORKER_HEARTBEAT_LEGACY_KEY,
     WORKER_HEARTBEAT_TTL,
     build_worker_instance_id,
+    is_worker_instance_alive,
     write_local_worker_heartbeat,
     worker_heartbeat_key,
     write_worker_heartbeat,
 )
 from app.worker.queue import (
+    AnalysisJobTransportSnapshot,
+    AnalysisJobQueueCapacityExceededError,
     InvalidAnalysisJobPayloadError,
     LeasedAnalysisJob,
     LostAnalysisJobLeaseError,
     ack_analysis_job,
     dequeue_analysis_job,
     drop_expired_analysis_job,
+    enqueue_analysis_job,
     get_expired_analysis_job_leases,
+    inspect_analysis_job_transport,
     move_analysis_job_to_dlq,
     promote_scheduled_analysis_jobs,
+    purge_analysis_job_transport,
     renew_analysis_job_lease,
     requeue_expired_analysis_job,
     schedule_analysis_job_retry,
@@ -1022,11 +1039,27 @@ async def _run_lease_reaper_if_due(runtime: WorkerRuntime, *, now_monotonic: flo
 
         try:
             if disposition == "requeue":
-                if await requeue_expired_analysis_job(runtime.redis, lease):
+                if await requeue_expired_analysis_job(
+                    runtime.redis,
+                    lease,
+                    max_depth=runtime.settings.analysis_queue_max_depth,
+                    max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
+                ):
                     requeued += 1
             else:
                 if await drop_expired_analysis_job(runtime.redis, lease):
                     dropped += 1
+        except AnalysisJobQueueCapacityExceededError as exc:
+            logger.warning(
+                "worker.lease_reaper_capacity_blocked",
+                job_id=lease.job_id,
+                tenant_id=lease.organization_id,
+                lease_token=lease.token,
+                worker_id=lease.worker_id,
+                queued=exc.queued,
+                processing=exc.processing,
+                max_depth=exc.max_depth,
+            )
         except Exception as exc:
             logger.error(
                 "worker.lease_reaper_finalize_failed",
@@ -1069,7 +1102,12 @@ async def _run_heavy_lease_reaper_if_due(runtime: WorkerRuntime, *, now_monotoni
     dropped = 0
     for lease in expired_leases:
         try:
-            if await requeue_expired_heavy_job(runtime.redis, lease):
+            if await requeue_expired_heavy_job(
+                runtime.redis,
+                lease,
+                max_depth=runtime.settings.heavy_queue_max_depth,
+                max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
+            ):
                 requeued += 1
             else:
                 if await drop_expired_heavy_job(runtime.redis, lease):
@@ -1105,17 +1143,19 @@ async def _run_one_iteration(runtime: WorkerRuntime) -> None:
         runtime.redis,
         limit=max(runtime.worker_concurrency * 4, 10),
         max_depth=runtime.settings.analysis_queue_max_depth,
+        max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
     )
 
     spawned_work = False
     acquired_slot = await _acquire_job_slot(runtime)
     if acquired_slot:
         try:
-            lease = await dequeue_analysis_job(
-                runtime.redis,
-                worker_id=runtime.worker_instance_id,
-                lease_timeout_seconds=runtime.job_lease_timeout_seconds,
-            )
+                lease = await dequeue_analysis_job(
+                    runtime.redis,
+                    worker_id=runtime.worker_instance_id,
+                    lease_timeout_seconds=runtime.job_lease_timeout_seconds,
+                    max_concurrent_jobs=runtime.settings.effective_backpressure_max_concurrent_jobs,
+                )
         except BaseException:
             runtime.concurrency_limiter.release()
             raise
@@ -1138,6 +1178,7 @@ async def _run_one_iteration(runtime: WorkerRuntime) -> None:
                     runtime.redis,
                     worker_id=runtime.worker_instance_id,
                     lease_timeout_seconds=runtime.heavy_job_lease_timeout_seconds,
+                    max_concurrent_jobs=runtime.settings.effective_backpressure_max_concurrent_jobs,
                 )
             except BaseException:
                 runtime.heavy_concurrency_limiter.release()
@@ -1155,6 +1196,171 @@ async def _run_one_iteration(runtime: WorkerRuntime) -> None:
 
     if not spawned_work:
         await asyncio.sleep(_IDLE_LOOP_SLEEP_SECONDS)
+
+
+async def _reconcile_startup_analysis_jobs(runtime: WorkerRuntime) -> None:
+    snapshot = await inspect_analysis_job_transport(runtime.redis)
+    service = _build_worker_analysis_service(runtime.settings)
+    requeued = 0
+    purged = 0
+
+    async with WorkerAsyncSessionFactory() as session:
+        repo = AnalysisRepository(session)
+        active_jobs = await repo.list_active_jobs_with_organization_id()
+        active_job_ids = {job.id for job, _ in active_jobs}
+
+        for queued_job_id in snapshot.queued_job_ids():
+            if queued_job_id not in active_job_ids:
+                await purge_analysis_job_transport(
+                    runtime.redis,
+                    job_id=queued_job_id,
+                    snapshot=snapshot,
+                )
+                purged += 1
+        for processing_job_id in snapshot.processing_job_ids():
+            if processing_job_id not in active_job_ids:
+                await purge_analysis_job_transport(
+                    runtime.redis,
+                    job_id=processing_job_id,
+                    snapshot=snapshot,
+                )
+                purged += 1
+        for retry_job_id in snapshot.scheduled_retry_job_ids():
+            if retry_job_id not in active_job_ids:
+                await purge_analysis_job_transport(
+                    runtime.redis,
+                    job_id=retry_job_id,
+                    snapshot=snapshot,
+                )
+                purged += 1
+        for dlq_job_id in snapshot.dlq_job_ids:
+            if dlq_job_id not in active_job_ids:
+                await purge_analysis_job_transport(
+                    runtime.redis,
+                    job_id=dlq_job_id,
+                    snapshot=snapshot,
+                )
+                purged += 1
+
+        for job, organization_id in active_jobs:
+            authoritative_status = str(job.status)
+            transport_has_entry = snapshot.has_any_entry(job.id)
+            transport_lease = snapshot.get_processing_lease(job.id)
+
+            if authoritative_status == ANALYSIS_JOB_STATUS_RUNNING:
+                worker_alive = None
+                if job.worker_id:
+                    try:
+                        worker_alive = await is_worker_instance_alive(runtime.redis, job.worker_id)
+                    except Exception:
+                        worker_alive = None
+
+                running_is_invalid = (
+                    not job.lease_token
+                    or not job.worker_id
+                    or service._job_running_is_stale(job)
+                    or transport_lease is None
+                    or transport_lease.token != (job.lease_token or "")
+                    or transport_lease.worker_id != (job.worker_id or "")
+                    or worker_alive is False
+                )
+                if not running_is_invalid:
+                    continue
+
+                await purge_analysis_job_transport(
+                    runtime.redis,
+                    job_id=job.id,
+                    snapshot=snapshot,
+                )
+                await repo.reset_job_to_queued(job)
+                authoritative_status = ANALYSIS_JOB_STATUS_QUEUED
+                transport_has_entry = False
+
+            if authoritative_status != ANALYSIS_JOB_STATUS_QUEUED:
+                continue
+
+            if job.id in snapshot.dlq_job_ids:
+                await purge_analysis_job_transport(
+                    runtime.redis,
+                    job_id=job.id,
+                    snapshot=snapshot,
+                )
+                transport_has_entry = False
+
+            if transport_has_entry:
+                continue
+
+            try:
+                await enqueue_analysis_job(
+                    runtime.redis,
+                    job_id=job.id,
+                    project_id=job.project_id,
+                    organization_id=organization_id,
+                    is_superadmin_context=False,
+                    max_depth=runtime.settings.analysis_queue_max_depth,
+                    max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
+                    priority=analysis_job_priority_for_type(job.job_type),
+                )
+                requeued += 1
+            except AnalysisJobQueueCapacityExceededError as exc:
+                logger.warning(
+                    "worker.startup_analysis_requeue_capacity_blocked",
+                    job_id=job.id,
+                    project_id=job.project_id,
+                    queued=exc.queued,
+                    processing=exc.processing,
+                    max_depth=exc.max_depth,
+                )
+
+    if requeued or purged:
+        logger.warning(
+            "worker.startup_analysis_reconciliation_completed",
+            requeued=requeued,
+            purged=purged,
+        )
+
+
+async def _reconcile_startup_exports(runtime: WorkerRuntime) -> None:
+    if runtime.worker_heavy_concurrency <= 0:
+        return
+
+    snapshot = await inspect_heavy_job_transport(runtime.redis)
+    requeued = 0
+    async with WorkerAsyncSessionFactory() as session:
+        exports = await ExportRepository(session).list_incomplete()
+        for export in exports:
+            if export.export_type not in {"quote-docx", "proposal-docx", "quote-pdf", "case-zip"}:
+                continue
+            if snapshot.has_export(export.id):
+                continue
+            try:
+                await enqueue_heavy_job(
+                    runtime.redis,
+                    job_type="export_generate",
+                    project_id=export.project_id,
+                    export_id=export.id,
+                    max_depth=runtime.settings.heavy_queue_max_depth,
+                    max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
+                    priority=heavy_job_priority_for_type("export_generate"),
+                )
+                requeued += 1
+            except Exception as exc:
+                logger.warning(
+                    "worker.startup_export_requeue_failed",
+                    export_id=export.id,
+                    project_id=export.project_id,
+                    error=str(exc),
+                )
+    if requeued:
+        logger.warning(
+            "worker.startup_export_reconciliation_completed",
+            requeued=requeued,
+        )
+
+
+async def _reconcile_startup_runtime_state(runtime: WorkerRuntime) -> None:
+    await _reconcile_startup_analysis_jobs(runtime)
+    await _reconcile_startup_exports(runtime)
 
 
 async def run(redis_url: str | None = None) -> None:
@@ -1193,6 +1399,10 @@ async def run(redis_url: str | None = None) -> None:
         heavy_concurrency_limiter=asyncio.Semaphore(max(1, worker_heavy_concurrency or 1)),
     )
     try:
+        await _reconcile_startup_runtime_state(runtime)
+    except Exception as exc:
+        logger.error("worker.startup_reconciliation_failed", error=str(exc), exc_info=True)
+    try:
         await _write_heartbeat_if_due(runtime)
     except Exception as exc:
         logger.error("worker.startup_heartbeat_failed", error=str(exc), exc_info=True)
@@ -1210,6 +1420,9 @@ async def run(redis_url: str | None = None) -> None:
         heartbeat_key=heartbeat_key,
         concurrency=worker_concurrency,
         heavy_concurrency=worker_heavy_concurrency,
+        max_concurrent_jobs=settings.effective_backpressure_max_concurrent_jobs,
+        max_queued_jobs=settings.effective_backpressure_max_queued_jobs,
+        max_retry_inflight=settings.effective_backpressure_max_retry_inflight,
         lease_timeout_seconds=job_lease_timeout_seconds,
         heavy_lease_timeout_seconds=heavy_job_lease_timeout_seconds,
     )

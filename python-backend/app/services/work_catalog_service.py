@@ -89,7 +89,7 @@ from app.services.tenant_work_type_resolution_service import (
     ResolvedTenantWorkTypeConfiguration,
     TenantWorkTypeResolutionService,
 )
-from app.work_catalog.cache import invalidate_tenant_effective_cache
+from app.work_catalog.cache import invalidate_pricing_resolution_cache, invalidate_tenant_effective_cache
 
 
 class WorkCatalogNotFoundError(LookupError):
@@ -533,9 +533,7 @@ class WorkCatalogService:
     def __init__(self, repository: WorkCatalogRepository, redis: Redis | None = None):
         self.repository = repository
         self.redis = redis
-        self.resolution_service = TenantWorkTypeResolutionService(repository)
-        self._project_existence_cache: set[tuple[str, str]] = set()
-        self._work_type_cache: dict[str, WorkType | None] = {}
+        self.resolution_service = TenantWorkTypeResolutionService(repository, redis=redis)
 
     async def _invalidate_tenant_effective_cache(
         self,
@@ -548,13 +546,13 @@ class WorkCatalogService:
             organization_id=organization_id,
             work_type_codes=work_type_codes,
         )
+        await invalidate_pricing_resolution_cache(
+            self.redis,
+            organization_id=organization_id,
+        )
 
     async def _get_work_type(self, work_type_code: str) -> WorkType | None:
-        if work_type_code in self._work_type_cache:
-            return self._work_type_cache[work_type_code]
-        work_type = await self.repository.get_work_type_by_code(work_type_code)
-        self._work_type_cache[work_type_code] = work_type
-        return work_type
+        return await self.repository.get_work_type_by_code(work_type_code)
 
     @staticmethod
     def _observe_operation(
@@ -871,13 +869,9 @@ class WorkCatalogService:
             )
 
     async def ensure_project_exists(self, *, project_id: str, organization_id: str) -> None:
-        cache_key = (project_id, organization_id)
-        if cache_key in self._project_existence_cache:
-            return
         project = await self.repository.get_project_in_org(project_id, organization_id)
         if project is None:
             raise WorkCatalogNotFoundError("Project was not found.")
-        self._project_existence_cache.add(cache_key)
 
     async def list_categories(self) -> list[CatalogCategoryListItemRead]:
         started_at = perf_counter()

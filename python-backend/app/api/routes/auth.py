@@ -1,11 +1,13 @@
 import secrets
 from datetime import timedelta
+from typing import NoReturn
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.api.deps import get_auth_service, get_current_user
 from app.core.account_limiter import (
+    AccountThrottleBackendUnavailableError,
     is_account_throttled,
     record_login_failure,
     reset_login_failures,
@@ -17,6 +19,7 @@ from app.core.limiter import limiter
 from app.core.metrics import AUTH_FAILURES_TOTAL
 from app.core.security import enforce_password_strength
 from app.models import PasswordResetToken
+from app.repositories.token_repository import TokenStateBackendUnavailableError
 from app.schemas.auth import (
     AuthSessionListResponse,
     AuthUserRead,
@@ -56,7 +59,102 @@ def _shared_auth_redis(request: Request):
         return None
     app = scope.get("app")
     state = getattr(app, "state", None)
+    auth_store = getattr(state, "auth_token_store", None)
+    if auth_store is not None:
+        return auth_store
     return getattr(state, "job_queue", None)
+
+
+def _raise_auth_protection_unavailable(
+    request: Request,
+    *,
+    endpoint: str,
+    email: str,
+    operation: str,
+    error: Exception,
+    user_id: str | None = None,
+    organization_id: str | None = None,
+) -> NoReturn:
+    _record_auth_failure(endpoint, "auth_protection_unavailable")
+    logger.error(
+        "SECURITY_EVENT: auth_protection_unavailable",
+        endpoint=endpoint,
+        operation=operation,
+        client_ip=_client_ip(request),
+        email_domain=_email_domain(email),
+        user_id=user_id,
+        organization_id=organization_id,
+        error=str(error),
+    )
+    raise HTTPException(
+        status_code=503,
+        detail="Authentication protection temporarily unavailable. Retry later.",
+    )
+
+
+def _raise_token_state_unavailable(
+    request: Request,
+    *,
+    endpoint: str,
+    operation: str,
+    error: Exception,
+    user_id: str | None = None,
+    organization_id: str | None = None,
+) -> NoReturn:
+    _record_auth_failure(endpoint, "token_state_unavailable")
+    logger.error(
+        "SECURITY_EVENT: auth_token_state_unavailable",
+        endpoint=endpoint,
+        operation=operation,
+        client_ip=_client_ip(request),
+        user_id=user_id,
+        organization_id=organization_id,
+        error=str(error),
+    )
+    raise HTTPException(
+        status_code=503,
+        detail="Authentication token validation unavailable. Retry later.",
+    )
+
+
+async def _revoke_login_result(
+    service: AuthService,
+    result: tuple[str, str, AuthUserRead] | None,
+    *,
+    endpoint: str,
+    user_id: str | None,
+    organization_id: str | None,
+) -> None:
+    if result is None:
+        return
+
+    access_token, refresh_token, _ = result
+    session_revoked = False
+    access_revoked = False
+    refresh_revoked = False
+    try:
+        session_revoked = await service.revoke_session_by_token(access_token)
+        access_revoked = await service.revoke_token(access_token)
+        refresh_revoked = await service.revoke_token(refresh_token)
+    except Exception as exc:
+        logger.error(
+            "auth.protection_guard_revoke_failed",
+            endpoint=endpoint,
+            user_id=user_id,
+            organization_id=organization_id,
+            error=str(exc),
+        )
+        return
+
+    logger.warning(
+        "auth.protection_guard_reverted_login",
+        endpoint=endpoint,
+        user_id=user_id,
+        organization_id=organization_id,
+        session_revoked=session_revoked,
+        access_revoked=access_revoked,
+        refresh_revoked=refresh_revoked,
+    )
 
 
 async def _enforce_account_throttle(
@@ -69,11 +167,22 @@ async def _enforce_account_throttle(
 ):
     settings = get_settings()
     shared_redis = _shared_auth_redis(request)
-    throttled = await is_account_throttled(
-        email,
-        settings.redis_url,
-        redis_client=shared_redis,
-    )
+    try:
+        throttled = await is_account_throttled(
+            email,
+            settings.redis_url,
+            redis_client=shared_redis,
+        )
+    except AccountThrottleBackendUnavailableError as exc:
+        _raise_auth_protection_unavailable(
+            request,
+            endpoint=endpoint,
+            email=email,
+            operation=exc.operation,
+            error=exc,
+            user_id=user_id,
+            organization_id=organization_id,
+        )
     if throttled:
         _record_auth_failure(endpoint, "account_throttled")
         logger.warning(
@@ -106,7 +215,16 @@ async def login(
     )
     result = await service.login(email=payload.email, password=payload.password)
     if not result:
-        await record_login_failure(payload.email, settings.redis_url, redis_client=shared_redis)
+        try:
+            await record_login_failure(payload.email, settings.redis_url, redis_client=shared_redis)
+        except AccountThrottleBackendUnavailableError as exc:
+            _raise_auth_protection_unavailable(
+                request,
+                endpoint="login",
+                email=payload.email,
+                operation=exc.operation,
+                error=exc,
+            )
         _record_auth_failure("login", "invalid_credentials")
         logger.warning(
             "SECURITY_EVENT: auth_login_failed",
@@ -116,7 +234,25 @@ async def login(
         )
         raise HTTPException(status_code=401, detail="Invalid credentials.")
 
-    await reset_login_failures(payload.email, settings.redis_url, redis_client=shared_redis)
+    try:
+        await reset_login_failures(payload.email, settings.redis_url, redis_client=shared_redis)
+    except AccountThrottleBackendUnavailableError as exc:
+        await _revoke_login_result(
+            service,
+            result,
+            endpoint="login",
+            user_id=result[2].id,
+            organization_id=result[2].organizationId,
+        )
+        _raise_auth_protection_unavailable(
+            request,
+            endpoint="login",
+            email=payload.email,
+            operation=exc.operation,
+            error=exc,
+            user_id=result[2].id,
+            organization_id=result[2].organizationId,
+        )
     access_token, refresh_token, user = result
     return LoginResponse(
         accessToken=access_token,
@@ -136,7 +272,15 @@ async def refresh(
     if not payload.refreshToken:
         _record_auth_failure("refresh", "missing_token")
         raise HTTPException(status_code=400, detail="refreshToken is required.")
-    refresh_result = await service.refresh_with_status(payload.refreshToken)
+    try:
+        refresh_result = await service.refresh_with_status(payload.refreshToken)
+    except TokenStateBackendUnavailableError as exc:
+        _raise_token_state_unavailable(
+            request,
+            endpoint="refresh",
+            operation=exc.operation,
+            error=exc,
+        )
     if not refresh_result.tokens:
         _record_auth_failure(
             "refresh",
@@ -165,15 +309,23 @@ async def logout(
     authorization: str | None = Header(None),
     service: AuthService = Depends(get_auth_service),
 ) -> LogoutResponse:
-    session_revoked = False
-    if authorization and authorization.startswith("Bearer "):
-        session_revoked = await service.revoke_session_by_token(authorization[7:])
-    if not session_revoked:
-        session_revoked = await service.revoke_session_by_token(payload.refreshToken)
-    refresh_revoked = await service.revoke_token(payload.refreshToken)
-    access_revoked = False
-    if authorization and authorization.startswith("Bearer "):
-        access_revoked = await service.revoke_token(authorization[7:])
+    try:
+        session_revoked = False
+        if authorization and authorization.startswith("Bearer "):
+            session_revoked = await service.revoke_session_by_token(authorization[7:])
+        if not session_revoked:
+            session_revoked = await service.revoke_session_by_token(payload.refreshToken)
+        refresh_revoked = await service.revoke_token(payload.refreshToken)
+        access_revoked = False
+        if authorization and authorization.startswith("Bearer "):
+            access_revoked = await service.revoke_token(authorization[7:])
+    except TokenStateBackendUnavailableError as exc:
+        _raise_token_state_unavailable(
+            request,
+            endpoint="logout",
+            operation=exc.operation,
+            error=exc,
+        )
     logger.info(
         "auth.logout_completed",
         client_ip=_client_ip(request),
@@ -216,7 +368,17 @@ async def revoke_session(
     current_user: AuthUserRead = Depends(get_current_user),
     service: AuthService = Depends(get_auth_service),
 ) -> LogoutResponse:
-    revoked = await service.revoke_session(user_id=current_user.id, session_id=session_id)
+    try:
+        revoked = await service.revoke_session(user_id=current_user.id, session_id=session_id)
+    except TokenStateBackendUnavailableError as exc:
+        _raise_token_state_unavailable(
+            request,
+            endpoint="revoke_session",
+            operation=exc.operation,
+            error=exc,
+            user_id=current_user.id,
+            organization_id=current_user.organizationId,
+        )
     if not revoked:
         raise HTTPException(status_code=404, detail="Session not found.")
 
@@ -255,7 +417,18 @@ async def change_password(
     )
     verified = await service.login(email=current_user.email, password=payload.currentPassword)
     if not verified:
-        await record_login_failure(current_user.email, settings.redis_url, redis_client=shared_redis)
+        try:
+            await record_login_failure(current_user.email, settings.redis_url, redis_client=shared_redis)
+        except AccountThrottleBackendUnavailableError as exc:
+            _raise_auth_protection_unavailable(
+                request,
+                endpoint="change_password",
+                email=current_user.email,
+                operation=exc.operation,
+                error=exc,
+                user_id=current_user.id,
+                organization_id=current_user.organizationId,
+            )
         _record_auth_failure("change_password", "invalid_current_password")
         logger.warning(
             "SECURITY_EVENT: auth_change_password_failed",
@@ -266,12 +439,39 @@ async def change_password(
         )
         raise HTTPException(status_code=401, detail="Current password is incorrect.")
 
-    await reset_login_failures(current_user.email, settings.redis_url, redis_client=shared_redis)
+    try:
+        await reset_login_failures(current_user.email, settings.redis_url, redis_client=shared_redis)
+    except AccountThrottleBackendUnavailableError as exc:
+        await _revoke_login_result(
+            service,
+            verified,
+            endpoint="change_password",
+            user_id=current_user.id,
+            organization_id=current_user.organizationId,
+        )
+        _raise_auth_protection_unavailable(
+            request,
+            endpoint="change_password",
+            email=current_user.email,
+            operation=exc.operation,
+            error=exc,
+            user_id=current_user.id,
+            organization_id=current_user.organizationId,
+        )
     try:
         changed = await service.change_password(
             user_id=current_user.id,
             organization_id=current_user.organizationId,
             new_password=payload.newPassword,
+        )
+    except TokenStateBackendUnavailableError as exc:
+        _raise_token_state_unavailable(
+            request,
+            endpoint="change_password",
+            operation=exc.operation,
+            error=exc,
+            user_id=current_user.id,
+            organization_id=current_user.organizationId,
         )
     except SecurityAuditWriteError as exc:
         logger.error(
@@ -288,12 +488,14 @@ async def change_password(
     if isinstance(authorization, str) and authorization.startswith("Bearer "):
         try:
             access_token_revoked = await service.revoke_token(authorization[7:])
-        except Exception as exc:
-            logger.warning(
-                "auth.change_password_revoke_failed",
+        except TokenStateBackendUnavailableError as exc:
+            _raise_token_state_unavailable(
+                request,
+                endpoint="change_password",
+                operation=exc.operation,
+                error=exc,
                 user_id=current_user.id,
                 organization_id=current_user.organizationId,
-                error=str(exc),
             )
     logger.info(
         "auth.change_password_completed",

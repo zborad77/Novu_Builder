@@ -2,6 +2,78 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.7.001 - 2026-04-02
+
+Backpressure subsystem, fail-closed auth throttle, timing oracle hardening, worker startup reconciliation, and expanded system health readiness endpoint.
+
+### Backpressure Subsystem
+
+- Added `app/core/backpressure.py` — global backpressure control layer across both analysis and heavy worker lanes:
+  - `BackpressureSnapshot` (frozen dataclass) aggregates queue depths, processing counts, retry inflight, and configured limits into a single decision surface.
+  - `ensure_analysis_intake_capacity()` and `ensure_heavy_intake_capacity()` raise HTTP 429/503 before a job is enqueued when the lane or global queue is full.
+  - `ensure_retry_budget()` prevents retry storms by enforcing a configurable concurrent-retry ceiling.
+  - Job priority routing: `quote_recalculation` → `PRIORITY_CRITICAL` (LPUSH), `export_generate` → `PRIORITY_CRITICAL`; all others → `PRIORITY_STANDARD` (RPUSH).
+- Added `BACKPRESSURE_MAX_CONCURRENT_JOBS`, `BACKPRESSURE_MAX_QUEUED_JOBS`, `BACKPRESSURE_MAX_RETRY_INFLIGHT` config fields with derived property defaults and cross-field validation guards (startup fails if limits are inconsistent with worker slot configuration).
+- Wired backpressure snapshot into `AnalysisService.create_analysis_job()` and retry path; both raise structured 429/503 responses with `record_backpressure_rejection()` metrics.
+
+### Fail-Closed Auth Throttle (P0-2 Fix)
+
+- Reworked `app/core/account_limiter.py` to fail-closed: when the Redis backend is unavailable, `AccountThrottleBackendUnavailableError` is raised instead of falling back to a per-process in-memory counter.
+- Added `_raise_backend_unavailable()` helper that logs `account_limiter.backend_unavailable` and raises the error, ensuring the auth layer propagates 503 rather than silently degrading to pod-local state.
+- Eliminates multi-instance brute-force bypass: no in-memory fallback means throttle truth is always shared-store or denied.
+
+### Timing Oracle Hardening
+
+- Added `app/core/tenant_timing.py` with `enforce_timing_floor()` — async helper that pads response time to a minimum floor (`TENANT_SENSITIVE_TIMING_FLOOR_SECONDS = 0.012 s`, `CACHE_ACCESS_TIMING_FLOOR_SECONDS = 0.004 s`) on cross-tenant sensitive operations.
+- Applied to tenant-effective resolution and cache-miss paths to eliminate timing side channels that could allow cross-tenant resource enumeration via response-time measurement.
+- Added `test_tenant_timing_hardening.py` covering floor enforcement, no-op for fast paths, and async correctness.
+
+### Worker Queue Hardening
+
+- Extracted shared `_QUEUE_CAPACITY_GUARD_LUA` Lua helper used by `_ENQUEUE_WITH_LIMIT_SCRIPT`, `_FINALIZE_EXPIRED_LEASE_SCRIPT`, and heavy queue equivalents — capacity guard logic is now a single canonical implementation.
+- `_ENQUEUE_WITH_LIMIT_SCRIPT` extended with global queued-jobs check in addition to per-lane depth check; returns `-2` for global capacity exhaustion (distinct from `-1` lane-full).
+- `_LEASE_JOB_SCRIPT` checks `max_concurrent_jobs` before dequeuing — workers stop pulling jobs when global concurrency ceiling is reached, preventing over-scheduling during backpressure events.
+- Priority-aware push: critical jobs use `LPUSH` (head of queue), standard jobs use `RPUSH` (tail), implemented atomically inside the Lua guard script.
+
+### Worker Startup Reconciliation
+
+- Added `_reconcile_startup_analysis_jobs()` in `runner.py` — on worker startup, reconciles Redis queue state against DB active jobs:
+  - Orphaned queue entries (present in Redis but absent from DB) are purged via `purge_analysis_job_transport()`.
+  - Orphaned retry ZSET entries are similarly cleaned up.
+  - Prevents ghost jobs from stale Redis state after crash/restart from blocking worker slots.
+
+### Deterministic Retry Backoff Jitter
+
+- Added `_retry_backoff_jitter_seconds()` in `analysis_service.py` using `hashlib.blake2s(f"{job_id}:{attempt_count}")` to produce deterministic, job-stable jitter — same job always gets same jitter offset, eliminating thundering-herd retry collisions without randomness.
+- Added `_retry_backoff_jitter_window_seconds()` to scale jitter window proportionally to backoff delay up to `_MAX_RETRY_JITTER_SECONDS = 30`.
+
+### Expanded System Health Endpoint
+
+- Reworked `GET /system/health` response in `app/api/routes/system.py` into a structured `_SystemStateSnapshot` covering: `startup_state`, `api_state`, `processing_state`, `redis_state`, `db_state`, `storage_state`, `queue_state`, `worker_state`, `auth_protection`, `operational`, `job_processing`.
+- Added `_AuthProtectionSnapshot` — reports whether brute-force protection is enforced and its source.
+- Added backpressure metrics to health response: current concurrent/queued/retry-inflight vs. configured maximums.
+- New Prometheus metrics: `BACKPRESSURE_CURRENT_CONCURRENT`, `BACKPRESSURE_CURRENT_QUEUED`, `BACKPRESSURE_CURRENT_RETRY_INFLIGHT`, `BACKPRESSURE_MAX_*`, `HEAVY_QUEUE_LENGTH`, `HEAVY_PROCESSING_JOBS`, `REDIS_RUNTIME_AVAILABLE`, `REDIS_RUNTIME_DEGRADED`, `STORAGE_READY`, `AUTH_PROTECTION_ENFORCED`.
+
+### Second Pilot Deployment Audit
+
+- Added `AUDIT_PILOT_2026-04-02_v2.md` — full risk audit against v0.7.000 codebase identifying 5 P0 and 4 P1 risks including missing CSP header, invalid finalize_action fallback, tenant filter enforcement, hardcoded seed passwords, and metrics auth guard.
+
+### Tests
+
+- Added `test_tenant_timing_hardening.py` for timing floor enforcement.
+- Extended `test_r08_account_throttle.py` with fail-closed Redis scenarios.
+- Extended `test_r19_job_queue.py` with backpressure snapshot and priority routing coverage.
+- Extended `test_retry_system.py` with deterministic jitter and retry budget enforcement tests.
+- Extended `test_worker_runner.py` with startup reconciliation and capacity-blocked reaper tests.
+- Extended `test_health_readiness_semantics.py` with full system state snapshot assertions.
+- Extended `test_r32_cache.py` with timing floor integration.
+
+### Notes
+
+- No new Alembic migrations in this release — all changes are application-layer only.
+- `BACKPRESSURE_MAX_*` config fields default to `0` (auto-derived from worker concurrency and queue depth settings); explicit values override the derivation.
+- Fail-closed auth throttle is a breaking behavioral change: Redis unavailability now returns HTTP 503 on auth endpoints instead of silently allowing requests through.
+
 ## v0.7.000 - 2026-04-02
 
 Pilot readiness hardening: per-session token revocation, worker healthcheck, analysis job payload offload, JSONB audit logs, deterministic token invalidation, and pre-pilot operational rehearsal tooling.

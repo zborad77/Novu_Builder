@@ -398,6 +398,25 @@ class AnalysisRepository:
         result = await self.session.execute(query)
         return int(result.scalar_one() or 0)
 
+    async def count_retry_inflight_jobs(self) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(AnalysisJob)
+            .where(
+                AnalysisJob.status.in_(
+                    (
+                        ANALYSIS_JOB_STATUS_QUEUED,
+                        ANALYSIS_JOB_STATUS_RUNNING,
+                    )
+                ),
+                (
+                    (func.coalesce(AnalysisJob.retry_count, 0) > 0)
+                    | (func.coalesce(AnalysisJob.attempt_count, 0) > 1)
+                ),
+            )
+        )
+        return int(result.scalar_one() or 0)
+
     async def list_analysis_jobs_by_project_id(self, project_id: str) -> list[AnalysisJob]:
         result = await self.session.execute(
             select(AnalysisJob)
@@ -405,6 +424,43 @@ class AnalysisRepository:
             .order_by(AnalysisJob.created_at.desc(), AnalysisJob.id.desc())
         )
         return list(result.scalars().all())
+
+    async def list_active_jobs(self) -> list[AnalysisJob]:
+        result = await self.session.execute(
+            select(AnalysisJob)
+            .where(
+                AnalysisJob.status.in_(
+                    (
+                        ANALYSIS_JOB_STATUS_QUEUED,
+                        ANALYSIS_JOB_STATUS_RUNNING,
+                    )
+                )
+            )
+            .order_by(AnalysisJob.created_at.asc(), AnalysisJob.id.asc())
+        )
+        return list(result.scalars().all())
+
+    async def list_active_jobs_with_organization_id(self) -> list[tuple[AnalysisJob, str]]:
+        result = await self.session.execute(
+            select(AnalysisJob, Project.organization_id)
+            .join(Project, Project.id == AnalysisJob.project_id)
+            .where(
+                AnalysisJob.status.in_(
+                    (
+                        ANALYSIS_JOB_STATUS_QUEUED,
+                        ANALYSIS_JOB_STATUS_RUNNING,
+                    )
+                )
+            )
+            .order_by(AnalysisJob.created_at.asc(), AnalysisJob.id.asc())
+        )
+        return [(job, organization_id) for job, organization_id in result.all()]
+
+    async def get_project_organization_id(self, project_id: str) -> str | None:
+        result = await self.session.execute(
+            select(Project.organization_id).where(Project.id == project_id)
+        )
+        return result.scalar_one_or_none()
 
     async def create_queued_job(
         self,

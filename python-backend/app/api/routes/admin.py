@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_analysis_service, get_job_queue, require_admin_capability, require_superadmin
+from app.api.deps import get_analysis_service, get_auth_redis, get_job_queue, require_admin_capability, require_superadmin
 from app.worker.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
 from app.core.config import get_settings
 from app.db.session import get_db_session
@@ -229,7 +229,7 @@ async def reset_user_password(
 
     target.password_hash = hash_password(payload.password)
     reset_timestamp = datetime.now(UTC).replace(microsecond=0)
-    token_repository = TokenRepository(session, redis=get_job_queue(request))
+    token_repository = TokenRepository(session, redis=get_auth_redis(request))
     AuthService.invalidate_user_token_state(target, now=reset_timestamp)
     revocations: list[SessionTokenRevocation] = await token_repository.revoke_all_user_sessions(
         target.id,

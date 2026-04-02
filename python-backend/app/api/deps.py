@@ -16,6 +16,7 @@ from app.repositories.proposal_draft_repository import ProposalDraftRepository
 from app.repositories.quote_variant_repository import QuoteVariantRepository
 from app.repositories.storage_consistency_repository import StorageConsistencyRepository
 from app.repositories.supplier_repository import SupplierRepository
+from app.repositories.token_repository import TokenStateBackendUnavailableError
 from app.repositories.work_catalog_repository import WorkCatalogRepository
 from app.schemas.auth import AuthUserRead
 from app.services.analysis_service import AnalysisService
@@ -50,20 +51,28 @@ def get_photo_service(
     return PhotoService(repository, work_queue=get_job_queue(request))
 
 
-def get_analysis_service(session: AsyncSession = Depends(get_db_session)) -> AnalysisService:
+def get_analysis_service(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> AnalysisService:
     settings = get_settings()
     return AnalysisService(
         repository=AnalysisRepository(session),
         photo_repository=PhotoRepository(session),
         work_catalog_repository=WorkCatalogRepository(session),
         provider_key=settings.ai_analysis_provider,
+        redis=get_redis(request),
     )
 
 
-def get_quote_variant_service(session: AsyncSession = Depends(get_db_session)) -> QuoteVariantService:
+def get_quote_variant_service(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> QuoteVariantService:
     return QuoteVariantService(
         QuoteVariantRepository(session),
         WorkCatalogRepository(session),
+        redis=get_redis(request),
     )
 
 
@@ -100,6 +109,14 @@ def get_redis(request: Request):
     return getattr(request.app.state, "job_queue", None)
 
 
+def get_auth_redis(request: Request):
+    """Return the shared Redis client for auth token-state caching."""
+    auth_store = getattr(request.app.state, "auth_token_store", None)
+    if auth_store is not None:
+        return auth_store
+    return getattr(request.app.state, "job_queue", None)
+
+
 def get_work_catalog_service(
     session: AsyncSession = Depends(get_db_session),
     redis=Depends(get_redis),
@@ -109,7 +126,7 @@ def get_work_catalog_service(
 
 def get_auth_service(
     session: AsyncSession = Depends(get_db_session),
-    redis=Depends(get_redis),
+    redis=Depends(get_auth_redis),
 ) -> AuthService:
     return AuthService(session, redis=redis)
 
@@ -129,7 +146,21 @@ async def get_current_user(
         )
         raise HTTPException(status_code=401, detail="Missing or invalid authorization header.")
     token = authorization[7:]
-    user = await auth_service.get_user_by_token(token)
+    try:
+        user = await auth_service.get_user_by_token(token)
+    except TokenStateBackendUnavailableError as exc:
+        logger.error(
+            "SECURITY_EVENT: auth_token_validation_unavailable",
+            operation=exc.operation,
+            method=request.method,
+            path=request.url.path,
+            client_ip=request.client.host if request.client else None,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication token validation unavailable. Retry later.",
+        ) from exc
     if not user:
         logger.warning(
             "SECURITY_EVENT: token_rejected",
@@ -245,6 +276,16 @@ def resolve_org_id(current_user: AuthUserRead) -> str | None:
             detail="User has no organization assigned.",
         )
     return current_user.organizationId
+
+
+def require_org_id(current_user: AuthUserRead) -> str:
+    org_id = resolve_org_id(current_user)
+    if not org_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Tenant-scoped route requires an organization context.",
+        )
+    return org_id
 
 
 async def require_manager(

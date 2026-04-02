@@ -96,10 +96,16 @@ def to_variant_read(variant: QuoteVariant) -> QuoteVariantRead:
 
 
 class QuoteVariantService:
-    def __init__(self, repository: QuoteVariantRepository, work_catalog_repository: WorkCatalogRepository):
+    def __init__(
+        self,
+        repository: QuoteVariantRepository,
+        work_catalog_repository: WorkCatalogRepository,
+        *,
+        redis=None,
+    ):
         self.repository = repository
         self.work_catalog_repository = work_catalog_repository
-        self.pricing_profile_service = PricingProfileService(work_catalog_repository)
+        self.pricing_profile_service = PricingProfileService(work_catalog_repository, redis=redis)
 
     async def get_analysis_job(self, job_id: str) -> AnalysisJobRead | None:
         job = await self.repository.get_analysis_job(job_id)

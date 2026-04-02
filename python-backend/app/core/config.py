@@ -108,6 +108,9 @@ _STRICT_RUNTIME_EXPLICIT_FIELDS: tuple[str, ...] = (
     "readiness_processing_grace_seconds",
     "analysis_queue_max_depth",
     "heavy_queue_max_depth",
+    "backpressure_max_concurrent_jobs",
+    "backpressure_max_queued_jobs",
+    "backpressure_max_retry_inflight",
     "analysis_job_max_attempts",
     "analysis_retry_backoff_base_seconds",
     "analysis_retry_backoff_max_seconds",
@@ -376,6 +379,21 @@ class Settings(BaseSettings):
     )
     analysis_queue_max_depth: int = Field(default=1000, alias="ANALYSIS_QUEUE_MAX_DEPTH", ge=1)
     heavy_queue_max_depth: int = Field(default=250, alias="HEAVY_QUEUE_MAX_DEPTH", ge=1)
+    backpressure_max_concurrent_jobs: int = Field(
+        default=0,
+        alias="BACKPRESSURE_MAX_CONCURRENT_JOBS",
+        ge=0,
+    )
+    backpressure_max_queued_jobs: int = Field(
+        default=0,
+        alias="BACKPRESSURE_MAX_QUEUED_JOBS",
+        ge=0,
+    )
+    backpressure_max_retry_inflight: int = Field(
+        default=0,
+        alias="BACKPRESSURE_MAX_RETRY_INFLIGHT",
+        ge=0,
+    )
     analysis_job_max_attempts: int = Field(default=3, alias="ANALYSIS_JOB_MAX_ATTEMPTS", ge=1)
     analysis_retry_backoff_base_seconds: int = Field(
         default=30,
@@ -521,6 +539,24 @@ class Settings(BaseSettings):
     @property
     def worker_total_concurrency(self) -> int:
         return self.worker_concurrency + self.worker_heavy_concurrency
+
+    @property
+    def effective_backpressure_max_concurrent_jobs(self) -> int:
+        if self.backpressure_max_concurrent_jobs > 0:
+            return self.backpressure_max_concurrent_jobs
+        return max(1, self.worker_total_concurrency * max(1, self.worker_instance_count))
+
+    @property
+    def effective_backpressure_max_queued_jobs(self) -> int:
+        if self.backpressure_max_queued_jobs > 0:
+            return self.backpressure_max_queued_jobs
+        return max(1, self.analysis_queue_max_depth + self.heavy_queue_max_depth)
+
+    @property
+    def effective_backpressure_max_retry_inflight(self) -> int:
+        if self.backpressure_max_retry_inflight > 0:
+            return self.backpressure_max_retry_inflight
+        return max(1, self.worker_concurrency)
 
     @property
     def worker_database_engine_kwargs(self) -> dict[str, bool | int]:
@@ -892,6 +928,21 @@ class Settings(BaseSettings):
         if self.worker_heavy_concurrency > 0 and self.heavy_queue_max_depth < self.worker_heavy_concurrency:
             raise ValueError(
                 "HEAVY_QUEUE_MAX_DEPTH must be >= WORKER_HEAVY_CONCURRENCY."
+            )
+        if self.effective_backpressure_max_concurrent_jobs > (
+            self.worker_total_concurrency * max(1, self.worker_instance_count)
+        ):
+            raise ValueError(
+                "BACKPRESSURE_MAX_CONCURRENT_JOBS must be <= total configured worker slots "
+                "(WORKER_CONCURRENCY + WORKER_HEAVY_CONCURRENCY) * WORKER_INSTANCE_COUNT."
+            )
+        if self.effective_backpressure_max_queued_jobs < self.worker_total_concurrency:
+            raise ValueError(
+                "BACKPRESSURE_MAX_QUEUED_JOBS must be >= total worker concurrency so the system can buffer at least one full worker wave."
+            )
+        if self.effective_backpressure_max_retry_inflight > self.effective_backpressure_max_queued_jobs:
+            raise ValueError(
+                "BACKPRESSURE_MAX_RETRY_INFLIGHT must be <= BACKPRESSURE_MAX_QUEUED_JOBS."
             )
         return self
 

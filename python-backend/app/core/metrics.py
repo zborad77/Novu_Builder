@@ -108,14 +108,59 @@ WORKER_MONITORING_AVAILABLE = Gauge(
     "1 if worker heartbeat monitoring can read Redis, 0 if worker status is currently unknown",
 )
 
+STORAGE_READY = Gauge(
+    "novu_storage_ready",
+    "1 if the active storage backend is reachable, 0 otherwise",
+)
+
+REDIS_RUNTIME_AVAILABLE = Gauge(
+    "novu_redis_runtime_available",
+    "1 if shared Redis-backed runtime enforcement is available, 0 otherwise",
+)
+
+REDIS_RUNTIME_DEGRADED = Gauge(
+    "novu_redis_runtime_degraded",
+    "1 if Redis runtime is operating in degraded mode (for example failover), 0 otherwise",
+)
+
+AUTH_PROTECTION_ENFORCED = Gauge(
+    "novu_auth_protection_enforced",
+    "1 if authoritative auth protection enforcement is currently active, 0 otherwise",
+)
+
 QUEUE_LENGTH = Gauge(
     "novu_queue_length",
     "Current durable analysis queue length in Redis",
 )
 
+HEAVY_QUEUE_LENGTH = Gauge(
+    "novu_heavy_queue_length",
+    "Current durable heavy queue length in Redis",
+)
+
 PROCESSING_JOBS = Gauge(
     "novu_processing_jobs",
     "Current number of leased analysis jobs in Redis processing",
+)
+
+HEAVY_PROCESSING_JOBS = Gauge(
+    "novu_heavy_processing_jobs",
+    "Current number of leased heavy jobs in Redis processing",
+)
+
+QUEUE_SCHEDULED_RETRY = Gauge(
+    "novu_queue_scheduled_retry",
+    "Current number of scheduled analysis retries waiting in Redis",
+)
+
+QUEUE_SCHEDULED_RETRY_DUE_NOW = Gauge(
+    "novu_queue_scheduled_retry_due_now",
+    "Current number of scheduled analysis retries that are due for promotion now",
+)
+
+QUEUE_DEAD_LETTER_ACTIVE = Gauge(
+    "novu_queue_dead_letter_active",
+    "Current number of active Redis dead-letter queue entries",
 )
 
 JOBS_QUEUED = Gauge(
@@ -170,6 +215,42 @@ DUPLICATE_PREVENTED_COUNT = Counter(
     "novu_duplicate_prevented_count",
     "Total duplicate job submissions or executions prevented",
     ["reason"],
+)
+
+BACKPRESSURE_CURRENT_CONCURRENT = Gauge(
+    "novu_backpressure_current_concurrent_jobs",
+    "Current concurrent jobs counted toward the global backpressure contract",
+)
+
+BACKPRESSURE_CURRENT_QUEUED = Gauge(
+    "novu_backpressure_current_queued_jobs",
+    "Current queued jobs counted toward the global backpressure contract",
+)
+
+BACKPRESSURE_CURRENT_RETRY_INFLIGHT = Gauge(
+    "novu_backpressure_current_retry_inflight",
+    "Current retry jobs counted toward the global backpressure contract",
+)
+
+BACKPRESSURE_MAX_CONCURRENT = Gauge(
+    "novu_backpressure_max_concurrent_jobs",
+    "Configured global concurrency ceiling enforced by backpressure",
+)
+
+BACKPRESSURE_MAX_QUEUED = Gauge(
+    "novu_backpressure_max_queued_jobs",
+    "Configured global queued-job ceiling enforced by backpressure",
+)
+
+BACKPRESSURE_MAX_RETRY_INFLIGHT = Gauge(
+    "novu_backpressure_max_retry_inflight",
+    "Configured global retry-inflight ceiling enforced by backpressure",
+)
+
+BACKPRESSURE_REJECTIONS_TOTAL = Counter(
+    "novu_backpressure_rejections_total",
+    "Total requests or retry actions rejected by backpressure",
+    ["surface", "reason"],
 )
 
 # Audit trail health (R-AUD-01)
@@ -281,6 +362,15 @@ def record_duplicate_prevented(reason: str) -> None:
     DUPLICATE_PREVENTED_COUNT.labels(reason=normalized_reason).inc()
 
 
+def record_backpressure_rejection(*, surface: str, reason: str) -> None:
+    normalized_surface = surface.strip().lower() or "unknown"
+    normalized_reason = reason.strip().lower() or "unknown"
+    BACKPRESSURE_REJECTIONS_TOTAL.labels(
+        surface=normalized_surface,
+        reason=normalized_reason,
+    ).inc()
+
+
 def observe_cache_operation(
     *,
     namespace: str,
@@ -345,3 +435,4 @@ def refresh_job_observability_gauges() -> None:
     JOB_FAIL_RATE.set(_JOB_FAIL_RATE_CURRENT)
     JOB_DURATION_SECONDS_AVG.set(_JOB_DURATION_AVG_CURRENT)
     JOB_DURATION_SECONDS_P95.set(_JOB_DURATION_P95_CURRENT)
+    BACKPRESSURE_REJECTIONS_TOTAL.labels(surface="analysis_api", reason="queue_full").inc(0)

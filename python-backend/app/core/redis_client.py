@@ -227,17 +227,44 @@ class FailoverRedisClient:
     async def rpush(self, *args, **kwargs):
         return await self._run_write("rpush", *args, **kwargs)
 
+    async def lpush(self, *args, **kwargs):
+        return await self._run_write("lpush", *args, **kwargs)
+
     async def llen(self, *args, **kwargs):
         return await self._run_read("llen", *args, **kwargs)
+
+    async def lrange(self, *args, **kwargs):
+        return await self._run_read("lrange", *args, **kwargs)
+
+    async def lindex(self, *args, **kwargs):
+        return await self._run_read("lindex", *args, **kwargs)
+
+    async def lrem(self, *args, **kwargs):
+        return await self._run_write("lrem", *args, **kwargs)
 
     async def eval(self, *args, **kwargs):
         return await self._run_write("eval", *args, **kwargs)
 
+    async def zrange(self, *args, **kwargs):
+        return await self._run_read("zrange", *args, **kwargs)
+
     async def zrangebyscore(self, *args, **kwargs):
         return await self._run_read("zrangebyscore", *args, **kwargs)
 
+    async def zcard(self, *args, **kwargs):
+        return await self._run_read("zcard", *args, **kwargs)
+
+    async def zcount(self, *args, **kwargs):
+        return await self._run_read("zcount", *args, **kwargs)
+
+    async def zrem(self, *args, **kwargs):
+        return await self._run_write("zrem", *args, **kwargs)
+
     async def hgetall(self, *args, **kwargs):
         return await self._run_read("hgetall", *args, **kwargs)
+
+    async def hmget(self, *args, **kwargs):
+        return await self._run_read("hmget", *args, **kwargs)
 
     async def get(self, *args, **kwargs):
         return await self._run_read("get", *args, **kwargs)
@@ -250,6 +277,18 @@ class FailoverRedisClient:
 
     async def set(self, *args, **kwargs):
         return await self._run_write("set", *args, **kwargs)
+
+    async def srem(self, *args, **kwargs):
+        return await self._run_write("srem", *args, **kwargs)
+
+    async def smembers(self, *args, **kwargs):
+        return await self._run_read("smembers", *args, **kwargs)
+
+    async def sismember(self, *args, **kwargs):
+        return await self._run_read("sismember", *args, **kwargs)
+
+    async def scard(self, *args, **kwargs):
+        return await self._run_read("scard", *args, **kwargs)
 
     async def scan_iter(self, *args, **kwargs) -> AsyncIterator[object]:
         client = await self._get_active_client()

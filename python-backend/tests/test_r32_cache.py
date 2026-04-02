@@ -2,24 +2,28 @@
 
 Tests cover:
   - cache miss: get_cached returns None when key absent
-  - cache hit: get_cached returns stored value without Redis being called twice
-  - set_cached stores JSON-serialisable value with correct TTL
+  - cache hit: get_cached returns stored value only when the tag matches
+  - set_cached stores a tagged JSON envelope with correct TTL
   - delete_cached removes one or more keys
   - fail-open: all helpers are no-ops when redis=None
+  - stale cache entries are rejected deterministically
+  - namespace tag invalidation simulates multi-pod cache busting
   - tenant isolation: keys for org_a and org_b are distinct
   - pricebook list route uses cache key scoped to org_id
   - supplier list route uses cache key scoped to org_id + includeInactive flag
 """
 import json
+from time import perf_counter
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.core.cache import _k, delete_cached, get_cached, set_cached
+from app.core.cache import _k, delete_cached, get_cache_tag, get_cached, invalidate_cache_tag, set_cached
 from app.work_catalog.cache import (
     effective_work_type_item_key,
     effective_work_type_list_key,
     invalidate_tenant_effective_cache,
+    tenant_effective_cache_scope,
     tenant_effective_cache_keys,
 )
 
@@ -31,51 +35,112 @@ class TestGetCached:
     async def test_returns_none_on_cache_miss(self):
         redis = AsyncMock()
         redis.get = AsyncMock(return_value=None)
-        result = await get_cached(redis, "some:key")
+        result = await get_cached(redis, "some:key", tag="v1")
         assert result is None
 
     @pytest.mark.asyncio
     async def test_returns_parsed_json_on_hit(self):
         redis = AsyncMock()
-        redis.get = AsyncMock(return_value=json.dumps({"x": 1}).encode())
-        result = await get_cached(redis, "some:key")
+        redis.get = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "meta": {"version": 1, "tag": "v1", "ttlSeconds": 300},
+                    "value": {"x": 1},
+                }
+            ).encode()
+        )
+        result = await get_cached(redis, "some:key", tag="v1")
         assert result == {"x": 1}
 
     @pytest.mark.asyncio
     async def test_returns_none_when_redis_is_none(self):
-        result = await get_cached(None, "some:key")
+        result = await get_cached(None, "some:key", tag="v1")
         assert result is None
 
     @pytest.mark.asyncio
     async def test_returns_none_on_redis_error(self):
         redis = AsyncMock()
         redis.get = AsyncMock(side_effect=Exception("connection refused"))
-        result = await get_cached(redis, "some:key")
+        result = await get_cached(redis, "some:key", tag="v1")
         assert result is None  # fail open
+
+    @pytest.mark.asyncio
+    async def test_rejects_stale_cache_entry_when_tag_changes(self):
+        redis = AsyncMock()
+        redis.get = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "meta": {"version": 1, "tag": "v1", "ttlSeconds": 300},
+                    "value": {"x": 1},
+                }
+            ).encode()
+        )
+
+        result = await get_cached(redis, "some:key", tag="v2")
+
+        assert result is None
+        redis.delete.assert_awaited_once_with(_k("some:key"))
+
+    @pytest.mark.asyncio
+    async def test_hit_and_miss_have_consistent_timing(self):
+        hit_redis = AsyncMock()
+        hit_redis.get = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "meta": {"version": 1, "tag": "v1", "ttlSeconds": 300},
+                    "value": {"x": 1},
+                }
+            ).encode()
+        )
+        miss_redis = AsyncMock()
+        miss_redis.get = AsyncMock(return_value=None)
+
+        async def _avg_duration(redis):
+            samples = []
+            for _ in range(5):
+                started_at = perf_counter()
+                await get_cached(redis, "tenant:key", tag="v1")
+                samples.append(perf_counter() - started_at)
+            return sum(samples) / len(samples)
+
+        with patch("app.core.cache.CACHE_ACCESS_TIMING_FLOOR_SECONDS", 0.01):
+            hit_avg = await _avg_duration(hit_redis)
+            miss_avg = await _avg_duration(miss_redis)
+
+        assert hit_avg >= 0.009
+        assert miss_avg >= 0.009
+        assert abs(hit_avg - miss_avg) < 0.006
 
 
 class TestSetCached:
     @pytest.mark.asyncio
     async def test_calls_setex_with_prefixed_key(self):
         redis = AsyncMock()
-        await set_cached(redis, "pricebooks:list:org-1", [{"id": "pb1"}], ttl=300)
+        await set_cached(redis, "pricebooks:list:org-1", [{"id": "pb1"}], ttl=300, tag="v9")
         redis.setex.assert_awaited_once()
         key_arg, ttl_arg, val_arg = redis.setex.call_args[0]
         assert key_arg == _k("pricebooks:list:org-1")
         assert ttl_arg == 300
-        assert json.loads(val_arg) == [{"id": "pb1"}]
+        payload = json.loads(val_arg)
+        assert payload["meta"] == {"version": 1, "tag": "v9", "ttlSeconds": 300}
+        assert payload["value"] == [{"id": "pb1"}]
 
     @pytest.mark.asyncio
     async def test_no_op_when_redis_is_none(self):
         # Should not raise
-        await set_cached(None, "key", {"data": 1}, ttl=60)
+        await set_cached(None, "key", {"data": 1}, ttl=60, tag="v1")
 
     @pytest.mark.asyncio
     async def test_no_op_on_redis_error(self):
         redis = AsyncMock()
         redis.setex = AsyncMock(side_effect=Exception("timeout"))
         # Should not raise — fails silently
-        await set_cached(redis, "key", {}, ttl=60)
+        await set_cached(redis, "key", {}, ttl=60, tag="v1")
+
+    @pytest.mark.asyncio
+    async def test_rejects_cache_write_without_positive_ttl(self):
+        with pytest.raises(ValueError):
+            await set_cached(AsyncMock(), "key", {}, ttl=0, tag="v1")
 
 
 class TestDeleteCached:
@@ -134,6 +199,48 @@ class TestWorkCatalogCacheKeys:
             )
         }
         assert expected == deleted
+        redis.incr.assert_awaited_once()
+        redis.expire.assert_awaited_once()
+
+
+class TestVersionTags:
+    @pytest.mark.asyncio
+    async def test_write_read_consistency_uses_same_tag(self):
+        class _Redis:
+            def __init__(self):
+                self.values = {}
+
+            async def get(self, key):
+                return self.values.get(key)
+
+            async def setex(self, key, ttl_seconds, value):
+                self.values[key] = value
+                return True
+
+            async def delete(self, *keys):
+                for key in keys:
+                    self.values.pop(key, None)
+                return True
+
+        redis = _Redis()
+        await set_cached(redis, "pricebooks:list:org-1", {"items": []}, ttl=60, tag="1")
+        cached = await get_cached(redis, "pricebooks:list:org-1", tag="1")
+        assert cached == {"items": []}
+
+    @pytest.mark.asyncio
+    async def test_multi_pod_invalidation_bumps_shared_namespace_tag(self):
+        redis = AsyncMock()
+        redis.get = AsyncMock(side_effect=[None, b"2"])
+        redis.incr = AsyncMock(return_value=2)
+        redis.expire = AsyncMock(return_value=True)
+
+        initial_tag = await get_cache_tag(redis, tenant_effective_cache_scope("org-a"))
+        next_tag = await invalidate_cache_tag(redis, tenant_effective_cache_scope("org-a"))
+        latest_tag = await get_cache_tag(redis, tenant_effective_cache_scope("org-a"))
+
+        assert initial_tag == "0"
+        assert next_tag == "2"
+        assert latest_tag == "2"
 
 
 # ── tenant isolation ──────────────────────────────────────────────────────────
@@ -196,6 +303,7 @@ class TestTenantIsolation:
 
         mock_user = MagicMock()
         mock_user.organizationId = "org-test"
+        mock_user.isSuperAdmin = False
 
         cached_data = [{"id": "pb1", "name": "Test", "organizationId": "org-test",
                         "hourlyRate": 350.0, "dailyRate": 2800.0, "laborHoursPerSqm": 0.3,
@@ -212,9 +320,10 @@ class TestTenantIsolation:
         mock_service.list_pricebooks.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_superadmin_bypasses_cache(self):
-        """Superadmin (org_id=None) must never read or write the cache."""
+    async def test_superadmin_requires_explicit_org_context(self):
+        """Tenant-scoped pricebook route must fail closed without an explicit org context."""
         from app.api.routes.pricebooks import list_pricebooks
+        from fastapi import HTTPException
 
         mock_service = AsyncMock()
         mock_service.list_pricebooks = AsyncMock(return_value=[])
@@ -225,11 +334,14 @@ class TestTenantIsolation:
 
         with patch("app.api.routes.pricebooks.get_cached", new_callable=AsyncMock) as mock_get:
             with patch("app.api.routes.pricebooks.set_cached", new_callable=AsyncMock) as mock_set:
-                await list_pricebooks(
-                    current_user=mock_user,
-                    service=mock_service,
-                    redis=AsyncMock(),
-                )
+                with pytest.raises(HTTPException) as exc_info:
+                    await list_pricebooks(
+                        current_user=mock_user,
+                        service=mock_service,
+                        redis=AsyncMock(),
+                    )
+        assert exc_info.value.status_code == 403
+        mock_service.list_pricebooks.assert_not_called()
         mock_get.assert_not_called()
         mock_set.assert_not_called()
 
@@ -244,6 +356,7 @@ class TestTenantIsolation:
 
         mock_user = MagicMock()
         mock_user.organizationId = "org-x"
+        mock_user.isSuperAdmin = False
 
         payload = SupplierPatch(
             name="Supplier X",

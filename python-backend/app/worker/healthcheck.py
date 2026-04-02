@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import sys
 
-from app.worker.heartbeat import local_worker_heartbeat_is_fresh, worker_local_health_path
+from app.worker.heartbeat import local_worker_heartbeat_status, worker_local_health_path
 
 
 def main() -> int:
-    if local_worker_heartbeat_is_fresh():
+    healthy, reason = local_worker_heartbeat_status(require_process=True)
+    if healthy:
         return 0
 
     sys.stderr.write(
-        f"worker heartbeat stale or missing: {worker_local_health_path()}\n"
+        f"worker heartbeat unhealthy ({reason}): {worker_local_health_path()}\n"
     )
     return 1
 

@@ -182,7 +182,12 @@ async def test_worker_restart_requeues_expired_job_lease_without_losing_job():
         await runner._run_lease_reaper_if_due(runtime, now_monotonic=9999.0)
 
     service.reconcile_expired_lease.assert_awaited_once_with(expired_lease)
-    requeue_mock.assert_awaited_once_with(runtime.redis, expired_lease)
+    requeue_mock.assert_awaited_once_with(
+        runtime.redis,
+        expired_lease,
+        max_depth=runtime.settings.analysis_queue_max_depth,
+        max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
+    )
     metrics_mock.assert_called_once_with(1)
 
 
@@ -242,7 +247,7 @@ async def test_postgres_restart_flips_api_readiness_and_recovers(app_client):
 
     assert degraded_health is not None
     assert degraded_ready is not None
-    assert degraded_health.status_code == 200
+    assert degraded_health.status_code == 503
     assert degraded_ready.status_code == 503
     assert recovered_ready.status_code == 200
 
@@ -262,6 +267,6 @@ async def test_storage_dependency_outage_keeps_health_alive_but_blocks_readiness
 
     assert degraded_health is not None
     assert degraded_ready is not None
-    assert degraded_health.status_code == 200
+    assert degraded_health.status_code == 503
     assert degraded_ready.status_code == 503
     assert recovered_ready.status_code == 200

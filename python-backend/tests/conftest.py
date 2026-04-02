@@ -3,6 +3,7 @@ import pathlib
 import shutil
 import tempfile
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -48,7 +49,6 @@ from app.core.config import get_settings  # noqa: E402
 
 get_settings.cache_clear()
 
-import app.core.account_limiter as account_limiter_mod  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.models import MaterialCatalog, Organization, PricingProfile, Supplier, User  # noqa: E402
 from app.services.auth_service import hash_password  # noqa: E402
@@ -58,11 +58,87 @@ _test_engine = create_async_engine(_TEST_DB_URL, echo=False)
 _TestSession = async_sessionmaker(_test_engine, class_=AsyncSession, expire_on_commit=False)
 
 
-@pytest.fixture(autouse=True)
-def _clear_account_limiter_fallback():
-    account_limiter_mod._FALLBACK_FAILURES.clear()
-    yield
-    account_limiter_mod._FALLBACK_FAILURES.clear()
+class _InMemoryAuthRedisPipeline:
+    def __init__(self, redis: "_InMemoryAuthRedis") -> None:
+        self._redis = redis
+        self._operations: list[tuple[str, str, int | None]] = []
+
+    def incr(self, key: str):
+        self._operations.append(("incr", key, None))
+        return self
+
+    def expire(self, key: str, ttl_seconds: int):
+        self._operations.append(("expire", key, ttl_seconds))
+        return self
+
+    async def execute(self):
+        results: list[int | bool] = []
+        for operation, key, ttl_seconds in self._operations:
+            if operation == "incr":
+                results.append(await self._redis.incr(key))
+            elif operation == "expire" and ttl_seconds is not None:
+                results.append(await self._redis.expire(key, ttl_seconds))
+        self._operations.clear()
+        return results
+
+
+class _InMemoryAuthRedis:
+    def __init__(self) -> None:
+        self._values: dict[str, str] = {}
+        self._expires_at: dict[str, datetime] = {}
+
+    def _purge_if_expired(self, key: str) -> None:
+        expires_at = self._expires_at.get(key)
+        if expires_at is None:
+            return
+        if expires_at <= datetime.now(UTC):
+            self._expires_at.pop(key, None)
+            self._values.pop(key, None)
+
+    async def get(self, key: str):
+        self._purge_if_expired(key)
+        return self._values.get(key)
+
+    async def setex(self, key: str, ttl_seconds: int, value) -> bool:
+        self._values[key] = value.decode("utf-8") if isinstance(value, bytes) else str(value)
+        self._expires_at[key] = datetime.now(UTC) + timedelta(seconds=max(1, int(ttl_seconds)))
+        return True
+
+    async def delete(self, *keys: str) -> int:
+        deleted = 0
+        for key in keys:
+            self._purge_if_expired(key)
+            if key in self._values:
+                deleted += 1
+            self._values.pop(key, None)
+            self._expires_at.pop(key, None)
+        return deleted
+
+    async def incr(self, key: str) -> int:
+        self._purge_if_expired(key)
+        next_value = int(self._values.get(key, "0")) + 1
+        self._values[key] = str(next_value)
+        return next_value
+
+    async def expire(self, key: str, ttl_seconds: int) -> bool:
+        self._purge_if_expired(key)
+        if key not in self._values:
+            return False
+        self._expires_at[key] = datetime.now(UTC) + timedelta(seconds=max(1, int(ttl_seconds)))
+        return True
+
+    def pipeline(self) -> _InMemoryAuthRedisPipeline:
+        return _InMemoryAuthRedisPipeline(self)
+
+    async def ping(self) -> bool:
+        return True
+
+    async def aclose(self) -> None:
+        return None
+
+    def clear(self) -> None:
+        self._values.clear()
+        self._expires_at.clear()
 
 
 @pytest.fixture
@@ -251,9 +327,26 @@ async def app_client(test_tenants):
     from app.main import app as fastapi_app  # noqa: PLC0415
 
     async with fastapi_app.router.lifespan_context(fastapi_app):
+        auth_token_store = _InMemoryAuthRedis()
+        original_auth_token_store = getattr(fastapi_app.state, "auth_token_store", None)
+        fastapi_app.state.auth_token_store = auth_token_store
         transport = ASGITransport(app=fastapi_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             yield client
+        fastapi_app.state.auth_token_store = original_auth_token_store
+
+
+@pytest.fixture(autouse=True)
+def _clear_auth_token_store_between_tests():
+    from app.main import app as fastapi_app  # noqa: PLC0415
+
+    store = getattr(getattr(fastapi_app, "state", None), "auth_token_store", None)
+    if hasattr(store, "clear"):
+        store.clear()
+    yield
+    store = getattr(getattr(fastapi_app, "state", None), "auth_token_store", None)
+    if hasattr(store, "clear"):
+        store.clear()
 
 
 @pytest_asyncio.fixture(scope="session")

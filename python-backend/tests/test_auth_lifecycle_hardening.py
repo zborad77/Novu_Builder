@@ -6,6 +6,10 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
+from app.repositories.token_repository import (
+    TOKEN_STATE_ACTIVE,
+    TokenStateBackendUnavailableError,
+)
 from app.schemas.auth import LogoutRequest, RefreshRequest
 from app.services.auth_service import AuthService, RefreshResult
 
@@ -43,7 +47,7 @@ def _make_service(user: MagicMock | None = None) -> AuthService:
     session.get = AsyncMock(return_value=user)
 
     tokens = MagicMock()
-    tokens.is_revoked = AsyncMock(return_value=False)
+    tokens.get_token_state = AsyncMock(return_value=TOKEN_STATE_ACTIVE)
     tokens.revoke = AsyncMock(return_value=True)
     tokens.create_user_session = AsyncMock()
     tokens.rotate_user_session = AsyncMock()
@@ -85,7 +89,7 @@ class TestAuthServiceHardening:
         result = await service.refresh(token)
 
         assert result is None
-        service._tokens.is_revoked.assert_not_awaited()
+        service._tokens.get_token_state.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_revoke_token_returns_false_for_invalid_or_expired_payload(self):
@@ -136,6 +140,36 @@ class TestAuthRouteHardening:
         assert "refresh-token-secret" not in repr(mock_warning.call_args)
 
     @pytest.mark.asyncio
+    async def test_refresh_route_returns_503_when_token_state_backend_is_unavailable(self):
+        from app.api.routes.auth import refresh
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/auth/refresh",
+                "headers": [],
+                "client": ("127.0.0.1", 12345),
+            }
+        )
+        service = AsyncMock(spec=AuthService)
+        service.refresh_with_status = AsyncMock(
+            side_effect=TokenStateBackendUnavailableError(
+                operation="get_token_state",
+                jti="refresh-jti",
+            )
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await refresh(
+                request=request,
+                payload=RefreshRequest(refreshToken="refresh-token-secret"),
+                service=service,
+            )
+
+        assert exc_info.value.status_code == 503
+
+    @pytest.mark.asyncio
     async def test_logout_route_logs_without_token_leak(self):
         from app.api.routes.auth import logout
 
@@ -164,6 +198,67 @@ class TestAuthRouteHardening:
         assert service.revoke_token.await_count == 2
         assert "bad-refresh-token" not in repr(mock_info.call_args)
         assert "valid-access-token" not in repr(mock_info.call_args)
+
+    @pytest.mark.asyncio
+    async def test_logout_route_returns_503_when_token_state_backend_is_unavailable(self):
+        from app.api.routes.auth import logout
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/auth/logout",
+                "headers": [],
+                "client": ("127.0.0.1", 12345),
+            }
+        )
+        service = AsyncMock(spec=AuthService)
+        service.revoke_session_by_token = AsyncMock(
+            side_effect=TokenStateBackendUnavailableError(
+                operation="cache_revoked_token",
+                jti="logout-jti",
+            )
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await logout(
+                request=request,
+                payload=LogoutRequest(refreshToken="refresh-token-secret"),
+                authorization="Bearer access-token",
+                service=service,
+            )
+
+        assert exc_info.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_get_current_user_returns_503_when_token_state_backend_is_unavailable(self):
+        from app.api.deps import get_current_user
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/v1/auth/me",
+                "headers": [],
+                "client": ("127.0.0.1", 12345),
+            }
+        )
+        service = AsyncMock(spec=AuthService)
+        service.get_user_by_token = AsyncMock(
+            side_effect=TokenStateBackendUnavailableError(
+                operation="get_token_state",
+                jti="access-jti",
+            )
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(
+                request=request,
+                authorization="Bearer access-token",
+                auth_service=service,
+            )
+
+        assert exc_info.value.status_code == 503
 
 
 class TestAuthLifecycleIntegration:

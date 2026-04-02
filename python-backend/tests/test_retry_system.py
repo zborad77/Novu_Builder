@@ -6,7 +6,8 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from app.services.analysis_service import AnalysisService
+from app.repositories.analysis_repository import InvalidAnalysisResultPayloadError
+from app.services.analysis_service import AnalysisService, _retry_backoff_seconds
 from app.worker.queue import LeasedAnalysisJob
 
 
@@ -40,6 +41,56 @@ def _project():
 
 
 class TestAnalysisRetryDecisions:
+    def test_retry_backoff_escalates_with_deterministic_jitter(self):
+        settings = SimpleNamespace(
+            analysis_retry_backoff_base_seconds=30,
+            analysis_retry_backoff_max_seconds=300,
+        )
+
+        attempt_one = _retry_backoff_seconds(
+            job_id="job-1",
+            attempt_count=1,
+            settings=settings,
+        )
+        attempt_two = _retry_backoff_seconds(
+            job_id="job-1",
+            attempt_count=2,
+            settings=settings,
+        )
+        attempt_three = _retry_backoff_seconds(
+            job_id="job-1",
+            attempt_count=3,
+            settings=settings,
+        )
+
+        assert attempt_one == _retry_backoff_seconds(
+            job_id="job-1",
+            attempt_count=1,
+            settings=settings,
+        )
+        assert 30 <= attempt_one <= 37
+        assert 60 <= attempt_two <= 75
+        assert 120 <= attempt_three <= 150
+        assert attempt_one < attempt_two < attempt_three
+
+    def test_retry_backoff_jitter_spreads_same_attempt_across_jobs(self):
+        settings = SimpleNamespace(
+            analysis_retry_backoff_base_seconds=30,
+            analysis_retry_backoff_max_seconds=300,
+        )
+
+        delays = {
+            _retry_backoff_seconds(
+                job_id=f"job-{index}",
+                attempt_count=2,
+                settings=settings,
+            )
+            for index in range(12)
+        }
+
+        assert len(delays) > 1
+        assert all(60 <= delay <= 75 for delay in delays)
+
     @pytest.mark.asyncio
     async def test_execute_job_schedules_retry_before_max_attempts(self):
         queued_job = _job(status="queued", attempt_count=0)
@@ -181,6 +232,79 @@ class TestAnalysisRetryDecisions:
         phase3_repo.mark_job_dead_letter.assert_awaited_once()
         phase3_repo.schedule_job_retry.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_execute_job_dead_letters_non_retryable_invalid_payload(self):
+        queued_job = _job(status="queued", attempt_count=0)
+        running_job = _job(status="running", attempt_count=1)
+        project = _project()
+
+        phase1_repo = AsyncMock()
+        phase1_repo.get_analysis_job = AsyncMock(side_effect=[queued_job, running_job])
+        phase1_repo.get_project_in_org = AsyncMock(return_value=project)
+
+        async def _mark_job_running(job, **_kwargs):
+            job.status = "running"
+            job.attempt_count = 1
+            return job
+
+        phase1_repo.mark_job_running = AsyncMock(side_effect=_mark_job_running)
+        phase1_repo.assert_job_lease_owned = AsyncMock(return_value=running_job)
+
+        phase3_repo = AsyncMock()
+        phase3_repo.get_analysis_job = AsyncMock(return_value=running_job)
+        phase3_repo.assert_job_lease_owned = AsyncMock(return_value=running_job)
+        phase3_repo.schedule_job_retry = AsyncMock()
+        phase3_repo.mark_job_dead_letter = AsyncMock()
+
+        photo_repo = AsyncMock()
+        photo_repo.list_photos_by_project_id = AsyncMock(return_value=[])
+
+        phase1_session = AsyncMock()
+        phase1_session.get = AsyncMock(return_value=project)
+        phase2_session = AsyncMock()
+        phase2_session.get = AsyncMock(return_value=project)
+
+        phase1_ctx = AsyncMock()
+        phase1_ctx.__aenter__.return_value = phase1_session
+        phase1_ctx.__aexit__.return_value = False
+        phase2_ctx = AsyncMock()
+        phase2_ctx.__aenter__.return_value = phase2_session
+        phase2_ctx.__aexit__.return_value = False
+
+        service = AnalysisService(
+            repository=AsyncMock(),
+            photo_repository=AsyncMock(),
+            provider_key="mock",
+        )
+
+        settings = SimpleNamespace(
+            analysis_job_max_attempts=5,
+            analysis_retry_backoff_base_seconds=30,
+            analysis_retry_backoff_max_seconds=300,
+        )
+
+        with (
+            patch("app.services.analysis_service.WorkerAsyncSessionFactory", side_effect=[phase1_ctx, phase2_ctx]),
+            patch("app.services.analysis_service.AnalysisRepository", side_effect=[phase1_repo, phase3_repo]),
+            patch("app.services.analysis_service.PhotoRepository", return_value=photo_repo),
+            patch(
+                "app.services.analysis_service.run_project_analysis",
+                side_effect=InvalidAnalysisResultPayloadError("schema mismatch"),
+            ),
+            patch("app.services.analysis_service.get_settings", return_value=settings),
+        ):
+            result = await service.execute_job(
+                "job-1",
+                "proj-1",
+                "org-1",
+                lease_token="lease-1",
+                worker_id="worker-1",
+            )
+
+        assert result.disposition == "dead_lettered"
+        phase3_repo.mark_job_dead_letter.assert_awaited_once()
+        phase3_repo.schedule_job_retry.assert_not_called()
+
 
 class TestDeadLetterReprocess:
     @pytest.mark.asyncio
@@ -272,6 +396,60 @@ class TestDeadLetterReprocess:
 
 
 class TestWorkerRetryFinalization:
+    @pytest.mark.asyncio
+    async def test_recover_job_after_worker_error_dead_letters_non_retryable_failure(self):
+        running_job = _job(status="running", attempt_count=1)
+        repo = AsyncMock()
+        repo.get_analysis_job = AsyncMock(return_value=running_job)
+        repo.assert_job_lease_owned = AsyncMock(return_value=running_job)
+        repo.schedule_job_retry = AsyncMock()
+        repo.mark_job_dead_letter = AsyncMock()
+
+        session = AsyncMock()
+        session_ctx = AsyncMock()
+        session_ctx.__aenter__.return_value = session
+        session_ctx.__aexit__.return_value = False
+
+        lease = LeasedAnalysisJob(
+            token="lease-1",
+            payload={
+                "job_id": "job-1",
+                "project_id": "proj-1",
+                "organization_id": "org-1",
+                "is_superadmin_context": False,
+            },
+            raw_payload='{"job_id":"job-1","project_id":"proj-1","organization_id":"org-1","is_superadmin_context":false}',
+            worker_id="worker-1",
+            leased_at_ms=1_700_000_000_000,
+            lease_timeout_ms=600_000,
+            expires_at_ms=1_700_000_600_000,
+        )
+
+        service = AnalysisService(
+            repository=AsyncMock(),
+            photo_repository=AsyncMock(),
+            provider_key="mock",
+        )
+        settings = SimpleNamespace(
+            analysis_job_max_attempts=5,
+            analysis_retry_backoff_base_seconds=30,
+            analysis_retry_backoff_max_seconds=300,
+        )
+
+        with (
+            patch("app.services.analysis_service.WorkerAsyncSessionFactory", return_value=session_ctx),
+            patch("app.services.analysis_service.AnalysisRepository", return_value=repo),
+            patch("app.services.analysis_service.get_settings", return_value=settings),
+        ):
+            result = await service.recover_job_after_worker_error(
+                lease=lease,
+                cause=InvalidAnalysisResultPayloadError("schema mismatch"),
+            )
+
+        assert result.disposition == "dead_lettered"
+        repo.mark_job_dead_letter.assert_awaited_once()
+        repo.schedule_job_retry.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_run_job_task_schedules_retry_without_ack(self):
         from app.worker import runner

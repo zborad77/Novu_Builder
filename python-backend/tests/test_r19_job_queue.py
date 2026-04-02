@@ -43,6 +43,10 @@ class FakeRedisQueue:
         self.lists.setdefault(key, []).append(raw)
         return len(self.lists[key])
 
+    async def lpush(self, key: str, raw: str) -> int:
+        self.lists.setdefault(key, []).insert(0, raw)
+        return len(self.lists[key])
+
     async def llen(self, key: str) -> int:
         return len(self.lists.setdefault(key, []))
 
@@ -51,7 +55,14 @@ class FakeRedisQueue:
         args = [str(part) for part in parts[numkeys:]]
 
         if script == queue_module._LEASE_JOB_SCRIPT:
-            queue_key, processing_key, expiry_key, lease_prefix, sequence_key = keys
+            queue_key, processing_key, heavy_processing_key, expiry_key, lease_prefix, sequence_key = keys
+            leased_at_ms, worker_id, lease_timeout_ms, max_concurrent = args
+            total_processing = (
+                len(self.lists.setdefault(processing_key, []))
+                + len(self.lists.setdefault(heavy_processing_key, []))
+            )
+            if total_processing >= int(max_concurrent):
+                return ["__backpressure__", str(total_processing)]
             queue_items = self.lists.setdefault(queue_key, [])
             if not queue_items:
                 return None
@@ -59,7 +70,6 @@ class FakeRedisQueue:
             raw = queue_items.pop(0)
             token = str(self.sequences.get(sequence_key, 0) + 1)
             self.sequences[sequence_key] = int(token)
-            leased_at_ms, worker_id, lease_timeout_ms = args
             expires_at_ms = str(int(leased_at_ms) + int(lease_timeout_ms))
 
             self.lists.setdefault(processing_key, []).append(raw)
@@ -93,14 +103,20 @@ class FakeRedisQueue:
             return 1
 
         if script == queue_module._ENQUEUE_WITH_LIMIT_SCRIPT:
-            queue_key, processing_key = keys
-            raw, max_depth = args
+            queue_key, processing_key, peer_queue_key = keys
+            raw, max_depth, max_global_queued, priority = args
             queue_depth = len(self.lists.setdefault(queue_key, []))
             processing_depth = len(self.lists.setdefault(processing_key, []))
+            global_queued = queue_depth + len(self.lists.setdefault(peer_queue_key, []))
             if queue_depth + processing_depth + 1 > int(max_depth):
-                return [0, queue_depth, processing_depth]
-            self.lists.setdefault(queue_key, []).append(raw)
-            return [1, queue_depth + 1, processing_depth]
+                return [0, queue_depth, processing_depth, global_queued]
+            if global_queued + 1 > int(max_global_queued):
+                return [-2, queue_depth, processing_depth, global_queued]
+            if priority == "critical":
+                self.lists.setdefault(queue_key, []).insert(0, raw)
+            else:
+                self.lists.setdefault(queue_key, []).append(raw)
+            return [1, queue_depth + 1, processing_depth, global_queued + 1]
 
         if script == queue_module._RENEW_LEASE_SCRIPT:
             lease_prefix, expiry_key = keys
@@ -141,24 +157,34 @@ class FakeRedisQueue:
             return 1
 
         if script == queue_module._FINALIZE_EXPIRED_LEASE_SCRIPT:
-            lease_prefix, processing_key, expiry_key, queue_key = keys
-            token, expected_leased_at_ms, action = args
+            lease_prefix, processing_key, expiry_key, queue_key, peer_queue_key = keys
+            token, expected_leased_at_ms, action, max_depth, max_global_queued, priority = args
             lease_key = f"{lease_prefix}{token}"
             lease = self.hashes.get(lease_key)
             if lease is None:
-                return 0
+                return [-3, 0, 0, 0]
             if lease["leased_at_ms"] != expected_leased_at_ms:
-                return 0
+                return [-3, 0, 0, 0]
 
             raw = lease["raw"]
+            queue_depth = len(self.lists.setdefault(queue_key, []))
+            processing_depth = len(self.lists.setdefault(processing_key, []))
+            global_queued = queue_depth + len(self.lists.setdefault(peer_queue_key, []))
+            if action == "requeue" and queue_depth + processing_depth > int(max_depth):
+                return [0, queue_depth, processing_depth, global_queued]
+            if action == "requeue" and global_queued + 1 > int(max_global_queued):
+                return [-2, queue_depth, processing_depth, global_queued]
             processing = self.lists.setdefault(processing_key, [])
             if raw in processing:
                 processing.remove(raw)
             if action == "requeue":
-                self.lists.setdefault(queue_key, []).append(raw)
+                if priority == "critical":
+                    self.lists.setdefault(queue_key, []).insert(0, raw)
+                else:
+                    self.lists.setdefault(queue_key, []).append(raw)
             self.hashes.pop(lease_key, None)
             self.zsets.setdefault(expiry_key, {}).pop(token, None)
-            return 1
+            return [1, 0, 0, len(self.lists.setdefault(queue_key, [])) + len(self.lists.setdefault(peer_queue_key, []))]
 
         if script == queue_module._MOVE_TO_DLQ_SCRIPT:
             lease_prefix, processing_key, expiry_key, dlq_history_key, dlq_active_key = keys
@@ -183,8 +209,8 @@ class FakeRedisQueue:
             return 1
 
         if script == queue_module._PROMOTE_RETRY_SCRIPT:
-            queue_key, processing_key, retry_key = keys
-            now_ms, limit, max_depth = args
+            queue_key, processing_key, retry_key, peer_queue_key = keys
+            now_ms, limit, max_depth, max_global_queued = args
             due = [
                 raw
                 for raw, score in sorted(self.zsets.setdefault(retry_key, {}).items(), key=lambda item: item[1])
@@ -194,15 +220,24 @@ class FakeRedisQueue:
             for raw in due:
                 queue_depth = len(self.lists.setdefault(queue_key, []))
                 processing_depth = len(self.lists.setdefault(processing_key, []))
+                global_queued = queue_depth + len(self.lists.setdefault(peer_queue_key, []))
                 if queue_depth + processing_depth + 1 > int(max_depth):
-                    break
+                    return [moved, len(due) - moved, queue_depth, processing_depth, global_queued]
+                if global_queued + 1 > int(max_global_queued):
+                    return [moved, len(due) - moved, queue_depth, processing_depth, global_queued]
                 if raw in self.zsets.setdefault(retry_key, {}):
                     self.lists.setdefault(queue_key, []).append(raw)
                     if self.zsets[retry_key].pop(raw, None) is not None:
                         moved += 1
                     else:
                         self.lists[queue_key].remove(raw)
-            return moved
+            return [
+                moved,
+                0,
+                len(self.lists.setdefault(queue_key, [])),
+                len(self.lists.setdefault(processing_key, [])),
+                len(self.lists.setdefault(queue_key, [])) + len(self.lists.setdefault(peer_queue_key, [])),
+            ]
 
         raise AssertionError(f"Unexpected script: {script[:40]!r}")
 
@@ -264,6 +299,7 @@ class TestEnqueueAnalysisJob:
             "project_id": "proj-1",
             "organization_id": "org-1",
             "is_superadmin_context": False,
+            "priority": "standard",
         }
 
     @pytest.mark.asyncio
@@ -357,6 +393,7 @@ class TestLeasedQueueFlow:
             "project_id": "proj-3",
             "organization_id": "org-3",
             "is_superadmin_context": False,
+            "priority": "standard",
         }
         assert lease.worker_id == "worker-a"
         assert lease.lease_timeout_seconds == 600
@@ -455,7 +492,7 @@ class TestLeasedQueueFlow:
         )
         assert len(expired) == 1
 
-        requeued = await requeue_expired_analysis_job(redis, expired[0])
+        requeued = await requeue_expired_analysis_job(redis, expired[0], max_depth=1)
         recovered_lease = await dequeue_analysis_job(
             redis,
             worker_id="worker-b",
@@ -467,6 +504,46 @@ class TestLeasedQueueFlow:
         assert recovered_lease is not None
         assert recovered_lease.job_id == "job-6"
         assert recovered_lease.worker_id == "worker-b"
+
+    @pytest.mark.asyncio
+    async def test_requeue_expired_lease_rejects_over_capacity_state(self):
+        redis = FakeRedisQueue()
+        leased_at = datetime(2026, 3, 30, 12, 0, tzinfo=UTC)
+
+        await enqueue_analysis_job(
+            redis,
+            job_id="job-over-cap-queued",
+            project_id="proj-over-cap-queued",
+            organization_id="org-6",
+            is_superadmin_context=False,
+        )
+        await enqueue_analysis_job(
+            redis,
+            job_id="job-over-cap-processing",
+            project_id="proj-over-cap-processing",
+            organization_id="org-6",
+            is_superadmin_context=False,
+        )
+        first_lease = await dequeue_analysis_job(
+            redis,
+            worker_id="worker-a",
+            lease_timeout_seconds=600,
+            now=leased_at,
+        )
+        assert first_lease is not None
+
+        expired = await get_expired_analysis_job_leases(
+            redis,
+            now=leased_at + timedelta(minutes=11),
+        )
+        assert len(expired) == 1
+
+        with pytest.raises(AnalysisJobQueueCapacityExceededError):
+            await requeue_expired_analysis_job(redis, expired[0], max_depth=1)
+
+        assert len(redis.lists[QUEUE_KEY]) == 1
+        assert len(redis.lists[PROCESSING_QUEUE_KEY]) == 1
+        assert first_lease.token in redis.zsets[queue_module.LEASE_EXPIRY_ZSET_KEY]
 
 
 class TestRetryAndDlqFlow:
@@ -823,6 +900,7 @@ class TestQueueOverflowGuards:
             ),
         ):
             get_settings.return_value.analysis_queue_max_depth = 1000
+            get_settings.return_value.effective_backpressure_max_queued_jobs = 2000
             with pytest.raises(HTTPException) as exc_info:
                 await create_analysis_job(
                     case_id="proj-1",
@@ -867,6 +945,7 @@ class TestQueueOverflowGuards:
             ),
         ):
             get_settings.return_value.analysis_queue_max_depth = 1000
+            get_settings.return_value.effective_backpressure_max_queued_jobs = 2000
             with pytest.raises(HTTPException) as exc_info:
                 await retry_analysis_job(
                     job_id="job-old",

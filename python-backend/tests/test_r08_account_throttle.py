@@ -1,15 +1,11 @@
 """R-08: Per-account brute-force protection for the login endpoint."""
 import pytest
+from fastapi import HTTPException
+from starlette.requests import Request
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import app.core.account_limiter as limiter_mod
-
-
-@pytest.fixture(autouse=True)
-def clear_fallback_state():
-    limiter_mod._FALLBACK_FAILURES.clear()
-    yield
-    limiter_mod._FALLBACK_FAILURES.clear()
+from app.api.routes.auth import login
 
 
 # ── Unit tests: account_limiter module ───────────────────────────────────────
@@ -62,15 +58,12 @@ class TestAccountLimiterUnit:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_redis_unavailable_uses_in_memory_fallback(self):
-        """Redis unavailability uses the in-memory fallback instead of failing open."""
-        with patch.object(limiter_mod, "_get_client", return_value=None):
-            for _ in range(limiter_mod._MAX_FAILED_ATTEMPTS):
-                await limiter_mod.record_login_failure("user@example.com", "redis://localhost")
+    async def test_redis_unavailable_raises_backend_unavailable_on_check(self):
+        with patch.object(limiter_mod, "_get_client", new=AsyncMock(side_effect=OSError("redis down"))):
+            with pytest.raises(limiter_mod.AccountThrottleBackendUnavailableError) as exc_info:
+                await limiter_mod.is_account_throttled("user@example.com", "redis://localhost")
 
-            result = await limiter_mod.is_account_throttled("user@example.com", "redis://localhost")
-
-        assert result is True
+        assert exc_info.value.operation == "check"
 
     @pytest.mark.asyncio
     async def test_record_failure_uses_pipeline_incr_and_expire(self):
@@ -103,23 +96,20 @@ class TestAccountLimiterUnit:
         mock_client.delete.assert_called_once_with(limiter_mod._key("user@example.com"))
 
     @pytest.mark.asyncio
-    async def test_record_failure_uses_fallback_when_redis_unavailable(self):
-        """record_login_failure increments the in-memory fallback when Redis is down."""
-        with patch.object(limiter_mod, "_get_client", return_value=None):
-            await limiter_mod.record_login_failure("user@example.com", "redis://localhost")
+    async def test_record_failure_raises_backend_unavailable_when_redis_unavailable(self):
+        with patch.object(limiter_mod, "_get_client", new=AsyncMock(side_effect=OSError("redis down"))):
+            with pytest.raises(limiter_mod.AccountThrottleBackendUnavailableError) as exc_info:
+                await limiter_mod.record_login_failure("user@example.com", "redis://localhost")
 
-        key = limiter_mod._key("user@example.com")
-        count, _ = limiter_mod._FALLBACK_FAILURES[key]
-        assert count == 1
+        assert exc_info.value.operation == "record"
 
     @pytest.mark.asyncio
-    async def test_reset_failures_clears_fallback_when_redis_unavailable(self):
-        """reset_login_failures clears the in-memory fallback when Redis is down."""
-        with patch.object(limiter_mod, "_get_client", return_value=None):
-            await limiter_mod.record_login_failure("user@example.com", "redis://localhost")
-            await limiter_mod.reset_login_failures("user@example.com", "redis://localhost")
+    async def test_reset_failure_raises_backend_unavailable_when_redis_unavailable(self):
+        with patch.object(limiter_mod, "_get_client", new=AsyncMock(side_effect=OSError("redis down"))):
+            with pytest.raises(limiter_mod.AccountThrottleBackendUnavailableError) as exc_info:
+                await limiter_mod.reset_login_failures("user@example.com", "redis://localhost")
 
-        assert limiter_mod._key("user@example.com") not in limiter_mod._FALLBACK_FAILURES
+        assert exc_info.value.operation == "reset"
 
     @pytest.mark.asyncio
     async def test_get_client_uses_shared_hardening_builder(self):
@@ -273,6 +263,91 @@ class TestLoginEndpointThrottling:
         assert resp_existing.status_code == 401
         assert resp_nonexistent.status_code == 401
         assert resp_existing.json()["detail"] == resp_nonexistent.json()["detail"]
+
+    async def test_login_returns_503_when_throttle_backend_is_unavailable_before_verification(self, app_client):
+        with patch(
+            "app.api.routes.auth.is_account_throttled",
+            new=AsyncMock(
+                side_effect=limiter_mod.AccountThrottleBackendUnavailableError(
+                    operation="check",
+                    email="victim@example.com",
+                    cause=OSError("redis down"),
+                )
+            ),
+        ):
+            resp = await app_client.post(
+                "/api/v1/auth/login",
+                json={"email": "victim@example.com", "password": "wrong_password!"},
+            )
+
+        assert resp.status_code == 503
+        assert "protection" in resp.json()["detail"].lower()
+
+    async def test_login_returns_503_when_failure_cannot_be_recorded(self, app_client):
+        with (
+            patch("app.api.routes.auth.is_account_throttled", new=AsyncMock(return_value=False)),
+            patch(
+                "app.api.routes.auth.record_login_failure",
+                new=AsyncMock(
+                    side_effect=limiter_mod.AccountThrottleBackendUnavailableError(
+                        operation="record",
+                        email="victim@example.com",
+                        cause=OSError("redis down"),
+                    )
+                ),
+            ),
+        ):
+            resp = await app_client.post(
+                "/api/v1/auth/login",
+                json={"email": "victim@example.com", "password": "wrong_password!"},
+            )
+
+        assert resp.status_code == 503
+
+    async def test_login_returns_503_and_revokes_issued_session_when_reset_fails(self):
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/auth/login",
+                "headers": [],
+                "client": ("127.0.0.1", 12345),
+            }
+        )
+        service = AsyncMock()
+        service.login = AsyncMock(
+            return_value=(
+                "access-token",
+                "refresh-token",
+                MagicMock(id="usr-1", organizationId="org-1"),
+            )
+        )
+        service.revoke_session_by_token = AsyncMock(return_value=True)
+        service.revoke_token = AsyncMock(return_value=True)
+
+        with (
+            patch("app.api.routes.auth.is_account_throttled", new=AsyncMock(return_value=False)),
+            patch(
+                "app.api.routes.auth.reset_login_failures",
+                new=AsyncMock(
+                    side_effect=limiter_mod.AccountThrottleBackendUnavailableError(
+                        operation="reset",
+                        email="manager_a@test.local",
+                        cause=OSError("redis down"),
+                    )
+                ),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await login(
+                    request=request,
+                    payload=MagicMock(email="manager_a@test.local", password="TestPassA1!"),
+                    service=service,
+                )
+
+        assert exc_info.value.status_code == 503
+        service.revoke_session_by_token.assert_awaited_once_with("access-token")
+        assert service.revoke_token.await_count == 2
 
 
 class TestChangePasswordEndpointThrottling:

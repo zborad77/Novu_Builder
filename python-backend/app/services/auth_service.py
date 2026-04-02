@@ -13,7 +13,13 @@ from app.core.audit import commit_security_critical_audit
 from app.core.config import get_settings
 from app.core.security import enforce_password_strength
 from app.models import User, UserSession
-from app.repositories.token_repository import SessionTokenRevocation, TokenRepository
+from app.repositories.token_repository import (
+    SessionTokenRevocation,
+    TOKEN_STATE_ACTIVE,
+    TOKEN_STATE_EXPIRED,
+    TOKEN_STATE_REVOKED,
+    TokenRepository,
+)
 from app.schemas.auth import AuthSessionRead, AuthUserRead
 
 logger = structlog.get_logger(__name__)
@@ -29,6 +35,9 @@ class RefreshResult:
 
 def hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+
+
+_DUMMY_PASSWORD_HASH = hash_password("NOVU_BUILDER_AUTH_DUMMY_PASSWORD")
 
 
 def _verify_password(plain: str, hashed: str) -> bool:
@@ -196,6 +205,19 @@ class AuthService:
         for record in revocations:
             await self._tokens.cache_revoked_token(record.jti, record.expires_at)
 
+    @staticmethod
+    def _payload_expiry(payload: dict) -> datetime:
+        return datetime.fromtimestamp(payload["exp"], tz=UTC)
+
+    async def _get_token_state(self, payload: dict) -> str:
+        jti = payload.get("jti")
+        if not isinstance(jti, str):
+            return TOKEN_STATE_EXPIRED
+        return await self._tokens.get_token_state(
+            jti,
+            expires_at=self._payload_expiry(payload),
+        )
+
     def decode_token(self, token: str, *, expected_type: str | None = None) -> dict | None:
         normalized_token = self._normalize_encoded_token(token)
         if normalized_token is None:
@@ -264,13 +286,14 @@ class AuthService:
         )
 
     async def login(self, *, email: str, password: str) -> tuple[str, str, AuthUserRead] | None:
+        normalized_email = email.strip().lower()
         result = await self.session.execute(
-            select(User).where(User.email == email.strip().lower(), User.is_active.is_(True))
+            select(User).where(User.email == normalized_email)
         )
         user = result.scalar_one_or_none()
-        if not user:
-            return None
-        if not _verify_password(password, user.password_hash):
+        password_hash = user.password_hash if user and user.password_hash else _DUMMY_PASSWORD_HASH
+        password_matches = _verify_password(password, password_hash)
+        if not user or not user.is_active or not password_matches:
             return None
         token_version = self._user_token_version(user)
         for _ in range(2):
@@ -310,8 +333,7 @@ class AuthService:
         payload = self.decode_token(token, expected_type="access")
         if not payload:
             return None
-        jti = payload.get("jti")
-        if jti and await self._tokens.is_revoked(jti):
+        if await self._get_token_state(payload) != TOKEN_STATE_ACTIVE:
             return None
         session_id = payload.get("sid")
         if session_id:
@@ -339,9 +361,12 @@ class AuthService:
         payload = self.decode_token(refresh_token, expected_type="refresh")
         if not payload:
             return RefreshResult(tokens=None, failure_reason="invalid_or_expired_token")
-        jti = payload.get("jti")
-        if jti and await self._tokens.is_revoked(jti):
+        token_state = await self._get_token_state(payload)
+        if token_state == TOKEN_STATE_REVOKED:
             return RefreshResult(tokens=None, failure_reason="revoked_or_reused_token")
+        if token_state != TOKEN_STATE_ACTIVE:
+            return RefreshResult(tokens=None, failure_reason="invalid_or_expired_token")
+        jti = payload.get("jti")
         session_id = payload.get("sid")
         session_record = None
         if session_id:
@@ -413,10 +438,8 @@ class AuthService:
         jti = payload.get("jti")
         if not jti:
             return False
-        exp = datetime.fromtimestamp(payload["exp"], tz=UTC)
-        if exp <= datetime.now(UTC):
-            return False
-        if await self._tokens.is_revoked(jti):
+        exp = self._payload_expiry(payload)
+        if await self._tokens.get_token_state(jti, expires_at=exp) != TOKEN_STATE_ACTIVE:
             return False
         return await self._tokens.revoke(jti, exp)
 

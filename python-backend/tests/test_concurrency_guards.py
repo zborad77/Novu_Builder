@@ -142,8 +142,14 @@ class TestCreateJobIdempotency:
         with (
             patch("app.services.analysis_service.get_settings") as get_settings,
             patch(
-                "app.services.analysis_service.get_analysis_job_queue_counts",
-                new=AsyncMock(return_value=(1000, 0)),
+                "app.services.analysis_service.collect_backpressure_snapshot",
+                new=AsyncMock(
+                    return_value=MagicMock(
+                        runtime_servable=True,
+                        analysis_total_jobs=1000,
+                        global_queue_full=False,
+                    )
+                ),
             ),
         ):
             get_settings.return_value.analysis_jobs_per_tenant_limit = 10

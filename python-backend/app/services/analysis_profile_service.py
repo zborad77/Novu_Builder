@@ -5,14 +5,22 @@ from decimal import Decimal
 from time import perf_counter
 from typing import Any
 
+from redis.asyncio import Redis
+
+from app.core.cache import VersionTaggedLocalCache, get_cache_tag
 from app.core.metrics import (
     observe_cache_operation,
     observe_work_catalog_resolution,
     record_work_catalog_validation_failure,
 )
+from app.core.tenant_timing import (
+    TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+    enforce_timing_floor,
+)
 from app.models.work_catalog import AnalysisProfile, WorkType
 from app.repositories.work_catalog_repository import WorkCatalogRepository
 from app.services.tenant_work_type_resolution_service import TenantWorkTypeResolutionService
+from app.work_catalog.cache import LOCAL_RESOLUTION_TTL_SECONDS, tenant_effective_cache_scope
 from app.work_catalog.domain import (
     CatalogValidationError,
     coerce_analysis_attribute_value,
@@ -53,11 +61,21 @@ class ResolvedAnalysisConfiguration:
 
 
 class AnalysisProfileService:
-    def __init__(self, repository: WorkCatalogRepository):
+    def __init__(self, repository: WorkCatalogRepository, redis: Redis | None = None):
         self.repository = repository
-        self.resolution_service = TenantWorkTypeResolutionService(repository)
-        self._resolved_by_work_type: dict[tuple[str, str], ResolvedAnalysisConfiguration] = {}
-        self._resolved_snapshots: dict[tuple[str, str, str], ResolvedAnalysisConfiguration] = {}
+        self.redis = redis
+        self.resolution_service = TenantWorkTypeResolutionService(repository, redis=redis)
+        self._resolved_by_work_type = VersionTaggedLocalCache(
+            namespace="work_catalog_local",
+            ttl_seconds=LOCAL_RESOLUTION_TTL_SECONDS,
+        )
+        self._resolved_snapshots = VersionTaggedLocalCache(
+            namespace="work_catalog_local",
+            ttl_seconds=LOCAL_RESOLUTION_TTL_SECONDS,
+        )
+
+    async def _cache_tag_for_org(self, organization_id: str) -> str:
+        return await get_cache_tag(self.redis, tenant_effective_cache_scope(organization_id))
 
     async def resolve_for_work_type(
         self,
@@ -65,23 +83,36 @@ class AnalysisProfileService:
         organization_id: str,
         work_type_code: str,
     ) -> ResolvedAnalysisConfiguration:
+        started_at = perf_counter()
         normalized_code = normalize_machine_code(work_type_code, field_name="workTypeCode")
         cache_key = (organization_id, normalized_code)
-        cached = self._resolved_by_work_type.get(cache_key)
+        cache_tag = await self._cache_tag_for_org(organization_id)
+        cached = self._resolved_by_work_type.get(cache_key, tag=cache_tag)
+        outcome = "success"
         if cached is not None:
             observe_cache_operation(
                 namespace="work_catalog_local",
                 operation="analysis_profile.resolve_for_work_type",
                 outcome="hit",
             )
-            return cached
+            outcome = "cache_hit"
+            try:
+                return cached
+            finally:
+                observe_work_catalog_resolution(
+                    path="analysis_profile.resolve_for_work_type",
+                    outcome=outcome,
+                    duration_seconds=perf_counter() - started_at,
+                )
+                await enforce_timing_floor(
+                    started_at,
+                    minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+                )
         observe_cache_operation(
             namespace="work_catalog_local",
             operation="analysis_profile.resolve_for_work_type",
             outcome="miss",
         )
-        started_at = perf_counter()
-        outcome = "success"
         try:
             resolved = await self.resolution_service.resolve_for_work_type(
                 organization_id=organization_id,
@@ -103,6 +134,10 @@ class AnalysisProfileService:
                 outcome=outcome,
                 duration_seconds=perf_counter() - started_at,
             )
+            await enforce_timing_floor(
+                started_at,
+                minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+            )
         work_type = resolved.work_type
         profile = resolved.analysis_profile
         if profile is None:
@@ -118,7 +153,7 @@ class AnalysisProfileService:
                 for parameter in resolved.parameters
             },
         )
-        self._resolved_by_work_type[cache_key] = configured
+        self._resolved_by_work_type.set(cache_key, configured, tag=cache_tag)
         return configured
 
     async def resolve_for_snapshot(
@@ -128,43 +163,68 @@ class AnalysisProfileService:
         work_type_code: str,
         analysis_profile_id: str,
     ) -> ResolvedAnalysisConfiguration:
+        started_at = perf_counter()
         normalized_code = normalize_machine_code(work_type_code, field_name="workTypeCode")
         cache_key = (organization_id, normalized_code, analysis_profile_id)
-        cached = self._resolved_snapshots.get(cache_key)
+        cache_tag = await self._cache_tag_for_org(organization_id)
+        cached = self._resolved_snapshots.get(cache_key, tag=cache_tag)
+        outcome = "success"
         if cached is not None:
             observe_cache_operation(
                 namespace="work_catalog_local",
                 operation="analysis_profile.resolve_for_snapshot",
                 outcome="hit",
             )
-            return cached
+            outcome = "cache_hit"
+            try:
+                return cached
+            finally:
+                observe_work_catalog_resolution(
+                    path="analysis_profile.resolve_for_snapshot",
+                    outcome=outcome,
+                    duration_seconds=perf_counter() - started_at,
+                )
+                await enforce_timing_floor(
+                    started_at,
+                    minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+                )
         observe_cache_operation(
             namespace="work_catalog_local",
             operation="analysis_profile.resolve_for_snapshot",
             outcome="miss",
         )
-        started_at = perf_counter()
-        outcome = "success"
         work_type = await self.repository.get_work_type_by_code(normalized_code)
         if work_type is None:
             outcome = "not_found"
-            observe_work_catalog_resolution(
-                path="analysis_profile.resolve_for_snapshot",
-                outcome=outcome,
-                duration_seconds=perf_counter() - started_at,
-            )
-            raise AnalysisProfileResolutionError(f"Work type '{normalized_code}' was not found.")
+            try:
+                raise AnalysisProfileResolutionError(f"Work type '{normalized_code}' was not found.")
+            finally:
+                observe_work_catalog_resolution(
+                    path="analysis_profile.resolve_for_snapshot",
+                    outcome=outcome,
+                    duration_seconds=perf_counter() - started_at,
+                )
+                await enforce_timing_floor(
+                    started_at,
+                    minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+                )
         profile = await self.repository.get_analysis_profile_by_id(analysis_profile_id)
         if profile is None:
             outcome = "not_found"
-            observe_work_catalog_resolution(
-                path="analysis_profile.resolve_for_snapshot",
-                outcome=outcome,
-                duration_seconds=perf_counter() - started_at,
-            )
-            raise AnalysisProfileResolutionError(
-                f"Analysis profile '{analysis_profile_id}' was not found."
-            )
+            try:
+                raise AnalysisProfileResolutionError(
+                    f"Analysis profile '{analysis_profile_id}' was not found."
+                )
+            finally:
+                observe_work_catalog_resolution(
+                    path="analysis_profile.resolve_for_snapshot",
+                    outcome=outcome,
+                    duration_seconds=perf_counter() - started_at,
+                )
+                await enforce_timing_floor(
+                    started_at,
+                    minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+                )
         if not profile.code.startswith(f"{work_type.code}-"):
             outcome = "validation_error"
             record_work_catalog_validation_failure(
@@ -175,6 +235,10 @@ class AnalysisProfileService:
                 path="analysis_profile.resolve_for_snapshot",
                 outcome=outcome,
                 duration_seconds=perf_counter() - started_at,
+            )
+            await enforce_timing_floor(
+                started_at,
+                minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
             )
             raise AnalysisProfileResolutionError(
                 f"Analysis profile '{profile.code}' is inconsistent with work type '{work_type.code}'."
@@ -189,6 +253,10 @@ class AnalysisProfileService:
                 path="analysis_profile.resolve_for_snapshot",
                 outcome=outcome,
                 duration_seconds=perf_counter() - started_at,
+            )
+            await enforce_timing_floor(
+                started_at,
+                minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
             )
             raise AnalysisProfileResolutionError(
                 f"Analysis profile '{profile.code}' is not active."
@@ -210,11 +278,15 @@ class AnalysisProfileService:
                 for parameter in (work_type.parameters or [])
             },
         )
-        self._resolved_snapshots[cache_key] = configured
+        self._resolved_snapshots.set(cache_key, configured, tag=cache_tag)
         observe_work_catalog_resolution(
             path="analysis_profile.resolve_for_snapshot",
             outcome=outcome,
             duration_seconds=perf_counter() - started_at,
+        )
+        await enforce_timing_floor(
+            started_at,
+            minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
         )
         return configured
 

@@ -7,11 +7,19 @@ from time import perf_counter
 from types import MappingProxyType
 from typing import Mapping
 
+from redis.asyncio import Redis
+
+from app.core.cache import VersionTaggedLocalCache, get_cache_tag
 from app.core.metrics import (
     observe_cache_operation,
     observe_work_catalog_resolution,
     observe_work_catalog_resolution_input,
     record_work_catalog_validation_failure,
+)
+from app.work_catalog.cache import LOCAL_RESOLUTION_TTL_SECONDS, tenant_effective_cache_scope
+from app.core.tenant_timing import (
+    TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+    enforce_timing_floor,
 )
 from app.models.work_catalog import (
     AnalysisProfile,
@@ -172,10 +180,20 @@ def _setting_matches_work_type(setting: TenantWorkTypeSetting | None, work_type:
 
 
 class TenantWorkTypeResolutionService:
-    def __init__(self, repository: WorkCatalogRepository):
+    def __init__(self, repository: WorkCatalogRepository, redis: Redis | None = None):
         self.repository = repository
-        self._resolved_by_work_type: dict[tuple[str, str], ResolvedTenantWorkTypeConfiguration] = {}
-        self._resolved_all_by_org: dict[str, list[ResolvedTenantWorkTypeConfiguration]] = {}
+        self.redis = redis
+        self._resolved_by_work_type = VersionTaggedLocalCache(
+            namespace="work_catalog_local",
+            ttl_seconds=LOCAL_RESOLUTION_TTL_SECONDS,
+        )
+        self._resolved_all_by_org = VersionTaggedLocalCache(
+            namespace="work_catalog_local",
+            ttl_seconds=LOCAL_RESOLUTION_TTL_SECONDS,
+        )
+
+    async def _cache_tag_for_org(self, organization_id: str) -> str:
+        return await get_cache_tag(self.redis, tenant_effective_cache_scope(organization_id))
 
     def invalidate(
         self,
@@ -183,13 +201,11 @@ class TenantWorkTypeResolutionService:
         organization_id: str,
         work_type_code: str | None = None,
     ) -> None:
-        self._resolved_all_by_org.pop(organization_id, None)
+        self._resolved_all_by_org.invalidate(organization_id)
         if work_type_code is None:
-            stale_keys = [key for key in self._resolved_by_work_type if key[0] == organization_id]
-            for key in stale_keys:
-                self._resolved_by_work_type.pop(key, None)
+            self._resolved_by_work_type.invalidate_where(lambda key: key[0] == organization_id)
             return
-        self._resolved_by_work_type.pop((organization_id, work_type_code), None)
+        self._resolved_by_work_type.invalidate((organization_id, work_type_code))
 
     async def resolve_for_work_type(
         self,
@@ -197,32 +213,51 @@ class TenantWorkTypeResolutionService:
         organization_id: str,
         work_type_code: str,
     ) -> ResolvedTenantWorkTypeConfiguration:
+        started_at = perf_counter()
         normalized_code = normalize_machine_code(work_type_code, field_name="workTypeCode")
         cache_key = (organization_id, normalized_code)
-        cached = self._resolved_by_work_type.get(cache_key)
+        cache_tag = await self._cache_tag_for_org(organization_id)
+        cached = self._resolved_by_work_type.get(cache_key, tag=cache_tag)
+        outcome = "success"
         if cached is not None:
             observe_cache_operation(
                 namespace="work_catalog_local",
                 operation="resolve_for_work_type",
                 outcome="hit",
             )
-            return cached
+            outcome = "cache_hit"
+            try:
+                return cached
+            finally:
+                observe_work_catalog_resolution(
+                    path="tenant_work_type_resolution.resolve_for_work_type",
+                    outcome=outcome,
+                    duration_seconds=perf_counter() - started_at,
+                )
+                await enforce_timing_floor(
+                    started_at,
+                    minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+                )
         observe_cache_operation(
             namespace="work_catalog_local",
             operation="resolve_for_work_type",
             outcome="miss",
         )
-        started_at = perf_counter()
-        outcome = "success"
         work_type = await self.repository.get_work_type_by_code_for_resolution(normalized_code)
         if work_type is None:
             outcome = "not_found"
-            observe_work_catalog_resolution(
-                path="tenant_work_type_resolution.resolve_for_work_type",
-                outcome=outcome,
-                duration_seconds=perf_counter() - started_at,
-            )
-            raise TenantWorkTypeResolutionError(f"Work type '{normalized_code}' was not found.")
+            try:
+                raise TenantWorkTypeResolutionError(f"Work type '{normalized_code}' was not found.")
+            finally:
+                observe_work_catalog_resolution(
+                    path="tenant_work_type_resolution.resolve_for_work_type",
+                    outcome=outcome,
+                    duration_seconds=perf_counter() - started_at,
+                )
+                await enforce_timing_floor(
+                    started_at,
+                    minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+                )
         try:
             resolved = await self._resolve_for_work_types(
                 organization_id=organization_id,
@@ -244,7 +279,11 @@ class TenantWorkTypeResolutionService:
                 outcome=outcome,
                 duration_seconds=perf_counter() - started_at,
             )
-        self._resolved_by_work_type[cache_key] = resolved[0]
+            await enforce_timing_floor(
+                started_at,
+                minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+            )
+        self._resolved_by_work_type.set(cache_key, resolved[0], tag=cache_tag)
         return resolved[0]
 
     async def resolve_all_for_org(
@@ -252,21 +291,34 @@ class TenantWorkTypeResolutionService:
         *,
         organization_id: str,
     ) -> list[ResolvedTenantWorkTypeConfiguration]:
-        cached = self._resolved_all_by_org.get(organization_id)
+        started_at = perf_counter()
+        cache_tag = await self._cache_tag_for_org(organization_id)
+        cached = self._resolved_all_by_org.get(organization_id, tag=cache_tag)
+        outcome = "success"
         if cached is not None:
             observe_cache_operation(
                 namespace="work_catalog_local",
                 operation="resolve_all_for_org",
                 outcome="hit",
             )
-            return cached
+            outcome = "cache_hit"
+            try:
+                return cached
+            finally:
+                observe_work_catalog_resolution(
+                    path="tenant_work_type_resolution.resolve_all_for_org",
+                    outcome=outcome,
+                    duration_seconds=perf_counter() - started_at,
+                )
+                await enforce_timing_floor(
+                    started_at,
+                    minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+                )
         observe_cache_operation(
             namespace="work_catalog_local",
             operation="resolve_all_for_org",
             outcome="miss",
         )
-        started_at = perf_counter()
-        outcome = "success"
         work_types = list(await self.repository.list_work_types_for_resolution())
         try:
             resolved = await self._resolve_for_work_types(
@@ -289,9 +341,13 @@ class TenantWorkTypeResolutionService:
                 outcome=outcome,
                 duration_seconds=perf_counter() - started_at,
             )
-        self._resolved_all_by_org[organization_id] = resolved
+            await enforce_timing_floor(
+                started_at,
+                minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+            )
+        self._resolved_all_by_org.set(organization_id, resolved, tag=cache_tag)
         for item in resolved:
-            self._resolved_by_work_type[(organization_id, item.work_type.code)] = item
+            self._resolved_by_work_type.set((organization_id, item.work_type.code), item, tag=cache_tag)
         return resolved
 
     async def _resolve_for_work_types(

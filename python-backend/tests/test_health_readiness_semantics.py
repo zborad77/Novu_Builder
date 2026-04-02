@@ -6,6 +6,22 @@ import pytest
 from fastapi import Response
 
 
+class _ReadyRuntime:
+    async def ping(self) -> bool:
+        return True
+
+    def runtime_status(self):
+        return SimpleNamespace(
+            state="ready",
+            mode="single",
+            candidate_count=1,
+            active_url="redis://:***@localhost:6379/0",
+            degraded=False,
+            last_error=None,
+            last_failover_at=None,
+        )
+
+
 @pytest.fixture(autouse=True)
 def _reset_readiness_cache():
     from app.api.routes.system import (
@@ -25,7 +41,7 @@ def _reset_readiness_cache():
 
 
 @pytest.mark.asyncio
-async def test_health_is_minimal_and_not_coupled_to_dependency_checks(app_client):
+async def test_health_returns_unavailable_when_integrity_dependencies_fail(app_client):
     failing_ctx = AsyncMock()
     failing_ctx.__aenter__.side_effect = RuntimeError("db unavailable")
     failing_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -33,16 +49,70 @@ async def test_health_is_minimal_and_not_coupled_to_dependency_checks(app_client
     with patch("app.api.routes.system.AsyncSessionFactory", return_value=failing_ctx):
         response = await app_client.get("/api/v1/health")
 
-    assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "python-backend"}
+    assert response.status_code == 503
+    assert response.json()["status"] == "unavailable"
+    assert response.json()["dependencies"]["db"] == "unavailable"
 
 
 @pytest.mark.asyncio
-async def test_ready_is_minimal_when_service_is_ready(app_client):
+async def test_ready_reports_degraded_when_worker_subsystem_is_not_green(app_client):
     response = await app_client.get("/api/v1/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ready", "service": "python-backend"}
+    assert response.json()["status"] == "degraded"
+    assert response.json()["ready"] is True
+    assert response.json()["apiState"] == "ready"
+    assert response.json()["processingState"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_ready_returns_503_when_redis_runtime_is_unavailable(app_client):
+    from app.main import app as fastapi_app
+
+    original_job_queue = getattr(fastapi_app.state, "job_queue", None)
+    original_auth_store = getattr(fastapi_app.state, "auth_token_store", None)
+    fastapi_app.state.job_queue = None
+    fastapi_app.state.auth_token_store = None
+    try:
+        response = await app_client.get("/api/v1/ready")
+    finally:
+        fastapi_app.state.job_queue = original_job_queue
+        fastapi_app.state.auth_token_store = original_auth_store
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "unavailable"
+    assert response.json()["dependencies"]["redis"] == "unavailable"
+    assert response.json()["security"]["authProtection"]["state"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_health_reports_degraded_when_worker_is_down_but_api_is_servable(app_client):
+    from app.main import app as fastapi_app
+
+    worker_snapshot = SimpleNamespace(
+        alive=False,
+        last_seen_at="2026-03-31T10:00:00+00:00",
+        alive_instances=0,
+        seen_instances=1,
+    )
+    original_job_queue = getattr(fastapi_app.state, "job_queue", None)
+    original_auth_store = getattr(fastapi_app.state, "auth_token_store", None)
+    fastapi_app.state.job_queue = _ReadyRuntime()
+    fastapi_app.state.auth_token_store = _ReadyRuntime()
+    try:
+        with (
+            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+        ):
+            response = await app_client.get("/api/v1/health")
+    finally:
+        fastapi_app.state.job_queue = original_job_queue
+        fastapi_app.state.auth_token_store = original_auth_store
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+    assert response.json()["ready"] is True
+    assert response.json()["worker"]["state"] == "stale"
 
 
 @pytest.mark.asyncio
@@ -211,7 +281,8 @@ async def test_ready_returns_503_when_startup_checks_are_not_ready(app_client):
         fastapi_app.state.startup_checks = original_checks
 
     assert response.status_code == 503
-    assert response.json() == {"status": "not_ready", "service": "python-backend"}
+    assert response.json()["status"] == "unavailable"
+    assert response.json()["dependencies"]["startup"] == "unavailable"
 
 
 @pytest.mark.asyncio
@@ -224,7 +295,8 @@ async def test_ready_returns_503_when_database_probe_fails(app_client):
         response = await app_client.get("/api/v1/ready")
 
     assert response.status_code == 503
-    assert response.json() == {"status": "not_ready", "service": "python-backend"}
+    assert response.json()["status"] == "unavailable"
+    assert response.json()["dependencies"]["db"] == "unavailable"
 
 
 @pytest.mark.asyncio
@@ -233,11 +305,12 @@ async def test_ready_returns_503_when_storage_probe_fails(app_client):
         response = await app_client.get("/api/v1/ready")
 
     assert response.status_code == 503
-    assert response.json() == {"status": "not_ready", "service": "python-backend"}
+    assert response.json()["status"] == "unavailable"
+    assert response.json()["dependencies"]["storage"] == "unavailable"
 
 
 @pytest.mark.asyncio
-async def test_health_stays_200_when_readiness_is_failing(app_client):
+async def test_health_returns_503_when_startup_integrity_is_not_ready(app_client):
     from app.main import app as fastapi_app
 
     original_checks = deepcopy(fastapi_app.state.startup_checks)
@@ -252,10 +325,10 @@ async def test_health_stays_200_when_readiness_is_failing(app_client):
     finally:
         fastapi_app.state.startup_checks = original_checks
 
-    assert health.status_code == 200
-    assert health.json() == {"status": "ok", "service": "python-backend"}
+    assert health.status_code == 503
+    assert health.json()["status"] == "unavailable"
     assert ready.status_code == 503
-    assert ready.json() == {"status": "not_ready", "service": "python-backend"}
+    assert ready.json()["status"] == "unavailable"
 
 
 @pytest.mark.asyncio
@@ -270,6 +343,7 @@ async def test_internal_health_returns_503_when_service_is_not_ready():
         "storage": "ok",
     }
     mock_request.app.state.job_queue = None
+    mock_request.app.state.auth_token_store = None
     response = Response()
 
     current_user = AuthUserRead(
@@ -288,9 +362,7 @@ async def test_internal_health_returns_503_when_service_is_not_ready():
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.execute = AsyncMock(side_effect=[
-            AsyncMock(),
-            SimpleNamespace(scalar_one=lambda: 0),
-            SimpleNamespace(scalar_one=lambda: 0),
+            SimpleNamespace(one=lambda: (0, 0, 0, 0)),
             SimpleNamespace(scalar_one_or_none=lambda: None),
         ])
         mock_session.scalar = AsyncMock(return_value=None)
@@ -303,11 +375,12 @@ async def test_internal_health_returns_503_when_service_is_not_ready():
         )
 
     assert response.status_code == 503
-    assert body["status"] == "degraded"
+    assert body["status"] == "unavailable"
     assert body["ready"] is False
     assert body["apiReady"] is False
     assert body["jobProcessingReady"] is False
     assert body["storage"] in {"ok", "error"}
+    assert body["security"]["authProtection"]["state"] == "unavailable"
 
 
 @pytest.mark.asyncio
@@ -321,7 +394,8 @@ async def test_internal_health_omits_debug_flag_and_keeps_internal_details():
         "schema": "ok",
         "storage": "ok",
     }
-    mock_request.app.state.job_queue = object()
+    mock_request.app.state.job_queue = _ReadyRuntime()
+    mock_request.app.state.auth_token_store = _ReadyRuntime()
     response = Response()
 
     current_user = AuthUserRead(
@@ -351,9 +425,7 @@ async def test_internal_health_omits_debug_flag_and_keeps_internal_details():
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.execute = AsyncMock(side_effect=[
-            AsyncMock(),
-            SimpleNamespace(scalar_one=lambda: 0),
-            SimpleNamespace(scalar_one=lambda: 0),
+            SimpleNamespace(one=lambda: (0, 0, 0, 0)),
             SimpleNamespace(scalar_one_or_none=lambda: None),
         ])
         mock_session.scalar = AsyncMock(return_value=None)
@@ -371,6 +443,7 @@ async def test_internal_health_omits_debug_flag_and_keeps_internal_details():
     assert "worker" in body
     assert body["apiReady"] is True
     assert body["jobProcessingReady"] is True
+    assert body["status"] == "ready"
 
 
 @pytest.mark.asyncio

@@ -359,7 +359,7 @@ class TestAdminPasswordResetInvalidatesTokens:
         before = datetime.now(UTC).replace(microsecond=0)
 
         with patch("app.api.routes.admin.commit_security_critical_audit", new_callable=AsyncMock):
-            with patch("app.api.routes.admin.get_job_queue", return_value=None):
+            with patch("app.api.routes.admin.get_auth_redis", return_value=None):
                 with patch("app.api.routes.admin.TokenRepository.revoke_all_user_sessions", new=AsyncMock(return_value=[])):
                     with patch("app.api.routes.admin.logger"):
                         await reset_user_password(
@@ -382,6 +382,74 @@ class TestAdminPasswordResetInvalidatesTokens:
             "tokens_valid_after must be a current timestamp"
         )
         assert mock_user.token_version == 1, "token_version must bump on admin password reset"
+
+    @pytest.mark.asyncio
+    async def test_reset_password_succeeds_when_token_state_cache_cannot_be_updated(self):
+        from datetime import UTC, datetime, timedelta
+
+        from fastapi import Request
+
+        from app.api.routes.admin import ResetPasswordPayload, reset_user_password
+        from app.repositories.token_repository import SessionTokenRevocation
+        from app.schemas.auth import AuthUserRead
+
+        mock_user = MagicMock()
+        mock_user.id = "user-1"
+        mock_user.email = "user@test.com"
+        mock_user.organization_id = "org-1"
+        mock_user.tokens_valid_after = None
+        mock_user.token_version = 0
+
+        mock_session = MagicMock()
+        mock_session.get = AsyncMock(return_value=mock_user)
+        mock_session.commit = AsyncMock()
+
+        mock_current_user = AuthUserRead(
+            id="sa-1",
+            email="sa@test.com",
+            fullName="SA",
+            role="superadmin",
+            isActive=True,
+            organizationId="org-1",
+            isSuperAdmin=True,
+            impersonatedBy=None,
+        )
+
+        mock_request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/admin/users/user-1/reset-password",
+                "headers": [],
+                "client": ("127.0.0.1", 12345),
+                "app": MagicMock(),
+            }
+        )
+        mock_request.app.state.auth_token_store = object()
+
+        revocations = [
+            SessionTokenRevocation(
+                jti="jti-1",
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            )
+        ]
+
+        with (
+            patch("app.api.routes.admin.commit_security_critical_audit", new_callable=AsyncMock),
+            patch("app.api.routes.admin.get_auth_redis", return_value=object()),
+            patch("app.api.routes.admin.TokenRepository.revoke_all_user_sessions", new=AsyncMock(return_value=revocations)),
+            patch(
+                "app.api.routes.admin.TokenRepository.cache_revoked_token",
+                new=AsyncMock(return_value=False),
+            ),
+        ):
+            await reset_user_password(
+                request=mock_request,
+                user_id="user-1",
+                payload=ResetPasswordPayload(password="NewSecure@Pass1"),
+                current_user=mock_current_user,
+                session=mock_session,
+            )
 
 
 class TestAuditMiddlewareDedup:

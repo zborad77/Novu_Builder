@@ -25,6 +25,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 from redis.asyncio import Redis
+import structlog
 
 QUEUE_KEY = "analysis:jobs"
 PROCESSING_QUEUE_KEY = "analysis:processing"
@@ -36,14 +37,23 @@ DLQ_KEY_PREFIX = "analysis:dlq:"
 DLQ_ACTIVE_SET_KEY = "analysis:dlq:active"
 DLQ_HISTORY_SUFFIX = ":history"
 
+logger = structlog.get_logger(__name__)
+_JOB_PRIORITY_STANDARD = "standard"
+_JOB_PRIORITY_CRITICAL = "critical"
+
 _LEASE_JOB_SCRIPT = """
+local total_processing = redis.call('LLEN', KEYS[2]) + redis.call('LLEN', KEYS[3])
+if total_processing >= tonumber(ARGV[4]) then
+    return {'__backpressure__', tostring(total_processing)}
+end
+
 local raw = redis.call('LPOP', KEYS[1])
 if not raw then
     return nil
 end
 
-local token = tostring(redis.call('INCR', KEYS[5]))
-local lease_key = KEYS[4] .. token
+local token = tostring(redis.call('INCR', KEYS[6]))
+local lease_key = KEYS[5] .. token
 local leased_at_ms = ARGV[1]
 local worker_id = ARGV[2]
 local lease_timeout_ms = ARGV[3]
@@ -60,20 +70,41 @@ redis.call(
     'lease_timeout_ms', lease_timeout_ms,
     'expires_at_ms', expires_at_ms
 )
-redis.call('ZADD', KEYS[3], expires_at_ms, token)
+redis.call('ZADD', KEYS[4], expires_at_ms, token)
 return {token, raw, worker_id, leased_at_ms, lease_timeout_ms, expires_at_ms}
 """
 
-_ENQUEUE_WITH_LIMIT_SCRIPT = """
-local queue_depth = redis.call('LLEN', KEYS[1])
-local processing_depth = redis.call('LLEN', KEYS[2])
-local max_depth = tonumber(ARGV[2])
-if (queue_depth + processing_depth + 1) > max_depth then
-    return {0, queue_depth, processing_depth}
+_QUEUE_CAPACITY_GUARD_LUA = """
+local function check_queue_capacity(queue_key, processing_key, peer_queue_key, max_depth, max_global_queued, delta)
+    local queue_depth = redis.call('LLEN', queue_key)
+    local processing_depth = redis.call('LLEN', processing_key)
+    if (queue_depth + processing_depth + delta) > max_depth then
+        return {0, queue_depth, processing_depth, queue_depth + redis.call('LLEN', peer_queue_key)}
+    end
+    local global_queued = queue_depth + redis.call('LLEN', peer_queue_key)
+    if (global_queued + delta) > max_global_queued then
+        return {-2, queue_depth, processing_depth, global_queued}
+    end
+    return {1, queue_depth, processing_depth, global_queued}
 end
 
-redis.call('RPUSH', KEYS[1], ARGV[1])
-return {1, queue_depth + 1, processing_depth}
+local function guarded_push(queue_key, processing_key, peer_queue_key, raw, max_depth, max_global_queued, delta, priority)
+    local guard = check_queue_capacity(queue_key, processing_key, peer_queue_key, max_depth, max_global_queued, delta)
+    if tonumber(guard[1]) ~= 1 then
+        return guard
+    end
+
+    if priority == 'critical' then
+        redis.call('LPUSH', queue_key, raw)
+    else
+        redis.call('RPUSH', queue_key, raw)
+    end
+    return {1, guard[2] + 1, guard[3], guard[4] + 1}
+end
+"""
+
+_ENQUEUE_WITH_LIMIT_SCRIPT = _QUEUE_CAPACITY_GUARD_LUA + """
+return guarded_push(KEYS[1], KEYS[2], KEYS[3], ARGV[1], tonumber(ARGV[2]), tonumber(ARGV[3]), 1, ARGV[4])
 """
 
 _ACK_JOB_SCRIPT = """
@@ -151,31 +182,48 @@ redis.call('ZREM', KEYS[3], ARGV[1])
 return 1
 """
 
-_FINALIZE_EXPIRED_LEASE_SCRIPT = """
+_FINALIZE_EXPIRED_LEASE_SCRIPT = _QUEUE_CAPACITY_GUARD_LUA + """
 local token = ARGV[1]
 local expected_leased_at_ms = ARGV[2]
 local action = ARGV[3]
+local max_depth = tonumber(ARGV[4])
 local lease_key = KEYS[1] .. token
 if redis.call('EXISTS', lease_key) == 0 then
-    return 0
+    return {-3, 0, 0, 0}
 end
 
 local actual_leased_at_ms = redis.call('HGET', lease_key, 'leased_at_ms')
 if actual_leased_at_ms ~= expected_leased_at_ms then
-    return 0
+    return {-3, 0, 0, 0}
 end
 
 local raw = redis.call('HGET', lease_key, 'raw')
 if raw then
+    if action == 'requeue' then
+        local queue_depth = redis.call('LLEN', KEYS[4])
+        local processing_depth = redis.call('LLEN', KEYS[2])
+        local global_queued = queue_depth + redis.call('LLEN', KEYS[5])
+        if (queue_depth + processing_depth) > max_depth then
+            return {0, queue_depth, processing_depth, global_queued}
+        end
+        if (global_queued + 1) > tonumber(ARGV[5]) then
+            return {-2, queue_depth, processing_depth, global_queued}
+        end
+    end
+
     redis.call('LREM', KEYS[2], 1, raw)
     if action == 'requeue' then
-        redis.call('RPUSH', KEYS[4], raw)
+        if ARGV[6] == 'critical' then
+            redis.call('LPUSH', KEYS[4], raw)
+        else
+            redis.call('RPUSH', KEYS[4], raw)
+        end
     end
 end
 
 redis.call('DEL', lease_key)
 redis.call('ZREM', KEYS[3], token)
-return 1
+return {1, 0, 0, redis.call('LLEN', KEYS[4]) + redis.call('LLEN', KEYS[5])}
 """
 
 _MOVE_TO_DLQ_SCRIPT = """
@@ -205,25 +253,14 @@ redis.call('ZREM', KEYS[3], ARGV[1])
 return 1
 """
 
-_PROMOTE_RETRY_SCRIPT = """
+_PROMOTE_RETRY_SCRIPT = _QUEUE_CAPACITY_GUARD_LUA + """
 local due = redis.call('ZRANGEBYSCORE', KEYS[3], 0, ARGV[1], 'LIMIT', 0, ARGV[2])
 local moved = 0
 
-local function enqueue_with_limit(raw)
-    local queue_depth = redis.call('LLEN', KEYS[1])
-    local processing_depth = redis.call('LLEN', KEYS[2])
-    local max_depth = tonumber(ARGV[3])
-    if (queue_depth + processing_depth + 1) > max_depth then
-        return 0
-    end
-
-    redis.call('RPUSH', KEYS[1], raw)
-    return 1
-end
-
 for _, raw in ipairs(due) do
-    if enqueue_with_limit(raw) ~= 1 then
-        break
+    local enqueue_result = guarded_push(KEYS[1], KEYS[2], KEYS[4], raw, tonumber(ARGV[3]), tonumber(ARGV[4]), 1, 'standard')
+    if tonumber(enqueue_result[1]) ~= 1 then
+        return {moved, #due - moved, enqueue_result[2], enqueue_result[3], enqueue_result[4]}
     end
 
     if redis.call('ZREM', KEYS[3], raw) == 1 then
@@ -232,7 +269,7 @@ for _, raw in ipairs(due) do
         redis.call('LREM', KEYS[1], 1, raw)
     end
 end
-return moved
+return {moved, 0, redis.call('LLEN', KEYS[1]), redis.call('LLEN', KEYS[2]), redis.call('LLEN', KEYS[1]) + redis.call('LLEN', KEYS[4])}
 """
 
 
@@ -247,14 +284,31 @@ class LostAnalysisJobLeaseError(RuntimeError):
 class AnalysisJobQueueCapacityExceededError(RuntimeError):
     """Raised when enqueue would push the analysis queue beyond the configured cap."""
 
-    def __init__(self, *, queued: int, processing: int, max_depth: int) -> None:
+    def __init__(
+        self,
+        *,
+        queued: int,
+        processing: int,
+        max_depth: int,
+        scope: str = "lane",
+        global_queued: int | None = None,
+        max_global_queued: int | None = None,
+    ) -> None:
         total = queued + processing
-        super().__init__(
-            f"Analysis queue is full ({total}/{max_depth}; queued={queued}, processing={processing})."
-        )
+        if scope == "global" and global_queued is not None and max_global_queued is not None:
+            super().__init__(
+                f"Analysis queue rejected by global backpressure ({global_queued}/{max_global_queued} queued)."
+            )
+        else:
+            super().__init__(
+                f"Analysis queue is full ({total}/{max_depth}; queued={queued}, processing={processing})."
+            )
         self.queued = queued
         self.processing = processing
         self.max_depth = max_depth
+        self.scope = scope
+        self.global_queued = global_queued
+        self.max_global_queued = max_global_queued
 
 
 def _build_dlq_key(job_id: str) -> str:
@@ -272,6 +326,7 @@ class AnalysisJobQueuePayload(BaseModel):
     project_id: str
     organization_id: str | None = None
     is_superadmin_context: bool = False
+    priority: str = _JOB_PRIORITY_STANDARD
 
     @field_validator("job_id", "project_id")
     @classmethod
@@ -289,6 +344,14 @@ class AnalysisJobQueuePayload(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("must be a non-empty string when provided")
+        return normalized
+
+    @field_validator("priority")
+    @classmethod
+    def _validate_priority(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {_JOB_PRIORITY_STANDARD, _JOB_PRIORITY_CRITICAL}:
+            raise ValueError("must be one of: standard, critical")
         return normalized
 
     @model_validator(mode="after")
@@ -324,8 +387,45 @@ class LeasedAnalysisJob:
         return None if value is None else str(value)
 
     @property
+    def priority(self) -> str:
+        return str(self.payload.get("priority", _JOB_PRIORITY_STANDARD))
+
+    @property
     def lease_timeout_seconds(self) -> int:
         return max(1, self.lease_timeout_ms // 1000)
+
+
+@dataclass(frozen=True)
+class AnalysisJobTransportSnapshot:
+    queued: tuple[tuple[str, str], ...]
+    processing: tuple[LeasedAnalysisJob, ...]
+    scheduled_retry: tuple[tuple[str, str], ...]
+    dlq_job_ids: frozenset[str]
+
+    def queued_job_ids(self) -> frozenset[str]:
+        return frozenset(job_id for job_id, _ in self.queued)
+
+    def processing_job_ids(self) -> frozenset[str]:
+        return frozenset(lease.job_id for lease in self.processing)
+
+    def scheduled_retry_job_ids(self) -> frozenset[str]:
+        return frozenset(job_id for job_id, _ in self.scheduled_retry)
+
+    def has_any_entry(self, job_id: str) -> bool:
+        normalized = str(job_id)
+        return (
+            normalized in self.queued_job_ids()
+            or normalized in self.processing_job_ids()
+            or normalized in self.scheduled_retry_job_ids()
+            or normalized in self.dlq_job_ids
+        )
+
+    def get_processing_lease(self, job_id: str) -> LeasedAnalysisJob | None:
+        normalized = str(job_id)
+        for lease in self.processing:
+            if lease.job_id == normalized:
+                return lease
+        return None
 
 
 def _utc_now_ms(now: datetime | None = None) -> int:
@@ -397,36 +497,204 @@ def _parse_dlq_payload(raw: str) -> dict:
     return payload
 
 
+def _parse_capacity_eval_result(
+    result: object,
+    *,
+    operation: str,
+) -> tuple[int, int, int, int]:
+    if not isinstance(result, (list, tuple)) or len(result) != 4:
+        raise RuntimeError(f"Unexpected Redis response while executing {operation}.")
+    return (
+        int(_decode_text(result[0])),
+        int(_decode_text(result[1])),
+        int(_decode_text(result[2])),
+        int(_decode_text(result[3])),
+    )
+
+
+def _parse_retry_promotion_eval_result(result: object) -> tuple[int, int, int, int, int]:
+    if not isinstance(result, (list, tuple)) or len(result) != 5:
+        raise RuntimeError("Unexpected Redis response while promoting scheduled analysis jobs.")
+    return (
+        int(_decode_text(result[0])),
+        int(_decode_text(result[1])),
+        int(_decode_text(result[2])),
+        int(_decode_text(result[3])),
+        int(_decode_text(result[4])),
+    )
+
+
 async def _enqueue_raw_payload(
     redis: Redis,
     raw_payload: str,
     *,
     max_depth: int | None = None,
+    max_global_queued: int | None = None,
+    priority: str = _JOB_PRIORITY_STANDARD,
 ) -> None:
+    normalized_priority = (
+        _JOB_PRIORITY_CRITICAL
+        if priority == _JOB_PRIORITY_CRITICAL
+        else _JOB_PRIORITY_STANDARD
+    )
     if max_depth is None:
-        await redis.rpush(QUEUE_KEY, raw_payload)
+        if normalized_priority == _JOB_PRIORITY_CRITICAL:
+            await redis.lpush(QUEUE_KEY, raw_payload)
+        else:
+            await redis.rpush(QUEUE_KEY, raw_payload)
         return
 
     result = await redis.eval(
         _ENQUEUE_WITH_LIMIT_SCRIPT,
-        2,
+        3,
         QUEUE_KEY,
         PROCESSING_QUEUE_KEY,
+        "heavy:jobs",
         raw_payload,
         str(max(1, int(max_depth))),
+        str(max(1, int(max_global_queued or 1_000_000))),
+        normalized_priority,
     )
-    if (
-        not isinstance(result, (list, tuple))
-        or len(result) != 3
-        or int(_decode_text(result[0])) != 1
-    ):
-        queued = int(_decode_text(result[1])) if isinstance(result, (list, tuple)) and len(result) > 1 else 0
-        processing = int(_decode_text(result[2])) if isinstance(result, (list, tuple)) and len(result) > 2 else 0
+    status, queued, processing, global_queued = _parse_capacity_eval_result(
+        result,
+        operation="analysis queue enqueue",
+    )
+    if status != 1:
         raise AnalysisJobQueueCapacityExceededError(
             queued=queued,
             processing=processing,
             max_depth=max(1, int(max_depth)),
+            scope="global" if status == -2 else "lane",
+            global_queued=global_queued,
+            max_global_queued=max(1, int(max_global_queued or 1_000_000)),
         )
+
+
+async def inspect_analysis_job_transport(redis: Redis | None) -> AnalysisJobTransportSnapshot:
+    """Return a best-effort snapshot of Redis transport state for reconciliation."""
+    if redis is None:
+        return AnalysisJobTransportSnapshot(
+            queued=(),
+            processing=(),
+            scheduled_retry=(),
+            dlq_job_ids=frozenset(),
+        )
+
+    queued_entries: list[tuple[str, str]] = []
+    for raw in await redis.lrange(QUEUE_KEY, 0, -1):
+        raw_payload = _decode_text(raw)
+        try:
+            payload = _parse_raw_payload(raw_payload)
+        except InvalidAnalysisJobPayloadError:
+            continue
+        queued_entries.append((str(payload["job_id"]), raw_payload))
+
+    processing_entries: list[LeasedAnalysisJob] = []
+    processing_tokens = await redis.zrange(LEASE_EXPIRY_ZSET_KEY, 0, -1)
+    lease_payloads: dict[str, dict[str, str]] = {}
+    for raw_token in processing_tokens:
+        token = _decode_text(raw_token)
+        candidate = await redis.hgetall(f"{LEASE_KEY_PREFIX}{token}")
+        if not candidate:
+            continue
+        lease_payloads[token] = {_decode_text(key): _decode_text(value) for key, value in candidate.items()}
+
+    for raw in await redis.lrange(PROCESSING_QUEUE_KEY, 0, -1):
+        raw_payload = _decode_text(raw)
+        try:
+            payload = _parse_raw_payload(raw_payload)
+        except InvalidAnalysisJobPayloadError:
+            continue
+
+        lease_token = ""
+        lease_data: dict[str, str] | None = None
+        for token, normalized in lease_payloads.items():
+            if normalized.get("raw") == raw_payload:
+                lease_token = token
+                lease_data = normalized
+                break
+
+        if lease_data is None:
+            processing_entries.append(
+                LeasedAnalysisJob(
+                    token="",
+                    payload=payload,
+                    raw_payload=raw_payload,
+                    worker_id="",
+                    leased_at_ms=0,
+                    lease_timeout_ms=0,
+                    expires_at_ms=0,
+                )
+            )
+            continue
+
+        try:
+            processing_entries.append(
+                LeasedAnalysisJob(
+                    token=lease_token or lease_data.get("token", ""),
+                    payload=payload,
+                    raw_payload=raw_payload,
+                    worker_id=lease_data.get("worker_id", ""),
+                    leased_at_ms=int(lease_data.get("leased_at_ms", "0")),
+                    lease_timeout_ms=int(lease_data.get("lease_timeout_ms", "0")),
+                    expires_at_ms=int(lease_data.get("expires_at_ms", "0")),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+
+    scheduled_retry_entries: list[tuple[str, str]] = []
+    for raw in await redis.zrange(RETRY_QUEUE_KEY, 0, -1):
+        raw_payload = _decode_text(raw)
+        try:
+            payload = _parse_raw_payload(raw_payload)
+        except InvalidAnalysisJobPayloadError:
+            continue
+        scheduled_retry_entries.append((str(payload["job_id"]), raw_payload))
+
+    dlq_values = await redis.smembers(DLQ_ACTIVE_SET_KEY)
+    dlq_job_ids = frozenset(_decode_text(value) for value in dlq_values)
+
+    return AnalysisJobTransportSnapshot(
+        queued=tuple(queued_entries),
+        processing=tuple(processing_entries),
+        scheduled_retry=tuple(scheduled_retry_entries),
+        dlq_job_ids=dlq_job_ids,
+    )
+
+
+async def purge_analysis_job_transport(
+    redis: Redis | None,
+    *,
+    job_id: str,
+    snapshot: AnalysisJobTransportSnapshot | None = None,
+) -> None:
+    """Remove queued/processing/retry/DLQ transport remnants for a DB-authoritative job id."""
+    if redis is None:
+        return
+
+    transport = snapshot or await inspect_analysis_job_transport(redis)
+    normalized_job_id = str(job_id)
+
+    for queued_job_id, raw_payload in transport.queued:
+        if queued_job_id == normalized_job_id:
+            await redis.lrem(QUEUE_KEY, 0, raw_payload)
+
+    for lease in transport.processing:
+        if lease.job_id != normalized_job_id:
+            continue
+        if lease.raw_payload:
+            await redis.lrem(PROCESSING_QUEUE_KEY, 0, lease.raw_payload)
+        if lease.token:
+            await redis.delete(f"{LEASE_KEY_PREFIX}{lease.token}")
+            await redis.zrem(LEASE_EXPIRY_ZSET_KEY, lease.token)
+
+    for retry_job_id, raw_payload in transport.scheduled_retry:
+        if retry_job_id == normalized_job_id:
+            await redis.zrem(RETRY_QUEUE_KEY, raw_payload)
+
+    if normalized_job_id in transport.dlq_job_ids:
+        await redis.srem(DLQ_ACTIVE_SET_KEY, normalized_job_id)
 
 
 def validate_analysis_job_payload(payload: object) -> AnalysisJobQueuePayload:
@@ -472,6 +740,8 @@ async def enqueue_analysis_job(
     organization_id: str | None,
     is_superadmin_context: bool,
     max_depth: int | None = None,
+    max_global_queued: int | None = None,
+    priority: str = _JOB_PRIORITY_STANDARD,
 ) -> None:
     """Push a validated job payload to the tail of the durable Redis queue."""
     payload = validate_analysis_job_payload(
@@ -480,12 +750,15 @@ async def enqueue_analysis_job(
             "project_id": project_id,
             "organization_id": organization_id,
             "is_superadmin_context": is_superadmin_context,
+            "priority": priority,
         }
     )
     await _enqueue_raw_payload(
         redis,
         json.dumps(payload.model_dump()),
         max_depth=max_depth,
+        max_global_queued=max_global_queued,
+        priority=payload.priority,
     )
 
 
@@ -503,23 +776,32 @@ async def dequeue_analysis_job(
     *,
     worker_id: str,
     lease_timeout_seconds: int,
+    max_concurrent_jobs: int | None = None,
     now: datetime | None = None,
 ) -> LeasedAnalysisJob | None:
     """Lease the next queued job, or return None when the queue is empty."""
     lease_timeout_ms = max(1, int(lease_timeout_seconds)) * 1000
     result = await redis.eval(
         _LEASE_JOB_SCRIPT,
-        5,
+        6,
         QUEUE_KEY,
         PROCESSING_QUEUE_KEY,
+        "heavy:processing",
         LEASE_EXPIRY_ZSET_KEY,
         LEASE_KEY_PREFIX,
         LEASE_SEQUENCE_KEY,
         str(_utc_now_ms(now)),
         worker_id,
         str(lease_timeout_ms),
+        str(max(1, int(max_concurrent_jobs or 1_000_000))),
     )
     if result is None:
+        return None
+    if (
+        isinstance(result, (list, tuple))
+        and len(result) == 2
+        and _decode_text(result[0]) == "__backpressure__"
+    ):
         return None
     return _leased_job_from_redis_result(result)
 
@@ -613,19 +895,34 @@ async def promote_scheduled_analysis_jobs(
     now: datetime | None = None,
     limit: int = 100,
     max_depth: int,
+    max_global_queued: int | None = None,
 ) -> int:
     """Promote due scheduled retries back into the durable queue."""
     result = await redis.eval(
         _PROMOTE_RETRY_SCRIPT,
-        3,
+        4,
         QUEUE_KEY,
         PROCESSING_QUEUE_KEY,
         RETRY_QUEUE_KEY,
+        "heavy:jobs",
         str(_utc_now_ms(now)),
         str(max(1, int(limit))),
         str(max(1, int(max_depth))),
+        str(max(1, int(max_global_queued or 1_000_000))),
     )
-    return int(result or 0)
+    moved, blocked, queued, processing, global_queued = _parse_retry_promotion_eval_result(result)
+    if blocked > 0:
+        logger.warning(
+            "analysis_queue.retry_promotion_capacity_blocked",
+            moved=moved,
+            blocked=blocked,
+            queued=queued,
+            processing=processing,
+            global_queued=global_queued,
+            max_depth=max(1, int(max_depth)),
+            max_global_queued=max(1, int(max_global_queued or 1_000_000)),
+        )
+    return moved
 
 
 async def get_expired_analysis_job_leases(
@@ -673,20 +970,43 @@ async def get_expired_analysis_job_leases(
     return expired
 
 
-async def requeue_expired_analysis_job(redis: Redis, lease: LeasedAnalysisJob) -> bool:
+async def requeue_expired_analysis_job(
+    redis: Redis,
+    lease: LeasedAnalysisJob,
+    *,
+    max_depth: int,
+    max_global_queued: int | None = None,
+) -> bool:
     """Return an expired lease back to the durable queue."""
     result = await redis.eval(
         _FINALIZE_EXPIRED_LEASE_SCRIPT,
-        4,
+        5,
         LEASE_KEY_PREFIX,
         PROCESSING_QUEUE_KEY,
         LEASE_EXPIRY_ZSET_KEY,
         QUEUE_KEY,
+        "heavy:jobs",
         lease.token,
         str(lease.leased_at_ms),
         "requeue",
+        str(max(1, int(max_depth))),
+        str(max(1, int(max_global_queued or 1_000_000))),
+        lease.priority,
     )
-    return int(result) == 1
+    status, queued, processing, global_queued = _parse_capacity_eval_result(
+        result,
+        operation="expired analysis job requeue",
+    )
+    if status in {0, -2}:
+        raise AnalysisJobQueueCapacityExceededError(
+            queued=queued,
+            processing=processing,
+            max_depth=max(1, int(max_depth)),
+            scope="global" if status == -2 else "lane",
+            global_queued=global_queued,
+            max_global_queued=max(1, int(max_global_queued or 1_000_000)),
+        )
+    return status == 1
 
 
 async def move_analysis_job_to_dlq(
@@ -744,6 +1064,7 @@ async def requeue_dlq_job(
     *,
     job_id: str,
     max_depth: int | None = None,
+    max_global_queued: int | None = None,
 ) -> dict | None:
     """Requeue a DLQ job by id and remove it from DLQ on success."""
     raw = None
@@ -759,6 +1080,7 @@ async def requeue_dlq_job(
         redis,
         payload["raw_payload"],
         max_depth=max_depth,
+        max_global_queued=max_global_queued,
     )
     if await redis.sismember(DLQ_ACTIVE_SET_KEY, job_id):
         await redis.srem(DLQ_ACTIVE_SET_KEY, job_id)
@@ -771,13 +1093,21 @@ async def drop_expired_analysis_job(redis: Redis, lease: LeasedAnalysisJob) -> b
     """Discard an expired processing lease without requeueing it."""
     result = await redis.eval(
         _FINALIZE_EXPIRED_LEASE_SCRIPT,
-        4,
+        5,
         LEASE_KEY_PREFIX,
         PROCESSING_QUEUE_KEY,
         LEASE_EXPIRY_ZSET_KEY,
         QUEUE_KEY,
+        "heavy:jobs",
         lease.token,
         str(lease.leased_at_ms),
         "drop",
+        "0",
+        "1",
+        lease.priority,
     )
-    return int(result) == 1
+    status, _, _, _ = _parse_capacity_eval_result(
+        result,
+        operation="expired analysis job drop",
+    )
+    return status == 1

@@ -21,6 +21,7 @@ Architektura je kvalitní a má silné základy, ale obsahuje **3 kritická rizi
 **Soubor:** `python-backend/app/worker/queue.py` (přibližně řádky 205–215)
 
 Lua skript `_PROMOTE_RETRY_SCRIPT` provádí přímý `RPUSH` bez kontroly limitu `max_depth`. Při hromadném selhání jobů (např. 500 najednou) scheduler povýší všechny retrye najednou, přeteče fronta a způsobí:
+
 - Memory spike v Redisu (riziko OOM)
 - Workers přijmou víc jobů než je `ANALYSIS_QUEUE_MAX_DEPTH`
 
@@ -33,6 +34,7 @@ Lua skript `_PROMOTE_RETRY_SCRIPT` provádí přímý `RPUSH` bez kontroly limit
 **Soubor:** `python-backend/app/core/account_limiter.py` (řádky 106–128)
 
 Při výpadku Redisu se přepne na in-memory fallback (`_FALLBACK_FAILURES` dict). V multi-instance nasazení (více API podů) má každý pod vlastní čítač:
+
 - Útočník distribuuje pokusy přes 3 pody → 3× více pokusů bez aktivace throttle
 - Výpadek Redisu (i 30 sekund) otevírá okno pro útok
 
@@ -47,6 +49,7 @@ Při výpadku Redisu se přepne na in-memory fallback (`_FALLBACK_FAILURES` dict
 Worker nemá `healthcheck` direktivu. Docker orchestrátor nedokáže automaticky restartovat zaseknutý worker proces.
 
 **Oprava:**
+
 ```yaml
 healthcheck:
   test: ["CMD", "python", "-m", "app.worker.healthcheck"]
@@ -130,13 +133,13 @@ Výchozí hodnota `false` → Prometheus nevidí worker. Monitorovací slepá sk
 
 ## P2 – STŘEDNÍ (opravit v prvním sprintu po pilotu)
 
-| ID | Problém | Soubor |
-|----|---------|--------|
-| P2-1 | CORS povoluje `methods=["*"]`, `headers=["*"]` | `app/main.py:300–306` |
-| P2-2 | Chybí Content-Security-Policy header | `app/main.py:308–318` |
-| P2-3 | Seed hesla jsou hardcoded v bootstrap | `app/db/bootstrap.py:231,260,275` |
-| P2-4 | JWT refresh token lifetime 7 dní | `.env.production.example:68` |
-| P2-5 | Chybí index na `revoked_tokens.expires_at` | ověřit v migraci 0023 |
+| ID   | Problém                                        | Soubor                            |
+| ---- | ---------------------------------------------- | --------------------------------- |
+| P2-1 | CORS povoluje `methods=["*"]`, `headers=["*"]` | `app/main.py:300–306`             |
+| P2-2 | Chybí Content-Security-Policy header           | `app/main.py:308–318`             |
+| P2-3 | Seed hesla jsou hardcoded v bootstrap          | `app/db/bootstrap.py:231,260,275` |
+| P2-4 | JWT refresh token lifetime 7 dní               | `.env.production.example:68`      |
+| P2-5 | Chybí index na `revoked_tokens.expires_at`     | ověřit v migraci 0023             |
 
 ---
 
@@ -156,6 +159,7 @@ Výchozí hodnota `false` → Prometheus nevidí worker. Monitorovací slepá sk
 ## Deployment checklist
 
 **Před pilotem:**
+
 - [ ] Ověřit `DB_SEED_ON_STARTUP=false` v `.env.production`
 - [ ] Vygenerovat JWT_SECRET, METRICS_AUTH_TOKEN (32+ náhodných hex bytů)
 - [ ] Nastavit POSTGRES_PASSWORD, REDIS_PASSWORD (32+ náhodných hex bytů)
@@ -165,6 +169,7 @@ Výchozí hodnota `false` → Prometheus nevidí worker. Monitorovací slepá sk
 - [ ] **Přidat P0-3** — worker healthcheck do docker-compose.yml
 
 **Před 100+ tenanty:**
+
 - [ ] P1-1: mapování výjimek ve worker finalize
 - [ ] P1-3: timing oracle v image enumeration
 - [ ] P1-4: Redis cache pro revoked tokens
@@ -175,13 +180,13 @@ Výchozí hodnota `false` → Prometheus nevidí worker. Monitorovací slepá sk
 
 ## Matice rizik
 
-| Oblast | P0 Kritická | P1 Vysoká | P2 Střední |
-|--------|------------|-----------|------------|
-| Bezpečnost | 1 | 2 | 4 |
-| Operační | 1 | 3 | 1 |
-| Datová integrita | 0 | 1 | 0 |
-| Výkon/škálovatelnost | 1 | 1 | 0 |
-| **Celkem** | **3** | **7** | **5** |
+| Oblast               | P0 Kritická | P1 Vysoká | P2 Střední |
+| -------------------- | ----------- | --------- | ---------- |
+| Bezpečnost           | 1           | 2         | 4          |
+| Operační             | 1           | 3         | 1          |
+| Datová integrita     | 0           | 1         | 0          |
+| Výkon/škálovatelnost | 1           | 1         | 0          |
+| **Celkem**           | **3**       | **7**     | **5**      |
 
 ---
 
@@ -196,5 +201,5 @@ Výchozí hodnota `false` → Prometheus nevidí worker. Monitorovací slepá sk
 
 ---
 
-*Audit připraven: 2. dubna 2026 | Claude Code (claude-sonnet-4-6)*  
-*Analyzováno: ~109 Python souborů, 40 migrací, docker-compose.yml*
+_Audit připraven: 2. dubna 2026 | Claude Code (claude-sonnet-4-6)_  
+_Analyzováno: ~109 Python souborů, 40 migrací, docker-compose.yml_

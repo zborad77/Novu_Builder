@@ -1,10 +1,17 @@
+from time import perf_counter
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import get_current_user, get_pricebook_service, get_redis
-from app.core.cache import delete_cached, get_cached, set_cached
+from app.api.deps import get_current_user, get_pricebook_service, get_redis, require_org_id
+from app.core.cache import delete_cached, get_cache_tag, get_cached, invalidate_cache_tag, set_cached
+from app.core.tenant_timing import (
+    TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+    enforce_timing_floor,
+)
 from app.schemas.auth import AuthUserRead
 from app.schemas.pricebook import PricebookCreate, PricebookItemRead, PricebookListResponse, PricebookRead
 from app.services.pricebook_service import PricebookService
+from app.work_catalog.cache import pricing_resolution_cache_scope
 
 router = APIRouter(tags=["pricebooks"])
 
@@ -16,24 +23,38 @@ def _list_key(org_id: str) -> str:
     return f"pricebooks:list:{org_id}"
 
 
+def _list_scope(org_id: str) -> str:
+    return f"pricebooks:{org_id}"
+
+
 @router.get("/pricebooks", response_model=PricebookListResponse)
 async def list_pricebooks(
     current_user: AuthUserRead = Depends(get_current_user),
     service: PricebookService = Depends(get_pricebook_service),
     redis=Depends(get_redis),
 ) -> PricebookListResponse:
-    org_id = current_user.organizationId
-    # R-32: only cache tenant-scoped views; superadmin (org_id=None) bypasses cache
-    if org_id:
-        cached = await get_cached(redis, _list_key(org_id))
+    started_at = perf_counter()
+    try:
+        org_id = require_org_id(current_user)
+        cache_tag = await get_cache_tag(redis, _list_scope(org_id))
+        cached = await get_cached(redis, _list_key(org_id), tag=cache_tag)
         if cached is not None:
             return PricebookListResponse(items=[PricebookRead.model_validate(i) for i in cached])
 
-    items = await service.list_pricebooks(org_id)
-
-    if org_id:
-        await set_cached(redis, _list_key(org_id), [i.model_dump(mode="json") for i in items], _LIST_TTL)
-    return PricebookListResponse(items=items)
+        items = await service.list_pricebooks(org_id)
+        await set_cached(
+            redis,
+            _list_key(org_id),
+            [i.model_dump(mode="json") for i in items],
+            _LIST_TTL,
+            tag=cache_tag,
+        )
+        return PricebookListResponse(items=items)
+    finally:
+        await enforce_timing_floor(
+            started_at,
+            minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+        )
 
 
 @router.post("/pricebooks", response_model=PricebookRead, status_code=status.HTTP_201_CREATED)
@@ -43,10 +64,12 @@ async def create_pricebook(
     service: PricebookService = Depends(get_pricebook_service),
     redis=Depends(get_redis),
 ) -> PricebookRead:
-    result = await service.create_pricebook(payload, current_user.organizationId)
+    org_id = require_org_id(current_user)
+    result = await service.create_pricebook(payload, org_id)
     # Invalidate list cache so the next GET reflects the new pricebook
-    if current_user.organizationId:
-        await delete_cached(redis, _list_key(current_user.organizationId))
+    await invalidate_cache_tag(redis, _list_scope(org_id))
+    await invalidate_cache_tag(redis, pricing_resolution_cache_scope(org_id))
+    await delete_cached(redis, _list_key(org_id))
     return result
 
 
@@ -56,7 +79,15 @@ async def list_pricebook_items(
     current_user: AuthUserRead = Depends(get_current_user),
     service: PricebookService = Depends(get_pricebook_service),
 ) -> list[PricebookItemRead]:
-    items = await service.list_pricebook_items(pricebook_id, current_user.organizationId)
-    if items is None:
-        raise HTTPException(status_code=404, detail="Pricebook not found.")
-    return items
+    started_at = perf_counter()
+    try:
+        org_id = require_org_id(current_user)
+        items = await service.list_pricebook_items(pricebook_id, org_id)
+        if items is None:
+            raise HTTPException(status_code=404, detail="Pricebook not found.")
+        return items
+    finally:
+        await enforce_timing_floor(
+            started_at,
+            minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
+        )

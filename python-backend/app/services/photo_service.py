@@ -2,8 +2,13 @@ import asyncio
 from uuid import uuid4
 
 import structlog
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 
+from app.core.backpressure import (
+    collect_backpressure_snapshot,
+    effective_backpressure_max_queued_jobs,
+    ensure_heavy_intake_capacity,
+)
 from app.core.config import get_settings
 from app.models import Project, ProjectPhoto
 from app.repositories.photo_repository import PhotoRepository
@@ -18,7 +23,7 @@ from app.storage.backend import (
     validate_photo_upload,
     write_storage_file,
 )
-from app.worker.heavy_queue import enqueue_heavy_job
+from app.worker.heavy_queue import HeavyJobQueueCapacityExceededError, enqueue_heavy_job
 
 logger = structlog.get_logger(__name__)
 
@@ -271,7 +276,20 @@ class PhotoService:
         return to_read_model(photo)
 
     async def create_multipart_photo(self, project: Project, file: UploadFile, *, is_primary: bool) -> ProjectPhotoRead:
-        max_upload_size_mb = get_settings().max_upload_size_mb
+        settings = get_settings()
+        queue_processing_enabled = settings.worker_heavy_concurrency > 0
+        if queue_processing_enabled:
+            snapshot = await collect_backpressure_snapshot(
+                settings=settings,
+                job_queue=self.work_queue,
+            )
+            ensure_heavy_intake_capacity(
+                snapshot,
+                settings=settings,
+                surface="photo_upload_api",
+            )
+
+        max_upload_size_mb = settings.max_upload_size_mb
         validated_upload = await validate_photo_upload(
             file,
             max_bytes=max_upload_size_mb * 1024 * 1024,
@@ -341,7 +359,6 @@ class PhotoService:
             )
             await self._cleanup_storage_keys(storage_key)
             raise
-        queue_processing_enabled = self.work_queue is not None and get_settings().worker_heavy_concurrency > 0
         if queue_processing_enabled:
             try:
                 await enqueue_heavy_job(
@@ -350,17 +367,34 @@ class PhotoService:
                     project_id=project.id,
                     organization_id=project.organization_id,
                     photo_id=created_photo.id,
-                    max_depth=get_settings().heavy_queue_max_depth,
+                    max_depth=settings.heavy_queue_max_depth,
+                    max_global_queued=effective_backpressure_max_queued_jobs(settings),
                 )
                 return to_read_model(created_photo)
-            except Exception as exc:
+            except HeavyJobQueueCapacityExceededError as exc:
+                created_photo.processing_status = "failed"
+                await self.repository.update_photo(created_photo)
                 logger.warning(
-                    "photo.variant_queue_enqueue_failed_falling_back_inline",
+                    "photo.variant_queue_enqueue_rejected",
+                    photo_id=created_photo.id,
+                    project_id=project.id,
+                    error=str(exc),
+                    queued=exc.queued,
+                    processing=exc.processing,
+                    max_depth=exc.max_depth,
+                )
+                raise HTTPException(status_code=429, detail="Photo processing queue is full. Please retry later.")
+            except Exception as exc:
+                created_photo.processing_status = "failed"
+                await self.repository.update_photo(created_photo)
+                logger.warning(
+                    "photo.variant_queue_enqueue_unavailable",
                     photo_id=created_photo.id,
                     project_id=project.id,
                     error=str(exc),
                     exc_info=True,
                 )
+                raise HTTPException(status_code=503, detail="Photo processing queue is unavailable.")
 
         processed_photo = await self._process_multipart_photo_variants(created_photo, content)
         return to_read_model(processed_photo)

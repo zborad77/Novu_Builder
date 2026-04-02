@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from app.repositories.analysis_repository import (
     ANALYSIS_JOB_STATUS_COMPLETED,
+    ANALYSIS_JOB_STATUS_DEAD_LETTER,
     ANALYSIS_JOB_STATUS_FAILED,
     ANALYSIS_JOB_STATUS_QUEUED,
     ANALYSIS_JOB_STATUS_RUNNING,
@@ -16,6 +17,7 @@ from app.repositories.analysis_repository import (
     AnalysisRepository,
 )
 from app.services.analysis_service import AnalysisService
+from app.worker.queue import AnalysisJobTransportSnapshot
 
 
 def _make_job(status: str = "queued") -> MagicMock:
@@ -216,6 +218,63 @@ class TestAnalysisServiceFailureGuards:
         assert result is False
 
     @pytest.mark.asyncio
+    async def test_get_job_reconciles_stale_running_job_to_queued(self):
+        job = _make_job(status=ANALYSIS_JOB_STATUS_RUNNING)
+        job.worker_id = "worker-a"
+        job.lease_token = "lease-a"
+        job.heartbeat_at = datetime.now(UTC).replace(year=2025)
+        repository = AsyncMock()
+        repository.get_analysis_job_in_org = AsyncMock(return_value=job)
+        repository.get_project_organization_id = AsyncMock(return_value="org-1")
+        repository.reset_job_to_queued = AsyncMock(side_effect=lambda current_job: setattr(current_job, "status", ANALYSIS_JOB_STATUS_QUEUED) or current_job)
+
+        service = AnalysisService(
+            repository=repository,
+            photo_repository=AsyncMock(),
+            provider_key="mock",
+        )
+        service._settings.worker_job_lease_timeout_seconds = 600
+
+        result = await service.get_job(
+            "job_1",
+            organization_id="org-1",
+            job_queue=None,
+        )
+
+        assert result is not None
+        assert result["status"] == ANALYSIS_JOB_STATUS_QUEUED
+        repository.reset_job_to_queued.assert_awaited_once_with(job)
+
+    @pytest.mark.asyncio
+    async def test_list_jobs_requeues_missing_queued_transport(self):
+        job = _make_job(status=ANALYSIS_JOB_STATUS_QUEUED)
+        repository = AsyncMock()
+        repository.list_analysis_jobs_by_project_id = AsyncMock(return_value=[job])
+        repository.get_project_organization_id = AsyncMock(return_value="org-1")
+
+        service = AnalysisService(
+            repository=repository,
+            photo_repository=AsyncMock(),
+            provider_key="mock",
+        )
+        service._settings.analysis_queue_max_depth = 100
+
+        snapshot = AnalysisJobTransportSnapshot(
+            queued=(),
+            processing=(),
+            scheduled_retry=(),
+            dlq_job_ids=frozenset(),
+        )
+        job_queue = AsyncMock()
+        job_queue.eval = AsyncMock(return_value=[1, 1, 0])
+
+        with patch("app.services.analysis_service.inspect_analysis_job_transport", new=AsyncMock(return_value=snapshot)):
+            results = await service.list_jobs("proj_1", job_queue=job_queue)
+
+        assert results[0]["status"] == ANALYSIS_JOB_STATUS_QUEUED
+        job_queue.eval.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_execute_job_invalid_analysis_payload_schedules_retry(self):
         job = _make_job()
         project = _make_project()
@@ -230,8 +289,8 @@ class TestAnalysisServiceFailureGuards:
             current_job.started_at = datetime.now(UTC)
             return current_job
 
-        async def _schedule_retry(current_job, *, message, error_traceback=None):
-            current_job.status = ANALYSIS_JOB_STATUS_QUEUED
+        async def _mark_dead_letter(current_job, *, message, error_traceback=None):
+            current_job.status = ANALYSIS_JOB_STATUS_DEAD_LETTER
             current_job.error_message = message
             current_job.error_traceback = error_traceback
             current_job.finished_at = datetime.now(UTC)
@@ -243,7 +302,7 @@ class TestAnalysisServiceFailureGuards:
                 "estimatedAreaSqm must be numeric when provided."
             )
         )
-        mock_repo.schedule_job_retry = AsyncMock(side_effect=_schedule_retry)
+        mock_repo.mark_job_dead_letter = AsyncMock(side_effect=_mark_dead_letter)
 
         mock_photo_repo = AsyncMock()
         mock_photo_repo.list_photos_by_project_id = AsyncMock(return_value=[])
@@ -270,8 +329,8 @@ class TestAnalysisServiceFailureGuards:
 
             await service.execute_job("job_1", "proj_1", organization_id="org_1")
 
-        mock_repo.schedule_job_retry.assert_awaited_once()
-        assert job.status == ANALYSIS_JOB_STATUS_QUEUED
+        mock_repo.mark_job_dead_letter.assert_awaited_once()
+        assert job.status == ANALYSIS_JOB_STATUS_DEAD_LETTER
         assert job.error_message.startswith("Invalid analysis payload:")
 
     @pytest.mark.asyncio

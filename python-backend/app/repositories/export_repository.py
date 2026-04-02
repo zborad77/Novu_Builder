@@ -115,6 +115,14 @@ class ExportRepository:
             for export_id, organization_id, project_id, storage_key, expires_at in result.all()
         ]
 
+    async def list_incomplete(self) -> list[ProjectExport]:
+        result = await self.session.execute(
+            select(ProjectExport)
+            .where(ProjectExport.status.in_(("pending", "generating")))
+            .order_by(ProjectExport.created_at.asc(), ProjectExport.id.asc())
+        )
+        return list(result.scalars().all())
+
     async def delete_by_ids(self, export_ids: list[str]) -> int:
         if not export_ids:
             return 0

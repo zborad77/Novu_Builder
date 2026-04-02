@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from unittest.mock import AsyncMock, MagicMock
 
 from app.models import User
+from app.repositories.token_repository import TOKEN_STATE_ACTIVE, TOKEN_STATE_REVOKED
 from app.services.auth_service import AuthService, hash_password
 
 
@@ -69,7 +70,7 @@ def _make_auth_service(user: MagicMock) -> AuthService:
     mock_session.commit = AsyncMock()
 
     mock_tokens = MagicMock()
-    mock_tokens.is_revoked = AsyncMock(return_value=False)
+    mock_tokens.get_token_state = AsyncMock(return_value=TOKEN_STATE_ACTIVE)
     mock_tokens.revoke = AsyncMock()
     mock_tokens.revoke_with_commit = AsyncMock()
     mock_tokens.cache_revoked_token = AsyncMock()
@@ -152,7 +153,7 @@ class TestRefreshTokensValidAfterGuard:
         user = _make_user(tokens_valid_after=None)
         service = _make_auth_service(user)
         # Override: token IS revoked
-        service._tokens.is_revoked = AsyncMock(return_value=True)
+        service._tokens.get_token_state = AsyncMock(return_value=TOKEN_STATE_REVOKED)
         token = _encode_refresh_token(user.id)
 
         result = await service.refresh(token)

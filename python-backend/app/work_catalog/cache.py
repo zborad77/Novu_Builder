@@ -4,7 +4,7 @@ from collections.abc import Iterable
 
 from redis.asyncio import Redis
 
-from app.core.cache import delete_cached
+from app.core.cache import delete_cached, invalidate_cache_tag
 
 
 WORK_CATALOG_CACHE_VERSION = "v2"
@@ -12,10 +12,23 @@ WORK_CATALOG_CACHE_VERSION = "v2"
 GLOBAL_CATALOG_TTL_SECONDS = 900
 TENANT_EFFECTIVE_TTL_SECONDS = 180
 WORKFLOW_CONFIGURATION_TTL_SECONDS = 180
+LOCAL_RESOLUTION_TTL_SECONDS = 30
 
 
 def _prefix() -> str:
     return f"work-catalog:{WORK_CATALOG_CACHE_VERSION}"
+
+
+def global_catalog_cache_scope() -> str:
+    return f"{_prefix()}:global"
+
+
+def tenant_effective_cache_scope(organization_id: str) -> str:
+    return f"{_prefix()}:tenant:{organization_id}:effective"
+
+
+def pricing_resolution_cache_scope(organization_id: str) -> str:
+    return f"{_prefix()}:tenant:{organization_id}:pricing"
 
 
 def global_categories_key() -> str:
@@ -68,6 +81,7 @@ async def invalidate_tenant_effective_cache(
     organization_id: str,
     work_type_codes: Iterable[str] = (),
 ) -> None:
+    await invalidate_cache_tag(redis, tenant_effective_cache_scope(organization_id))
     await delete_cached(
         redis,
         *tenant_effective_cache_keys(
@@ -75,3 +89,11 @@ async def invalidate_tenant_effective_cache(
             work_type_codes=work_type_codes,
         ),
     )
+
+
+async def invalidate_pricing_resolution_cache(
+    redis: Redis | None,
+    *,
+    organization_id: str,
+) -> None:
+    await invalidate_cache_tag(redis, pricing_resolution_cache_scope(organization_id))

@@ -5,7 +5,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.worker.queue import InvalidAnalysisJobPayloadError, LeasedAnalysisJob
+from app.worker.queue import (
+    AnalysisJobQueueCapacityExceededError,
+    InvalidAnalysisJobPayloadError,
+    LeasedAnalysisJob,
+)
 from app.worker.heavy_queue import LeasedHeavyJob, LostHeavyJobLeaseError
 
 
@@ -599,6 +603,7 @@ class TestWorkerMetricsStartup:
             patch("app.worker.runner.dequeue_analysis_job", new=AsyncMock()) as dequeue_analysis,
             patch("app.worker.runner.dequeue_heavy_job", new=AsyncMock(return_value=heavy_payload)) as dequeue_heavy,
             patch("app.worker.runner.ack_heavy_job", new=AsyncMock(return_value=True)),
+            patch("app.worker.runner.promote_scheduled_analysis_jobs", new=AsyncMock(return_value=0)),
         ):
             await runner._run_one_iteration(runtime)
 
@@ -802,8 +807,16 @@ def _make_runtime(
 ) -> "runner_module.WorkerRuntime":
     from app.worker import runner as runner_module
 
+    settings = MagicMock()
+    settings.analysis_queue_max_depth = 1000
+    settings.heavy_queue_max_depth = 1000
+    settings.worker_job_lease_timeout_seconds = 600
+    settings.effective_backpressure_max_concurrent_jobs = 10
+    settings.effective_backpressure_max_queued_jobs = 2000
+    settings.effective_backpressure_max_retry_inflight = 5
+
     return runner_module.WorkerRuntime(
-        settings=MagicMock(),
+        settings=settings,
         redis=AsyncMock(),
         redis_url="redis://localhost:6379/0",
         worker_instance_id="worker-a",
@@ -822,6 +835,168 @@ def _make_runtime(
         last_heartbeat=time.monotonic(),
         last_heavy_lease_reap=last_heavy_lease_reap,
     )
+
+
+class TestRunLeaseReaper:
+    @pytest.mark.asyncio
+    async def test_expired_lease_is_requeued_with_queue_capacity_contract(self):
+        from app.worker import runner
+
+        runtime = _make_runtime()
+        runtime.last_lease_reap = 0.0
+        expired = _lease()
+        service = MagicMock(reconcile_expired_lease=AsyncMock(return_value="requeue"))
+        requeue_mock = AsyncMock(return_value=True)
+
+        with (
+            patch("app.worker.runner._build_worker_analysis_service", return_value=service),
+            patch("app.worker.runner.get_expired_analysis_job_leases", new=AsyncMock(return_value=[expired])),
+            patch("app.worker.runner.requeue_expired_analysis_job", new=requeue_mock),
+            patch("app.worker.runner.drop_expired_analysis_job", new=AsyncMock(return_value=False)),
+            patch("app.worker.runner.record_reaper_requeues"),
+        ):
+            await runner._run_lease_reaper_if_due(runtime, now_monotonic=9999.0)
+
+        requeue_mock.assert_awaited_once_with(
+            runtime.redis,
+            expired,
+            max_depth=runtime.settings.analysis_queue_max_depth,
+            max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
+        )
+
+    @pytest.mark.asyncio
+    async def test_capacity_blocked_requeue_is_logged_without_drop(self):
+        from app.worker import runner
+
+        runtime = _make_runtime()
+        runtime.last_lease_reap = 0.0
+        expired = _lease()
+        service = MagicMock(reconcile_expired_lease=AsyncMock(return_value="requeue"))
+        drop_mock = AsyncMock(return_value=False)
+        warning_logger = MagicMock()
+
+        with (
+            patch("app.worker.runner._build_worker_analysis_service", return_value=service),
+            patch("app.worker.runner.get_expired_analysis_job_leases", new=AsyncMock(return_value=[expired])),
+            patch(
+                "app.worker.runner.requeue_expired_analysis_job",
+                new=AsyncMock(
+                    side_effect=AnalysisJobQueueCapacityExceededError(
+                        queued=10,
+                        processing=1,
+                        max_depth=10,
+                    )
+                ),
+            ),
+            patch("app.worker.runner.drop_expired_analysis_job", new=drop_mock),
+            patch("app.worker.runner.logger.warning", new=warning_logger),
+            patch("app.worker.runner.record_reaper_requeues"),
+        ):
+            await runner._run_lease_reaper_if_due(runtime, now_monotonic=9999.0)
+
+        drop_mock.assert_not_awaited()
+        assert any(
+            call.args and call.args[0] == "worker.lease_reaper_capacity_blocked"
+            for call in warning_logger.call_args_list
+        )
+
+
+class TestStartupReconciliation:
+    @pytest.mark.asyncio
+    async def test_startup_requeues_running_job_when_transport_is_missing(self):
+        from app.worker import runner
+
+        runtime = _make_runtime()
+        job = MagicMock()
+        job.id = "job-startup-1"
+        job.project_id = "proj-1"
+        job.status = "running"
+        job.lease_token = "lease-1"
+        job.worker_id = "worker-dead"
+        job.heartbeat_at = None
+
+        repo = AsyncMock()
+        repo.list_active_jobs_with_organization_id = AsyncMock(return_value=[(job, "org-1")])
+        repo.reset_job_to_queued = AsyncMock(side_effect=lambda current_job: setattr(current_job, "status", "queued") or current_job)
+
+        session = AsyncMock()
+        session_ctx = AsyncMock()
+        session_ctx.__aenter__.return_value = session
+        session_ctx.__aexit__.return_value = False
+
+        empty_snapshot = MagicMock(
+            has_any_entry=MagicMock(return_value=False),
+            get_processing_lease=MagicMock(return_value=None),
+            queued_job_ids=MagicMock(return_value=frozenset()),
+            processing_job_ids=MagicMock(return_value=frozenset()),
+            scheduled_retry_job_ids=MagicMock(return_value=frozenset()),
+            dlq_job_ids=frozenset(),
+        )
+
+        service = MagicMock()
+        service._job_running_is_stale = MagicMock(return_value=True)
+
+        with (
+            patch("app.worker.runner.WorkerAsyncSessionFactory", return_value=session_ctx),
+            patch("app.worker.runner.AnalysisRepository", return_value=repo),
+            patch("app.worker.runner.inspect_analysis_job_transport", new=AsyncMock(return_value=empty_snapshot)),
+            patch("app.worker.runner.purge_analysis_job_transport", new=AsyncMock()) as purge_mock,
+            patch("app.worker.runner.enqueue_analysis_job", new=AsyncMock()) as enqueue_mock,
+            patch("app.worker.runner._build_worker_analysis_service", return_value=service),
+            patch("app.worker.runner.is_worker_instance_alive", new=AsyncMock(return_value=False)),
+        ):
+            await runner._reconcile_startup_analysis_jobs(runtime)
+
+        repo.reset_job_to_queued.assert_awaited_once_with(job)
+        purge_mock.assert_awaited_once()
+        enqueue_mock.assert_awaited_once_with(
+            runtime.redis,
+            job_id="job-startup-1",
+            project_id="proj-1",
+            organization_id="org-1",
+            is_superadmin_context=False,
+            max_depth=runtime.settings.analysis_queue_max_depth,
+            max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
+            priority="standard",
+        )
+
+    @pytest.mark.asyncio
+    async def test_startup_requeues_incomplete_export_missing_heavy_transport(self):
+        from app.worker import runner
+
+        runtime = _make_runtime(worker_heavy_concurrency=1)
+        export = MagicMock()
+        export.id = "exp-1"
+        export.project_id = "proj-1"
+        export.export_type = "quote-pdf"
+
+        export_repo = AsyncMock()
+        export_repo.list_incomplete = AsyncMock(return_value=[export])
+
+        session = AsyncMock()
+        session_ctx = AsyncMock()
+        session_ctx.__aenter__.return_value = session
+        session_ctx.__aexit__.return_value = False
+
+        heavy_snapshot = MagicMock(has_export=MagicMock(return_value=False))
+
+        with (
+            patch("app.worker.runner.WorkerAsyncSessionFactory", return_value=session_ctx),
+            patch("app.worker.runner.ExportRepository", return_value=export_repo),
+            patch("app.worker.runner.inspect_heavy_job_transport", new=AsyncMock(return_value=heavy_snapshot)),
+            patch("app.worker.runner.enqueue_heavy_job", new=AsyncMock()) as enqueue_mock,
+        ):
+            await runner._reconcile_startup_exports(runtime)
+
+        enqueue_mock.assert_awaited_once_with(
+            runtime.redis,
+            job_type="export_generate",
+            project_id="proj-1",
+            export_id="exp-1",
+            max_depth=runtime.settings.heavy_queue_max_depth,
+            max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
+            priority="critical",
+        )
 
 
 class TestHeavyWorkerJobExecutor:
@@ -1073,7 +1248,12 @@ class TestRunHeavyLeaseReaper:
         ):
             await runner._run_heavy_lease_reaper_if_due(runtime, now_monotonic=9999.0)
 
-        requeue_mock.assert_awaited_once_with(runtime.redis, expired)
+        requeue_mock.assert_awaited_once_with(
+            runtime.redis,
+            expired,
+            max_depth=runtime.settings.heavy_queue_max_depth,
+            max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
+        )
 
     @pytest.mark.asyncio
     async def test_failed_requeue_falls_back_to_drop(self):

@@ -36,6 +36,8 @@ async def create_analysis_job(
     job_queue=Depends(get_job_queue),
 ) -> AnalysisTriggerResponse:
     org_id = resolve_org_id(current_user)
+    if job_queue is None:
+        raise HTTPException(status_code=503, detail="Analysis queue is unavailable.")
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -56,6 +58,7 @@ async def create_analysis_job(
                 organization_id=org_id,
                 is_superadmin_context=current_user.isSuperAdmin,
                 max_depth=settings.analysis_queue_max_depth,
+                max_global_queued=settings.effective_backpressure_max_queued_jobs,
             )
         except AnalysisJobQueueCapacityExceededError:
             await analysis_service.cancel_analysis_job(job.id, organization_id=org_id)
@@ -63,7 +66,8 @@ async def create_analysis_job(
     elif job_queue is not None:
         logger.info("job_queue.skip_duplicate_enqueue", job_id=job.id, action="create_analysis_job")
     else:
-        logger.warning("job_queue.unavailable", job_id=job.id, action="create_analysis_job")
+        await analysis_service.cancel_analysis_job(job.id, organization_id=org_id)
+        raise HTTPException(status_code=503, detail="Analysis queue is unavailable.")
     return AnalysisTriggerResponse(
         jobId=job.id,
         status=job.status,
@@ -80,12 +84,13 @@ async def list_case_analysis_jobs(
     current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
+    job_queue=Depends(get_job_queue),
 ) -> list[dict]:
     org_id = resolve_org_id(current_user)
     project = await project_service.get_project(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
-    return await analysis_service.list_jobs(case_id)
+    return await analysis_service.list_jobs(case_id, job_queue=job_queue)
 
 
 @router.get("/analysis-jobs/{job_id}", response_model=dict)
@@ -94,9 +99,10 @@ async def get_analysis_job(
     current_user: AuthUserRead = Depends(get_current_user),
     analysis_service: AnalysisService = Depends(get_analysis_service),
     project_service: ProjectService = Depends(get_project_service),
+    job_queue=Depends(get_job_queue),
 ) -> dict:
     org_id = resolve_org_id(current_user)
-    job = await analysis_service.get_job(job_id, organization_id=org_id)
+    job = await analysis_service.get_job(job_id, organization_id=org_id, job_queue=job_queue)
     if not job:
         if not current_user.isSuperAdmin:
             log_cross_tenant_denied(
@@ -174,6 +180,8 @@ async def retry_analysis_job(
     job_queue=Depends(get_job_queue),
 ) -> AnalysisTriggerResponse:
     org_id = resolve_org_id(current_user)
+    if job_queue is None:
+        raise HTTPException(status_code=503, detail="Analysis queue is unavailable.")
     original_job = await analysis_service.get_job(job_id, organization_id=org_id)
     if not original_job:
         if not current_user.isSuperAdmin:
@@ -201,12 +209,14 @@ async def retry_analysis_job(
                 organization_id=org_id,
                 is_superadmin_context=current_user.isSuperAdmin,
                 max_depth=settings.analysis_queue_max_depth,
+                max_global_queued=settings.effective_backpressure_max_queued_jobs,
             )
         except AnalysisJobQueueCapacityExceededError:
             await analysis_service.cancel_analysis_job(new_job.id, organization_id=org_id)
             raise HTTPException(status_code=429, detail="Analysis queue is full. Please retry later.")
     else:
-        logger.warning("job_queue.unavailable", job_id=new_job.id, action="retry_analysis_job")
+        await analysis_service.cancel_analysis_job(new_job.id, organization_id=org_id)
+        raise HTTPException(status_code=503, detail="Analysis queue is unavailable.")
     return AnalysisTriggerResponse(
         jobId=new_job.id,
         status=new_job.status,

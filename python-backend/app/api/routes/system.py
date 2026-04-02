@@ -4,7 +4,7 @@ import asyncio
 import inspect
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -15,7 +15,16 @@ import structlog
 from app.api.deps import require_superadmin
 from app.core.config import get_settings
 from app.core.metrics import (
+    AUTH_PROTECTION_ENFORCED,
+    BACKPRESSURE_CURRENT_CONCURRENT,
+    BACKPRESSURE_CURRENT_QUEUED,
+    BACKPRESSURE_CURRENT_RETRY_INFLIGHT,
+    BACKPRESSURE_MAX_CONCURRENT,
+    BACKPRESSURE_MAX_QUEUED,
+    BACKPRESSURE_MAX_RETRY_INFLIGHT,
     DB_ALIVE,
+    HEAVY_PROCESSING_JOBS,
+    HEAVY_QUEUE_LENGTH,
     JOBS_QUEUED,
     JOBS_RUNNING,
     JOB_FAIL_RATE,
@@ -24,7 +33,13 @@ from app.core.metrics import (
     JOB_DURATION_SECONDS_P95,
     PROMETHEUS_CLIENT_AVAILABLE,
     PROCESSING_JOBS,
+    QUEUE_DEAD_LETTER_ACTIVE,
     QUEUE_LENGTH,
+    QUEUE_SCHEDULED_RETRY,
+    QUEUE_SCHEDULED_RETRY_DUE_NOW,
+    REDIS_RUNTIME_AVAILABLE,
+    REDIS_RUNTIME_DEGRADED,
+    STORAGE_READY,
     DUPLICATE_PREVENTED_COUNT,
     REAPER_REQUEUES_TOTAL,
     refresh_job_observability_gauges,
@@ -48,12 +63,21 @@ from app.worker.queue import (
     RETRY_QUEUE_KEY,
     get_analysis_job_queue_counts,
 )
+from app.worker.heavy_queue import get_heavy_job_queue_counts
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
 _PROBE_SERVICE_NAME = "python-backend"
 _READINESS_DB_CACHE_TTL_SECONDS = 2.0
 _OPERATIONAL_METRICS_CACHE_TTL_SECONDS = 5.0
+_SYSTEM_STATE_READY = "ready"
+_SYSTEM_STATE_DEGRADED = "degraded"
+_SYSTEM_STATE_UNAVAILABLE = "unavailable"
+_SYSTEM_STATE_SEVERITY = {
+    _SYSTEM_STATE_READY: 0,
+    _SYSTEM_STATE_DEGRADED: 1,
+    _SYSTEM_STATE_UNAVAILABLE: 2,
+}
 
 try:
     from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -107,15 +131,50 @@ class _WorkerHeartbeatSnapshot:
 
 
 @dataclass(frozen=True)
+class _AuthProtectionSnapshot:
+    state: str
+    enforced: bool
+    source: str | None
+
+
+@dataclass(frozen=True)
+class _SystemStateSnapshot:
+    state: str
+    ready: bool
+    healthy: bool
+    startup_state: str
+    api_state: str
+    processing_state: str
+    redis_state: str
+    db_state: str
+    storage_state: str
+    queue_state: str
+    worker_state: str
+    auth_protection: _AuthProtectionSnapshot
+    operational: "_OperationalMetricsSnapshot"
+    job_processing: "_JobProcessingReadinessSnapshot"
+
+
+@dataclass(frozen=True)
 class _OperationalMetricsSnapshot:
-    db_alive: bool
-    jobs_running: int
-    jobs_queued: int
-    queue_length: int
-    processing_jobs: int
-    job_stuck_max_age_seconds: float
-    worker: _WorkerHeartbeatSnapshot
+    db_alive: bool = False
+    jobs_running: int = 0
+    jobs_queued: int = 0
+    queue_length: int = 0
+    processing_jobs: int = 0
+    heavy_queue_length: int = 0
+    heavy_processing_jobs: int = 0
+    job_stuck_max_age_seconds: float = 0.0
+    worker: _WorkerHeartbeatSnapshot = field(
+        default_factory=lambda: _WorkerHeartbeatSnapshot(
+            alive=None,
+            last_seen_at=None,
+            alive_instances=None,
+            seen_instances=None,
+        )
+    )
     retry_queued_jobs: int = 0
+    retry_inflight_jobs: int = 0
     dead_letter_jobs: int = 0
     oldest_queued_age_seconds: float = 0.0
     retry_scheduled: int | None = None
@@ -137,31 +196,57 @@ class _JobProcessingReadinessSnapshot:
 
 @dataclass(frozen=True)
 class _DatabaseJobSnapshot:
-    jobs_running: int
-    jobs_queued: int
-    retry_queued_jobs: int
-    dead_letter_jobs: int
-    max_running_age_seconds: float
-    oldest_queued_age_seconds: float
+    jobs_running: int = 0
+    jobs_queued: int = 0
+    retry_queued_jobs: int = 0
+    retry_inflight_jobs: int = 0
+    dead_letter_jobs: int = 0
+    max_running_age_seconds: float = 0.0
+    oldest_queued_age_seconds: float = 0.0
+
+
+def _normalize_system_state(value: str | None) -> str:
+    if value in _SYSTEM_STATE_SEVERITY:
+        return str(value)
+    return _SYSTEM_STATE_UNAVAILABLE
+
+
+def _worst_system_state(*states: str | None) -> str:
+    normalized = [_normalize_system_state(state) for state in states if state is not None]
+    if not normalized:
+        return _SYSTEM_STATE_UNAVAILABLE
+    return max(normalized, key=lambda item: _SYSTEM_STATE_SEVERITY[item])
+
+
+def _state_from_ready_flag(ready: bool) -> str:
+    return _SYSTEM_STATE_READY if ready else _SYSTEM_STATE_UNAVAILABLE
+
+
+def _state_is_servable(state: str) -> bool:
+    return _normalize_system_state(state) in {_SYSTEM_STATE_READY, _SYSTEM_STATE_DEGRADED}
+
+
+def _state_is_healthy(state: str) -> bool:
+    return _normalize_system_state(state) != _SYSTEM_STATE_UNAVAILABLE
 
 
 def _queue_runtime_state(job_queue) -> str:
     if job_queue is None:
-        return "unavailable"
+        return _SYSTEM_STATE_UNAVAILABLE
     status_factory = getattr(job_queue, "runtime_status", None)
     if callable(status_factory):
         if inspect.iscoroutinefunction(status_factory):
-            return "unavailable"
+            return _SYSTEM_STATE_UNAVAILABLE
         try:
             status = status_factory()
             if inspect.isawaitable(status):
-                return "unavailable"
+                return _SYSTEM_STATE_UNAVAILABLE
             state = getattr(status, "state", None)
-            if isinstance(state, str) and state:
+            if isinstance(state, str) and state in _SYSTEM_STATE_SEVERITY:
                 return state
         except Exception:
-            return "unavailable"
-    return "ready"
+            return _SYSTEM_STATE_UNAVAILABLE
+    return _SYSTEM_STATE_READY
 
 
 def _queue_runtime_details(job_queue) -> dict[str, object] | None:
@@ -189,18 +274,71 @@ def _queue_runtime_details(job_queue) -> dict[str, object] | None:
     }
 
 
+async def _probe_runtime_state(client) -> str:
+    if client is None:
+        return _SYSTEM_STATE_UNAVAILABLE
+
+    runtime_state = _queue_runtime_state(client)
+    if runtime_state in {_SYSTEM_STATE_READY, _SYSTEM_STATE_DEGRADED}:
+        return runtime_state
+
+    ping = getattr(client, "ping", None)
+    if not callable(ping):
+        return _SYSTEM_STATE_UNAVAILABLE
+
+    try:
+        ping_result = ping()
+        if inspect.isawaitable(ping_result):
+            await ping_result
+        return _SYSTEM_STATE_READY
+    except Exception:
+        return _SYSTEM_STATE_UNAVAILABLE
+
+
+async def _get_auth_protection_snapshot(request: Request) -> _AuthProtectionSnapshot:
+    auth_store = getattr(request.app.state, "auth_token_store", None)
+    source = "authTokenStore"
+    if auth_store is None:
+        auth_store = getattr(request.app.state, "job_queue", None)
+        source = "jobQueueSharedStore" if auth_store is not None else None
+
+    state = await _probe_runtime_state(auth_store)
+    return _AuthProtectionSnapshot(
+        state=state,
+        enforced=state in {_SYSTEM_STATE_READY, _SYSTEM_STATE_DEGRADED},
+        source=source,
+    )
+
+
 async def _refresh_operational_metrics(request: Request) -> None:
     """Refresh DB/worker/job gauges before each Prometheus scrape (C5).
 
     Failures are silently swallowed; a missing gauge value is better than a
     broken scrape endpoint.
     """
-    snapshot = await _get_operational_metrics_snapshot_cached(request)
+    system_snapshot = await _collect_system_state_snapshot(request)
+    snapshot = system_snapshot.operational
     DB_ALIVE.set(1 if snapshot.db_alive else 0)
+    STORAGE_READY.set(1 if system_snapshot.storage_state == _SYSTEM_STATE_READY else 0)
+    REDIS_RUNTIME_AVAILABLE.set(1 if _state_is_servable(system_snapshot.redis_state) else 0)
+    REDIS_RUNTIME_DEGRADED.set(1 if system_snapshot.redis_state == _SYSTEM_STATE_DEGRADED else 0)
+    AUTH_PROTECTION_ENFORCED.set(1 if system_snapshot.auth_protection.enforced else 0)
     JOBS_RUNNING.set(snapshot.jobs_running)
     JOBS_QUEUED.set(snapshot.jobs_queued)
     QUEUE_LENGTH.set(snapshot.queue_length)
     PROCESSING_JOBS.set(snapshot.processing_jobs)
+    HEAVY_QUEUE_LENGTH.set(snapshot.heavy_queue_length)
+    HEAVY_PROCESSING_JOBS.set(snapshot.heavy_processing_jobs)
+    QUEUE_SCHEDULED_RETRY.set(snapshot.retry_scheduled or 0)
+    QUEUE_SCHEDULED_RETRY_DUE_NOW.set(snapshot.retry_due_now or 0)
+    QUEUE_DEAD_LETTER_ACTIVE.set(snapshot.dlq_active or 0)
+    settings = get_settings()
+    BACKPRESSURE_CURRENT_CONCURRENT.set(snapshot.processing_jobs + snapshot.heavy_processing_jobs)
+    BACKPRESSURE_CURRENT_QUEUED.set(snapshot.queue_length + snapshot.heavy_queue_length)
+    BACKPRESSURE_CURRENT_RETRY_INFLIGHT.set(snapshot.retry_inflight_jobs)
+    BACKPRESSURE_MAX_CONCURRENT.set(settings.effective_backpressure_max_concurrent_jobs)
+    BACKPRESSURE_MAX_QUEUED.set(settings.effective_backpressure_max_queued_jobs)
+    BACKPRESSURE_MAX_RETRY_INFLIGHT.set(settings.effective_backpressure_max_retry_inflight)
     JOB_STUCK_MAX_AGE_SECONDS.set(snapshot.job_stuck_max_age_seconds)
     refresh_job_observability_gauges()
     REAPER_REQUEUES_TOTAL.inc(0)
@@ -402,12 +540,39 @@ async def _query_job_counts(session) -> _DatabaseJobSnapshot:
                 0,
             ),
             func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            AnalysisJob.status.in_(("queued", "running"))
+                            & (
+                                (func.coalesce(AnalysisJob.retry_count, 0) > 0)
+                                | (func.coalesce(AnalysisJob.attempt_count, 0) > 1)
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+            func.coalesce(
                 func.sum(case((AnalysisJob.status == "dead_letter", 1), else_=0)),
                 0,
             ),
         )
     )
-    jobs_running, jobs_queued, retry_queued_jobs, dead_letter_jobs = counts_row.one()
+    count_values = tuple(counts_row.one())
+    if len(count_values) >= 5:
+        jobs_running, jobs_queued, retry_queued_jobs, retry_inflight_jobs, dead_letter_jobs = count_values[:5]
+    elif len(count_values) == 4:
+        jobs_running, jobs_queued, retry_queued_jobs, dead_letter_jobs = count_values
+        retry_inflight_jobs = retry_queued_jobs
+    elif len(count_values) == 3:
+        jobs_running, jobs_queued, dead_letter_jobs = count_values
+        retry_queued_jobs = 0
+        retry_inflight_jobs = 0
+    else:
+        jobs_running = jobs_queued = retry_queued_jobs = retry_inflight_jobs = dead_letter_jobs = 0
 
     oldest_running_started_at = await session.scalar(
         select(func.min(AnalysisJob.started_at)).where(
@@ -445,6 +610,7 @@ async def _query_job_counts(session) -> _DatabaseJobSnapshot:
         jobs_running=int(jobs_running or 0),
         jobs_queued=int(jobs_queued or 0),
         retry_queued_jobs=int(retry_queued_jobs or 0),
+        retry_inflight_jobs=int(retry_inflight_jobs or 0),
         dead_letter_jobs=int(dead_letter_jobs or 0),
         max_running_age_seconds=max_age_seconds,
         oldest_queued_age_seconds=oldest_queued_age_seconds,
@@ -472,9 +638,12 @@ async def _collect_operational_metrics_snapshot(request: Request) -> _Operationa
     jobs_running = 0
     jobs_queued = 0
     retry_queued_jobs = 0
+    retry_inflight_jobs = 0
     dead_letter_jobs = 0
     queue_length = 0
     processing_jobs = 0
+    heavy_queue_length = 0
+    heavy_processing_jobs = 0
     job_stuck_max_age_seconds = 0.0
     oldest_queued_age_seconds = 0.0
     retry_scheduled = None
@@ -485,12 +654,18 @@ async def _collect_operational_metrics_snapshot(request: Request) -> _Operationa
     try:
         async with AsyncSessionFactory() as session:
             db_snapshot = await _query_job_counts(session)
-            jobs_running = db_snapshot.jobs_running
-            jobs_queued = db_snapshot.jobs_queued
-            retry_queued_jobs = db_snapshot.retry_queued_jobs
-            dead_letter_jobs = db_snapshot.dead_letter_jobs
-            job_stuck_max_age_seconds = db_snapshot.max_running_age_seconds
-            oldest_queued_age_seconds = db_snapshot.oldest_queued_age_seconds
+            if isinstance(db_snapshot, tuple):
+                jobs_running = int(db_snapshot[0]) if len(db_snapshot) > 0 else 0
+                jobs_queued = int(db_snapshot[1]) if len(db_snapshot) > 1 else 0
+                job_stuck_max_age_seconds = float(db_snapshot[2]) if len(db_snapshot) > 2 else 0.0
+            else:
+                jobs_running = db_snapshot.jobs_running
+                jobs_queued = db_snapshot.jobs_queued
+                retry_queued_jobs = db_snapshot.retry_queued_jobs
+                retry_inflight_jobs = db_snapshot.retry_inflight_jobs
+                dead_letter_jobs = db_snapshot.dead_letter_jobs
+                job_stuck_max_age_seconds = db_snapshot.max_running_age_seconds
+                oldest_queued_age_seconds = db_snapshot.oldest_queued_age_seconds
             db_alive = True
     except Exception:
         db_alive = False
@@ -500,12 +675,21 @@ async def _collect_operational_metrics_snapshot(request: Request) -> _Operationa
     job_queue = getattr(request.app.state, "job_queue", None)
     queue_state = _queue_runtime_state(job_queue)
     if job_queue is not None:
+        queue_metrics_collected = False
         try:
             queue_length, processing_jobs = await get_analysis_job_queue_counts(job_queue)
-            queue_monitoring_available = True
+            queue_metrics_collected = True
         except Exception:
             queue_length = 0
             processing_jobs = 0
+        try:
+            heavy_queue_length, heavy_processing_jobs = await get_heavy_job_queue_counts(job_queue)
+            queue_metrics_collected = True
+        except Exception:
+            heavy_queue_length = 0
+            heavy_processing_jobs = 0
+        queue_monitoring_available = queue_metrics_collected
+        if not queue_monitoring_available:
             queue_state = "unavailable"
         else:
             try:
@@ -531,9 +715,12 @@ async def _collect_operational_metrics_snapshot(request: Request) -> _Operationa
         jobs_queued=jobs_queued,
         queue_length=queue_length,
         processing_jobs=processing_jobs,
+        heavy_queue_length=heavy_queue_length,
+        heavy_processing_jobs=heavy_processing_jobs,
         job_stuck_max_age_seconds=job_stuck_max_age_seconds,
         worker=worker_snapshot,
         retry_queued_jobs=retry_queued_jobs,
+        retry_inflight_jobs=retry_inflight_jobs,
         dead_letter_jobs=dead_letter_jobs,
         oldest_queued_age_seconds=oldest_queued_age_seconds,
         retry_scheduled=retry_scheduled,
@@ -613,11 +800,7 @@ async def _storage_ready_cached(request: Request) -> bool:
 
 
 async def _is_ready(request: Request) -> bool:
-    return (
-        _startup_ready(request)
-        and await _database_ready_cached(request)
-        and await _storage_ready_cached(request)
-    )
+    return (await _collect_system_state_snapshot(request)).ready
 
 
 def _processing_grace_active(request: Request, *, now_monotonic: float | None = None) -> bool:
@@ -638,10 +821,18 @@ def _worker_state(snapshot: _WorkerHeartbeatSnapshot) -> str:
     if snapshot.alive is None:
         return "unknown"
     if snapshot.alive:
-        return "ready"
+        return _SYSTEM_STATE_READY
     if (snapshot.seen_instances or 0) > 0:
         return "stale"
     return "missing"
+
+
+def _worker_service_state(snapshot: _WorkerHeartbeatSnapshot) -> str:
+    if snapshot.alive is None:
+        return _SYSTEM_STATE_UNAVAILABLE
+    if snapshot.alive:
+        return _SYSTEM_STATE_READY
+    return _SYSTEM_STATE_DEGRADED
 
 
 def _evaluate_job_processing_readiness(
@@ -692,6 +883,59 @@ async def _get_job_processing_readiness(
     )
 
 
+async def _collect_system_state_snapshot(request: Request) -> _SystemStateSnapshot:
+    startup_state = _state_from_ready_flag(_startup_ready(request))
+    operational = await _get_operational_metrics_snapshot_cached(request)
+    storage_state = _state_from_ready_flag(await _storage_ready_cached(request))
+    db_state = _state_from_ready_flag(operational.db_alive)
+    auth_protection = await _get_auth_protection_snapshot(request)
+    api_state = _worst_system_state(
+        startup_state,
+        db_state,
+        storage_state,
+        auth_protection.state,
+    )
+    job_processing = _evaluate_job_processing_readiness(
+        request,
+        api_ready=_state_is_servable(api_state),
+        queue_monitoring_available=operational.queue_monitoring_available,
+        queue_state=operational.queue_state,
+        worker_snapshot=operational.worker,
+        strict=False,
+    )
+
+    queue_state = (
+        operational.queue_state
+        if operational.queue_monitoring_available
+        else _SYSTEM_STATE_UNAVAILABLE
+    )
+    worker_state = _worker_service_state(operational.worker)
+    processing_state = _worst_system_state(queue_state, worker_state)
+    if job_processing.grace_active and not job_processing.strict_job_processing_ready:
+        processing_state = _SYSTEM_STATE_DEGRADED
+    redis_state = _worst_system_state(queue_state, auth_protection.state)
+    state = _worst_system_state(api_state, processing_state)
+    ready = _state_is_servable(api_state)
+    healthy = _state_is_healthy(state)
+
+    return _SystemStateSnapshot(
+        state=state,
+        ready=ready,
+        healthy=healthy,
+        startup_state=startup_state,
+        api_state=api_state,
+        processing_state=processing_state,
+        redis_state=redis_state,
+        db_state=db_state,
+        storage_state=storage_state,
+        queue_state=queue_state,
+        worker_state=worker_state,
+        auth_protection=auth_protection,
+        operational=operational,
+        job_processing=job_processing,
+    )
+
+
 def _probe_payload(status_value: str) -> dict[str, str]:
     return {
         "status": status_value,
@@ -699,9 +943,43 @@ def _probe_payload(status_value: str) -> dict[str, str]:
     }
 
 
-def _set_readiness_status(response: Response, *, ready: bool) -> None:
+def _public_dependency_summary(snapshot: _SystemStateSnapshot) -> dict[str, str]:
+    return {
+        "startup": snapshot.startup_state,
+        "db": snapshot.db_state,
+        "storage": snapshot.storage_state,
+        "redis": snapshot.redis_state,
+    }
+
+
+def _public_probe_payload(snapshot: _SystemStateSnapshot) -> dict[str, object]:
+    return {
+        "status": snapshot.state,
+        "service": _PROBE_SERVICE_NAME,
+        "ready": snapshot.ready,
+        "apiState": snapshot.api_state,
+        "processingState": snapshot.processing_state,
+        "dependencies": _public_dependency_summary(snapshot),
+        "queue": {
+            "state": snapshot.queue_state,
+        },
+        "worker": {
+            "state": snapshot.job_processing.worker_state,
+        },
+        "security": {
+            "authProtection": {
+                "state": snapshot.auth_protection.state,
+                "enforced": snapshot.auth_protection.enforced,
+            },
+        },
+    }
+
+
+def _set_probe_state_status(response: Response, *, state: str) -> None:
     response.status_code = (
-        status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE
+        status.HTTP_200_OK
+        if _state_is_healthy(state)
+        else status.HTTP_503_SERVICE_UNAVAILABLE
     )
 
 
@@ -754,20 +1032,20 @@ async def root() -> dict:
 
 
 @router.get("/health")
-async def health() -> dict[str, str]:
-    """Public liveness probe; fast, dependency-free, and intentionally minimal."""
-    return _probe_payload("ok")
+async def health(request: Request, response: Response) -> dict[str, object]:
+    """Public health probe; reports truthful runtime integrity without internal counts."""
+    snapshot = await _collect_system_state_snapshot(request)
+    _set_probe_state_status(response, state=snapshot.state)
+    return _public_probe_payload(snapshot)
 
 
 @router.get("/ready")
-async def ready(request: Request, response: Response) -> dict[str, str]:
+async def ready(request: Request, response: Response) -> dict[str, object]:
     """Public readiness probe; returns ready only when traffic can be served safely."""
-    if await _is_ready(request):
-        _set_readiness_status(response, ready=True)
-        return _probe_payload("ready")
-
-    _set_readiness_status(response, ready=False)
-    return _probe_payload("not_ready")
+    snapshot = await _collect_system_state_snapshot(request)
+    ready_state = snapshot.state if snapshot.ready else _SYSTEM_STATE_UNAVAILABLE
+    _set_probe_state_status(response, state=ready_state)
+    return _public_probe_payload(snapshot)
 
 
 @router.get("/ready/processing")
@@ -778,7 +1056,12 @@ async def ready_processing(
 ) -> dict[str, object]:
     """Readiness for background-job processing, separate from API/read readiness."""
     readiness = await _get_job_processing_readiness(request, strict=strict)
-    _set_readiness_status(response, ready=readiness.job_processing_ready)
+    readiness_state = _SYSTEM_STATE_READY
+    if not readiness.job_processing_ready:
+        readiness_state = _SYSTEM_STATE_UNAVAILABLE
+    elif readiness.grace_active and not readiness.strict_job_processing_ready:
+        readiness_state = _SYSTEM_STATE_DEGRADED
+    _set_probe_state_status(response, state=readiness_state)
 
     status_value = "ready"
     if not readiness.job_processing_ready:
@@ -805,103 +1088,40 @@ async def health_internal(
     _: AuthUserRead = Depends(require_superadmin),
 ) -> dict:
     """Protected diagnostics endpoint; richer than liveness/readiness probes."""
-    startup_ready = _startup_ready(request)
-
-    db_live = False
-    storage_live = False
-    jobs_running = 0
-    jobs_queued = 0
-    retry_queued_jobs = 0
-    dead_letter_jobs = 0
-    processing_jobs = 0
-    queue_length = 0
-    max_running_age_seconds = 0.0
-    oldest_queued_age_seconds = 0.0
-    retry_scheduled = None
-    retry_due_now = None
-    dlq_active = None
-    last_completed_at: str | None = None
-    try:
-        async with AsyncSessionFactory() as session:
-            await session.execute(text("SELECT 1"))
-            db_live = True
-            db_snapshot = await _query_job_counts(session)
-            jobs_running = db_snapshot.jobs_running
-            jobs_queued = db_snapshot.jobs_queued
-            retry_queued_jobs = db_snapshot.retry_queued_jobs
-            dead_letter_jobs = db_snapshot.dead_letter_jobs
-            max_running_age_seconds = db_snapshot.max_running_age_seconds
-            oldest_queued_age_seconds = db_snapshot.oldest_queued_age_seconds
-
-            last_row = await session.execute(
-                select(AnalysisJob.finished_at)
-                .where(AnalysisJob.status == "completed")
-                .order_by(AnalysisJob.finished_at.desc())
-                .limit(1)
-            )
-            last_ts = last_row.scalar_one_or_none()
-            if last_ts:
-                if last_ts.tzinfo is None:
-                    last_ts = last_ts.replace(tzinfo=UTC)
-                last_completed_at = last_ts.isoformat()
-    except Exception:
-        pass
-
-    try:
-        queue_length, processing_jobs = await get_analysis_job_queue_counts(getattr(request.app.state, "job_queue", None))
-        queue_monitoring_available = getattr(request.app.state, "job_queue", None) is not None
-    except Exception:
-        queue_length = 0
-        processing_jobs = 0
-        queue_monitoring_available = False
-    else:
-        try:
-            retry_scheduled, retry_due_now, dlq_active = await _query_queue_operational_counts(
-                getattr(request.app.state, "job_queue", None)
-            )
-        except Exception:
-            retry_scheduled = None
-            retry_due_now = None
-            dlq_active = None
-
-    worker_snapshot = _WorkerHeartbeatSnapshot(
-        alive=None,
-        last_seen_at=None,
-        alive_instances=None,
-        seen_instances=None,
-    )
-    try:
-        worker_snapshot = await _get_worker_heartbeat_snapshot(getattr(request.app.state, "job_queue", None))
-    except Exception:
-        worker_snapshot = _WorkerHeartbeatSnapshot(
-            alive=None,
-            last_seen_at=None,
-            alive_instances=None,
-            seen_instances=None,
-        )
-
-    storage_live = await _storage_ready_cached(request)
-    api_ready = startup_ready and db_live and storage_live
-    job_processing = _evaluate_job_processing_readiness(
-        request,
-        api_ready=api_ready,
-        queue_monitoring_available=queue_monitoring_available,
-        queue_state=_queue_runtime_state(getattr(request.app.state, "job_queue", None)),
-        worker_snapshot=worker_snapshot,
-        strict=True,
-    )
-    ready = api_ready and job_processing.strict_job_processing_ready
-    _set_readiness_status(response, ready=ready)
+    snapshot = await _collect_system_state_snapshot(request)
+    operational = snapshot.operational
     queue_details = _queue_runtime_details(getattr(request.app.state, "job_queue", None)) or {}
+
+    last_completed_at: str | None = None
+    if operational.db_alive:
+        try:
+            async with AsyncSessionFactory() as session:
+                last_row = await session.execute(
+                    select(AnalysisJob.finished_at)
+                    .where(AnalysisJob.status == "completed")
+                    .order_by(AnalysisJob.finished_at.desc())
+                    .limit(1)
+                )
+                last_ts = last_row.scalar_one_or_none()
+                if last_ts:
+                    if last_ts.tzinfo is None:
+                        last_ts = last_ts.replace(tzinfo=UTC)
+                    last_completed_at = last_ts.isoformat()
+        except Exception:
+            last_completed_at = None
+
+    _set_probe_state_status(response, state=snapshot.state)
     queue_section = {
-        "state": job_processing.queue_state,
-        "monitoringAvailable": queue_monitoring_available,
+        "state": snapshot.queue_state,
+        "monitoringAvailable": operational.queue_monitoring_available,
         "depth": {
-            "durable": queue_length,
-            "processing": processing_jobs,
-            "scheduledRetry": retry_scheduled,
-            "scheduledRetryDueNow": retry_due_now,
-            "deadLetterActive": dlq_active,
+            "durable": operational.queue_length,
+            "processing": operational.processing_jobs,
+            "heavyDurable": operational.heavy_queue_length,
+            "heavyProcessing": operational.heavy_processing_jobs,
+            "scheduledRetry": operational.retry_scheduled,
+            "scheduledRetryDueNow": operational.retry_due_now,
+            "deadLetterActive": operational.dlq_active,
         },
     }
     for key, value in queue_details.items():
@@ -910,32 +1130,60 @@ async def health_internal(
         queue_section[key] = value
 
     return {
-        "status": "ok" if ready else "degraded",
+        "status": snapshot.state,
         "service": _PROBE_SERVICE_NAME,
-        "ready": ready,
-        "apiReady": api_ready,
-        "jobProcessingReady": job_processing.strict_job_processing_ready,
-        "jobProcessingGraceActive": job_processing.grace_active,
+        "ready": snapshot.ready,
+        "healthy": snapshot.healthy,
+        "apiReady": snapshot.ready,
+        "apiState": snapshot.api_state,
+        "jobProcessingReady": snapshot.job_processing.strict_job_processing_ready,
+        "jobProcessingState": snapshot.processing_state,
+        "jobProcessingGraceActive": snapshot.job_processing.grace_active,
         "startupChecks": request.app.state.startup_checks,
-        "db": "ok" if db_live else "error",
-        "storage": "ok" if storage_live else "error",
+        "db": "ok" if operational.db_alive else "error",
+        "storage": "ok" if snapshot.storage_state == _SYSTEM_STATE_READY else "error",
+        "dependencies": {
+            "startup": snapshot.startup_state,
+            "db": snapshot.db_state,
+            "storage": snapshot.storage_state,
+            "redis": snapshot.redis_state,
+        },
         "jobs": {
-            "running": jobs_running,
-            "queued": jobs_queued,
-            "retryQueued": retry_queued_jobs,
-            "deadLetter": dead_letter_jobs,
-            "processing": processing_jobs,
-            "queueLength": queue_length,
-            "maxRunningAgeSeconds": round(max_running_age_seconds, 1),
-            "oldestQueuedAgeSeconds": round(oldest_queued_age_seconds, 1),
+            "running": operational.jobs_running,
+            "queued": operational.jobs_queued,
+            "retryQueued": operational.retry_queued_jobs,
+            "retryInflight": operational.retry_inflight_jobs,
+            "deadLetter": operational.dead_letter_jobs,
+            "processing": operational.processing_jobs,
+            "queueLength": operational.queue_length,
+            "heavyProcessing": operational.heavy_processing_jobs,
+            "heavyQueueLength": operational.heavy_queue_length,
+            "maxRunningAgeSeconds": round(operational.job_stuck_max_age_seconds, 1),
+            "oldestQueuedAgeSeconds": round(operational.oldest_queued_age_seconds, 1),
             "lastCompletedAt": last_completed_at,
+            "backpressure": {
+                "currentConcurrent": operational.processing_jobs + operational.heavy_processing_jobs,
+                "maxConcurrent": get_settings().effective_backpressure_max_concurrent_jobs,
+                "currentQueued": operational.queue_length + operational.heavy_queue_length,
+                "maxQueued": get_settings().effective_backpressure_max_queued_jobs,
+                "currentRetryInflight": operational.retry_inflight_jobs,
+                "maxRetryInflight": get_settings().effective_backpressure_max_retry_inflight,
+            },
         },
         "worker": {
-            "alive": worker_snapshot.alive,
-            "state": job_processing.worker_state,
-            "lastSeenAt": worker_snapshot.last_seen_at,
-            "aliveInstances": worker_snapshot.alive_instances,
-            "seenInstances": worker_snapshot.seen_instances,
+            "alive": operational.worker.alive,
+            "state": snapshot.job_processing.worker_state,
+            "serviceState": snapshot.worker_state,
+            "lastSeenAt": operational.worker.last_seen_at,
+            "aliveInstances": operational.worker.alive_instances,
+            "seenInstances": operational.worker.seen_instances,
+        },
+        "security": {
+            "authProtection": {
+                "state": snapshot.auth_protection.state,
+                "enforced": snapshot.auth_protection.enforced,
+                "source": snapshot.auth_protection.source,
+            },
         },
         "queue": queue_section,
         "timestamp": datetime.now(UTC).isoformat(),

@@ -1,21 +1,28 @@
 import hashlib
+import json
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
+from typing import Literal
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cache import get_cached, set_cached
 from app.core.metrics import observe_cache_operation
 from app.core.token_limits import JTI_MAX_LENGTH
 from app.models import PasswordResetToken, RevokedToken, UserSession
 
 _MAX_PASSWORD_RESET_TOKEN_LENGTH = 512
 _REVOKED_TOKEN_CACHE_NAMESPACE = "revoked-token"
-_REVOKED_TOKEN_CACHE_MISS_TTL_SECONDS = 60
+_REVOKED_TOKEN_CACHE_PREFIX = "cache:"
+_REVOKED_TOKEN_CACHE_ENTRY_VERSION = 1
+_REVOKED_TOKEN_CACHE_TAG = "revoked-token-v1"
+TOKEN_STATE_ACTIVE: Literal["active"] = "active"
+TOKEN_STATE_REVOKED: Literal["revoked"] = "revoked"
+TOKEN_STATE_EXPIRED: Literal["expired"] = "expired"
+TokenState = Literal["active", "revoked", "expired"]
 
 
 @dataclass(frozen=True)
@@ -32,6 +39,25 @@ class SessionTokenRevocation:
     expires_at: datetime
 
 
+class TokenStateBackendUnavailableError(RuntimeError):
+    """Raised when a shared token-state optimization cannot be used."""
+
+    def __init__(
+        self,
+        *,
+        operation: str,
+        jti: str | None,
+        cause: Exception | None = None,
+    ) -> None:
+        self.operation = operation
+        self.jti = jti
+        self.cause = cause
+        super().__init__(
+            f"Shared token-state backend is unavailable during {operation}"
+            f"{f' for {jti!r}' if jti else ''}."
+        )
+
+
 class TokenRepository:
     def __init__(self, session: AsyncSession, redis=None):
         self.session = session
@@ -39,23 +65,89 @@ class TokenRepository:
 
     @staticmethod
     def _revoked_cache_key(jti: str) -> str:
-        return f"{_REVOKED_TOKEN_CACHE_NAMESPACE}:{jti}"
+        return f"{_REVOKED_TOKEN_CACHE_PREFIX}{_REVOKED_TOKEN_CACHE_NAMESPACE}:{jti}"
 
-    async def _cache_revoked_lookup(self, *, jti: str, revoked: bool, ttl_seconds: int) -> None:
-        ttl = max(1, int(ttl_seconds))
-        await set_cached(
-            self.redis,
-            self._revoked_cache_key(jti),
-            {"revoked": revoked},
-            ttl=ttl,
+    def _raise_backend_unavailable(
+        self,
+        *,
+        operation: str,
+        jti: str | None,
+        error: Exception | None = None,
+    ) -> None:
+        raise TokenStateBackendUnavailableError(
+            operation=operation,
+            jti=jti,
+            cause=error,
+        ) from error
+
+    @staticmethod
+    def _decode_cached_revoked_state(raw: object) -> bool | None:
+        if raw is None:
+            return None
+
+        decoded = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else str(raw)
+        if decoded == TOKEN_STATE_REVOKED:
+            return True
+
+        try:
+            payload = json.loads(decoded)
+        except json.JSONDecodeError:
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("revoked") is True:
+            return True
+        meta = payload.get("meta")
+        if not isinstance(meta, dict):
+            return None
+        if int(meta.get("version", 0) or 0) != _REVOKED_TOKEN_CACHE_ENTRY_VERSION:
+            return None
+        if meta.get("tag") != _REVOKED_TOKEN_CACHE_TAG:
+            return None
+        if payload.get("state") == TOKEN_STATE_REVOKED:
+            return True
+        return None
+
+    @staticmethod
+    def _build_revoked_cache_payload(*, ttl_seconds: int) -> str:
+        return json.dumps(
+            {
+                "meta": {
+                    "version": _REVOKED_TOKEN_CACHE_ENTRY_VERSION,
+                    "tag": _REVOKED_TOKEN_CACHE_TAG,
+                    "ttlSeconds": max(1, int(ttl_seconds)),
+                },
+                "state": TOKEN_STATE_REVOKED,
+                "revoked": True,
+            }
         )
+
+    async def _write_revoked_cache_entry(self, *, jti: str, ttl_seconds: int) -> None:
+        ttl = max(1, int(ttl_seconds))
+        if self.redis is None:
+            return
+        try:
+            await self.redis.setex(
+                self._revoked_cache_key(jti),
+                ttl,
+                self._build_revoked_cache_payload(ttl_seconds=ttl),
+            )
+        except Exception as exc:
+            observe_cache_operation(
+                namespace=_REVOKED_TOKEN_CACHE_NAMESPACE,
+                operation="set",
+                outcome="error",
+                duration_seconds=0.0,
+            )
+            return
 
     async def _cache_revoked_hit(self, *, jti: str, expires_at: datetime) -> None:
         normalized_expiry = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=UTC)
         ttl_seconds = int((normalized_expiry.astimezone(UTC) - datetime.now(UTC)).total_seconds())
         if ttl_seconds <= 0:
             return
-        await self._cache_revoked_lookup(jti=jti, revoked=True, ttl_seconds=ttl_seconds)
+        await self._write_revoked_cache_entry(jti=jti, ttl_seconds=ttl_seconds)
 
     @staticmethod
     def normalize_jti(jti: str | None) -> str | None:
@@ -100,15 +192,35 @@ class TokenRepository:
         if normalized_jti is None:
             return False
         started_at = perf_counter()
-        cached = await get_cached(self.redis, self._revoked_cache_key(normalized_jti))
-        if isinstance(cached, dict) and isinstance(cached.get("revoked"), bool):
+        raw_cached = None
+        if self.redis is None:
+            observe_cache_operation(
+                namespace=_REVOKED_TOKEN_CACHE_NAMESPACE,
+                operation="lookup",
+                outcome="unavailable",
+                duration_seconds=perf_counter() - started_at,
+            )
+        else:
+            try:
+                raw_cached = await self.redis.get(self._revoked_cache_key(normalized_jti))
+            except Exception:
+                observe_cache_operation(
+                    namespace=_REVOKED_TOKEN_CACHE_NAMESPACE,
+                    operation="lookup",
+                    outcome="error",
+                    duration_seconds=perf_counter() - started_at,
+                )
+                raw_cached = None
+
+        cached = self._decode_cached_revoked_state(raw_cached)
+        if cached is True:
             observe_cache_operation(
                 namespace=_REVOKED_TOKEN_CACHE_NAMESPACE,
                 operation="lookup",
                 outcome="hit",
                 duration_seconds=perf_counter() - started_at,
             )
-            return bool(cached["revoked"])
+            return True
 
         result = await self.session.execute(
             select(RevokedToken).where(
@@ -124,15 +236,25 @@ class TokenRepository:
             duration_seconds=perf_counter() - started_at,
         )
         if record is None:
-            await self._cache_revoked_lookup(
-                jti=normalized_jti,
-                revoked=False,
-                ttl_seconds=_REVOKED_TOKEN_CACHE_MISS_TTL_SECONDS,
-            )
             return False
 
         await self._cache_revoked_hit(jti=normalized_jti, expires_at=record.expires_at)
         return True
+
+    async def get_token_state(
+        self,
+        jti: str,
+        *,
+        expires_at: datetime,
+        now: datetime | None = None,
+    ) -> TokenState:
+        normalized_expiry = self._normalize_datetime(expires_at)
+        current_time = self._normalize_datetime(now or datetime.now(UTC))
+        if normalized_expiry <= current_time:
+            return TOKEN_STATE_EXPIRED
+        if await self.is_revoked(jti):
+            return TOKEN_STATE_REVOKED
+        return TOKEN_STATE_ACTIVE
 
     async def revoke(self, jti: str, expires_at: datetime) -> bool:
         return await self.revoke_with_commit(jti, expires_at, commit=True)
@@ -161,7 +283,7 @@ class TokenRepository:
         if normalized_jti is None:
             return False
         await self._cache_revoked_hit(jti=normalized_jti, expires_at=expires_at)
-        return True
+        return self.redis is not None
 
     async def get_user_session(self, session_id: str) -> UserSession | None:
         return await self.session.get(UserSession, session_id)
