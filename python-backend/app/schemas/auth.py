@@ -1,4 +1,4 @@
-
+from datetime import datetime
 from pydantic import BaseModel
 
 
@@ -23,6 +23,7 @@ class LoginResponse(BaseModel):
     refreshToken: str
     tokenType: str = "bearer"
     user: AuthUserRead
+    sessionId: str | None = None
 
 
 class LogoutRequest(BaseModel):
@@ -44,6 +45,19 @@ class ChangePasswordRequest(BaseModel):
 
 class ChangePasswordResponse(BaseModel):
     message: str
+
+
+class AuthSessionRead(BaseModel):
+    id: str
+    createdAt: datetime
+    accessExpiresAt: datetime
+    refreshExpiresAt: datetime
+    revokedAt: datetime | None = None
+    isCurrent: bool = False
+
+
+class AuthSessionListResponse(BaseModel):
+    items: list[AuthSessionRead]
 
 
 class ForgotPasswordRequest(BaseModel):

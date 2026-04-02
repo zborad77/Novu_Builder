@@ -29,10 +29,33 @@ METRICS_AUTH_TOKEN=$(openssl rand -hex 32)
 
 Production values that must be filled before `docker compose up`:
 
+- Root `.env.production` is the authoritative source for compose runtime knobs.
+- Pilot/production must not rely on internal backend defaults for worker, queue, rate-limit, or observability parameters.
+
 - `APP_BASE_URL` - deployed client URL, must not point to localhost/example domains
 - `CORS_ALLOWED_ORIGINS` - deployed browser origins, comma-separated when needed
+- `AI_ANALYSIS_PROVIDER` - explicit provider selection (`mock` for rehearsal, real provider for production usage)
+- `WORKER_CONCURRENCY` - explicit worker parallelism; do not leave implicit default `1`
+- `WORKER_HEAVY_CONCURRENCY`
+- `WORKER_JOB_LEASE_TIMEOUT_SECONDS`
+- `WORKER_JOB_REAP_INTERVAL_SECONDS`
+- `ANALYSIS_QUEUE_MAX_DEPTH`
+- `ANALYSIS_JOB_MAX_ATTEMPTS`
+- `ANALYSIS_RETRY_BACKOFF_BASE_SECONDS`
+- `ANALYSIS_RETRY_BACKOFF_MAX_SECONDS`
+- `ANALYSIS_JOBS_PER_TENANT_LIMIT`
+- `WORKER_DB_POOL_SIZE`
+- `WORKER_INSTANCE_COUNT`
+- `REDIS_FAILOVER_URLS` - empty string is valid only as an explicit single-node choice
+- `REDIS_SOCKET_CONNECT_TIMEOUT`, `REDIS_SOCKET_TIMEOUT`
+- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `JWT_REFRESH_TOKEN_EXPIRE_DAYS`
+- `REQUIRE_HTTPS`, `HSTS_MAX_AGE`
+- `RATE_LIMIT_LOGIN`, `RATE_LIMIT_ADMIN`, `RATE_LIMIT_UPLOAD`, `RATE_LIMIT_ANALYSIS_JOBS`
 - `METRICS_AUTH_ENABLED=true`
 - `METRICS_AUTH_TOKEN` - strong bearer token for `/api/v1/metrics`
+- `WORKER_METRICS_ENABLED=true`
+- `SENTRY_DSN` - set real DSN or explicit empty value to disable intentionally
+- `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_PROFILES_SAMPLE_RATE`
 - `STORAGE_BACKEND=s3`
 - `STORAGE_AUTHORITATIVE=true`
 - `S3_CONNECT_TIMEOUT_SECONDS` - fail-fast S3 connect timeout in seconds, must stay `> 0`

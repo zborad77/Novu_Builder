@@ -2,15 +2,20 @@ import hashlib
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from time import perf_counter
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import get_cached, set_cached
+from app.core.metrics import observe_cache_operation
 from app.core.token_limits import JTI_MAX_LENGTH
-from app.models import PasswordResetToken, RevokedToken
+from app.models import PasswordResetToken, RevokedToken, UserSession
 
 _MAX_PASSWORD_RESET_TOKEN_LENGTH = 512
+_REVOKED_TOKEN_CACHE_NAMESPACE = "revoked-token"
+_REVOKED_TOKEN_CACHE_MISS_TTL_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -21,9 +26,36 @@ class ClaimedPasswordResetToken:
     used_at: datetime
 
 
+@dataclass(frozen=True)
+class SessionTokenRevocation:
+    jti: str
+    expires_at: datetime
+
+
 class TokenRepository:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, redis=None):
         self.session = session
+        self.redis = redis
+
+    @staticmethod
+    def _revoked_cache_key(jti: str) -> str:
+        return f"{_REVOKED_TOKEN_CACHE_NAMESPACE}:{jti}"
+
+    async def _cache_revoked_lookup(self, *, jti: str, revoked: bool, ttl_seconds: int) -> None:
+        ttl = max(1, int(ttl_seconds))
+        await set_cached(
+            self.redis,
+            self._revoked_cache_key(jti),
+            {"revoked": revoked},
+            ttl=ttl,
+        )
+
+    async def _cache_revoked_hit(self, *, jti: str, expires_at: datetime) -> None:
+        normalized_expiry = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=UTC)
+        ttl_seconds = int((normalized_expiry.astimezone(UTC) - datetime.now(UTC)).total_seconds())
+        if ttl_seconds <= 0:
+            return
+        await self._cache_revoked_lookup(jti=jti, revoked=True, ttl_seconds=ttl_seconds)
 
     @staticmethod
     def normalize_jti(jti: str | None) -> str | None:
@@ -38,6 +70,12 @@ class TokenRepository:
         if any(ch.isspace() or ord(ch) < 32 for ch in jti):
             return None
         return jti
+
+    @staticmethod
+    def _normalize_datetime(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
     @staticmethod
     def normalize_password_reset_token(raw_token: str | None) -> str | None:
@@ -61,15 +99,51 @@ class TokenRepository:
         normalized_jti = self.normalize_jti(jti)
         if normalized_jti is None:
             return False
+        started_at = perf_counter()
+        cached = await get_cached(self.redis, self._revoked_cache_key(normalized_jti))
+        if isinstance(cached, dict) and isinstance(cached.get("revoked"), bool):
+            observe_cache_operation(
+                namespace=_REVOKED_TOKEN_CACHE_NAMESPACE,
+                operation="lookup",
+                outcome="hit",
+                duration_seconds=perf_counter() - started_at,
+            )
+            return bool(cached["revoked"])
+
         result = await self.session.execute(
             select(RevokedToken).where(
                 RevokedToken.jti == normalized_jti,
                 RevokedToken.expires_at > datetime.now(UTC),
             )
         )
-        return result.scalar_one_or_none() is not None
+        record = result.scalar_one_or_none()
+        observe_cache_operation(
+            namespace=_REVOKED_TOKEN_CACHE_NAMESPACE,
+            operation="lookup",
+            outcome="db_fallback",
+            duration_seconds=perf_counter() - started_at,
+        )
+        if record is None:
+            await self._cache_revoked_lookup(
+                jti=normalized_jti,
+                revoked=False,
+                ttl_seconds=_REVOKED_TOKEN_CACHE_MISS_TTL_SECONDS,
+            )
+            return False
+
+        await self._cache_revoked_hit(jti=normalized_jti, expires_at=record.expires_at)
+        return True
 
     async def revoke(self, jti: str, expires_at: datetime) -> bool:
+        return await self.revoke_with_commit(jti, expires_at, commit=True)
+
+    async def revoke_with_commit(
+        self,
+        jti: str,
+        expires_at: datetime,
+        *,
+        commit: bool,
+    ) -> bool:
         normalized_jti = self.normalize_jti(jti)
         if normalized_jti is None:
             return False
@@ -77,8 +151,169 @@ class TokenRepository:
         if existing:
             return False
         self.session.add(RevokedToken(jti=normalized_jti, expires_at=expires_at))
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
+            await self._cache_revoked_hit(jti=normalized_jti, expires_at=expires_at)
         return True
+
+    async def cache_revoked_token(self, jti: str, expires_at: datetime) -> bool:
+        normalized_jti = self.normalize_jti(jti)
+        if normalized_jti is None:
+            return False
+        await self._cache_revoked_hit(jti=normalized_jti, expires_at=expires_at)
+        return True
+
+    async def get_user_session(self, session_id: str) -> UserSession | None:
+        return await self.session.get(UserSession, session_id)
+
+    async def get_active_user_session(
+        self,
+        session_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> UserSession | None:
+        current_time = now or datetime.now(UTC)
+        result = await self.session.execute(
+            select(UserSession).where(
+                UserSession.id == session_id,
+                UserSession.revoked_at.is_(None),
+                UserSession.refresh_expires_at > current_time,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_user_sessions(self, user_id: str) -> list[UserSession]:
+        result = await self.session.execute(
+            select(UserSession)
+            .where(UserSession.user_id == user_id)
+            .order_by(UserSession.created_at.desc(), UserSession.id.desc())
+        )
+        return list(result.scalars().all())
+
+    async def create_user_session(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        access_jti: str,
+        refresh_jti: str,
+        access_expires_at: datetime,
+        refresh_expires_at: datetime,
+        commit: bool = True,
+    ) -> UserSession:
+        record = UserSession(
+            id=session_id,
+            user_id=user_id,
+            access_jti=access_jti,
+            refresh_jti=refresh_jti,
+            access_expires_at=access_expires_at,
+            refresh_expires_at=refresh_expires_at,
+            revoked_at=None,
+        )
+        self.session.add(record)
+        await self.session.flush()
+        if commit:
+            await self.session.commit()
+            await self.session.refresh(record)
+        return record
+
+    async def rotate_user_session(
+        self,
+        session: UserSession,
+        *,
+        access_jti: str,
+        refresh_jti: str,
+        access_expires_at: datetime,
+        refresh_expires_at: datetime,
+        commit: bool = True,
+    ) -> UserSession:
+        session.access_jti = access_jti
+        session.refresh_jti = refresh_jti
+        session.access_expires_at = access_expires_at
+        session.refresh_expires_at = refresh_expires_at
+        session.revoked_at = None
+        await self.session.flush()
+        if commit:
+            await self.session.commit()
+            await self.session.refresh(session)
+        return session
+
+    async def revoke_user_session(
+        self,
+        session: UserSession,
+        *,
+        now: datetime | None = None,
+        commit: bool = True,
+    ) -> UserSession:
+        session.revoked_at = now or datetime.now(UTC)
+        await self.session.flush()
+        if commit:
+            await self.session.commit()
+            await self.session.refresh(session)
+        return session
+
+    async def revoke_all_user_sessions(
+        self,
+        user_id: str,
+        *,
+        now: datetime | None = None,
+        commit: bool = True,
+    ) -> list[SessionTokenRevocation]:
+        current_time = self._normalize_datetime(now or datetime.now(UTC))
+        result = await self.session.execute(
+            select(UserSession).where(
+                UserSession.user_id == user_id,
+                UserSession.revoked_at.is_(None),
+            )
+        )
+        sessions = list(result.scalars().all())
+        if not sessions:
+            return []
+
+        revocations: list[SessionTokenRevocation] = []
+        for session in sessions:
+            session.revoked_at = current_time
+
+            access_expires_at = self._normalize_datetime(session.access_expires_at)
+            if access_expires_at > current_time:
+                revocations.append(
+                    SessionTokenRevocation(
+                        jti=session.access_jti,
+                        expires_at=access_expires_at,
+                    )
+                )
+
+            refresh_expires_at = self._normalize_datetime(session.refresh_expires_at)
+            if refresh_expires_at > current_time:
+                revocations.append(
+                    SessionTokenRevocation(
+                        jti=session.refresh_jti,
+                        expires_at=refresh_expires_at,
+                    )
+                )
+
+        if revocations:
+            revocation_map = {record.jti: record for record in revocations}
+            existing_result = await self.session.execute(
+                select(RevokedToken.jti).where(RevokedToken.jti.in_(tuple(revocation_map)))
+            )
+            existing_jtis = set(existing_result.scalars().all())
+            for record in revocations:
+                if record.jti in existing_jtis:
+                    continue
+                self.session.add(
+                    RevokedToken(
+                        jti=record.jti,
+                        expires_at=record.expires_at,
+                    )
+                )
+
+        await self.session.flush()
+        if commit:
+            await self.session.commit()
+            for record in revocations:
+                await self._cache_revoked_hit(jti=record.jti, expires_at=record.expires_at)
+        return revocations
 
     async def delete_expired(self) -> int:
         result = await self.session.execute(

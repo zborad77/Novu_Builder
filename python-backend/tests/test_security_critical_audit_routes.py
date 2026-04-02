@@ -41,12 +41,11 @@ async def test_change_password_returns_503_when_security_audit_enforcement_fails
 
     service = MagicMock()
     service.login = AsyncMock(return_value=("access", "refresh", _current_user()))
-    service.session = AsyncMock()
-    service.session.get = AsyncMock(return_value=SimpleNamespace(password_hash="old-hash", tokens_valid_after=None))
+    service.change_password = AsyncMock(side_effect=SecurityAuditWriteError("audit unavailable"))
 
-    with patch(
-        "app.api.routes.auth.commit_security_critical_audit",
-        new=AsyncMock(side_effect=SecurityAuditWriteError("audit unavailable")),
+    with (
+        patch("app.api.routes.auth.is_account_throttled", new=AsyncMock(return_value=False)),
+        patch("app.api.routes.auth.reset_login_failures", new=AsyncMock()),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await change_password(
@@ -70,6 +69,7 @@ async def test_reset_user_password_returns_503_when_security_audit_enforcement_f
         organization_id="org-1",
         password_hash="old-hash",
         tokens_valid_after=None,
+        token_version=0,
     )
     session = AsyncMock()
     session.get = AsyncMock(return_value=target)
@@ -77,6 +77,12 @@ async def test_reset_user_password_returns_503_when_security_audit_enforcement_f
     with patch(
         "app.api.routes.admin.commit_security_critical_audit",
         new=AsyncMock(side_effect=SecurityAuditWriteError("audit unavailable")),
+    ), patch(
+        "app.api.routes.admin.TokenRepository.revoke_all_user_sessions",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "app.api.routes.admin.get_job_queue",
+        return_value=None,
     ):
         with pytest.raises(HTTPException) as exc_info:
             await reset_user_password(

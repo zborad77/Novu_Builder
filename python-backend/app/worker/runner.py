@@ -28,7 +28,7 @@ from fastapi import HTTPException
 
 from app.core.config import get_settings, startup_failure_message
 from app.core.logging import configure_logging
-from app.core.metrics import record_reaper_requeues
+from app.core.metrics import PROMETHEUS_CLIENT_AVAILABLE, record_reaper_requeues
 from app.core.redis_client import build_queue_redis_client_from_settings
 from app.db.session import WorkerAsyncSessionFactory
 from app.repositories.analysis_repository import AnalysisJobLeaseOwnershipError
@@ -54,12 +54,14 @@ from app.worker.heavy_queue import (
     validate_heavy_job_payload,
 )
 from app.worker.heartbeat import (
+    clear_local_worker_heartbeat,
     clear_worker_heartbeat,
     WORKER_HEARTBEAT_INTERVAL,
     WORKER_HEARTBEAT_KEY_PREFIX,
     WORKER_HEARTBEAT_LEGACY_KEY,
     WORKER_HEARTBEAT_TTL,
     build_worker_instance_id,
+    write_local_worker_heartbeat,
     worker_heartbeat_key,
     write_worker_heartbeat,
 )
@@ -80,6 +82,11 @@ from app.worker.queue import (
 )
 
 logger = structlog.get_logger(__name__)
+
+try:
+    from prometheus_client import start_http_server
+except ModuleNotFoundError:
+    start_http_server = None
 
 
 class WorkerPayloadValidationError(ValueError):
@@ -496,10 +503,15 @@ async def _write_heartbeat_if_due(runtime: WorkerRuntime, *, now_monotonic: floa
     if current - runtime.last_heartbeat < _HEARTBEAT_INTERVAL:
         return
 
+    now = datetime.now(UTC)
     await write_worker_heartbeat(
         runtime.redis,
         runtime.worker_instance_id,
-        now=datetime.now(UTC),
+        now=now,
+    )
+    await write_local_worker_heartbeat(
+        runtime.worker_instance_id,
+        now=now,
     )
     runtime.last_heartbeat = current
 
@@ -606,9 +618,49 @@ async def _renew_job_lease_loop(runtime: WorkerRuntime, lease: LeasedAnalysisJob
             )
 
 
+async def _resolve_job_failure_finalization(
+    runtime: WorkerRuntime,
+    lease: LeasedAnalysisJob,
+    *,
+    cause: Exception,
+) -> tuple[str, datetime | None, int, str | None]:
+    service = _build_worker_analysis_service(runtime.settings)
+    try:
+        result = await service.recover_job_after_worker_error(
+            lease=lease,
+            cause=cause,
+        )
+    except AnalysisJobLeaseOwnershipError:
+        return "ack", None, 0, None
+    except Exception as recovery_exc:
+        fallback_reason = str(cause).strip() or type(cause).__name__
+        logger.error(
+            "worker.job_recovery_failed",
+            job_id=lease.job_id,
+            tenant_id=lease.organization_id,
+            lease_token=lease.token,
+            worker_id=lease.worker_id,
+            original_error_type=type(cause).__name__,
+            original_error=fallback_reason,
+            recovery_error_type=type(recovery_exc).__name__,
+            recovery_error=str(recovery_exc),
+            exc_info=True,
+        )
+        return "dlq", None, 0, fallback_reason
+
+    attempt_count = int(getattr(result, "attempt_count", 0) or 0)
+    retry_at = getattr(result, "retry_at", None)
+    failure_reason = getattr(result, "failure_reason", None)
+    if result.disposition == "retry_scheduled" and retry_at is not None:
+        return "retry", retry_at, attempt_count, failure_reason
+    if result.disposition == "dead_lettered":
+        return "dlq", None, attempt_count, failure_reason
+    return "ack", None, attempt_count, failure_reason
+
+
 async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> None:
     renewal_task = asyncio.create_task(_renew_job_lease_loop(runtime, lease))
-    finalize_action = "none"
+    finalize_action = "ack"
     retry_at: datetime | None = None
     dlq_reason: str | None = None
     attempt_count = 0
@@ -635,6 +687,7 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
             status="aborted",
             error=str(exc),
         )
+        finalize_action = "ack"
     except WorkerJobExecutionError as exc:
         logger.error(
             "worker.job_unhandled_error",
@@ -647,6 +700,11 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
             worker_id=lease.worker_id,
             status="failed",
             exc_info=True,
+        )
+        finalize_action, retry_at, attempt_count, dlq_reason = await _resolve_job_failure_finalization(
+            runtime,
+            lease,
+            cause=exc.cause,
         )
     except InvalidAnalysisJobPayloadError as exc:
         logger.error(
@@ -671,6 +729,11 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
             worker_id=lease.worker_id,
             status="failed",
             exc_info=True,
+        )
+        finalize_action, retry_at, attempt_count, dlq_reason = await _resolve_job_failure_finalization(
+            runtime,
+            lease,
+            cause=exc,
         )
     finally:
         renewal_task.cancel()
@@ -1041,6 +1104,7 @@ async def _run_one_iteration(runtime: WorkerRuntime) -> None:
     await promote_scheduled_analysis_jobs(
         runtime.redis,
         limit=max(runtime.worker_concurrency * 4, 10),
+        max_depth=runtime.settings.analysis_queue_max_depth,
     )
 
     spawned_work = False
@@ -1170,12 +1234,34 @@ async def run(redis_url: str | None = None) -> None:
     finally:
         await _cancel_inflight_tasks(runtime)
         await clear_worker_heartbeat(runtime.redis, worker_instance_id)
+        await clear_local_worker_heartbeat()
         await runtime.redis.aclose()
         logger.info("worker.stopped")
 
 
 def main() -> None:
-    configure_logging(get_settings().log_level)
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    if settings.worker_metrics_enabled:
+        if start_http_server is None or not PROMETHEUS_CLIENT_AVAILABLE:
+            if settings.app_env.lower() not in ("development", "test"):
+                raise RuntimeError(
+                    startup_failure_message(
+                        "worker_metrics",
+                        "prometheus_client must be installed when WORKER_METRICS_ENABLED=true outside development/test.",
+                    )
+                )
+            logger.warning("worker.metrics_disabled", reason="prometheus_client_not_installed")
+        else:
+            start_http_server(
+                port=settings.worker_metrics_port,
+                addr=settings.worker_metrics_host,
+            )
+            logger.info(
+                "worker.metrics_started",
+                host=settings.worker_metrics_host,
+                port=settings.worker_metrics_port,
+            )
     try:
         asyncio.run(run())
     except KeyboardInterrupt:

@@ -64,6 +64,22 @@ async def _ensure_global_catalog_seed(db_session) -> None:
     await db_session.commit()
 
 
+def test_pricing_profile_seed_ids_fit_schema_limits_and_remain_unique():
+    pricing_seed_keys = (
+        "catalog_pricing_profiles",
+        "pricing_profile_required_inputs",
+        "pricing_profile_base_rules",
+        "pricing_profile_adjustment_rules",
+        "pricing_profile_labor_assumptions",
+        "pricing_profile_material_assumptions",
+    )
+
+    for key in pricing_seed_keys:
+        ids = [row["id"] for row in GLOBAL_WORK_CATALOG_SEED[key]]
+        assert all(len(value) <= 64 for value in ids), key
+        assert len(ids) == len(set(ids)), key
+
+
 async def _ensure_project(db_session, test_tenants) -> Project:
     project_id = f"prj_pp_{uuid4().hex[:8]}"
     project = Project(

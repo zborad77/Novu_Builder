@@ -36,6 +36,12 @@ from app.work_catalog.domain import (
     validate_parameter_definition,
     validate_pricing_profile_definition,
 )
+from app.work_catalog.seed_ids import (
+    assert_valid_seed_id_collection,
+    build_analysis_profile_id,
+    build_catalog_pricing_profile_id,
+    build_work_type_parameter_id,
+)
 from app.work_catalog.analysis_profile_seed_data import build_analysis_profile_catalog
 from app.work_catalog.parameter_seed_data import (
     WORK_TYPE_PARAMETER_SCHEMAS,
@@ -1171,18 +1177,18 @@ _PRICING_PROFILE_LABOR_ASSUMPTIONS = _PRICING_PROFILE_CATALOG["pricing_profile_l
 _PRICING_PROFILE_MATERIAL_ASSUMPTIONS = _PRICING_PROFILE_CATALOG["pricing_profile_material_assumptions"]
 
 _DEFAULT_ANALYSIS_PROFILE_BY_WORK_TYPE_ID = {
-    "wt_chimney_renovation": "ap_chimney_renovation_vision_v1",
-    "wt_wall_demolition": "ap_wall_demolition_vision_v1",
-    "wt_plastering": "ap_plastering_vision_v1",
-    "wt_facade_installation": "ap_facade_installation_vision_v1",
-    "wt_floor_renovation": "ap_floor_renovation_vision_v1",
-    "wt_roof_repair": "ap_roof_repair_vision_v1",
-    "wt_gutter_repair": "ap_gutter_repair_vision_v1",
-    "wt_window_replacement": "ap_window_replacement_vision_v1",
-    "wt_door_repair": "ap_door_repair_vision_v1",
-    "wt_painting": "ap_painting_vision_v1",
-    "wt_interior_finishing": "ap_interior_finishing_vision_v1",
-    "wt_emergency_repair": "ap_emergency_repair_vision_v1",
+    "wt_chimney_renovation": build_analysis_profile_id("wt_chimney_renovation"),
+    "wt_wall_demolition": build_analysis_profile_id("wt_wall_demolition"),
+    "wt_plastering": build_analysis_profile_id("wt_plastering"),
+    "wt_facade_installation": build_analysis_profile_id("wt_facade_installation"),
+    "wt_floor_renovation": build_analysis_profile_id("wt_floor_renovation"),
+    "wt_roof_repair": build_analysis_profile_id("wt_roof_repair"),
+    "wt_gutter_repair": build_analysis_profile_id("wt_gutter_repair"),
+    "wt_window_replacement": build_analysis_profile_id("wt_window_replacement"),
+    "wt_door_repair": build_analysis_profile_id("wt_door_repair"),
+    "wt_painting": build_analysis_profile_id("wt_painting"),
+    "wt_interior_finishing": build_analysis_profile_id("wt_interior_finishing"),
+    "wt_emergency_repair": build_analysis_profile_id("wt_emergency_repair"),
 }
 for _work_type in _WORK_TYPES:
     if _work_type["id"] in _DEFAULT_ANALYSIS_PROFILE_BY_WORK_TYPE_ID:
@@ -1207,6 +1213,30 @@ def _validate_catalog_seed() -> None:
 
     Raises AssertionError with a descriptive message on any violation.
     """
+    seed_collections = {
+        "categories": _CATEGORIES,
+        "analysis_profiles": _ANALYSIS_PROFILES,
+        "analysis_profile_target_objects": _ANALYSIS_PROFILE_TARGET_OBJECTS,
+        "analysis_profile_ignored_objects": _ANALYSIS_PROFILE_IGNORED_OBJECTS,
+        "analysis_profile_extraction_rules": _ANALYSIS_PROFILE_EXTRACTION_RULES,
+        "analysis_profile_validation_rules": _ANALYSIS_PROFILE_VALIDATION_RULES,
+        "analysis_profile_confidence_thresholds": _ANALYSIS_PROFILE_CONFIDENCE_THRESHOLDS,
+        "analysis_profile_output_mappings": _ANALYSIS_PROFILE_OUTPUT_MAPPINGS,
+        "catalog_pricing_profiles": _CATALOG_PRICING_PROFILES,
+        "pricing_profile_required_inputs": _PRICING_PROFILE_REQUIRED_INPUTS,
+        "pricing_profile_base_rules": _PRICING_PROFILE_BASE_RULES,
+        "pricing_profile_adjustment_rules": _PRICING_PROFILE_ADJUSTMENT_RULES,
+        "pricing_profile_labor_assumptions": _PRICING_PROFILE_LABOR_ASSUMPTIONS,
+        "pricing_profile_material_assumptions": _PRICING_PROFILE_MATERIAL_ASSUMPTIONS,
+        "work_types": _WORK_TYPES,
+        "parameters": _PARAMETERS,
+        "parameter_options": _PARAMETER_OPTIONS,
+        "tenant_settings": _DEV_TENANT_SETTINGS,
+        "tenant_parameter_overrides": _DEV_TENANT_PARAMETER_OVERRIDES,
+    }
+    for name, rows in seed_collections.items():
+        assert_valid_seed_id_collection((row["id"] for row in rows), context=f"{name} IDs")
+
     category_ids: set[str] = set()
     category_codes: list[str] = []
     for c in _CATEGORIES:
@@ -1430,9 +1460,6 @@ def _validate_catalog_seed() -> None:
         )
 
 
-# Run validation immediately on import — fail fast before any DB operation.
-_validate_catalog_seed()
-
 # ---------------------------------------------------------------------------
 # Dev / test seed data — NOT part of the global catalog.
 # These rows are dev-environment only and reference org_1 / price_default
@@ -1446,7 +1473,7 @@ _DEV_TENANT_SETTINGS: list[dict[str, Any]] = [
         "work_type_id": "wt_roof_repair",
         "status": "enabled",
         "custom_display_name": "Oprava strechy",
-        "catalog_pricing_profile_id": "cpp_roof_repair_pricing_v1",
+        "catalog_pricing_profile_id": build_catalog_pricing_profile_id("roof-repair"),
         "tenant_pricing_profile_id": "price_default",
         "config_version": 1,
     },
@@ -1456,7 +1483,7 @@ _DEV_TENANT_SETTINGS: list[dict[str, Any]] = [
         "work_type_id": "wt_painting",
         "status": "enabled",
         "custom_display_name": "Malovani",
-        "catalog_pricing_profile_id": "cpp_painting_pricing_v1",
+        "catalog_pricing_profile_id": build_catalog_pricing_profile_id("painting"),
         "tenant_pricing_profile_id": "price_default",
         "config_version": 1,
     },
@@ -1468,13 +1495,16 @@ _DEV_TENANT_PARAMETER_OVERRIDES: list[dict[str, Any]] = [
         "tenant_work_type_setting_id": "twts_org_1_roof_repair",
         "organization_id": "org_1",
         "work_type_id": "wt_roof_repair",
-        "work_type_parameter_id": "wtp_roof_repair_severity",
+        "work_type_parameter_id": build_work_type_parameter_id("roof_repair", "severity"),
         "override_status": "optional",
         "custom_display_name": "Zavaznost opravy strechy",
         "sort_order_override": 25,
         "config_version": 1,
     },
 ]
+
+# Run validation immediately on import — fail fast before any DB operation.
+_validate_catalog_seed()
 
 # ---------------------------------------------------------------------------
 # Public exports

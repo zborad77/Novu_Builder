@@ -150,15 +150,14 @@ async def upload_case_images(
 async def get_image_preview(
     image_id: str,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ):
-    photo = await photo_service.get_photo_by_id(image_id)
-    if not photo:
-        raise HTTPException(status_code=404, detail="Image not found.")
     org_id = resolve_org_id(current_user)
-    project = await project_service.get_project_lean(photo.projectId, organization_id=org_id)
-    if not project:
+    photo = await photo_service.get_photo_by_id_in_org(
+        image_id,
+        organization_id=org_id,
+    )
+    if not photo:
         if not current_user.isSuperAdmin:
             log_cross_tenant_denied(
                 logger,

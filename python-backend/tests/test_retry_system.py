@@ -47,7 +47,7 @@ class TestAnalysisRetryDecisions:
         project = _project()
 
         phase1_repo = AsyncMock()
-        phase1_repo.get_analysis_job = AsyncMock(return_value=queued_job)
+        phase1_repo.get_analysis_job = AsyncMock(side_effect=[queued_job, running_job])
         phase1_repo.get_project_in_org = AsyncMock(return_value=project)
 
         async def _mark_job_running(job, **_kwargs):
@@ -118,7 +118,7 @@ class TestAnalysisRetryDecisions:
         project = _project()
 
         phase1_repo = AsyncMock()
-        phase1_repo.get_analysis_job = AsyncMock(return_value=queued_job)
+        phase1_repo.get_analysis_job = AsyncMock(side_effect=[queued_job, running_job])
         phase1_repo.get_project_in_org = AsyncMock(return_value=project)
 
         async def _mark_job_running(job, **_kwargs):
@@ -307,6 +307,7 @@ class TestWorkerRetryFinalization:
                     )
                 )
             ),
+            heavy_job_executor=MagicMock(execute_lease=AsyncMock()),
             worker_concurrency=1,
             job_lease_timeout_seconds=600,
             lease_reap_interval_seconds=30,
@@ -360,6 +361,7 @@ class TestWorkerRetryFinalization:
                     )
                 )
             ),
+            heavy_job_executor=MagicMock(execute_lease=AsyncMock()),
             worker_concurrency=1,
             job_lease_timeout_seconds=600,
             lease_reap_interval_seconds=30,
@@ -375,5 +377,115 @@ class TestWorkerRetryFinalization:
         ):
             await runner._run_job_task(runtime, lease)
 
+        move_dlq.assert_awaited_once()
+        ack_job.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_run_job_task_unknown_worker_error_recovers_to_retry(self):
+        from app.worker import runner
+
+        lease = LeasedAnalysisJob(
+            token="lease-1",
+            payload={
+                "job_id": "job-1",
+                "project_id": "proj-1",
+                "organization_id": "org-1",
+                "is_superadmin_context": False,
+            },
+            raw_payload='{"job_id":"job-1","project_id":"proj-1","organization_id":"org-1","is_superadmin_context":false}',
+            worker_id="worker-1",
+            leased_at_ms=1_700_000_000_000,
+            lease_timeout_ms=600_000,
+            expires_at_ms=1_700_000_600_000,
+        )
+
+        runtime = runner.WorkerRuntime(
+            settings=MagicMock(),
+            redis=AsyncMock(),
+            redis_url="redis://localhost:6379/0",
+            worker_instance_id="worker-1",
+            heartbeat_key="worker:heartbeat:worker-1",
+            job_executor=MagicMock(
+                execute_lease=AsyncMock(
+                    side_effect=runner.WorkerJobExecutionError(
+                        job_id="job-1",
+                        project_id="proj-1",
+                        organization_id="org-1",
+                        cause=RuntimeError("provider down"),
+                    )
+                )
+            ),
+            heavy_job_executor=MagicMock(execute_lease=AsyncMock()),
+            worker_concurrency=1,
+            job_lease_timeout_seconds=600,
+            lease_reap_interval_seconds=30,
+            concurrency_limiter=AsyncMock(),
+            inflight_tasks=set(),
+        )
+
+        runtime.concurrency_limiter.release = MagicMock()
+        retry_at = datetime.now(UTC) + timedelta(seconds=30)
+
+        with (
+            patch(
+                "app.worker.runner._resolve_job_failure_finalization",
+                new=AsyncMock(return_value=("retry", retry_at, 2, "provider down")),
+            ) as resolve_failure,
+            patch("app.worker.runner.schedule_analysis_job_retry", new=AsyncMock(return_value=True)) as schedule_retry,
+            patch("app.worker.runner.ack_analysis_job", new=AsyncMock()) as ack_job,
+        ):
+            await runner._run_job_task(runtime, lease)
+
+        resolve_failure.assert_awaited_once()
+        schedule_retry.assert_awaited_once_with(runtime.redis, lease, retry_at=retry_at)
+        ack_job.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_run_job_task_generic_exception_dead_letters_when_recovery_requires_dlq(self):
+        from app.worker import runner
+
+        lease = LeasedAnalysisJob(
+            token="lease-1",
+            payload={
+                "job_id": "job-1",
+                "project_id": "proj-1",
+                "organization_id": "org-1",
+                "is_superadmin_context": False,
+            },
+            raw_payload='{"job_id":"job-1","project_id":"proj-1","organization_id":"org-1","is_superadmin_context":false}',
+            worker_id="worker-1",
+            leased_at_ms=1_700_000_000_000,
+            lease_timeout_ms=600_000,
+            expires_at_ms=1_700_000_600_000,
+        )
+
+        runtime = runner.WorkerRuntime(
+            settings=MagicMock(),
+            redis=AsyncMock(),
+            redis_url="redis://localhost:6379/0",
+            worker_instance_id="worker-1",
+            heartbeat_key="worker:heartbeat:worker-1",
+            job_executor=MagicMock(execute_lease=AsyncMock(side_effect=RuntimeError("unexpected boom"))),
+            heavy_job_executor=MagicMock(execute_lease=AsyncMock()),
+            worker_concurrency=1,
+            job_lease_timeout_seconds=600,
+            lease_reap_interval_seconds=30,
+            concurrency_limiter=AsyncMock(),
+            inflight_tasks=set(),
+        )
+
+        runtime.concurrency_limiter.release = MagicMock()
+
+        with (
+            patch(
+                "app.worker.runner._resolve_job_failure_finalization",
+                new=AsyncMock(return_value=("dlq", None, 0, "unexpected boom")),
+            ) as resolve_failure,
+            patch("app.worker.runner.move_analysis_job_to_dlq", new=AsyncMock(return_value=True)) as move_dlq,
+            patch("app.worker.runner.ack_analysis_job", new=AsyncMock()) as ack_job,
+        ):
+            await runner._run_job_task(runtime, lease)
+
+        resolve_failure.assert_awaited_once()
         move_dlq.assert_awaited_once()
         ack_job.assert_not_awaited()

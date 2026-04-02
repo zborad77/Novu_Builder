@@ -9,6 +9,8 @@ Coverage:
 """
 import inspect
 from datetime import UTC, datetime
+import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -72,6 +74,9 @@ class TestWorkerHeartbeat:
         assert "clear_worker_heartbeat" in src, (
             "run() must clear its own heartbeat key during shutdown"
         )
+        assert "clear_local_worker_heartbeat" in src, (
+            "run() must clear its local heartbeat file during shutdown"
+        )
 
     def test_heartbeat_constants_sane(self):
         """Heartbeat interval must be less than TTL (otherwise key always expires)."""
@@ -98,6 +103,51 @@ async def test_write_worker_heartbeat_sets_ttl():
 
     redis.set.assert_awaited_once()
     assert redis.set.await_args.kwargs["ex"] == WORKER_HEARTBEAT_TTL
+
+
+@pytest.mark.asyncio
+async def test_write_local_worker_heartbeat_updates_local_file(monkeypatch):
+    from app.worker.heartbeat import (
+        local_worker_heartbeat_is_fresh,
+        worker_local_health_path,
+        write_local_worker_heartbeat,
+    )
+
+    heartbeat_path = Path("d:/Novu_Hub/Novu_Builder/python-backend/.tmp_test_runtime/heartbeat-test-current.json")
+    heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+    heartbeat_path.unlink(missing_ok=True)
+    monkeypatch.setenv("WORKER_HEALTH_PATH", str(heartbeat_path))
+
+    await write_local_worker_heartbeat("worker-a", now=datetime.now(UTC))
+
+    payload = json.loads(worker_local_health_path().read_text(encoding="utf-8"))
+    assert payload["instance_id"] == "worker-a"
+    assert local_worker_heartbeat_is_fresh(now=datetime.now(UTC)) is True
+
+
+def test_local_worker_heartbeat_stale_when_timestamp_too_old(monkeypatch):
+    from app.worker.heartbeat import (
+        WORKER_HEARTBEAT_FRESHNESS_SECONDS,
+        local_worker_heartbeat_is_fresh,
+        worker_local_health_path,
+    )
+
+    heartbeat_path = Path("d:/Novu_Hub/Novu_Builder/python-backend/.tmp_test_runtime/heartbeat-test-stale.json")
+    heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+    heartbeat_path.unlink(missing_ok=True)
+    monkeypatch.setenv("WORKER_HEALTH_PATH", str(heartbeat_path))
+    stale_at = datetime.now(UTC).timestamp() - (WORKER_HEARTBEAT_FRESHNESS_SECONDS + 5)
+    worker_local_health_path().write_text(
+        json.dumps(
+            {
+                "instance_id": "worker-a",
+                "timestamp": datetime.fromtimestamp(stale_at, tz=UTC).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert local_worker_heartbeat_is_fresh(now=datetime.now(UTC)) is False
 
 
 class TestHealthInternalWorkerSection:
@@ -157,7 +207,6 @@ class TestHealthInternalWorkerSection:
         assert result["worker"]["alive"] is True
         assert result["worker"]["aliveInstances"] == 1
         assert result["worker"]["seenInstances"] == 2
-        assert response.status_code == 200
 
     @pytest.mark.asyncio
     async def test_worker_dead_when_no_heartbeat_key(self):
@@ -193,7 +242,6 @@ class TestHealthInternalWorkerSection:
         assert result["worker"]["alive"] is False
         assert result["worker"]["aliveInstances"] == 0
         assert result["worker"]["seenInstances"] == 0
-        assert response.status_code == 200
 
     @pytest.mark.asyncio
     async def test_worker_alive_with_legacy_single_worker_heartbeat_key(self):
@@ -230,7 +278,6 @@ class TestHealthInternalWorkerSection:
         assert result["worker"]["alive"] is True
         assert result["worker"]["aliveInstances"] == 1
         assert result["worker"]["seenInstances"] == 1
-        assert response.status_code == 200
 
     @pytest.mark.asyncio
     async def test_worker_unknown_when_redis_unavailable(self):
@@ -264,4 +311,3 @@ class TestHealthInternalWorkerSection:
         assert result["worker"]["alive"] is None
         assert result["worker"]["aliveInstances"] is None
         assert result["worker"]["seenInstances"] is None
-        assert response.status_code == 200

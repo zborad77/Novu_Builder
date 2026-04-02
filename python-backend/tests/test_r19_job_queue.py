@@ -10,6 +10,7 @@ import app.worker.queue as queue_module
 from app.services.analysis_service import AnalysisJobCreateResult
 from app.worker.queue import (
     AnalysisJobQueueCapacityExceededError,
+    DLQ_ACTIVE_SET_KEY,
     DLQ_KEY_PREFIX,
     InvalidAnalysisJobPayloadError,
     PROCESSING_QUEUE_KEY,
@@ -36,6 +37,7 @@ class FakeRedisQueue:
         self.zsets: dict[str, dict[str, int]] = {}
         self.sequences: dict[str, int] = {}
         self.values: dict[str, str] = {}
+        self.sets: dict[str, set[str]] = {}
 
     async def rpush(self, key: str, raw: str) -> int:
         self.lists.setdefault(key, []).append(raw)
@@ -159,8 +161,8 @@ class FakeRedisQueue:
             return 1
 
         if script == queue_module._MOVE_TO_DLQ_SCRIPT:
-            lease_prefix, processing_key, expiry_key, dlq_key = keys
-            token, worker_id, expected_leased_at_ms, dlq_payload = args
+            lease_prefix, processing_key, expiry_key, dlq_history_key, dlq_active_key = keys
+            token, worker_id, expected_leased_at_ms, dlq_payload, job_id = args
             lease_key = f"{lease_prefix}{token}"
             lease = self.hashes.get(lease_key)
             if lease is None:
@@ -174,14 +176,15 @@ class FakeRedisQueue:
             processing = self.lists.setdefault(processing_key, [])
             if raw in processing:
                 processing.remove(raw)
-            self.values[dlq_key] = dlq_payload
+            self.lists.setdefault(dlq_history_key, []).append(dlq_payload)
+            self.sets.setdefault(dlq_active_key, set()).add(job_id)
             self.hashes.pop(lease_key, None)
             self.zsets.setdefault(expiry_key, {}).pop(token, None)
             return 1
 
         if script == queue_module._PROMOTE_RETRY_SCRIPT:
-            queue_key, retry_key = keys
-            now_ms, limit = args
+            queue_key, processing_key, retry_key = keys
+            now_ms, limit, max_depth = args
             due = [
                 raw
                 for raw, score in sorted(self.zsets.setdefault(retry_key, {}).items(), key=lambda item: item[1])
@@ -189,10 +192,16 @@ class FakeRedisQueue:
             ][:int(limit)]
             moved = 0
             for raw in due:
+                queue_depth = len(self.lists.setdefault(queue_key, []))
+                processing_depth = len(self.lists.setdefault(processing_key, []))
+                if queue_depth + processing_depth + 1 > int(max_depth):
+                    break
                 if raw in self.zsets.setdefault(retry_key, {}):
-                    self.zsets[retry_key].pop(raw, None)
                     self.lists.setdefault(queue_key, []).append(raw)
-                    moved += 1
+                    if self.zsets[retry_key].pop(raw, None) is not None:
+                        moved += 1
+                    else:
+                        self.lists[queue_key].remove(raw)
             return moved
 
         raise AssertionError(f"Unexpected script: {script[:40]!r}")
@@ -210,6 +219,26 @@ class FakeRedisQueue:
 
     async def get(self, key: str):
         return self.values.get(key)
+
+    async def lindex(self, key: str, index: int):
+        items = self.lists.get(key, [])
+        if not items:
+            return None
+        if index < 0:
+            index += len(items)
+        if index < 0 or index >= len(items):
+            return None
+        return items[index]
+
+    async def sismember(self, key: str, member: str) -> bool:
+        return member in self.sets.get(key, set())
+
+    async def srem(self, key: str, member: str) -> int:
+        values = self.sets.setdefault(key, set())
+        if member in values:
+            values.remove(member)
+            return 1
+        return 0
 
     async def delete(self, key: str) -> int:
         return 1 if self.values.pop(key, None) is not None else 0
@@ -475,15 +504,61 @@ class TestRetryAndDlqFlow:
         moved_before_due = await promote_scheduled_analysis_jobs(
             redis,
             now=leased_at + timedelta(seconds=10),
+            max_depth=10,
         )
         moved_after_due = await promote_scheduled_analysis_jobs(
             redis,
             now=retry_at + timedelta(seconds=1),
+            max_depth=10,
         )
 
         assert moved_before_due == 0
         assert moved_after_due == 1
         assert len(redis.lists[QUEUE_KEY]) == 1
+
+    @pytest.mark.asyncio
+    async def test_promote_scheduled_retries_respects_queue_capacity(self):
+        redis = FakeRedisQueue()
+        leased_at = datetime(2026, 3, 30, 12, 0, tzinfo=UTC)
+        retry_at = leased_at + timedelta(seconds=30)
+
+        await enqueue_analysis_job(
+            redis,
+            job_id="job-retry-cap",
+            project_id="proj-retry-cap",
+            organization_id="org-1",
+            is_superadmin_context=False,
+        )
+        lease = await dequeue_analysis_job(
+            redis,
+            worker_id="worker-a",
+            lease_timeout_seconds=600,
+            now=leased_at,
+        )
+        assert lease is not None
+        assert await schedule_analysis_job_retry(
+            redis,
+            lease,
+            retry_at=retry_at,
+        ) is True
+
+        await enqueue_analysis_job(
+            redis,
+            job_id="job-fill",
+            project_id="proj-fill",
+            organization_id="org-1",
+            is_superadmin_context=False,
+        )
+
+        moved = await promote_scheduled_analysis_jobs(
+            redis,
+            now=retry_at + timedelta(seconds=1),
+            max_depth=1,
+        )
+
+        assert moved == 0
+        assert len(redis.lists[QUEUE_KEY]) == 1
+        assert lease.raw_payload in redis.zsets[RETRY_QUEUE_KEY]
 
     @pytest.mark.asyncio
     async def test_move_to_dlq_and_requeue_by_job_id(self):
@@ -515,7 +590,8 @@ class TestRetryAndDlqFlow:
 
         assert moved is True
         assert redis.lists[PROCESSING_QUEUE_KEY] == []
-        assert f"{DLQ_KEY_PREFIX}{lease.job_id}" in redis.values
+        assert lease.job_id in redis.sets[DLQ_ACTIVE_SET_KEY]
+        assert f"{DLQ_KEY_PREFIX}{lease.job_id}:history" in redis.lists
 
         dlq_payload = await get_dlq_job(redis, lease.job_id)
         assert dlq_payload is not None
@@ -530,7 +606,64 @@ class TestRetryAndDlqFlow:
 
         assert requeued is not None
         assert len(redis.lists[QUEUE_KEY]) == 1
-        assert f"{DLQ_KEY_PREFIX}{lease.job_id}" not in redis.values
+        assert lease.job_id not in redis.sets[DLQ_ACTIVE_SET_KEY]
+
+    @pytest.mark.asyncio
+    async def test_dlq_preserves_append_only_failure_history(self):
+        redis = FakeRedisQueue()
+        leased_at = datetime(2026, 3, 30, 12, 0, tzinfo=UTC)
+
+        await enqueue_analysis_job(
+            redis,
+            job_id="job-dlq-history",
+            project_id="proj-dlq-history",
+            organization_id="org-1",
+            is_superadmin_context=False,
+        )
+
+        first_lease = await dequeue_analysis_job(
+            redis,
+            worker_id="worker-a",
+            lease_timeout_seconds=600,
+            now=leased_at,
+        )
+        assert first_lease is not None
+        assert await move_analysis_job_to_dlq(
+            redis,
+            first_lease,
+            attempt_count=3,
+            reason="first failure",
+            now=leased_at,
+        ) is True
+
+        first_requeue = await requeue_dlq_job(redis, job_id="job-dlq-history", max_depth=10)
+        assert first_requeue is not None
+
+        second_lease = await dequeue_analysis_job(
+            redis,
+            worker_id="worker-b",
+            lease_timeout_seconds=600,
+            now=leased_at + timedelta(minutes=1),
+        )
+        assert second_lease is not None
+        assert await move_analysis_job_to_dlq(
+            redis,
+            second_lease,
+            attempt_count=4,
+            reason="second failure",
+            now=leased_at + timedelta(minutes=1),
+        ) is True
+
+        history_key = f"{DLQ_KEY_PREFIX}{second_lease.job_id}:history"
+        assert len(redis.lists[history_key]) == 2
+        first_history = json.loads(redis.lists[history_key][0])
+        second_history = json.loads(redis.lists[history_key][1])
+        assert first_history["reason"] == "first failure"
+        assert second_history["reason"] == "second failure"
+
+        latest = await get_dlq_job(redis, second_lease.job_id)
+        assert latest is not None
+        assert latest["reason"] == "second failure"
 
 
 class TestExecuteJobStatusGuard:

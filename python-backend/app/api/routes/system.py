@@ -43,7 +43,11 @@ from app.worker.heartbeat import (
     WORKER_HEARTBEAT_KEY_PREFIX,
     WORKER_HEARTBEAT_LEGACY_KEY,
 )
-from app.worker.queue import get_analysis_job_queue_counts
+from app.worker.queue import (
+    DLQ_ACTIVE_SET_KEY,
+    RETRY_QUEUE_KEY,
+    get_analysis_job_queue_counts,
+)
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -111,6 +115,12 @@ class _OperationalMetricsSnapshot:
     processing_jobs: int
     job_stuck_max_age_seconds: float
     worker: _WorkerHeartbeatSnapshot
+    retry_queued_jobs: int = 0
+    dead_letter_jobs: int = 0
+    oldest_queued_age_seconds: float = 0.0
+    retry_scheduled: int | None = None
+    retry_due_now: int | None = None
+    dlq_active: int | None = None
     queue_monitoring_available: bool = False
     queue_state: str = "unavailable"
 
@@ -125,11 +135,23 @@ class _JobProcessingReadinessSnapshot:
     grace_active: bool
 
 
+@dataclass(frozen=True)
+class _DatabaseJobSnapshot:
+    jobs_running: int
+    jobs_queued: int
+    retry_queued_jobs: int
+    dead_letter_jobs: int
+    max_running_age_seconds: float
+    oldest_queued_age_seconds: float
+
+
 def _queue_runtime_state(job_queue) -> str:
     if job_queue is None:
         return "unavailable"
     status_factory = getattr(job_queue, "runtime_status", None)
     if callable(status_factory):
+        if inspect.iscoroutinefunction(status_factory):
+            return "unavailable"
         try:
             status = status_factory()
             if inspect.isawaitable(status):
@@ -147,6 +169,8 @@ def _queue_runtime_details(job_queue) -> dict[str, object] | None:
         return None
     status_factory = getattr(job_queue, "runtime_status", None)
     if not callable(status_factory):
+        return None
+    if inspect.iscoroutinefunction(status_factory):
         return None
     try:
         status = status_factory()
@@ -353,7 +377,7 @@ def _peek_operational_metrics_snapshot(
     return cache.snapshot
 
 
-async def _query_job_counts(session) -> tuple[int, int, float]:
+async def _query_job_counts(session) -> _DatabaseJobSnapshot:
     counts_row = await session.execute(
         select(
             func.coalesce(
@@ -364,9 +388,26 @@ async def _query_job_counts(session) -> tuple[int, int, float]:
                 func.sum(case((AnalysisJob.status == "queued", 1), else_=0)),
                 0,
             ),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            (AnalysisJob.status == "queued")
+                            & (func.coalesce(AnalysisJob.retry_count, 0) > 0),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+            func.coalesce(
+                func.sum(case((AnalysisJob.status == "dead_letter", 1), else_=0)),
+                0,
+            ),
         )
     )
-    jobs_running, jobs_queued = counts_row.one()
+    jobs_running, jobs_queued, retry_queued_jobs, dead_letter_jobs = counts_row.one()
 
     oldest_running_started_at = await session.scalar(
         select(func.min(AnalysisJob.started_at)).where(
@@ -383,21 +424,73 @@ async def _query_job_counts(session) -> tuple[int, int, float]:
             0.0,
             (datetime.now(UTC) - oldest_running_started_at.astimezone(UTC)).total_seconds(),
         )
-    return int(jobs_running or 0), int(jobs_queued or 0), max_age_seconds
+
+    oldest_queued_created_at = await session.scalar(
+        select(func.min(AnalysisJob.created_at)).where(
+            AnalysisJob.status == "queued",
+            AnalysisJob.created_at.is_not(None),
+        )
+    )
+    if oldest_queued_created_at is None:
+        oldest_queued_age_seconds = 0.0
+    else:
+        if oldest_queued_created_at.tzinfo is None:
+            oldest_queued_created_at = oldest_queued_created_at.replace(tzinfo=UTC)
+        oldest_queued_age_seconds = max(
+            0.0,
+            (datetime.now(UTC) - oldest_queued_created_at.astimezone(UTC)).total_seconds(),
+        )
+
+    return _DatabaseJobSnapshot(
+        jobs_running=int(jobs_running or 0),
+        jobs_queued=int(jobs_queued or 0),
+        retry_queued_jobs=int(retry_queued_jobs or 0),
+        dead_letter_jobs=int(dead_letter_jobs or 0),
+        max_running_age_seconds=max_age_seconds,
+        oldest_queued_age_seconds=oldest_queued_age_seconds,
+    )
+
+
+async def _query_queue_operational_counts(redis) -> tuple[int | None, int | None, int | None]:
+    if redis is None:
+        return None, None, None
+
+    retry_scheduled = int(await redis.zcard(RETRY_QUEUE_KEY))
+    retry_due_now = int(
+        await redis.zcount(
+            RETRY_QUEUE_KEY,
+            min=0,
+            max=int(datetime.now(UTC).timestamp() * 1000),
+        )
+    )
+    dlq_active = int(await redis.scard(DLQ_ACTIVE_SET_KEY))
+    return retry_scheduled, retry_due_now, dlq_active
 
 
 async def _collect_operational_metrics_snapshot(request: Request) -> _OperationalMetricsSnapshot:
     db_alive = False
     jobs_running = 0
     jobs_queued = 0
+    retry_queued_jobs = 0
+    dead_letter_jobs = 0
     queue_length = 0
     processing_jobs = 0
     job_stuck_max_age_seconds = 0.0
+    oldest_queued_age_seconds = 0.0
+    retry_scheduled = None
+    retry_due_now = None
+    dlq_active = None
     queue_monitoring_available = False
     queue_state = "unavailable"
     try:
         async with AsyncSessionFactory() as session:
-            jobs_running, jobs_queued, job_stuck_max_age_seconds = await _query_job_counts(session)
+            db_snapshot = await _query_job_counts(session)
+            jobs_running = db_snapshot.jobs_running
+            jobs_queued = db_snapshot.jobs_queued
+            retry_queued_jobs = db_snapshot.retry_queued_jobs
+            dead_letter_jobs = db_snapshot.dead_letter_jobs
+            job_stuck_max_age_seconds = db_snapshot.max_running_age_seconds
+            oldest_queued_age_seconds = db_snapshot.oldest_queued_age_seconds
             db_alive = True
     except Exception:
         db_alive = False
@@ -414,6 +507,13 @@ async def _collect_operational_metrics_snapshot(request: Request) -> _Operationa
             queue_length = 0
             processing_jobs = 0
             queue_state = "unavailable"
+        else:
+            try:
+                retry_scheduled, retry_due_now, dlq_active = await _query_queue_operational_counts(job_queue)
+            except Exception:
+                retry_scheduled = None
+                retry_due_now = None
+                dlq_active = None
 
     try:
         worker_snapshot = await _get_worker_heartbeat_snapshot(job_queue)
@@ -433,6 +533,12 @@ async def _collect_operational_metrics_snapshot(request: Request) -> _Operationa
         processing_jobs=processing_jobs,
         job_stuck_max_age_seconds=job_stuck_max_age_seconds,
         worker=worker_snapshot,
+        retry_queued_jobs=retry_queued_jobs,
+        dead_letter_jobs=dead_letter_jobs,
+        oldest_queued_age_seconds=oldest_queued_age_seconds,
+        retry_scheduled=retry_scheduled,
+        retry_due_now=retry_due_now,
+        dlq_active=dlq_active,
         queue_monitoring_available=queue_monitoring_available,
         queue_state=queue_state,
     )
@@ -705,23 +811,27 @@ async def health_internal(
     storage_live = False
     jobs_running = 0
     jobs_queued = 0
+    retry_queued_jobs = 0
+    dead_letter_jobs = 0
     processing_jobs = 0
     queue_length = 0
     max_running_age_seconds = 0.0
+    oldest_queued_age_seconds = 0.0
+    retry_scheduled = None
+    retry_due_now = None
+    dlq_active = None
     last_completed_at: str | None = None
     try:
         async with AsyncSessionFactory() as session:
             await session.execute(text("SELECT 1"))
             db_live = True
-
-            running_row = await session.execute(
-                select(func.count()).where(AnalysisJob.status == "running")
-            )
-            queued_row = await session.execute(
-                select(func.count()).where(AnalysisJob.status == "queued")
-            )
-            jobs_running = running_row.scalar_one() or 0
-            jobs_queued = queued_row.scalar_one() or 0
+            db_snapshot = await _query_job_counts(session)
+            jobs_running = db_snapshot.jobs_running
+            jobs_queued = db_snapshot.jobs_queued
+            retry_queued_jobs = db_snapshot.retry_queued_jobs
+            dead_letter_jobs = db_snapshot.dead_letter_jobs
+            max_running_age_seconds = db_snapshot.max_running_age_seconds
+            oldest_queued_age_seconds = db_snapshot.oldest_queued_age_seconds
 
             last_row = await session.execute(
                 select(AnalysisJob.finished_at)
@@ -734,20 +844,6 @@ async def health_internal(
                 if last_ts.tzinfo is None:
                     last_ts = last_ts.replace(tzinfo=UTC)
                 last_completed_at = last_ts.isoformat()
-
-            oldest_started = await session.scalar(
-                select(func.min(AnalysisJob.started_at)).where(
-                    AnalysisJob.status == "running",
-                    AnalysisJob.started_at.is_not(None),
-                )
-            )
-            if oldest_started is not None:
-                if oldest_started.tzinfo is None:
-                    oldest_started = oldest_started.replace(tzinfo=UTC)
-                max_running_age_seconds = max(
-                    0.0,
-                    (datetime.now(UTC) - oldest_started.astimezone(UTC)).total_seconds(),
-                )
     except Exception:
         pass
 
@@ -758,6 +854,15 @@ async def health_internal(
         queue_length = 0
         processing_jobs = 0
         queue_monitoring_available = False
+    else:
+        try:
+            retry_scheduled, retry_due_now, dlq_active = await _query_queue_operational_counts(
+                getattr(request.app.state, "job_queue", None)
+            )
+        except Exception:
+            retry_scheduled = None
+            retry_due_now = None
+            dlq_active = None
 
     worker_snapshot = _WorkerHeartbeatSnapshot(
         alive=None,
@@ -787,6 +892,22 @@ async def health_internal(
     )
     ready = api_ready and job_processing.strict_job_processing_ready
     _set_readiness_status(response, ready=ready)
+    queue_details = _queue_runtime_details(getattr(request.app.state, "job_queue", None)) or {}
+    queue_section = {
+        "state": job_processing.queue_state,
+        "monitoringAvailable": queue_monitoring_available,
+        "depth": {
+            "durable": queue_length,
+            "processing": processing_jobs,
+            "scheduledRetry": retry_scheduled,
+            "scheduledRetryDueNow": retry_due_now,
+            "deadLetterActive": dlq_active,
+        },
+    }
+    for key, value in queue_details.items():
+        if key == "state":
+            continue
+        queue_section[key] = value
 
     return {
         "status": "ok" if ready else "degraded",
@@ -801,12 +922,14 @@ async def health_internal(
         "jobs": {
             "running": jobs_running,
             "queued": jobs_queued,
+            "retryQueued": retry_queued_jobs,
+            "deadLetter": dead_letter_jobs,
             "processing": processing_jobs,
             "queueLength": queue_length,
             "maxRunningAgeSeconds": round(max_running_age_seconds, 1),
+            "oldestQueuedAgeSeconds": round(oldest_queued_age_seconds, 1),
             "lastCompletedAt": last_completed_at,
         },
-        "queue": _queue_runtime_details(getattr(request.app.state, "job_queue", None)),
         "worker": {
             "alive": worker_snapshot.alive,
             "state": job_processing.worker_state,
@@ -814,8 +937,6 @@ async def health_internal(
             "aliveInstances": worker_snapshot.alive_instances,
             "seenInstances": worker_snapshot.seen_instances,
         },
-        "queue": {
-            "state": job_processing.queue_state,
-        },
+        "queue": queue_section,
         "timestamp": datetime.now(UTC).isoformat(),
     }

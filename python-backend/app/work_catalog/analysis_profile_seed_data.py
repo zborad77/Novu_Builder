@@ -3,6 +3,11 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from app.work_catalog.seed_ids import (
+    build_analysis_profile_component_id,
+    build_analysis_profile_id,
+)
+
 
 def _target(
     code: str,
@@ -335,7 +340,7 @@ def build_analysis_profile_catalog(
         work_type = work_types_by_id.get(work_type_id)
         if work_type is None:
             raise AssertionError(f"Analysis profile blueprint references unknown work type '{work_type_id}'.")
-        profile_id = f"ap_{work_type_id[3:]}_vision_v1"
+        profile_id = build_analysis_profile_id(work_type_id)
         work_type_parameters = sorted(parameters_by_work_type.get(work_type_id, []), key=_sort_key)
         extractable_parameters = [row for row in work_type_parameters if row.get("vision_extractable")]
         if not extractable_parameters:
@@ -368,7 +373,7 @@ def build_analysis_profile_catalog(
         for sort_order, row in enumerate(blueprint["target_objects"], start=10):
             target_objects.append(
                 {
-                    "id": f"apto_{work_type_id[3:]}_{row['code'].replace('-', '_')}",
+                    "id": build_analysis_profile_component_id("apto", work_type_id, row["code"]),
                     "analysis_profile_id": profile_id,
                     "code": row["code"],
                     "label": row["label"],
@@ -382,7 +387,7 @@ def build_analysis_profile_catalog(
         for sort_order, row in enumerate(blueprint["ignored_objects"], start=10):
             ignored_objects.append(
                 {
-                    "id": f"apio_{work_type_id[3:]}_{row['code'].replace('-', '_')}",
+                    "id": build_analysis_profile_component_id("apio", work_type_id, row["code"]),
                     "analysis_profile_id": profile_id,
                     "code": row["code"],
                     "label": row["label"],
@@ -395,7 +400,7 @@ def build_analysis_profile_catalog(
         for sort_order, parameter in enumerate(extractable_parameters, start=10):
             extraction_rules.append(
                 {
-                    "id": f"aper_{work_type_id[3:]}_{parameter['code'].replace('-', '_')}",
+                    "id": build_analysis_profile_component_id("aper", work_type_id, parameter["code"]),
                     "analysis_profile_id": profile_id,
                     "attribute_code": parameter["code"],
                     "label": parameter["name"],
@@ -411,7 +416,7 @@ def build_analysis_profile_catalog(
             )
             confidence_thresholds.append(
                 {
-                    "id": f"apct_{work_type_id[3:]}_{parameter['code'].replace('-', '_')}",
+                    "id": build_analysis_profile_component_id("apct", work_type_id, parameter["code"]),
                     "analysis_profile_id": profile_id,
                     "attribute_code": parameter["code"],
                     "target_object_code": primary_object_code,
@@ -423,7 +428,7 @@ def build_analysis_profile_catalog(
             )
             output_mappings.append(
                 {
-                    "id": f"apom_{work_type_id[3:]}_{parameter['code'].replace('-', '_')}",
+                    "id": build_analysis_profile_component_id("apom", work_type_id, parameter["code"]),
                     "analysis_profile_id": profile_id,
                     "code": f"project-work-item-{parameter['code']}",
                     "target_entity": "project_work_item_value",
@@ -438,7 +443,12 @@ def build_analysis_profile_catalog(
             if parameter["data_type"] == "number":
                 validation_rules.append(
                     {
-                        "id": f"apvr_{work_type_id[3:]}_{parameter['code'].replace('-', '_')}_bounds",
+                        "id": build_analysis_profile_component_id(
+                            "apvr",
+                            work_type_id,
+                            parameter["code"],
+                            "bounds",
+                        ),
                         "analysis_profile_id": profile_id,
                         "code": f"{parameter['code']}-bounds",
                         "rule_type": "numeric_range",
@@ -455,7 +465,12 @@ def build_analysis_profile_catalog(
             if parameter.get("is_required", False):
                 validation_rules.append(
                     {
-                        "id": f"apvr_{work_type_id[3:]}_{parameter['code'].replace('-', '_')}_required",
+                        "id": build_analysis_profile_component_id(
+                            "apvr",
+                            work_type_id,
+                            parameter["code"],
+                            "required",
+                        ),
                         "analysis_profile_id": profile_id,
                         "code": f"{parameter['code']}-required",
                         "rule_type": "required_attribute",
@@ -471,7 +486,7 @@ def build_analysis_profile_catalog(
 
         validation_rules.append(
             {
-                "id": f"apvr_{work_type_id[3:]}_min_photos",
+                "id": build_analysis_profile_component_id("apvr", work_type_id, "min_photos"),
                 "analysis_profile_id": profile_id,
                 "code": "minimum-photo-count",
                 "rule_type": "min_photos",
@@ -488,7 +503,7 @@ def build_analysis_profile_catalog(
         for sort_order, (target_entity, target_field, source_attribute_code) in enumerate(_standard_attribute_mappings(), start=10):
             output_mappings.append(
                 {
-                    "id": f"apom_{work_type_id[3:]}_{target_entity}_{target_field}".replace("-", "_"),
+                    "id": build_analysis_profile_component_id("apom", work_type_id, target_entity, target_field),
                     "analysis_profile_id": profile_id,
                     "code": f"{target_entity}-{target_field}".replace("_", "-"),
                     "target_entity": target_entity,
@@ -502,7 +517,7 @@ def build_analysis_profile_catalog(
 
         output_mappings.append(
             {
-                "id": f"apom_{work_type_id[3:]}_measured_quantity",
+                "id": build_analysis_profile_component_id("apom", work_type_id, "measured_quantity"),
                 "analysis_profile_id": profile_id,
                 "code": "project-work-item-measured-quantity",
                 "target_entity": "project_work_item",
@@ -515,7 +530,7 @@ def build_analysis_profile_catalog(
         )
         output_mappings.append(
             {
-                "id": f"apom_{work_type_id[3:]}_measured_unit",
+                "id": build_analysis_profile_component_id("apom", work_type_id, "measured_unit"),
                 "analysis_profile_id": profile_id,
                 "code": "project-work-item-measured-unit",
                 "target_entity": "project_work_item",

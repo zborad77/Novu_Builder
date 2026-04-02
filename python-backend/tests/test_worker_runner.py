@@ -384,6 +384,10 @@ class TestWorkerRedisConnectionHardening:
                 "app.worker.runner.WorkerJobExecutor.execute_lease",
                 new=AsyncMock(side_effect=[job_error, asyncio.CancelledError()]),
             ),
+            patch(
+                "app.worker.runner._resolve_job_failure_finalization",
+                new=AsyncMock(return_value=("ack", None, 0, "provider blew up")),
+            ),
             patch("app.worker.runner.asyncio.sleep", new=AsyncMock()) as sleep_mock,
         ):
             await runner.run()
@@ -421,10 +425,12 @@ class TestWorkerRedisConnectionHardening:
             patch("app.worker.runner._write_heartbeat_if_due", new=AsyncMock()) as write_heartbeat,
             patch("app.worker.runner._run_one_iteration", new=AsyncMock(side_effect=asyncio.CancelledError())),
             patch("app.worker.runner.clear_worker_heartbeat", new=AsyncMock()),
+            patch("app.worker.runner.clear_local_worker_heartbeat", new=AsyncMock()) as clear_local,
         ):
             await runner.run()
 
         write_heartbeat.assert_awaited_once()
+        clear_local.assert_awaited_once()
 
 
 class TestWorkerConcurrencyControl:
@@ -513,6 +519,48 @@ class TestWorkerConcurrencyControl:
         dequeue.assert_not_awaited()
         pending_task.cancel()
         await asyncio.gather(pending_task, return_exceptions=True)
+
+
+class TestWorkerMetricsStartup:
+    def test_main_starts_worker_metrics_endpoint_when_enabled(self):
+        from app.worker import runner
+
+        settings = MagicMock()
+        settings.log_level = "INFO"
+        settings.worker_metrics_enabled = True
+        settings.worker_metrics_host = "0.0.0.0"
+        settings.worker_metrics_port = 9101
+        settings.app_env = "development"
+
+        with (
+            patch("app.worker.runner.get_settings", return_value=settings),
+            patch("app.worker.runner.configure_logging"),
+            patch("app.worker.runner.start_http_server") as start_http_server,
+            patch("app.worker.runner.asyncio.run", side_effect=KeyboardInterrupt),
+            patch("app.worker.runner.sys.exit"),
+        ):
+            runner.main()
+
+        start_http_server.assert_called_once_with(port=9101, addr="0.0.0.0")
+
+    def test_main_fails_fast_when_worker_metrics_enabled_without_prometheus_in_production(self):
+        from app.worker import runner
+
+        settings = MagicMock()
+        settings.log_level = "INFO"
+        settings.worker_metrics_enabled = True
+        settings.worker_metrics_host = "0.0.0.0"
+        settings.worker_metrics_port = 9101
+        settings.app_env = "production"
+
+        with (
+            patch("app.worker.runner.get_settings", return_value=settings),
+            patch("app.worker.runner.configure_logging"),
+            patch("app.worker.runner.start_http_server", None),
+            patch("app.worker.runner.PROMETHEUS_CLIENT_AVAILABLE", False),
+        ):
+            with pytest.raises(RuntimeError, match="worker_metrics"):
+                runner.main()
 
     @pytest.mark.asyncio
     async def test_run_one_iteration_dequeues_heavy_job_even_when_analysis_slot_is_busy(self):

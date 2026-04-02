@@ -267,9 +267,10 @@ class TestUploadRouteSizeLimit:
         mock_photo_service.create_multipart_photo = AsyncMock(
             side_effect=UploadValidationError("File too large: more than 20971520 bytes exceeds the 20 MB upload limit.")
         )
+        route_handler = getattr(upload_case_images, "__wrapped__", upload_case_images)
 
         with pytest.raises(HTTPException) as exc_info:
-            await upload_case_images(
+            await route_handler(
                 request=mock_request,
                 case_id="prj_test",
                 current_user=mock_user,
@@ -312,8 +313,9 @@ class TestUploadRouteSizeLimit:
 
         mock_photo_service = AsyncMock(spec=PhotoService)
         mock_photo_service.create_multipart_photo = AsyncMock(return_value=photo_read)
+        route_handler = getattr(upload_case_images, "__wrapped__", upload_case_images)
 
-        result = await upload_case_images(
+        result = await route_handler(
             request=mock_request,
             case_id="prj_test",
             current_user=mock_user,

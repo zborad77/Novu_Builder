@@ -2,6 +2,28 @@ class MockVisionProvider:
     key = "mock"
 
     @staticmethod
+    def _extract_rehearsal_failure_mode(project: dict) -> tuple[str | None, int]:
+        description = str(project.get("description") or "")
+        address = str(project.get("address_label") or "")
+        combined = f"{description} {address}"
+        lowered = combined.lower()
+
+        if "[rehearsal:fail-always]" in lowered:
+            return "always", 0
+
+        marker = "[rehearsal:fail-until-attempt="
+        if marker in lowered:
+            start = lowered.index(marker) + len(marker)
+            end = lowered.find("]", start)
+            if end > start:
+                try:
+                    return "until_attempt", max(1, int(lowered[start:end]))
+                except ValueError:
+                    return "until_attempt", 1
+
+        return None, 0
+
+    @staticmethod
     def build_mock_mask() -> list[dict[str, float]]:
         return [
             {"x": 0.12, "y": 0.16},
@@ -17,6 +39,16 @@ class MockVisionProvider:
         photos: list[dict],
         analysis_config: dict | None = None,
     ) -> dict:
+        failure_mode, failure_attempt_limit = self._extract_rehearsal_failure_mode(project)
+        attempt_count = int(project.get("attemptCount") or 0)
+        if failure_mode == "always":
+            raise RuntimeError("Mock rehearsal injected persistent failure.")
+        if failure_mode == "until_attempt" and attempt_count <= failure_attempt_limit:
+            raise RuntimeError(
+                f"Mock rehearsal injected retryable failure on attempt {attempt_count} "
+                f"(limit={failure_attempt_limit})."
+            )
+
         description = str(project.get("description") or "").lower()
         address = str(project.get("address_label") or "").lower()
         normalized_text = f"{description} {address}"

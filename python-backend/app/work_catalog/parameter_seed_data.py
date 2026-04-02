@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.work_catalog.seed_ids import (
+    build_work_type_parameter_id,
+    build_work_type_parameter_option_id,
+)
+
 
 def _option(code: str, label: str) -> dict[str, str]:
     return {"code": code, "label": label}
@@ -361,7 +366,7 @@ def _parameter_row(
     return {
         "_param_key": key,
         "_options": list(options or []),
-        "id": f"wtp_{wt_id}_{key}",
+        "id": build_work_type_parameter_id(wt_id, key),
         "work_type_id": f"wt_{wt_id}",
         "code": code,
         "slug": code,
@@ -2327,7 +2332,7 @@ def build_parameter_catalog() -> tuple[list[dict[str, Any]], list[dict[str, Any]
             for index, option in enumerate(option_defs, start=1):
                 parameter_options.append(
                     {
-                        "id": f"wtpo_{wt_id}_{param_key}_{option['code'].replace('-', '_')}",
+                        "id": build_work_type_parameter_option_id(wt_id, param_key, option["code"]),
                         "work_type_parameter_id": row["id"],
                         "code": option["code"],
                         "label": option["label"],

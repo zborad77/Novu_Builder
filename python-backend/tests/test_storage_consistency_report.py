@@ -46,6 +46,26 @@ def _orphan_issue(key: str = "projects/p1/orphan.jpg") -> StorageConsistencyIssu
     )
 
 
+def _scan_result(
+    *,
+    missing_storage_objects: list[StorageConsistencyIssue] | None = None,
+    orphan_storage_objects: list[StorageConsistencyIssue] | None = None,
+) -> StorageConsistencyScanResult:
+    missing = missing_storage_objects or []
+    orphans = orphan_storage_objects or []
+    return StorageConsistencyScanResult(
+        missing_storage_objects=missing,
+        orphan_storage_objects=orphans,
+        orphan_summary=mod.StorageOrphanSummary(
+            orphan_count=len(orphans),
+            eligible_delete_count=len(orphans),
+            retained_count=0,
+            minimum_age_seconds=0,
+            approval_token=None,
+        ),
+    )
+
+
 # ── scan_status semantics ─────────────────────────────────────────────────────
 
 
@@ -53,10 +73,7 @@ def _orphan_issue(key: str = "projects/p1/orphan.jpg") -> StorageConsistencyIssu
 async def test_build_report_all_clean_is_scan_complete():
     """No missing refs, no orphans → scan_complete; both directions complete."""
     service = _make_service()
-    clean_result = StorageConsistencyScanResult(
-        missing_storage_objects=[],
-        orphan_storage_objects=[],
-    )
+    clean_result = _scan_result()
     with patch.object(service, "scan_db_vs_s3", AsyncMock(return_value=clean_result)):
         report = await service.build_consistency_report()
 
@@ -73,10 +90,7 @@ async def test_build_report_missing_referenced_object_is_fail():
     """A DB-referenced key that is absent from storage → scan_status='fail'."""
     service = _make_service()
     issue = _missing_issue()
-    result = StorageConsistencyScanResult(
-        missing_storage_objects=[issue],
-        orphan_storage_objects=[],
-    )
+    result = _scan_result(missing_storage_objects=[issue])
     with patch.object(service, "scan_db_vs_s3", AsyncMock(return_value=result)):
         report = await service.build_consistency_report()
 
@@ -90,10 +104,7 @@ async def test_build_report_missing_referenced_object_is_hard_fail_not_warning()
     """Missing referenced object must appear in blockers, NOT in warnings."""
     service = _make_service()
     issue = _missing_issue()
-    result = StorageConsistencyScanResult(
-        missing_storage_objects=[issue],
-        orphan_storage_objects=[],
-    )
+    result = _scan_result(missing_storage_objects=[issue])
     with patch.object(service, "scan_db_vs_s3", AsyncMock(return_value=result)):
         report = await service.build_consistency_report()
 
@@ -106,10 +117,7 @@ async def test_build_report_orphan_only_is_warning_not_fail():
     """Orphan storage object → scan_status='warning'; no blockers; not a hard fail."""
     service = _make_service()
     issue = _orphan_issue()
-    result = StorageConsistencyScanResult(
-        missing_storage_objects=[],
-        orphan_storage_objects=[issue],
-    )
+    result = _scan_result(orphan_storage_objects=[issue])
     with patch.object(service, "scan_db_vs_s3", AsyncMock(return_value=result)):
         report = await service.build_consistency_report()
 
@@ -123,10 +131,7 @@ async def test_build_report_orphan_is_warning_not_placed_in_blockers():
     """Orphan must appear in warnings, NOT in blockers."""
     service = _make_service()
     issue = _orphan_issue()
-    result = StorageConsistencyScanResult(
-        missing_storage_objects=[],
-        orphan_storage_objects=[issue],
-    )
+    result = _scan_result(orphan_storage_objects=[issue])
     with patch.object(service, "scan_db_vs_s3", AsyncMock(return_value=result)):
         report = await service.build_consistency_report()
 
@@ -140,10 +145,7 @@ async def test_build_report_blocker_takes_precedence_over_warning():
     service = _make_service()
     missing = _missing_issue()
     orphan = _orphan_issue()
-    result = StorageConsistencyScanResult(
-        missing_storage_objects=[missing],
-        orphan_storage_objects=[orphan],
-    )
+    result = _scan_result(missing_storage_objects=[missing], orphan_storage_objects=[orphan])
     with patch.object(service, "scan_db_vs_s3", AsyncMock(return_value=result)):
         report = await service.build_consistency_report()
 
@@ -157,10 +159,7 @@ async def test_build_report_multiple_blockers_all_listed():
     """All missing referenced objects must be present in the blockers list."""
     service = _make_service()
     issues = [_missing_issue(f"projects/p1/photo_{i}.jpg") for i in range(5)]
-    result = StorageConsistencyScanResult(
-        missing_storage_objects=issues,
-        orphan_storage_objects=[],
-    )
+    result = _scan_result(missing_storage_objects=issues)
     with patch.object(service, "scan_db_vs_s3", AsyncMock(return_value=result)):
         report = await service.build_consistency_report()
 
@@ -210,10 +209,7 @@ async def test_build_report_scan_partial_does_not_claim_success():
 async def test_build_report_both_directions_complete_on_clean_scan():
     """Both db_to_s3.status and s3_to_db.status must be 'complete' on a clean full scan."""
     service = _make_service()
-    result = StorageConsistencyScanResult(
-        missing_storage_objects=[],
-        orphan_storage_objects=[],
-    )
+    result = _scan_result()
     with patch.object(service, "scan_db_vs_s3", AsyncMock(return_value=result)):
         report = await service.build_consistency_report()
 
@@ -239,10 +235,7 @@ async def test_build_report_scan_error_marks_both_directions_not_executed():
 async def test_build_report_returns_consistency_report_dataclass():
     """Return type must be ConsistencyReport with the expected sub-dataclasses."""
     service = _make_service()
-    result = StorageConsistencyScanResult(
-        missing_storage_objects=[],
-        orphan_storage_objects=[],
-    )
+    result = _scan_result()
     with patch.object(service, "scan_db_vs_s3", AsyncMock(return_value=result)):
         report = await service.build_consistency_report()
 

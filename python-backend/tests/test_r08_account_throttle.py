@@ -5,6 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import app.core.account_limiter as limiter_mod
 
 
+@pytest.fixture(autouse=True)
+def clear_fallback_state():
+    limiter_mod._FALLBACK_FAILURES.clear()
+    yield
+    limiter_mod._FALLBACK_FAILURES.clear()
+
+
 # ── Unit tests: account_limiter module ───────────────────────────────────────
 
 class TestAccountLimiterUnit:
@@ -55,12 +62,15 @@ class TestAccountLimiterUnit:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_not_throttled_when_redis_unavailable(self):
-        """Fails open (no throttle) when Redis is not reachable."""
+    async def test_redis_unavailable_uses_in_memory_fallback(self):
+        """Redis unavailability uses the in-memory fallback instead of failing open."""
         with patch.object(limiter_mod, "_get_client", return_value=None):
+            for _ in range(limiter_mod._MAX_FAILED_ATTEMPTS):
+                await limiter_mod.record_login_failure("user@example.com", "redis://localhost")
+
             result = await limiter_mod.is_account_throttled("user@example.com", "redis://localhost")
 
-        assert result is False
+        assert result is True
 
     @pytest.mark.asyncio
     async def test_record_failure_uses_pipeline_incr_and_expire(self):
@@ -93,18 +103,23 @@ class TestAccountLimiterUnit:
         mock_client.delete.assert_called_once_with(limiter_mod._key("user@example.com"))
 
     @pytest.mark.asyncio
-    async def test_record_failure_noop_when_redis_unavailable(self):
-        """record_login_failure silently no-ops when Redis is down."""
+    async def test_record_failure_uses_fallback_when_redis_unavailable(self):
+        """record_login_failure increments the in-memory fallback when Redis is down."""
         with patch.object(limiter_mod, "_get_client", return_value=None):
-            # Must not raise
             await limiter_mod.record_login_failure("user@example.com", "redis://localhost")
 
+        key = limiter_mod._key("user@example.com")
+        count, _ = limiter_mod._FALLBACK_FAILURES[key]
+        assert count == 1
+
     @pytest.mark.asyncio
-    async def test_reset_failures_noop_when_redis_unavailable(self):
-        """reset_login_failures silently no-ops when Redis is down."""
+    async def test_reset_failures_clears_fallback_when_redis_unavailable(self):
+        """reset_login_failures clears the in-memory fallback when Redis is down."""
         with patch.object(limiter_mod, "_get_client", return_value=None):
-            # Must not raise
+            await limiter_mod.record_login_failure("user@example.com", "redis://localhost")
             await limiter_mod.reset_login_failures("user@example.com", "redis://localhost")
+
+        assert limiter_mod._key("user@example.com") not in limiter_mod._FALLBACK_FAILURES
 
     @pytest.mark.asyncio
     async def test_get_client_uses_shared_hardening_builder(self):
@@ -258,3 +273,19 @@ class TestLoginEndpointThrottling:
         assert resp_existing.status_code == 401
         assert resp_nonexistent.status_code == 401
         assert resp_existing.json()["detail"] == resp_nonexistent.json()["detail"]
+
+
+class TestChangePasswordEndpointThrottling:
+
+    async def test_throttled_account_gets_429(self, app_client, token_a, test_tenants):
+        with patch("app.api.routes.auth.is_account_throttled", return_value=True):
+            resp = await app_client.post(
+                "/api/v1/auth/change-password",
+                json={
+                    "currentPassword": test_tenants["user_a"]["password"],
+                    "newPassword": "AnotherPass99!",
+                },
+                headers={"Authorization": f"Bearer {token_a}"},
+            )
+
+        assert resp.status_code == 429

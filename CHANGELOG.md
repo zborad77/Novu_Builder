@@ -2,6 +2,63 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.7.000 - 2026-04-02
+
+Pilot readiness hardening: per-session token revocation, worker healthcheck, analysis job payload offload, JSONB audit logs, deterministic token invalidation, and pre-pilot operational rehearsal tooling.
+
+### Session Management And Token Revocation
+
+- Added `user_sessions` table (migration `20260401_0037`) with per-session lifecycle tracking: `access_jti`, `refresh_jti`, `revoked_at`, and device metadata columns with CASCADE delete on user removal.
+- Added `users.token_version` counter (migration `20260401_0040`) for deterministic global token invalidation — incrementing the counter invalidates all existing tokens for a user without touching the `revoked_tokens` table.
+- Extended `AuthService` with session creation, per-session revocation, and active session listing.
+- Added `GET /auth/sessions` and `DELETE /auth/sessions/{session_id}` routes for user-facing session management (force-logout from specific devices).
+- Updated `TokenRepository` to cross-reference session table during JTI validation.
+
+### Analysis Job Payload Offload
+
+- Added `analysis_jobs.input_payload_storage_key` column (migration `20260401_0038`) to offload large input payloads from the main `analysis_jobs` table row into object storage.
+- Reduces hot-row size for high-photo-count analysis jobs; payload is fetched lazily by the worker only when execution begins.
+- Added `test_analysis_payload_offload.py` covering round-trip offload and fallback to inline payload for backward compatibility.
+
+### JSONB Audit Logs
+
+- Migrated `audit_logs.detail` column from `TEXT` to `JSONB` (migration `20260401_0039`) on PostgreSQL; SQLite remains TEXT for dev/test environments.
+- Enables structured GIN-indexed queries on audit detail payloads without application-side JSON parsing overhead.
+- Migration is safe on existing data: performs in-place `USING detail::jsonb` cast with NULL passthrough.
+
+### Worker Healthcheck
+
+- Added `app/worker/healthcheck.py` as a lightweight Docker healthcheck entrypoint; checks whether the local heartbeat file is fresh and exits 0 (healthy) or 1 (stale/missing).
+- Wired into `docker-compose.yml` worker service: `interval: 30s`, `timeout: 10s`, `retries: 3`, `start_period: 30s`.
+- Worker process is now restartable by the Docker orchestrator on zombie/stuck detection without manual intervention.
+
+### Deterministic Seed IDs
+
+- Added `app/work_catalog/seed_ids.py` with stable, hard-coded UUIDs for all 43 work catalog seed entries.
+- Eliminates non-determinism in bootstrap across fresh environments and test fixtures; seed UUIDs are now constants referenced across tests and migrations.
+- Added `test_seed_id_hardening.py` asserting UUID format, uniqueness, and registry completeness.
+- Added `app/db/seed_runtime.py` for runtime seed data population decoupled from migration-time seeding.
+- Added `test_seed_runtime.py` covering idempotent upsert behaviour and conflict resolution.
+
+### Pilot Operational Rehearsal
+
+- Added `docs/pilot-load-rehearsal.md` — step-by-step pilot load rehearsal procedure covering auth flow, case/photo flow, analysis queue orchestration, worker drain, and operational visibility checkpoints.
+- Added `docs/pilot-operational-resilience-drill.md` — resilience drill scenarios: Redis restart, worker crash, DB connection spike, storage slowdown.
+- Added `docs/operational-load-rehearsal.md` — larger operational load rehearsal guide for post-pilot scaling readiness.
+- Added `scripts/run-pilot-load-rehearsal.py` and `scripts/run-operational-load-rehearsal.py` as executable rehearsal drivers using the mock AI provider.
+- Added `test_operational_load_rehearsal.py` and `test_operational_resilience_drill.py` covering rehearsal smoke assertions and drill scenario setup/teardown.
+
+### Pre-Pilot Security Audit
+
+- Added `AUDIT_2026-03-31.md` — comprehensive security and operational audit covering authentication, multi-tenancy, storage, worker, and monitoring gaps.
+- Added `AUDIT_PILOT_2026-04-02.md` — risk-focused pilot deployment audit with P0/P1/P2 classification, deployment checklist, and go/no-go verdict.
+
+### Notes
+
+- Four new Alembic migrations (0037–0040); apply in order before starting the application.
+- `users.token_version` column defaults to `0` for existing rows — no data migration required.
+- Worker healthcheck depends on `app.worker.heartbeat.local_worker_heartbeat_is_fresh()`; ensure `WORKER_HEARTBEAT_PATH` is writable in the container.
+
 ## v0.6.003 - 2026-03-31
 
 Heavy workload lane separation, multi-pipeline Vision layer, and full-state DR operator documentation pack.

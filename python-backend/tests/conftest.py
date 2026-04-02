@@ -1,6 +1,7 @@
 import os
 import pathlib
 import shutil
+import tempfile
 import uuid
 
 import pytest
@@ -13,6 +14,8 @@ _TEST_RUNTIME_ROOT = _TESTS_ROOT.parent / ".tmp_test_runtime"
 _TEST_RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
 _TEST_SESSION_ROOT = _TEST_RUNTIME_ROOT / f"session_{uuid.uuid4().hex[:8]}"
 _TEST_SESSION_ROOT.mkdir(parents=True, exist_ok=True)
+_PYTEST_TEMP_ROOT = _TEST_SESSION_ROOT / "tmp"
+_PYTEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
 _TMP_STORAGE = _TEST_SESSION_ROOT / "storage"
 _TMP_STORAGE.mkdir(parents=True, exist_ok=True)
 
@@ -21,6 +24,11 @@ _TMP_DB_DIR.mkdir(parents=True, exist_ok=True)
 _TEST_DB_PATH = _TMP_DB_DIR / "test_e2e_tenant.db"
 _TEST_DB_URL = os.environ.get("TEST_DATABASE_URL") or f"sqlite+aiosqlite:///{_TEST_DB_PATH}"
 _USING_LOCAL_SQLITE = "TEST_DATABASE_URL" not in os.environ
+
+os.environ["TMP"] = str(_PYTEST_TEMP_ROOT)
+os.environ["TEMP"] = str(_PYTEST_TEMP_ROOT)
+os.environ["TMPDIR"] = str(_PYTEST_TEMP_ROOT)
+tempfile.tempdir = str(_PYTEST_TEMP_ROOT)
 
 if _USING_LOCAL_SQLITE and _TEST_DB_PATH.exists():
     _TEST_DB_PATH.unlink(missing_ok=True)
@@ -40,6 +48,7 @@ from app.core.config import get_settings  # noqa: E402
 
 get_settings.cache_clear()
 
+import app.core.account_limiter as account_limiter_mod  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.models import MaterialCatalog, Organization, PricingProfile, Supplier, User  # noqa: E402
 from app.services.auth_service import hash_password  # noqa: E402
@@ -47,6 +56,23 @@ from app.services.auth_service import hash_password  # noqa: E402
 
 _test_engine = create_async_engine(_TEST_DB_URL, echo=False)
 _TestSession = async_sessionmaker(_test_engine, class_=AsyncSession, expire_on_commit=False)
+
+
+@pytest.fixture(autouse=True)
+def _clear_account_limiter_fallback():
+    account_limiter_mod._FALLBACK_FAILURES.clear()
+    yield
+    account_limiter_mod._FALLBACK_FAILURES.clear()
+
+
+@pytest.fixture
+def tmp_path():
+    path = _PYTEST_TEMP_ROOT / f"case_{uuid.uuid4().hex[:8]}"
+    path.mkdir(parents=True, exist_ok=False)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True)

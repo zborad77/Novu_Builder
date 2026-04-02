@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from app.api.routes.auth import change_password, login, logout, refresh
 from app.schemas.auth import AuthUserRead, ChangePasswordRequest, LogoutRequest
@@ -29,6 +30,18 @@ def _current_user() -> AuthUserRead:
         isActive=True,
         organizationId="org_test",
         isSuperAdmin=False,
+    )
+
+
+def _request(*, client_host: str = "127.0.0.1") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/test",
+            "headers": [],
+            "client": (client_host, 12345),
+        }
     )
 
 
@@ -92,13 +105,16 @@ class TestLimiterImportHardening:
 class TestAuthAbuseLogging:
     @pytest.mark.asyncio
     async def test_change_password_invalid_current_password_logs_without_secret_leak(self):
-        request = MagicMock()
-        request.client.host = "127.0.0.1"
+        request = _request()
         current_user = _current_user()
         service = AsyncMock(spec=AuthService)
         service.login = AsyncMock(return_value=None)
 
-        with patch("app.api.routes.auth.logger.warning") as mock_warning:
+        with (
+            patch("app.api.routes.auth.is_account_throttled", new=AsyncMock(return_value=False)),
+            patch("app.api.routes.auth.record_login_failure", new=AsyncMock()) as mock_record,
+            patch("app.api.routes.auth.logger.warning") as mock_warning,
+        ):
             with pytest.raises(HTTPException) as exc_info:
                 await change_password(
                     request=request,
@@ -111,26 +127,25 @@ class TestAuthAbuseLogging:
                 )
 
         assert exc_info.value.status_code == 401
+        mock_record.assert_awaited_once()
         mock_warning.assert_called_once()
         assert "WrongPassword99!" not in repr(mock_warning.call_args)
         assert "NewSecurePass99!" not in repr(mock_warning.call_args)
 
     @pytest.mark.asyncio
     async def test_change_password_success_logs_without_secret_leak(self):
-        request = MagicMock()
-        request.client.host = "127.0.0.1"
+        request = _request()
         current_user = _current_user()
-        user = MagicMock()
-        user.password_hash = "old-hash"
-        user.tokens_valid_after = None
 
         service = AsyncMock(spec=AuthService)
         service.login = AsyncMock(return_value=object())
-        service.session = MagicMock()
-        service.session.get = AsyncMock(return_value=user)
-        service.session.commit = AsyncMock()
+        service.change_password = AsyncMock(return_value=True)
 
-        with patch("app.api.routes.auth.logger.info") as mock_info:
+        with (
+            patch("app.api.routes.auth.is_account_throttled", new=AsyncMock(return_value=False)),
+            patch("app.api.routes.auth.reset_login_failures", new=AsyncMock()) as mock_reset,
+            patch("app.api.routes.auth.logger.info") as mock_info,
+        ):
             response = await change_password(
                 request=request,
                 payload=ChangePasswordRequest(
@@ -142,15 +157,42 @@ class TestAuthAbuseLogging:
             )
 
         assert response.message == "Password changed."
+        mock_reset.assert_awaited_once()
+        service.change_password.assert_awaited_once()
         mock_info.assert_called_once()
         assert "CurrentPass99!" not in repr(mock_info.call_args)
         assert "BrandNewPass99!" not in repr(mock_info.call_args)
 
     @pytest.mark.asyncio
-    async def test_logout_route_log_still_omits_token_values(self):
-        request = MagicMock()
-        request.client.host = "127.0.0.1"
+    async def test_change_password_throttle_blocks_before_password_verification(self):
+        request = _request()
+        current_user = _current_user()
         service = AsyncMock(spec=AuthService)
+        service.login = AsyncMock()
+
+        with patch(
+            "app.api.routes.auth.is_account_throttled",
+            new=AsyncMock(return_value=True),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await change_password(
+                    request=request,
+                    payload=ChangePasswordRequest(
+                        currentPassword="CurrentPass99!",
+                        newPassword="BrandNewPass99!",
+                    ),
+                    current_user=current_user,
+                    service=service,
+                )
+
+        assert exc_info.value.status_code == 429
+        service.login.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_logout_route_log_still_omits_token_values(self):
+        request = _request()
+        service = AsyncMock(spec=AuthService)
+        service.revoke_session_by_token = AsyncMock(side_effect=[True, False])
         service.revoke_token = AsyncMock(side_effect=[False, True])
 
         with patch("app.api.routes.auth.logger.info") as mock_info:

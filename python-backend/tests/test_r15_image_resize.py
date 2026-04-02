@@ -139,9 +139,26 @@ class TestPhotoServiceUsesResize:
         photo.id = "pho_1"
         photo.project_id = "prj_1"
         photo.storage_key = "projects/prj_1/original/photo.jpg"
+        photo.original_filename = "photo.jpg"
+        photo.mime_type = "image/jpeg"
+        photo.file_size = len(content)
+        photo.width = 2200
+        photo.height = 1800
+        photo.taken_at = None
+        photo.exif_lat = None
+        photo.exif_lng = None
         photo.processing_status = "uploaded"
+        photo.is_primary = False
+        photo.is_analysis_reference = False
+        photo.sort_order = 0
         photo.preview_storage_key = "projects/prj_1/preview/photo.jpg"
+        photo.preview_file_size = None
+        photo.preview_width = None
+        photo.preview_height = None
         photo.ai_input_storage_key = "projects/prj_1/ai/photo.jpg"
+        photo.ai_input_file_size = None
+        photo.ai_input_width = None
+        photo.ai_input_height = None
 
         repo = AsyncMock()
         repo.get_photo_by_id = AsyncMock(return_value=photo)

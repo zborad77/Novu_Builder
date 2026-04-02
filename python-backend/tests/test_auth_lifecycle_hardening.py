@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import jwt
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from app.schemas.auth import LogoutRequest, RefreshRequest
 from app.services.auth_service import AuthService, RefreshResult
@@ -29,6 +30,7 @@ def _make_user(*, password_hash: str = "$2b$12$invalid-invalid-invalid-invalid-i
     user.password_hash = password_hash
     user.is_active = True
     user.tokens_valid_after = None
+    user.token_version = 0
     user.full_name = "Auth Hardening User"
     user.role = "manager"
     user.organization_id = "org_test"
@@ -43,6 +45,8 @@ def _make_service(user: MagicMock | None = None) -> AuthService:
     tokens = MagicMock()
     tokens.is_revoked = AsyncMock(return_value=False)
     tokens.revoke = AsyncMock(return_value=True)
+    tokens.create_user_session = AsyncMock()
+    tokens.rotate_user_session = AsyncMock()
 
     service = AuthService.__new__(AuthService)
     service.session = session
@@ -105,8 +109,15 @@ class TestAuthRouteHardening:
     async def test_refresh_route_logs_reuse_reason_without_token_leak(self):
         from app.api.routes.auth import refresh
 
-        request = MagicMock()
-        request.client.host = "127.0.0.1"
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/auth/refresh",
+                "headers": [],
+                "client": ("127.0.0.1", 12345),
+            }
+        )
         service = AsyncMock(spec=AuthService)
         service.refresh_with_status = AsyncMock(
             return_value=RefreshResult(tokens=None, failure_reason="revoked_or_reused_token")
@@ -128,9 +139,17 @@ class TestAuthRouteHardening:
     async def test_logout_route_logs_without_token_leak(self):
         from app.api.routes.auth import logout
 
-        request = MagicMock()
-        request.client.host = "127.0.0.1"
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/auth/logout",
+                "headers": [],
+                "client": ("127.0.0.1", 12345),
+            }
+        )
         service = AsyncMock(spec=AuthService)
+        service.revoke_session_by_token = AsyncMock(side_effect=[True, False])
         service.revoke_token = AsyncMock(side_effect=[False, True])
 
         with patch("app.api.routes.auth.logger.info") as mock_info:
@@ -191,3 +210,59 @@ class TestAuthLifecycleIntegration:
             headers={"Authorization": f"Bearer {access_token}"},
         )
         assert me_response.status_code == 401, me_response.text
+
+    @pytest.mark.asyncio
+    async def test_login_and_refresh_return_stable_session_id(self, app_client, test_tenants):
+        login_response = await app_client.post("/api/v1/auth/login", json=test_tenants["user_a"])
+        assert login_response.status_code == 200, login_response.text
+        session_id = login_response.json()["sessionId"]
+        assert isinstance(session_id, str) and session_id.startswith("sess_")
+
+        refresh_response = await app_client.post(
+            "/api/v1/auth/refresh",
+            json={"refreshToken": login_response.json()["refreshToken"]},
+        )
+        assert refresh_response.status_code == 200, refresh_response.text
+        assert refresh_response.json()["sessionId"] == session_id
+
+    @pytest.mark.asyncio
+    async def test_user_can_list_and_revoke_specific_session(self, app_client, test_tenants):
+        first_login = await app_client.post("/api/v1/auth/login", json=test_tenants["user_a"])
+        second_login = await app_client.post("/api/v1/auth/login", json=test_tenants["user_a"])
+        assert first_login.status_code == 200, first_login.text
+        assert second_login.status_code == 200, second_login.text
+
+        first_access = first_login.json()["accessToken"]
+        first_session_id = first_login.json()["sessionId"]
+        second_access = second_login.json()["accessToken"]
+        second_session_id = second_login.json()["sessionId"]
+        assert first_session_id != second_session_id
+
+        sessions_response = await app_client.get(
+            "/api/v1/auth/sessions",
+            headers={"Authorization": f"Bearer {first_access}"},
+        )
+        assert sessions_response.status_code == 200, sessions_response.text
+        items = sessions_response.json()["items"]
+        assert {item["id"] for item in items} >= {first_session_id, second_session_id}
+        current_items = [item for item in items if item["isCurrent"]]
+        assert len(current_items) == 1
+        assert current_items[0]["id"] == first_session_id
+
+        revoke_response = await app_client.delete(
+            f"/api/v1/auth/sessions/{second_session_id}",
+            headers={"Authorization": f"Bearer {first_access}"},
+        )
+        assert revoke_response.status_code == 200, revoke_response.text
+
+        revoked_me = await app_client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {second_access}"},
+        )
+        assert revoked_me.status_code == 401, revoked_me.text
+
+        current_me = await app_client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {first_access}"},
+        )
+        assert current_me.status_code == 200, current_me.text

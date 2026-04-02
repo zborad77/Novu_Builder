@@ -198,6 +198,25 @@ async def test_write_audit_log_commit_false_stages_without_committing():
     session.rollback.assert_not_awaited()
 
 
+def test_build_audit_log_keeps_structured_detail_dict():
+    from app.core.audit import _AuditActor, _build_audit_log
+
+    row = _build_audit_log(
+        actor=_AuditActor(
+            user_id="usr-1",
+            user_email="audit@test.local",
+            org_id="org-1",
+            impersonated_by=None,
+        ),
+        action="case.update",
+        resource_type="cases",
+        resource_id="case-1",
+        detail={"field": "status"},
+    )
+
+    assert row.detail == {"field": "status"}
+
+
 @pytest.mark.asyncio
 async def test_commit_security_critical_audit_fails_closed_on_commit_failure():
     from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit

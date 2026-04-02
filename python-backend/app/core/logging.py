@@ -171,6 +171,7 @@ def redact_log_event(
 
 
 def configure_logging(log_level: str = "INFO", log_file: str = "", log_error_file: str = "") -> None:
+    structlog.reset_defaults()
     level = getattr(logging, log_level.upper(), logging.INFO)
 
     stdout_handler = logging.StreamHandler(sys.stdout)
@@ -248,5 +249,5 @@ def configure_logging(log_level: str = "INFO", log_file: str = "", log_error_fil
         wrapper_class=structlog.make_filtering_bound_logger(level),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
-        cache_logger_on_first_use=True,
+        cache_logger_on_first_use=False,
     )

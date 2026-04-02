@@ -1,6 +1,7 @@
 from app.models.domain import (
     AnalysisJob,
     AnalysisResult,
+    AuditLog,
     Client,
     MaterialCatalog,
     Organization,
@@ -17,6 +18,7 @@ from app.models.domain import (
     RevokedToken,
     Supplier,
     SupplierMaterialPrice,
+    UserSession,
     User,
 )
 from app.models.work_catalog import (
@@ -56,6 +58,7 @@ __all__ = [
     "AnalysisProfileTargetObject",
     "AnalysisProfileValidationRule",
     "AnalysisResult",
+    "AuditLog",
     "CatalogPricingProfile",
     "CatalogPricingProfileAdjustmentRule",
     "CatalogPricingProfileBaseRule",
@@ -85,6 +88,7 @@ __all__ = [
     "TenantWorkTypeParameterOverride",
     "TenantWorkTypeSetting",
     "User",
+    "UserSession",
     "VisionDetection",
     "WorkCategory",
     "WorkType",

@@ -9,6 +9,7 @@ from typing import Literal
 import structlog
 
 from app.repositories.storage_consistency_repository import (
+    AnalysisJobPayloadStorageReference,
     ExportStorageReference,
     PhotoStorageReference,
     StorageConsistencyRepository,
@@ -71,11 +72,13 @@ class StorageConsistencyService:
     ) -> StorageConsistencyScanResult:
         photo_refs = await self.repository.list_photo_storage_references()
         export_refs = await self.repository.list_export_storage_references()
+        analysis_payload_refs = await self.repository.list_analysis_job_payload_storage_references()
         storage_objects = await self._list_managed_storage_objects()
 
         managed_refs = [
             *[self._photo_ref_to_issue(reference) for reference in photo_refs],
             *[self._export_ref_to_issue(reference) for reference in export_refs],
+            *[self._analysis_payload_ref_to_issue(reference) for reference in analysis_payload_refs],
         ]
         managed_keys = {reference.key for reference in managed_refs}
         storage_keys = {str(item["key"]) for item in storage_objects}
@@ -181,7 +184,8 @@ class StorageConsistencyService:
     async def _list_managed_storage_objects(self) -> list[dict[str, object]]:
         project_objects = await list_storage_objects(prefix="projects")
         export_objects = await list_storage_objects(prefix="exports")
-        return [*project_objects, *export_objects]
+        analysis_payload_objects = await list_storage_objects(prefix="analysis-jobs")
+        return [*project_objects, *export_objects, *analysis_payload_objects]
 
     async def _build_orphan_storage_objects(
         self,
@@ -244,6 +248,19 @@ class StorageConsistencyService:
         )
 
     @staticmethod
+    def _analysis_payload_ref_to_issue(
+        reference: AnalysisJobPayloadStorageReference,
+    ) -> StorageConsistencyIssue:
+        return StorageConsistencyIssue(
+            org_id=reference.organization_id,
+            key=reference.storage_key,
+            action="missing_storage_object",
+            source="db.analysis_job.input_payload",
+            record_id=reference.job_id,
+            project_id=reference.project_id,
+        )
+
+    @staticmethod
     def _project_id_from_storage_key(storage_key: str) -> str | None:
         parts = PurePosixPath(storage_key).parts
         if len(parts) < 2:
@@ -251,6 +268,8 @@ class StorageConsistencyService:
         if parts[0] == "projects":
             return parts[1]
         if parts[0] == "exports":
+            return parts[1]
+        if parts[0] == "analysis-jobs":
             return parts[1]
         return None
 

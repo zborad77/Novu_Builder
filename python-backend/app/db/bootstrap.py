@@ -2,6 +2,12 @@ import base64
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.seed_runtime import (
+    SeedModelPlan,
+    SeedPlanReport,
+    SeedWriteMode,
+    execute_seed_plan,
+)
 from app.services.auth_service import hash_password
 from app.models import (
     AnalysisJob,
@@ -82,65 +88,121 @@ def _ensure_seed_photo_files(seeded_photos: list[dict]) -> None:
         _ensure_seed_file(photo_data.get("ai_input_storage_key"), content)
 
 
-async def _seed_global_work_catalog(session: AsyncSession) -> None:
-    async def _upsert_seed_row(model, row: dict) -> None:
-        existing = await session.get(model, row["id"])
-        if existing is None:
-            session.add(model(**row))
-            return
-        for key, value in row.items():
-            setattr(existing, key, value)
+_GLOBAL_WORK_CATALOG_SEED_PLAN: tuple[SeedModelPlan, ...] = (
+    SeedModelPlan("categories", WorkCategory, GLOBAL_WORK_CATALOG_SEED["categories"], SeedWriteMode.AUTHORITATIVE_UPSERT),
+    SeedModelPlan("analysis_profiles", AnalysisProfile, GLOBAL_WORK_CATALOG_SEED["analysis_profiles"], SeedWriteMode.AUTHORITATIVE_UPSERT),
+    SeedModelPlan(
+        "analysis_profile_target_objects",
+        AnalysisProfileTargetObject,
+        GLOBAL_WORK_CATALOG_SEED["analysis_profile_target_objects"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+    SeedModelPlan(
+        "analysis_profile_ignored_objects",
+        AnalysisProfileIgnoredObject,
+        GLOBAL_WORK_CATALOG_SEED["analysis_profile_ignored_objects"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+    SeedModelPlan(
+        "analysis_profile_extraction_rules",
+        AnalysisProfileExtractionRule,
+        GLOBAL_WORK_CATALOG_SEED["analysis_profile_extraction_rules"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+    SeedModelPlan(
+        "analysis_profile_validation_rules",
+        AnalysisProfileValidationRule,
+        GLOBAL_WORK_CATALOG_SEED["analysis_profile_validation_rules"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+    SeedModelPlan(
+        "analysis_profile_confidence_thresholds",
+        AnalysisProfileConfidenceThreshold,
+        GLOBAL_WORK_CATALOG_SEED["analysis_profile_confidence_thresholds"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+    SeedModelPlan(
+        "analysis_profile_output_mappings",
+        AnalysisProfileOutputMapping,
+        GLOBAL_WORK_CATALOG_SEED["analysis_profile_output_mappings"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+    SeedModelPlan(
+        "catalog_pricing_profiles",
+        CatalogPricingProfile,
+        GLOBAL_WORK_CATALOG_SEED["catalog_pricing_profiles"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+    SeedModelPlan(
+        "pricing_profile_required_inputs",
+        CatalogPricingProfileRequiredInput,
+        GLOBAL_WORK_CATALOG_SEED["pricing_profile_required_inputs"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+    SeedModelPlan(
+        "pricing_profile_base_rules",
+        CatalogPricingProfileBaseRule,
+        GLOBAL_WORK_CATALOG_SEED["pricing_profile_base_rules"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+    SeedModelPlan(
+        "pricing_profile_adjustment_rules",
+        CatalogPricingProfileAdjustmentRule,
+        GLOBAL_WORK_CATALOG_SEED["pricing_profile_adjustment_rules"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+    SeedModelPlan(
+        "pricing_profile_labor_assumptions",
+        CatalogPricingProfileLaborAssumption,
+        GLOBAL_WORK_CATALOG_SEED["pricing_profile_labor_assumptions"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+    SeedModelPlan(
+        "pricing_profile_material_assumptions",
+        CatalogPricingProfileMaterialAssumption,
+        GLOBAL_WORK_CATALOG_SEED["pricing_profile_material_assumptions"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+    SeedModelPlan("work_types", WorkType, GLOBAL_WORK_CATALOG_SEED["work_types"], SeedWriteMode.AUTHORITATIVE_UPSERT),
+    SeedModelPlan("parameters", WorkTypeParameter, GLOBAL_WORK_CATALOG_SEED["parameters"], SeedWriteMode.AUTHORITATIVE_UPSERT),
+    SeedModelPlan(
+        "parameter_options",
+        WorkTypeParameterOption,
+        GLOBAL_WORK_CATALOG_SEED["parameter_options"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+)
 
-    for row in GLOBAL_WORK_CATALOG_SEED["categories"]:
-        await _upsert_seed_row(WorkCategory, row)
+_DEV_WORK_CATALOG_OVERRIDE_SEED_PLAN: tuple[SeedModelPlan, ...] = (
+    SeedModelPlan(
+        "tenant_settings",
+        TenantWorkTypeSetting,
+        GLOBAL_WORK_CATALOG_SEED["tenant_settings"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+    SeedModelPlan(
+        "tenant_parameter_overrides",
+        TenantWorkTypeParameterOverride,
+        GLOBAL_WORK_CATALOG_SEED["tenant_parameter_overrides"],
+        SeedWriteMode.AUTHORITATIVE_UPSERT,
+    ),
+)
 
-    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profiles"]:
-        await _upsert_seed_row(AnalysisProfile, row)
 
-    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profile_target_objects"]:
-        await _upsert_seed_row(AnalysisProfileTargetObject, row)
+async def _seed_global_work_catalog(session: AsyncSession) -> SeedPlanReport:
+    return await execute_seed_plan(
+        session,
+        plan_name="global_work_catalog",
+        model_plans=_GLOBAL_WORK_CATALOG_SEED_PLAN,
+    )
 
-    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profile_ignored_objects"]:
-        await _upsert_seed_row(AnalysisProfileIgnoredObject, row)
 
-    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profile_extraction_rules"]:
-        await _upsert_seed_row(AnalysisProfileExtractionRule, row)
-
-    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profile_validation_rules"]:
-        await _upsert_seed_row(AnalysisProfileValidationRule, row)
-
-    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profile_confidence_thresholds"]:
-        await _upsert_seed_row(AnalysisProfileConfidenceThreshold, row)
-
-    for row in GLOBAL_WORK_CATALOG_SEED["analysis_profile_output_mappings"]:
-        await _upsert_seed_row(AnalysisProfileOutputMapping, row)
-
-    for row in GLOBAL_WORK_CATALOG_SEED["catalog_pricing_profiles"]:
-        await _upsert_seed_row(CatalogPricingProfile, row)
-
-    for row in GLOBAL_WORK_CATALOG_SEED["pricing_profile_required_inputs"]:
-        await _upsert_seed_row(CatalogPricingProfileRequiredInput, row)
-
-    for row in GLOBAL_WORK_CATALOG_SEED["pricing_profile_base_rules"]:
-        await _upsert_seed_row(CatalogPricingProfileBaseRule, row)
-
-    for row in GLOBAL_WORK_CATALOG_SEED["pricing_profile_adjustment_rules"]:
-        await _upsert_seed_row(CatalogPricingProfileAdjustmentRule, row)
-
-    for row in GLOBAL_WORK_CATALOG_SEED["pricing_profile_labor_assumptions"]:
-        await _upsert_seed_row(CatalogPricingProfileLaborAssumption, row)
-
-    for row in GLOBAL_WORK_CATALOG_SEED["pricing_profile_material_assumptions"]:
-        await _upsert_seed_row(CatalogPricingProfileMaterialAssumption, row)
-
-    for row in GLOBAL_WORK_CATALOG_SEED["work_types"]:
-        await _upsert_seed_row(WorkType, row)
-
-    for row in GLOBAL_WORK_CATALOG_SEED["parameters"]:
-        await _upsert_seed_row(WorkTypeParameter, row)
-
-    for row in GLOBAL_WORK_CATALOG_SEED["parameter_options"]:
-        await _upsert_seed_row(WorkTypeParameterOption, row)
+async def _seed_dev_work_catalog_overrides(session: AsyncSession) -> SeedPlanReport:
+    return await execute_seed_plan(
+        session,
+        plan_name="dev_work_catalog_overrides",
+        model_plans=_DEV_WORK_CATALOG_OVERRIDE_SEED_PLAN,
+    )
 
 
 async def ensure_dev_seed(session: AsyncSession) -> None:
@@ -252,14 +314,7 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
         )
 
     await _seed_global_work_catalog(session)
-
-    for row in GLOBAL_WORK_CATALOG_SEED["tenant_settings"]:
-        if await session.get(TenantWorkTypeSetting, row["id"]) is None:
-            session.add(TenantWorkTypeSetting(**row))
-
-    for row in GLOBAL_WORK_CATALOG_SEED["tenant_parameter_overrides"]:
-        if await session.get(TenantWorkTypeParameterOverride, row["id"]) is None:
-            session.add(TenantWorkTypeParameterOverride(**row))
+    await _seed_dev_work_catalog_overrides(session)
 
     suppliers = [
         {

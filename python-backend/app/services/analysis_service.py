@@ -38,6 +38,7 @@ from app.services.analysis_profile_service import (
     AnalysisProfileResolutionError,
     AnalysisProfileService,
 )
+from app.storage.backend import delete_storage_file, write_storage_file
 from app.work_catalog.domain import CatalogValidationError
 from app.worker.queue import (
     AnalysisJobQueueCapacityExceededError,
@@ -51,6 +52,9 @@ logger = structlog.get_logger(__name__)
 _JOB_TIMEOUT_SECONDS = 180  # 3 minutes — generous upper bound for vision API calls
 _MAX_JOB_RETRY_COUNT = 10  # Hard ceiling to prevent runaway cost from AI provider calls
 _REPEATED_FAILURE_THRESHOLD = 3  # Emit dead-letter sentinel after this many retries
+_INPUT_PAYLOAD_LARGE_STRING_THRESHOLD = 2048
+_INPUT_PAYLOAD_SUMMARY_MAX_ITEMS = 12
+_INPUT_PAYLOAD_SUMMARY_MAX_STRING_LEN = 256
 
 
 def _optional_str_attr(obj: object, name: str) -> str | None:
@@ -115,6 +119,7 @@ def to_read_model(result: AnalysisResult) -> AnalysisResultRead:
 
 
 def to_job_read(job: AnalysisJob) -> dict:
+    input_payload = _safe_json_load(job.input_payload)
     return {
         "id": job.id,
         "projectId": job.project_id,
@@ -136,7 +141,8 @@ def to_job_read(job: AnalysisJob) -> dict:
         ),
         "errorMessage": job.error_message,
         "errorTraceback": job.error_traceback,
-        "inputPayload": _safe_json_load(job.input_payload),
+        "inputPayload": input_payload,
+        "inputPayloadOffloaded": bool(getattr(job, "input_payload_storage_key", None)),
         "outputSummary": _safe_json_load(job.output_summary),
         "createdAt": job.created_at,
     }
@@ -180,6 +186,83 @@ def _retry_backoff_seconds(*, attempt_count: int, settings) -> int:
     return min(delay, settings.analysis_retry_backoff_max_seconds)
 
 
+def _job_input_payload_storage_key(job_id: str) -> str:
+    return f"analysis-jobs/{job_id}/input-payload.json"
+
+
+def _looks_like_large_base64_string(value: str) -> bool:
+    stripped = value.strip()
+    if len(stripped) < _INPUT_PAYLOAD_LARGE_STRING_THRESHOLD:
+        return False
+    allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=_-")
+    sample = stripped[: min(len(stripped), 4096)]
+    if any(ch.isspace() for ch in sample):
+        return False
+    allowed_ratio = sum(1 for ch in sample if ch in allowed) / max(1, len(sample))
+    return allowed_ratio >= 0.98
+
+
+def _payload_has_large_blob(value: object, *, depth: int = 0) -> bool:
+    if isinstance(value, str):
+        return _looks_like_large_base64_string(value)
+    if depth >= 4:
+        return False
+    if isinstance(value, dict):
+        return any(_payload_has_large_blob(item, depth=depth + 1) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_payload_has_large_blob(item, depth=depth + 1) for item in value)
+    return False
+
+
+def _summarize_payload_value(value: object, *, depth: int = 0) -> object:
+    if isinstance(value, str):
+        if _looks_like_large_base64_string(value):
+            return f"[offloaded-base64-string bytes={len(value.encode('utf-8'))}]"
+        if len(value) > _INPUT_PAYLOAD_SUMMARY_MAX_STRING_LEN:
+            return (
+                value[:_INPUT_PAYLOAD_SUMMARY_MAX_STRING_LEN]
+                + f"... [truncated, total_chars={len(value)}]"
+            )
+        return value
+    if depth >= 2:
+        if isinstance(value, dict):
+            return f"[dict keys={len(value)}]"
+        if isinstance(value, (list, tuple)):
+            return f"[list items={len(value)}]"
+        return value
+    if isinstance(value, dict):
+        summary: dict[str, object] = {}
+        items = list(value.items())
+        for key, item in items[:_INPUT_PAYLOAD_SUMMARY_MAX_ITEMS]:
+            summary[str(key)] = _summarize_payload_value(item, depth=depth + 1)
+        if len(items) > _INPUT_PAYLOAD_SUMMARY_MAX_ITEMS:
+            summary["_truncatedKeys"] = len(items) - _INPUT_PAYLOAD_SUMMARY_MAX_ITEMS
+        return summary
+    if isinstance(value, (list, tuple)):
+        summary_items = [
+            _summarize_payload_value(item, depth=depth + 1)
+            for item in list(value)[:_INPUT_PAYLOAD_SUMMARY_MAX_ITEMS]
+        ]
+        if len(value) > _INPUT_PAYLOAD_SUMMARY_MAX_ITEMS:
+            summary_items.append(f"[truncated_items={len(value) - _INPUT_PAYLOAD_SUMMARY_MAX_ITEMS}]")
+        return summary_items
+    return value
+
+
+def _build_offloaded_input_payload_summary(
+    payload: object,
+    *,
+    storage_key: str,
+    payload_bytes: int,
+) -> dict[str, object]:
+    return {
+        "offloaded": True,
+        "storageKey": storage_key,
+        "payloadBytes": payload_bytes,
+        "preview": _summarize_payload_value(payload),
+    }
+
+
 async def _fail_job_and_raise(
     job: AnalysisJob,
     repo: AnalysisRepository,
@@ -206,12 +289,63 @@ class AnalysisService:
     ):
         self.repository = repository
         self.photo_repository = photo_repository
+        self._settings = get_settings()
         self.analysis_profile_service = (
             AnalysisProfileService(work_catalog_repository)
             if work_catalog_repository is not None
             else None
         )
         self.provider_key = provider_key
+
+    async def _cleanup_input_payload_storage_key(self, storage_key: str | None) -> None:
+        if not storage_key:
+            return
+        try:
+            await delete_storage_file(relative_storage_key=storage_key)
+        except Exception as exc:
+            logger.warning(
+                "analysis.input_payload_cleanup_failed",
+                storage_key=storage_key,
+                error=str(exc),
+                exc_info=True,
+            )
+
+    async def _persist_job_input_payload(
+        self,
+        job: AnalysisJob,
+        payload: object,
+    ) -> str | None:
+        serialized = json.dumps(payload, ensure_ascii=False)
+        serialized_bytes = serialized.encode("utf-8")
+        previous_storage_key = _optional_str_attr(job, "input_payload_storage_key")
+        should_offload = (
+            len(serialized_bytes) > self._settings.analysis_job_inline_payload_max_bytes
+            or _payload_has_large_blob(payload)
+        )
+        if not should_offload:
+            job.input_payload = serialized
+            if hasattr(job, "input_payload_storage_key"):
+                job.input_payload_storage_key = None
+            return previous_storage_key
+
+        storage_key = _job_input_payload_storage_key(job.id)
+        await write_storage_file(
+            relative_storage_key=storage_key,
+            content=serialized_bytes,
+        )
+        job.input_payload = json.dumps(
+            _build_offloaded_input_payload_summary(
+                payload,
+                storage_key=storage_key,
+                payload_bytes=len(serialized_bytes),
+            ),
+            ensure_ascii=False,
+        )
+        if hasattr(job, "input_payload_storage_key"):
+            job.input_payload_storage_key = storage_key
+        if previous_storage_key and previous_storage_key != storage_key:
+            return previous_storage_key
+        return None
 
     async def _enforce_tenant_active_job_limit(
         self,
@@ -627,16 +761,17 @@ class AnalysisService:
                     worker_id=worker_id,
                 )
 
-            job.input_payload = json.dumps(
+            cleanup_storage_key = await self._persist_job_input_payload(
+                job,
                 {
                     "jobType": ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
                     "projectId": project_id,
                     "organizationId": organization_id,
                     "parentJobId": job.parent_job_id,
                 },
-                ensure_ascii=False,
             )
             await session.commit()
+        await self._cleanup_input_payload_storage_key(cleanup_storage_key)
 
         try:
             async with WorkerAsyncSessionFactory() as quote_session:
@@ -742,24 +877,6 @@ class AnalysisService:
         set is_superadmin_context=True when intentionally omitting organization_id;
         otherwise a 403 is raised to prevent accidental tenant-isolation bypass.
         """
-        async with WorkerAsyncSessionFactory() as session:
-            repo = AnalysisRepository(session)
-            job = await repo.get_analysis_job(job_id)
-            if not job:
-                logger.error("worker.job_not_found", job_id=job_id, project_id=project_id)
-                raise HTTPException(status_code=404, detail="Analysis job not found.")
-            job_type = _optional_str_attr(job, "job_type") or ANALYSIS_JOB_TYPE_MANUAL_TRIGGER
-
-        if job_type == ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION:
-            return await self._execute_quote_recalculation_job(
-                job_id,
-                project_id,
-                organization_id,
-                is_superadmin_context=is_superadmin_context,
-                lease_token=lease_token,
-                worker_id=worker_id,
-            )
-
         log = logger.bind(
             job_id=job_id,
             project_id=project_id,
@@ -793,6 +910,7 @@ class AnalysisService:
         job_retry_count: int
         job_attempt_count: int
         analysis_config: dict | None = None
+        delegate_quote_recalculation = False
         settings = get_settings()
 
         async with WorkerAsyncSessionFactory() as session:
@@ -805,107 +923,125 @@ class AnalysisService:
                 log.error("worker.job_not_found")
                 raise HTTPException(status_code=404, detail="Analysis job not found.")
 
-            if job.status == ANALYSIS_JOB_STATUS_COMPLETED:
-                record_duplicate_prevented("already_completed")
-                log.info("worker.job_skipped", reason="already_completed")
-                return AnalysisJobExecutionResult(disposition="skipped")
-
-            # R-19: idempotency guard — skip if job was already picked up or cancelled
-            if job.status != ANALYSIS_JOB_STATUS_QUEUED:
-                record_duplicate_prevented("not_queued")
-                log.warning("worker.job_skipped", reason="not_queued", current_status=job.status)
-                return AnalysisJobExecutionResult(disposition="skipped")
-
-            if job.project_id != project_id:
-                log.error("worker.job_project_mismatch", job_project_id=job.project_id, expected_project_id=project_id)
-                log.warning("SECURITY_EVENT: job_project_mismatch", job_id=job_id, job_project_id=job.project_id, requested_project_id=project_id)
-                await _fail_job_and_raise(job, repo, message=f"Job {job_id} belongs to project {job.project_id}, not {project_id}.", status_code=403, detail="Job project mismatch.")
-
-            if organization_id is None:
-                log.info("worker.superadmin_bypass", job_id=job_id, project_id=project_id)
-
-            if organization_id is not None:
-                project = await repo.get_project_in_org(project_id, organization_id)
+            job_type = _optional_str_attr(job, "job_type") or ANALYSIS_JOB_TYPE_MANUAL_TRIGGER
+            if job_type == ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION:
+                delegate_quote_recalculation = True
             else:
-                project = await session.get(Project, project_id)
+                if job.status == ANALYSIS_JOB_STATUS_COMPLETED:
+                    record_duplicate_prevented("already_completed")
+                    log.info("worker.job_skipped", reason="already_completed")
+                    return AnalysisJobExecutionResult(disposition="skipped")
 
-            if not project:
-                log.error("worker.project_not_found", organization_id=organization_id)
-                log.warning("SECURITY_EVENT: org_mismatch", project_id=project_id, organization_id=organization_id)
-                await _fail_job_and_raise(job, repo, message="Project not found.", status_code=403, detail="Project not found.")
+                # R-19: idempotency guard — skip if job was already picked up or cancelled
+                if job.status != ANALYSIS_JOB_STATUS_QUEUED:
+                    record_duplicate_prevented("not_queued")
+                    log.warning("worker.job_skipped", reason="not_queued", current_status=job.status)
+                    return AnalysisJobExecutionResult(disposition="skipped")
 
-            claim_timestamp = datetime.now(UTC)
-            try:
-                await repo.mark_job_running(
-                    job,
-                    lease_token=lease_token,
-                    worker_id=worker_id,
-                    leased_at=claim_timestamp,
-                    heartbeat_at=claim_timestamp,
-                )
-            except InvalidAnalysisJobStatusTransition:
-                record_duplicate_prevented("invalid_status_transition")
-                log.warning("worker.job_skipped", reason="invalid_status_transition", current_status=job.status)
-                return AnalysisJobExecutionResult(disposition="skipped")
+                if job.project_id != project_id:
+                    log.error("worker.job_project_mismatch", job_project_id=job.project_id, expected_project_id=project_id)
+                    log.warning("SECURITY_EVENT: job_project_mismatch", job_id=job_id, job_project_id=job.project_id, requested_project_id=project_id)
+                    await _fail_job_and_raise(job, repo, message=f"Job {job_id} belongs to project {job.project_id}, not {project_id}.", status_code=403, detail="Job project mismatch.")
 
-            if lease_token is not None and worker_id is not None:
-                await repo.assert_job_lease_owned(
-                    job,
-                    lease_token=lease_token,
-                    worker_id=worker_id,
-                )
+                if organization_id is None:
+                    log.info("worker.superadmin_bypass", job_id=job_id, project_id=project_id)
 
-            photos = await photo_repo.list_photos_by_project_id(project_id)
-            input_data = {
-                "provider": self.provider_key,
-                "project_id": project.id,
-                "title": project.title,
-                "property_type": project.property_type,
-                "repair_scope": project.repair_scope,
-                "photo_count": len(photos),
-            }
-            requested_work_type_code = _optional_str_attr(job, "requested_work_type_code")
-            analysis_profile_id = _optional_str_attr(job, "analysis_profile_id")
-            if (
-                organization_id is not None
-                and requested_work_type_code
-                and analysis_profile_id
-            ):
+                if organization_id is not None:
+                    project = await repo.get_project_in_org(project_id, organization_id)
+                else:
+                    project = await session.get(Project, project_id)
+
+                if not project:
+                    log.error("worker.project_not_found", organization_id=organization_id)
+                    log.warning("SECURITY_EVENT: org_mismatch", project_id=project_id, organization_id=organization_id)
+                    await _fail_job_and_raise(job, repo, message="Project not found.", status_code=403, detail="Project not found.")
+
+                claim_timestamp = datetime.now(UTC)
                 try:
-                    resolved_profile = await profile_service.resolve_for_snapshot(
-                        organization_id=organization_id,
-                        work_type_code=requested_work_type_code,
-                        analysis_profile_id=analysis_profile_id,
-                    )
-                except AnalysisProfileResolutionError as exc:
-                    await _fail_job_and_raise(
+                    await repo.mark_job_running(
                         job,
-                        repo,
-                        message=str(exc),
-                        status_code=422,
-                        detail=str(exc),
+                        lease_token=lease_token,
+                        worker_id=worker_id,
+                        leased_at=claim_timestamp,
+                        heartbeat_at=claim_timestamp,
                     )
-                analysis_config = profile_service.build_provider_config(resolved_profile)
-                input_data["work_type_code"] = resolved_profile.work_type_code
-                input_data["analysis_profile_code"] = resolved_profile.profile_code
-                input_data["analysis_profile_version"] = resolved_profile.profile_version
-            job.input_payload = json.dumps(input_data, ensure_ascii=False)
+                except InvalidAnalysisJobStatusTransition:
+                    record_duplicate_prevented("invalid_status_transition")
+                    log.warning("worker.job_skipped", reason="invalid_status_transition", current_status=job.status)
+                    return AnalysisJobExecutionResult(disposition="skipped")
 
-            # Capture all primitives needed for Phase 2 & 3 before session closes.
-            # expire_on_commit=False keeps ORM attribute values accessible on
-            # detached objects, so photos list is safe to pass to run_project_analysis.
-            job_retry_count = job.retry_count
-            job_attempt_count = _job_attempt_count(job)
-            project_dict = {
-                "id": project.id,
-                "title": project.title,
-                "description": project.description,
-                "address_label": project.address_label,
-                "property_type": project.property_type,
-                "repair_scope": project.repair_scope,
-            }
+                if lease_token is not None and worker_id is not None:
+                    await repo.assert_job_lease_owned(
+                        job,
+                        lease_token=lease_token,
+                        worker_id=worker_id,
+                    )
 
-            await session.commit()
+                photos = await photo_repo.list_photos_by_project_id(project_id)
+                input_data = {
+                    "provider": self.provider_key,
+                    "project_id": project.id,
+                    "title": project.title,
+                    "property_type": project.property_type,
+                    "repair_scope": project.repair_scope,
+                    "photo_count": len(photos),
+                }
+                requested_work_type_code = _optional_str_attr(job, "requested_work_type_code")
+                analysis_profile_id = _optional_str_attr(job, "analysis_profile_id")
+                if (
+                    organization_id is not None
+                    and requested_work_type_code
+                    and analysis_profile_id
+                ):
+                    try:
+                        resolved_profile = await profile_service.resolve_for_snapshot(
+                            organization_id=organization_id,
+                            work_type_code=requested_work_type_code,
+                            analysis_profile_id=analysis_profile_id,
+                        )
+                    except AnalysisProfileResolutionError as exc:
+                        await _fail_job_and_raise(
+                            job,
+                            repo,
+                            message=str(exc),
+                            status_code=422,
+                            detail=str(exc),
+                        )
+                    analysis_config = profile_service.build_provider_config(resolved_profile)
+                    input_data["work_type_code"] = resolved_profile.work_type_code
+                    input_data["analysis_profile_code"] = resolved_profile.profile_code
+                    input_data["analysis_profile_version"] = resolved_profile.profile_version
+                cleanup_storage_key = await self._persist_job_input_payload(job, input_data)
+
+                # Capture all primitives needed for Phase 2 & 3 before session closes.
+                # expire_on_commit=False keeps ORM attribute values accessible on
+                # detached objects, so photos list is safe to pass to run_project_analysis.
+                job_retry_count = job.retry_count
+                job_attempt_count = _job_attempt_count(job)
+                project_dict = {
+                    "id": project.id,
+                    "title": project.title,
+                    "description": project.description,
+                    "address_label": project.address_label,
+                    "property_type": project.property_type,
+                    "repair_scope": project.repair_scope,
+                    "retryCount": job_retry_count,
+                    "attemptCount": job_attempt_count,
+                }
+
+                await session.commit()
+
+        if delegate_quote_recalculation:
+            return await self._execute_quote_recalculation_job(
+                job_id,
+                project_id,
+                organization_id,
+                is_superadmin_context=is_superadmin_context,
+                lease_token=lease_token,
+                worker_id=worker_id,
+            )
+
+        await self._cleanup_input_payload_storage_key(cleanup_storage_key)
         # Phase 1 session CLOSED — no DB connection held from this point.
 
         log.info(
@@ -1197,6 +1333,70 @@ class AnalysisService:
                 )
                 return False
         return True
+
+    async def recover_job_after_worker_error(
+        self,
+        *,
+        lease,
+        cause: Exception,
+    ) -> AnalysisJobExecutionResult:
+        error_message = str(cause).strip() or type(cause).__name__
+        error_traceback = "".join(
+            traceback.format_exception(type(cause), cause, cause.__traceback__)
+        )
+        settings = get_settings()
+        log = logger.bind(
+            job_id=lease.job_id,
+            project_id=lease.project_id,
+            tenant_id=lease.organization_id,
+            lease_token=lease.token,
+            worker_id=lease.worker_id,
+        )
+
+        async with WorkerAsyncSessionFactory() as session:
+            repo = AnalysisRepository(session)
+            job = await repo.get_analysis_job(lease.job_id)
+            if not job:
+                log.warning("worker.job_recovery_missing_job")
+                return AnalysisJobExecutionResult(
+                    disposition="skipped",
+                    failure_reason=error_message,
+                )
+
+            try:
+                await repo.assert_job_lease_owned(
+                    job,
+                    lease_token=lease.token,
+                    worker_id=lease.worker_id,
+                )
+            except AnalysisJobLeaseOwnershipError:
+                log.warning(
+                    "worker.job_recovery_lost_db_lease",
+                    db_status=job.status,
+                    db_lease_token=job.lease_token,
+                    db_worker_id=job.worker_id,
+                )
+                raise
+
+            try:
+                return await self._handle_attempt_failure(
+                    repo,
+                    job,
+                    message=error_message,
+                    error_traceback=error_traceback,
+                    log=log,
+                    settings=settings,
+                )
+            except InvalidAnalysisJobStatusTransition:
+                log.warning(
+                    "worker.job_recovery_transition_rejected",
+                    current_status=job.status,
+                )
+                return AnalysisJobExecutionResult(
+                    disposition="skipped",
+                    attempt_count=_job_attempt_count(job),
+                    failure_reason=error_message,
+                )
 
     async def refresh_job_lease_heartbeat(
         self,

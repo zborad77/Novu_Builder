@@ -33,6 +33,9 @@ class CompanyPatch(BaseModel):
 class CompanyListResponse(BaseModel):
     items: list[CompanyRead]
     total: int
+    limit: int
+    offset: int
+    hasMore: bool
 
 
 class AdminUserRead(BaseModel):
@@ -66,3 +69,6 @@ class AdminUserPatch(BaseModel):
 class AdminUserListResponse(BaseModel):
     items: list[AdminUserRead]
     total: int
+    limit: int
+    offset: int
+    hasMore: bool

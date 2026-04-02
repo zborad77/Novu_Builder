@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Project, ProjectExport, ProjectPhoto
+from app.models import AnalysisJob, Project, ProjectExport, ProjectPhoto
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,14 @@ class ExportStorageReference:
     organization_id: str
     project_id: str
     export_id: str
+    storage_key: str
+
+
+@dataclass(frozen=True)
+class AnalysisJobPayloadStorageReference:
+    organization_id: str
+    project_id: str
+    job_id: str
     storage_key: str
 
 
@@ -98,6 +106,29 @@ class StorageConsistencyRepository:
                 storage_key=storage_key,
             )
             for organization_id, project_id, export_id, storage_key in result.all()
+            if storage_key
+        ]
+
+    async def list_analysis_job_payload_storage_references(self) -> list[AnalysisJobPayloadStorageReference]:
+        result = await self.session.execute(
+            select(
+                Project.organization_id,
+                AnalysisJob.project_id,
+                AnalysisJob.id,
+                AnalysisJob.input_payload_storage_key,
+            )
+            .join(Project, Project.id == AnalysisJob.project_id)
+            .where(AnalysisJob.input_payload_storage_key.is_not(None))
+            .order_by(Project.organization_id.asc(), AnalysisJob.project_id.asc(), AnalysisJob.id.asc())
+        )
+        return [
+            AnalysisJobPayloadStorageReference(
+                organization_id=organization_id,
+                project_id=project_id,
+                job_id=job_id,
+                storage_key=storage_key,
+            )
+            for organization_id, project_id, job_id, storage_key in result.all()
             if storage_key
         ]
 

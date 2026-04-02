@@ -178,8 +178,10 @@ class TestAuditEnforcement:
     @pytest.mark.parametrize("endpoint,action", _write_routes_with_audit)
     def test_write_route_calls_write_audit_log(self, endpoint, action):
         src = _src(endpoint)
-        assert "write_audit_log(" in src, (
-            f"{endpoint.__name__} must call write_audit_log()"
+        assert (
+            "write_audit_log(" in src or "commit_security_critical_audit(" in src
+        ), (
+            f"{endpoint.__name__} must call write_audit_log() or commit_security_critical_audit()"
         )
         assert action in src, (
             f"{endpoint.__name__} must log action '{action}'"
@@ -191,15 +193,15 @@ class TestAuditEnforcement:
 
     def test_reset_password_does_not_log_password_value(self):
         src = _src(reset_user_password)
-        # detail dict must not include the password field
-        assert '"password"' not in src.split("write_audit_log")[1].split(")")[0]
+        detail_start = src.index("detail={")
+        detail_end = src.index("},", detail_start)
+        detail_section = src[detail_start:detail_end]
+        assert '"password"' not in detail_section
 
     def test_impersonate_does_not_log_token(self):
         """The detail dict passed to write_audit_log must not contain the JWT token value."""
         src = _src(impersonate_user)
-        # Extract just the detail dict literal inside write_audit_log(...)
-        # We look between 'detail={' and the closing '},' of the detail arg
-        assert "write_audit_log(" in src
+        # Extract just the detail dict literal passed to the audit writer.
         detail_start = src.index("detail={")
         detail_end = src.index("},", detail_start)
         detail_section = src[detail_start:detail_end]
@@ -208,10 +210,13 @@ class TestAuditEnforcement:
 
     def test_audit_write_failure_logs_warning(self):
         """write_audit_log must emit a warning on failure (not silently swallow)."""
-        from app.core.audit import write_audit_log
+        from app.core.audit import _log_audit_write_failure, write_audit_log
+
+        helper_src = inspect.getsource(_log_audit_write_failure)
         src = inspect.getsource(write_audit_log)
-        assert "SECURITY_EVENT: audit_write_failed" in src
-        assert "logger.warning" in src
+        assert "_log_audit_write_failure(" in src
+        assert "SECURITY_EVENT: audit_write_failed" in helper_src
+        assert "logger.warning" in helper_src
 
     def test_impersonate_audit_includes_target_email(self):
         src = _src(impersonate_user)

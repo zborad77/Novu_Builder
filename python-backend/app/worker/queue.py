@@ -33,6 +33,8 @@ LEASE_KEY_PREFIX = "analysis:lease:"
 LEASE_EXPIRY_ZSET_KEY = "analysis:lease_expiry"
 LEASE_SEQUENCE_KEY = "analysis:lease_sequence"
 DLQ_KEY_PREFIX = "analysis:dlq:"
+DLQ_ACTIVE_SET_KEY = "analysis:dlq:active"
+DLQ_HISTORY_SUFFIX = ":history"
 
 _LEASE_JOB_SCRIPT = """
 local raw = redis.call('LPOP', KEYS[1])
@@ -196,19 +198,38 @@ local raw = redis.call('HGET', lease_key, 'raw')
 if raw then
     redis.call('LREM', KEYS[2], 1, raw)
 end
-redis.call('SET', KEYS[4], ARGV[4])
+redis.call('RPUSH', KEYS[4], ARGV[4])
+redis.call('SADD', KEYS[5], ARGV[5])
 redis.call('DEL', lease_key)
 redis.call('ZREM', KEYS[3], ARGV[1])
 return 1
 """
 
 _PROMOTE_RETRY_SCRIPT = """
-local due = redis.call('ZRANGEBYSCORE', KEYS[2], 0, ARGV[1], 'LIMIT', 0, ARGV[2])
+local due = redis.call('ZRANGEBYSCORE', KEYS[3], 0, ARGV[1], 'LIMIT', 0, ARGV[2])
 local moved = 0
+
+local function enqueue_with_limit(raw)
+    local queue_depth = redis.call('LLEN', KEYS[1])
+    local processing_depth = redis.call('LLEN', KEYS[2])
+    local max_depth = tonumber(ARGV[3])
+    if (queue_depth + processing_depth + 1) > max_depth then
+        return 0
+    end
+
+    redis.call('RPUSH', KEYS[1], raw)
+    return 1
+end
+
 for _, raw in ipairs(due) do
-    if redis.call('ZREM', KEYS[2], raw) == 1 then
-        redis.call('RPUSH', KEYS[1], raw)
+    if enqueue_with_limit(raw) ~= 1 then
+        break
+    end
+
+    if redis.call('ZREM', KEYS[3], raw) == 1 then
         moved = moved + 1
+    else
+        redis.call('LREM', KEYS[1], 1, raw)
     end
 end
 return moved
@@ -238,6 +259,10 @@ class AnalysisJobQueueCapacityExceededError(RuntimeError):
 
 def _build_dlq_key(job_id: str) -> str:
     return f"{DLQ_KEY_PREFIX}{job_id}"
+
+
+def _build_dlq_history_key(job_id: str) -> str:
+    return f"{_build_dlq_key(job_id)}{DLQ_HISTORY_SUFFIX}"
 
 
 class AnalysisJobQueuePayload(BaseModel):
@@ -587,15 +612,18 @@ async def promote_scheduled_analysis_jobs(
     *,
     now: datetime | None = None,
     limit: int = 100,
+    max_depth: int,
 ) -> int:
     """Promote due scheduled retries back into the durable queue."""
     result = await redis.eval(
         _PROMOTE_RETRY_SCRIPT,
-        2,
+        3,
         QUEUE_KEY,
+        PROCESSING_QUEUE_KEY,
         RETRY_QUEUE_KEY,
         str(_utc_now_ms(now)),
         str(max(1, int(limit))),
+        str(max(1, int(max_depth))),
     )
     return int(result or 0)
 
@@ -672,11 +700,12 @@ async def move_analysis_job_to_dlq(
     """Remove a leased job from processing and store its payload in the DLQ."""
     result = await redis.eval(
         _MOVE_TO_DLQ_SCRIPT,
-        4,
+        5,
         LEASE_KEY_PREFIX,
         PROCESSING_QUEUE_KEY,
         LEASE_EXPIRY_ZSET_KEY,
-        _build_dlq_key(lease.job_id),
+        _build_dlq_history_key(lease.job_id),
+        DLQ_ACTIVE_SET_KEY,
         lease.token,
         lease.worker_id,
         str(lease.leased_at_ms),
@@ -686,6 +715,7 @@ async def move_analysis_job_to_dlq(
             reason=reason,
             now=now,
         ),
+        lease.job_id,
     )
     if int(result) == -1:
         raise LostAnalysisJobLeaseError(
@@ -696,10 +726,17 @@ async def move_analysis_job_to_dlq(
 
 async def get_dlq_job(redis: Redis, job_id: str) -> dict | None:
     """Return the stored DLQ payload for a job, or None if absent."""
-    raw = await redis.get(_build_dlq_key(job_id))
-    if raw is None:
+    if await redis.sismember(DLQ_ACTIVE_SET_KEY, job_id):
+        raw = await redis.lindex(_build_dlq_history_key(job_id), -1)
+        if raw is None:
+            return None
+        return _parse_dlq_payload(_decode_text(raw))
+
+    # Backward-compatible fallback for legacy one-value DLQ entries.
+    legacy_raw = await redis.get(_build_dlq_key(job_id))
+    if legacy_raw is None:
         return None
-    return _parse_dlq_payload(_decode_text(raw))
+    return _parse_dlq_payload(_decode_text(legacy_raw))
 
 
 async def requeue_dlq_job(
@@ -709,8 +746,11 @@ async def requeue_dlq_job(
     max_depth: int | None = None,
 ) -> dict | None:
     """Requeue a DLQ job by id and remove it from DLQ on success."""
-    dlq_key = _build_dlq_key(job_id)
-    raw = await redis.get(dlq_key)
+    raw = None
+    if await redis.sismember(DLQ_ACTIVE_SET_KEY, job_id):
+        raw = await redis.lindex(_build_dlq_history_key(job_id), -1)
+    else:
+        raw = await redis.get(_build_dlq_key(job_id))
     if raw is None:
         return None
 
@@ -720,7 +760,10 @@ async def requeue_dlq_job(
         payload["raw_payload"],
         max_depth=max_depth,
     )
-    await redis.delete(dlq_key)
+    if await redis.sismember(DLQ_ACTIVE_SET_KEY, job_id):
+        await redis.srem(DLQ_ACTIVE_SET_KEY, job_id)
+    else:
+        await redis.delete(_build_dlq_key(job_id))
     return payload
 
 

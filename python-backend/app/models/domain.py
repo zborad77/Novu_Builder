@@ -1,6 +1,8 @@
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, func, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text, func, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.token_limits import JTI_MAX_LENGTH
@@ -47,6 +49,7 @@ class User(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_superadmin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     tokens_valid_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"), nullable=False)
 
     organization: Mapped["Organization"] = relationship(back_populates="users")
     created_projects: Mapped[list["Project"]] = relationship(back_populates="created_by_user")
@@ -165,11 +168,11 @@ class ProjectProposalDraft(TimestampMixin, Base):
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     subject: Mapped[str | None] = mapped_column(String(255))
     summary: Mapped[str | None] = mapped_column(Text)
-    material_cost: Mapped[float | None] = mapped_column(Numeric(14, 4))
-    labor_cost: Mapped[float | None] = mapped_column(Numeric(14, 4))
-    transport_cost: Mapped[float | None] = mapped_column(Numeric(14, 4))
-    amortization: Mapped[float | None] = mapped_column(Numeric(14, 4))
-    margin: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    material_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    labor_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    transport_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    amortization: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    margin: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     recommended_supplier: Mapped[str | None] = mapped_column(String(255))
     recommended_company: Mapped[str | None] = mapped_column(String(255))
 
@@ -186,7 +189,7 @@ class ProjectFinalProposal(TimestampMixin, Base):
     currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False)
     subject: Mapped[str | None] = mapped_column(String(255))
     summary: Mapped[str | None] = mapped_column(Text)
-    total_price: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    total_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="final_proposals")
@@ -261,6 +264,7 @@ class AnalysisJob(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
     error_traceback: Mapped[str | None] = mapped_column(Text)       # full traceback
     input_payload: Mapped[str | None] = mapped_column(Text)         # JSON: co šlo do AI
+    input_payload_storage_key: Mapped[str | None] = mapped_column(String(512))
     output_summary: Mapped[str | None] = mapped_column(Text)        # JSON: co přišlo zpět
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -334,13 +338,13 @@ class PricingProfile(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    hourly_rate: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
-    daily_rate: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
-    labor_hours_per_sqm: Mapped[float] = mapped_column(Numeric(14, 4), default=0.3, nullable=False)
-    margin_economy_pct: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
-    margin_standard_pct: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
-    margin_premium_pct: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
-    vat_pct: Mapped[float] = mapped_column(Numeric(14, 4), default=21, nullable=False)
+    hourly_rate: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    daily_rate: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    labor_hours_per_sqm: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=0.3, nullable=False)
+    margin_economy_pct: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    margin_standard_pct: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    margin_premium_pct: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    vat_pct: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=21, nullable=False)
     currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
@@ -391,8 +395,8 @@ class MaterialCatalog(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     category: Mapped[str | None] = mapped_column(String(64))
     unit: Mapped[str] = mapped_column(String(32), nullable=False)
-    norm_per_sqm: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
-    default_unit_price: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
+    norm_per_sqm: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    default_unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     default_supplier_id: Mapped[str | None] = mapped_column(ForeignKey("suppliers.id", ondelete="SET NULL"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
@@ -412,7 +416,7 @@ class SupplierMaterialPrice(TimestampMixin, Base):
     supplier_product_name: Mapped[str | None] = mapped_column(String(255))
     supplier_sku: Mapped[str | None] = mapped_column(String(128))
     unit: Mapped[str] = mapped_column(String(32), nullable=False)
-    unit_price: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False)
     availability_status: Mapped[str | None] = mapped_column(String(64))
     source_type: Mapped[str] = mapped_column(String(64), default="manual", nullable=False)
@@ -441,15 +445,15 @@ class QuoteVariant(TimestampMixin, Base):
     analysis_result_id: Mapped[str | None] = mapped_column(ForeignKey("analysis_results.id", ondelete="SET NULL"))
     pricing_profile_id: Mapped[str | None] = mapped_column(ForeignKey("pricing_profiles.id", ondelete="SET NULL"))
     variant_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    labor_cost: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
-    material_cost: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
-    other_cost: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
-    margin_pct: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
-    total_ex_vat: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
-    vat_amount: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
-    total_inc_vat: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
+    labor_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    material_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    other_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    margin_pct: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    total_ex_vat: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    vat_amount: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    total_inc_vat: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False)
-    vat_pct: Mapped[float] = mapped_column(Numeric(14, 4), default=21, nullable=False)
+    vat_pct: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=21, nullable=False)
     pricing_summary_json: Mapped[str | None] = mapped_column(Text)
 
     project: Mapped["Project"] = relationship(back_populates="quote_variants")
@@ -496,17 +500,17 @@ class QuoteItem(TimestampMixin, Base):
     item_type: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    quantity: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     unit: Mapped[str] = mapped_column(String(32), nullable=False)
-    unit_price: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
-    total_price: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    total_price: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     material_catalog_id: Mapped[str | None] = mapped_column(ForeignKey("material_catalog.id", ondelete="SET NULL"))
     supplier_id: Mapped[str | None] = mapped_column(ForeignKey("suppliers.id", ondelete="SET NULL"))
     price_source: Mapped[str] = mapped_column(String(64), default="company_catalog", nullable=False)
     is_manual_override: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    ai_suggested_unit_price: Mapped[float | None] = mapped_column(Numeric(14, 4))
-    supplier_reference_unit_price: Mapped[float | None] = mapped_column(Numeric(14, 4))
-    company_default_unit_price: Mapped[float | None] = mapped_column(Numeric(14, 4))
+    ai_suggested_unit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    supplier_reference_unit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    company_default_unit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     sort_order: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     quote_variant: Mapped["QuoteVariant"] = relationship(back_populates="items")
@@ -517,10 +521,40 @@ class QuoteItem(TimestampMixin, Base):
 class RevokedToken(Base):
     """Blocklist for revoked JWT tokens. Checked on every authenticated request."""
     __tablename__ = "revoked_tokens"
+    __table_args__ = (
+        Index("ix_revoked_tokens_expires_at", "expires_at"),
+    )
 
     jti: Mapped[str] = mapped_column(String(JTI_MAX_LENGTH), primary_key=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class UserSession(Base):
+    """Persisted login session metadata for per-session revocation and auditability."""
+    __tablename__ = "user_sessions"
+    __table_args__ = (
+        Index("ix_user_sessions_user_created_at", "user_id", "created_at"),
+        Index("ix_user_sessions_refresh_expires_at", "refresh_expires_at"),
+        Index("ix_user_sessions_revoked_at", "revoked_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    access_jti: Mapped[str] = mapped_column(String(JTI_MAX_LENGTH), unique=True, nullable=False)
+    refresh_jti: Mapped[str] = mapped_column(String(JTI_MAX_LENGTH), unique=True, nullable=False)
+    access_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    refresh_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    user: Mapped["User"] = relationship()
 
 
 class RolePermission(Base):
@@ -575,7 +609,7 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     resource_type: Mapped[str | None] = mapped_column(String(64), index=True)
     resource_id: Mapped[str | None] = mapped_column(String(64))
-    detail: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
     impersonated_by: Mapped[str | None] = mapped_column(String(64))
     ip: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)

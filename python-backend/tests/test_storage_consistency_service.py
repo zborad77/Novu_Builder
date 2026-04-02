@@ -5,13 +5,14 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import delete
 
-from app.models import Project, ProjectExport, ProjectPhoto
+from app.models import AnalysisJob, Project, ProjectExport, ProjectPhoto
 from app.repositories.storage_consistency_repository import StorageConsistencyRepository
 from app.services import storage_consistency_service as storage_consistency_mod
 from app.services.storage_consistency_service import StorageConsistencyService
 
 
 async def _seed_storage_consistency_rows(db_session, test_tenants):
+    await db_session.execute(delete(AnalysisJob))
     await db_session.execute(delete(ProjectExport))
     await db_session.execute(delete(ProjectPhoto))
     await db_session.execute(delete(Project))
@@ -65,6 +66,20 @@ async def _seed_storage_consistency_rows(db_session, test_tenants):
             expires_at=base + timedelta(days=7),
         )
     )
+    db_session.add(
+        AnalysisJob(
+            id=f"job_consistency_{token}",
+            project_id=project_id,
+            status="completed",
+            job_type="manual_trigger",
+            requested_by_user_id="usr_e2e_a1",
+            retry_count=0,
+            attempt_count=1,
+            input_payload='{"provider":"mock"}',
+            input_payload_storage_key=f"analysis-jobs/{project_id}/input-payload.json",
+            created_at=base + timedelta(seconds=3),
+        )
+    )
     await db_session.commit()
     return {
         "project_id": project_id,
@@ -75,6 +90,7 @@ async def _seed_storage_consistency_rows(db_session, test_tenants):
         "orphan_key": f"projects/{project_id}/orphan.jpg",
         "export_id": export_id,
         "export_file_key": f"exports/{project_id}/{export_id}-report.pdf",
+        "analysis_payload_key": f"analysis-jobs/{project_id}/input-payload.json",
     }
 
 
@@ -93,15 +109,24 @@ async def test_scan_db_vs_s3_finds_missing_db_objects_and_orphan_storage(monkeyp
             ]
         if prefix == "exports":
             return [{"key": seeded["export_file_key"], "last_modified_at": datetime.now(UTC)}]
+        if prefix == "analysis-jobs":
+            return []
         raise AssertionError(f"Unexpected prefix {prefix!r}")
 
     monkeypatch.setattr(storage_consistency_mod, "list_storage_objects", fake_list_storage_objects)
 
     result = await service.scan_db_vs_s3()
 
-    assert [issue.key for issue in result.missing_storage_objects] == [seeded["ai_key"]]
-    assert result.missing_storage_objects[0].org_id == test_tenants["org_a"]
-    assert result.missing_storage_objects[0].source == "db.project_photo.ai_input"
+    missing_by_source = {
+        issue.source: issue
+        for issue in result.missing_storage_objects
+    }
+    assert missing_by_source["db.project_photo.ai_input"].key == seeded["ai_key"]
+    assert missing_by_source["db.project_photo.ai_input"].org_id == test_tenants["org_a"]
+    assert (
+        missing_by_source["db.analysis_job.input_payload"].key
+        == seeded["analysis_payload_key"]
+    )
 
     assert [issue.key for issue in result.orphan_storage_objects] == [seeded["orphan_key"]]
     assert result.orphan_storage_objects[0].org_id == test_tenants["org_a"]
@@ -126,6 +151,8 @@ async def test_orphan_detection(monkeypatch, db_session, test_tenants):
             ]
         if prefix == "exports":
             return [{"key": seeded["export_file_key"], "last_modified_at": datetime.now(UTC)}]
+        if prefix == "analysis-jobs":
+            return []
         raise AssertionError(f"Unexpected prefix {prefix!r}")
 
     monkeypatch.setattr(storage_consistency_mod, "list_storage_objects", fake_list_storage_objects)
@@ -154,14 +181,23 @@ async def test_scan_db_vs_s3_flags_missing_export_artifact_from_db(monkeypatch, 
             ]
         if prefix == "exports":
             return []
+        if prefix == "analysis-jobs":
+            return []
         raise AssertionError(f"Unexpected prefix {prefix!r}")
 
     monkeypatch.setattr(storage_consistency_mod, "list_storage_objects", fake_list_storage_objects)
 
     result = await service.scan_db_vs_s3()
 
-    assert [issue.key for issue in result.missing_storage_objects] == [seeded["export_file_key"]]
-    assert result.missing_storage_objects[0].source == "db.project_export.storage"
+    missing_by_source = {
+        issue.source: issue
+        for issue in result.missing_storage_objects
+    }
+    assert missing_by_source["db.project_export.storage"].key == seeded["export_file_key"]
+    assert (
+        missing_by_source["db.analysis_job.input_payload"].key
+        == seeded["analysis_payload_key"]
+    )
 
 
 @pytest.mark.asyncio
@@ -365,3 +401,32 @@ async def test_cleanup_orphans_retains_young_objects_until_minimum_age(monkeypat
         )
     ]
     mock_delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scan_db_vs_s3_tracks_analysis_job_payload_storage(monkeypatch, db_session, test_tenants):
+    seeded = await _seed_storage_consistency_rows(db_session, test_tenants)
+    service = StorageConsistencyService(StorageConsistencyRepository(db_session))
+
+    async def fake_list_storage_objects(*, prefix: str | None = None) -> list[dict[str, object]]:
+        if prefix == "projects":
+            return [
+                {"key": seeded["original_key"], "last_modified_at": datetime.now(UTC)},
+                {"key": seeded["preview_key"], "last_modified_at": datetime.now(UTC)},
+                {"key": seeded["ai_key"], "last_modified_at": datetime.now(UTC)},
+            ]
+        if prefix == "exports":
+            return [{"key": seeded["export_file_key"], "last_modified_at": datetime.now(UTC)}]
+        if prefix == "analysis-jobs":
+            return []
+        raise AssertionError(f"Unexpected prefix {prefix!r}")
+
+    monkeypatch.setattr(storage_consistency_mod, "list_storage_objects", fake_list_storage_objects)
+
+    result = await service.scan_db_vs_s3()
+
+    missing_by_source = {
+        issue.source: issue.key
+        for issue in result.missing_storage_objects
+    }
+    assert missing_by_source["db.analysis_job.input_payload"] == seeded["analysis_payload_key"]

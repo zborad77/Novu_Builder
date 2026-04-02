@@ -19,18 +19,22 @@ def _settings(**overrides):
     return SimpleNamespace(**base)
 
 
-def test_verify_storage_backend_uses_local_probe_for_local_backend():
+@pytest.mark.asyncio
+async def test_verify_storage_backend_delegates_to_storage_health_probe_for_local_backend():
     settings = _settings(storage_backend="local")
-    with patch("app.main.verify_storage_root") as verify_local:
-        verify_storage_backend(settings)
-    verify_local.assert_called_once_with()
+    verify_storage_health = AsyncMock()
+    with patch("app.main.verify_storage_health", verify_storage_health):
+        await verify_storage_backend(settings)
+    verify_storage_health.assert_awaited_once_with()
 
 
-def test_verify_storage_backend_skips_local_probe_for_s3_backend():
+@pytest.mark.asyncio
+async def test_verify_storage_backend_delegates_to_storage_health_probe_for_s3_backend():
     settings = _settings(storage_backend="s3")
-    with patch("app.main.verify_storage_root") as verify_local:
-        verify_storage_backend(settings)
-    verify_local.assert_not_called()
+    verify_storage_health = AsyncMock()
+    with patch("app.main.verify_storage_health", verify_storage_health):
+        await verify_storage_backend(settings)
+    verify_storage_health.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

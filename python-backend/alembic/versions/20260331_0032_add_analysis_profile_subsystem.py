@@ -25,7 +25,14 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("scope_description", sa.Text(), nullable=True))
         batch_op.add_column(sa.Column("fallback_mode", sa.String(length=32), nullable=False, server_default="manual_review"))
         batch_op.add_column(sa.Column("fallback_instructions", sa.Text(), nullable=True))
-        batch_op.add_column(sa.Column("fallback_requires_manual_review", sa.Boolean(), nullable=False, server_default=sa.text("1")))
+        batch_op.add_column(
+            sa.Column(
+                "fallback_requires_manual_review",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("true"),
+            )
+        )
         batch_op.create_unique_constraint(
             "uq_catalog_analysis_profiles_code_version",
             ["code", "profile_version"],
@@ -55,7 +62,7 @@ def upgrade() -> None:
         sa.Column("label", sa.String(length=255), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("object_role", sa.String(length=32), nullable=False),
-        sa.Column("is_required", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("is_required", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default="100"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
@@ -106,8 +113,8 @@ def upgrade() -> None:
         sa.Column("unit", sa.String(length=32), nullable=True),
         sa.Column("target_parameter_code", sa.String(length=64), nullable=False),
         sa.Column("source_object_code", sa.String(length=64), nullable=False),
-        sa.Column("is_required", sa.Boolean(), nullable=False, server_default=sa.text("0")),
-        sa.Column("manual_review_on_missing", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("is_required", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.Column("manual_review_on_missing", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default="100"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
@@ -196,7 +203,7 @@ def upgrade() -> None:
         sa.Column("target_field", sa.String(length=64), nullable=False),
         sa.Column("source_attribute_code", sa.String(length=64), nullable=False),
         sa.Column("target_parameter_code", sa.String(length=64), nullable=True),
-        sa.Column("is_required", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("is_required", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default="100"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),

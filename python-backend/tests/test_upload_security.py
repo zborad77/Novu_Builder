@@ -394,9 +394,10 @@ class TestRouteMapping:
         mock_photo_service.create_multipart_photo = AsyncMock(
             side_effect=UploadValidationError("Invalid filename: path traversal sequences are not allowed.")
         )
+        route_handler = getattr(upload_case_images, "__wrapped__", upload_case_images)
 
         with pytest.raises(HTTPException) as exc_info:
-            await upload_case_images(
+            await route_handler(
                 request=mock_request,
                 case_id="prj_test",
                 current_user=mock_user,
@@ -437,9 +438,10 @@ class TestRouteMapping:
                 status_code=415,
             )
         )
+        route_handler = getattr(upload_case_images, "__wrapped__", upload_case_images)
 
         with pytest.raises(HTTPException) as exc_info:
-            await upload_case_images(
+            await route_handler(
                 request=mock_request,
                 case_id="prj_test",
                 current_user=mock_user,

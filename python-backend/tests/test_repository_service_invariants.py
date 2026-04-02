@@ -213,6 +213,32 @@ async def test_photo_repository_project_scoping_and_next_sort_order_stay_consist
     assert await repo.get_next_sort_order(seeded["projects"]["b"]) == 2
 
 
+async def test_photo_repository_get_photo_by_id_in_org_enforces_tenant_filter(
+    db_session,
+    test_tenants,
+):
+    seeded = await _seed_project_photo_rows(db_session, test_tenants)
+    repo = PhotoRepository(db_session)
+
+    same_org = await repo.get_photo_by_id_in_org(
+        seeded["photos"]["a2"],
+        organization_id=test_tenants["org_a"],
+    )
+    wrong_org = await repo.get_photo_by_id_in_org(
+        seeded["photos"]["a2"],
+        organization_id=test_tenants["org_b"],
+    )
+    superadmin = await repo.get_photo_by_id_in_org(
+        seeded["photos"]["a2"],
+        organization_id=None,
+    )
+
+    assert same_org is not None
+    assert same_org.project_id == seeded["projects"]["a"]
+    assert wrong_org is None
+    assert superadmin is not None
+
+
 async def test_photo_service_move_photo_reindexes_without_gaps_or_duplicates(
     db_session,
     test_tenants,

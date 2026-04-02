@@ -1,9 +1,9 @@
 # =============================================================================
-# Refresh token revocation — tokens_valid_after guard
+# Refresh token revocation — global token invalidation guard
 #
-# Verifies that AuthService.refresh() rejects a refresh token that was issued
-# BEFORE the user's tokens_valid_after timestamp (set on password change /
-# admin reset), and that tokens issued AFTER that timestamp are still accepted.
+# Verifies that AuthService.refresh() rejects refresh tokens invalidated by the
+# global token-version guard, while preserving a legacy tokens_valid_after
+# fallback for pre-version tokens during rollout.
 #
 # Tests are structured in two layers:
 #   1. Unit tests (mocked) — fast, no DB, cover the guard logic directly
@@ -29,16 +29,15 @@ _JWT_ALGO = "HS256"
 _REFRESH_TTL_DAYS = 30
 
 
-def _encode_refresh_token(user_id: str, issued_offset_seconds: int = 0) -> str:
+def _encode_refresh_token(user_id: str, issued_offset_seconds: int = 0, *, version: int | None = 0) -> str:
     """Encode a minimal refresh token whose iat is NOW + offset."""
     now = datetime.now(UTC)
     iat = now + timedelta(seconds=issued_offset_seconds)
     exp = iat + timedelta(days=_REFRESH_TTL_DAYS)
-    return jwt.encode(
-        {"sub": user_id, "jti": "test-jti-1", "type": "refresh", "exp": exp},
-        _JWT_SECRET,
-        algorithm=_JWT_ALGO,
-    )
+    payload = {"sub": user_id, "jti": "test-jti-1", "type": "refresh", "exp": exp}
+    if version is not None:
+        payload["ver"] = version
+    return jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALGO)
 
 
 def _make_settings(refresh_days: int = _REFRESH_TTL_DAYS) -> MagicMock:
@@ -50,11 +49,12 @@ def _make_settings(refresh_days: int = _REFRESH_TTL_DAYS) -> MagicMock:
     return s
 
 
-def _make_user(*, tokens_valid_after=None) -> MagicMock:
+def _make_user(*, tokens_valid_after=None, token_version: int = 0) -> MagicMock:
     u = MagicMock(spec=User)
     u.id = "usr_test_1"
     u.is_active = True
     u.tokens_valid_after = tokens_valid_after
+    u.token_version = token_version
     u.email = "test@test.local"
     u.full_name = "Test User"
     u.role = "manager"
@@ -66,10 +66,15 @@ def _make_user(*, tokens_valid_after=None) -> MagicMock:
 def _make_auth_service(user: MagicMock) -> AuthService:
     mock_session = MagicMock()
     mock_session.get = AsyncMock(return_value=user)
+    mock_session.commit = AsyncMock()
 
     mock_tokens = MagicMock()
     mock_tokens.is_revoked = AsyncMock(return_value=False)
     mock_tokens.revoke = AsyncMock()
+    mock_tokens.revoke_with_commit = AsyncMock()
+    mock_tokens.cache_revoked_token = AsyncMock()
+    mock_tokens.create_user_session = AsyncMock()
+    mock_tokens.rotate_user_session = AsyncMock()
 
     service = AuthService.__new__(AuthService)
     service.session = mock_session
@@ -95,12 +100,11 @@ class TestRefreshTokensValidAfterGuard:
 
     @pytest.mark.asyncio
     async def test_refresh_accepted_when_token_issued_after_tva(self):
-        """Token issued 10 s after tokens_valid_after → accepted."""
+        """Legacy token without version still uses tokens_valid_after fallback."""
         tva = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=60)
         user = _make_user(tokens_valid_after=tva)
         service = _make_auth_service(user)
-        # Token issued 10 s after tva (offset from now, relative to tva)
-        token = _encode_refresh_token(user.id, issued_offset_seconds=0)
+        token = _encode_refresh_token(user.id, issued_offset_seconds=0, version=None)
 
         result = await service.refresh(token)
 
@@ -108,15 +112,11 @@ class TestRefreshTokensValidAfterGuard:
 
     @pytest.mark.asyncio
     async def test_refresh_rejected_when_token_issued_before_tva(self):
-        """Token was issued, then password was reset (tva moved to future) → rejected."""
-        # Simulate: token was issued "30 days ago" — its iat is now - 30d
-        # Then tva is set to "now - 1s" (after the token was issued)
-        # issued_at = exp - 30d = (now + 30d) - 30d = now  → we need iat < tva
-        # So set tva = now + 5s (in the future relative to the token)
+        """Legacy token without version is still rejected by tva during rollout."""
         tva = datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=5)
         user = _make_user(tokens_valid_after=tva)
         service = _make_auth_service(user)
-        token = _encode_refresh_token(user.id)  # issued_at ≈ now < tva
+        token = _encode_refresh_token(user.id, version=None)
 
         result = await service.refresh(token)
 
@@ -124,12 +124,11 @@ class TestRefreshTokensValidAfterGuard:
 
     @pytest.mark.asyncio
     async def test_refresh_rejected_with_naive_tva(self):
-        """tokens_valid_after without tzinfo (SQLite returns naive datetimes) → still rejected."""
-        # naive tva = now + 5s (no tzinfo, as SQLite stores it)
+        """Legacy fallback handles naive tva values returned by SQLite."""
         tva_naive = (datetime.now(UTC) + timedelta(seconds=5)).replace(tzinfo=None, microsecond=0)
         user = _make_user(tokens_valid_after=tva_naive)
         service = _make_auth_service(user)
-        token = _encode_refresh_token(user.id)
+        token = _encode_refresh_token(user.id, version=None)
 
         result = await service.refresh(token)
 
@@ -141,7 +140,7 @@ class TestRefreshTokensValidAfterGuard:
         tva = datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=5)
         user = _make_user(tokens_valid_after=tva)
         service = _make_auth_service(user)
-        token = _encode_refresh_token(user.id)
+        token = _encode_refresh_token(user.id, version=None)
 
         result = await service.refresh(token)
 
@@ -159,6 +158,17 @@ class TestRefreshTokensValidAfterGuard:
         result = await service.refresh(token)
 
         assert result is None, "Revoked token must be rejected regardless of tva"
+
+    @pytest.mark.asyncio
+    async def test_refresh_rejected_when_token_version_mismatch(self):
+        """Version mismatch deterministically invalidates tokens without relying on time precision."""
+        user = _make_user(tokens_valid_after=datetime.now(UTC).replace(microsecond=0), token_version=1)
+        service = _make_auth_service(user)
+        token = _encode_refresh_token(user.id, version=0)
+
+        result = await service.refresh(token)
+
+        assert result is None, "Refresh must be rejected when token version lags behind the user version"
 
 
 # ── 2. E2E integration test ───────────────────────────────────────────────────
@@ -208,7 +218,7 @@ class TestRefreshRevocationE2E:
         """Full flow:
         1. Login → get refresh token
         2. Verify refresh works (sanity check)
-        3. Change password → bumps tokens_valid_after
+        3. Change password → bumps global token invalidation state
         4. Attempt refresh with the OLD token → must fail with 401
         """
         # Step 1: Login

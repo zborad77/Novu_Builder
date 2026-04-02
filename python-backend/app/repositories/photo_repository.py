@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ProjectPhoto
+from app.models import Project, ProjectPhoto
 
 
 class PhotoRepository:
@@ -56,6 +56,25 @@ class PhotoRepository:
                 ProjectPhoto.status == "active",
             )
         )
+        return result.scalar_one_or_none()
+
+    async def get_photo_by_id_in_org(
+        self,
+        photo_id: str,
+        *,
+        organization_id: str | None,
+    ) -> ProjectPhoto | None:
+        query = (
+            select(ProjectPhoto)
+            .join(Project, Project.id == ProjectPhoto.project_id)
+            .where(
+                ProjectPhoto.id == photo_id,
+                ProjectPhoto.status == "active",
+            )
+        )
+        if organization_id is not None:
+            query = query.where(Project.organization_id == organization_id)
+        result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
     async def list_pending_delete(self, *, limit: int = 100) -> Sequence[ProjectPhoto]:

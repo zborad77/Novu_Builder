@@ -256,6 +256,20 @@ class PhotoService:
             return None
         return to_read_model(photo)
 
+    async def get_photo_by_id_in_org(
+        self,
+        photo_id: str,
+        *,
+        organization_id: str | None,
+    ) -> ProjectPhotoRead | None:
+        photo = await self.repository.get_photo_by_id_in_org(
+            photo_id,
+            organization_id=organization_id,
+        )
+        if not photo:
+            return None
+        return to_read_model(photo)
+
     async def create_multipart_photo(self, project: Project, file: UploadFile, *, is_primary: bool) -> ProjectPhotoRead:
         max_upload_size_mb = get_settings().max_upload_size_mb
         validated_upload = await validate_photo_upload(

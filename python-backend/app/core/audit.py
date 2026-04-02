@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass
-import json
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -328,10 +327,6 @@ def _build_audit_log(
     ip: str | None = None,
     user_id: str | None = None,
 ) -> AuditLog:
-    serialized_detail = None
-    if detail is not None:
-        serialized_detail = json.dumps(detail, ensure_ascii=False)
-
     return AuditLog(
         id=uuid4().hex,
         user_id=user_id if user_id is not None else actor.user_id,
@@ -340,7 +335,7 @@ def _build_audit_log(
         action=action,
         resource_type=resource_type,
         resource_id=resource_id,
-        detail=serialized_detail,
+        detail=detail,
         impersonated_by=actor.impersonated_by,
         ip=ip,
         created_at=datetime.now(UTC),

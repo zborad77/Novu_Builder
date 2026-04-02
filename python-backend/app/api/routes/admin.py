@@ -1,4 +1,5 @@
 import collections
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -26,10 +27,11 @@ from app.schemas.company import (
 )
 from app.core.limiter import limiter
 from app.core.security import enforce_password_strength
-from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit, write_audit_log
+from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit
+from app.repositories.token_repository import SessionTokenRevocation, TokenRepository
 from app.services.analysis_service import AnalysisService, to_job_read
 from app.services.company_service import CompanyService
-from app.services.auth_service import hash_password
+from app.services.auth_service import AuthService, hash_password
 
 import structlog
 
@@ -46,11 +48,19 @@ def get_company_service(session: AsyncSession = Depends(get_db_session)) -> Comp
 
 @router.get("/companies", response_model=CompanyListResponse)
 async def list_companies(
+    limit: int = Query(default=100, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     service: CompanyService = Depends(get_company_service),
     _: AuthUserRead = Depends(require_superadmin),
 ) -> CompanyListResponse:
-    items = await service.list_companies()
-    return CompanyListResponse(items=items, total=len(items))
+    items, total = await service.list_companies(limit=limit, offset=offset)
+    return CompanyListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        hasMore=(offset + len(items)) < total,
+    )
 
 
 @router.post("/companies", response_model=CompanyRead, status_code=status.HTTP_201_CREATED)
@@ -64,8 +74,7 @@ async def create_company(
     if not payload.name.strip():
         raise HTTPException(status_code=400, detail="Company name is required.")
     company = await service.create_company(payload)
-    await write_audit_log(
-        service.session,
+    await service.write_audit_log(
         current_user_id=current_user.id,
         action="admin.company.create",
         resource_type="company",
@@ -99,8 +108,7 @@ async def patch_company(
     updated = await service.patch_company(company_id, payload)
     if not updated:
         raise HTTPException(status_code=404, detail="Company not found.")
-    await write_audit_log(
-        service.session,
+    await service.write_audit_log(
         current_user_id=current_user.id,
         action="admin.company.patch",
         resource_type="company",
@@ -115,11 +123,23 @@ async def patch_company(
 @router.get("/users", response_model=AdminUserListResponse)
 async def list_users(
     org_id: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     service: CompanyService = Depends(get_company_service),
     _: AuthUserRead = Depends(require_superadmin),
 ) -> AdminUserListResponse:
-    items = await service.list_users(organization_id=org_id)
-    return AdminUserListResponse(items=items, total=len(items))
+    items, total = await service.list_users(
+        organization_id=org_id,
+        limit=limit,
+        offset=offset,
+    )
+    return AdminUserListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        hasMore=(offset + len(items)) < total,
+    )
 
 
 @router.post("/users", response_model=AdminUserRead, status_code=status.HTTP_201_CREATED)
@@ -141,8 +161,7 @@ async def create_user(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not user:
         raise HTTPException(status_code=404, detail="Organization not found.")
-    await write_audit_log(
-        service.session,
+    await service.write_audit_log(
         current_user_id=current_user.id,
         action="admin.user.create",
         resource_type="user",
@@ -176,8 +195,7 @@ async def patch_user(
     updated = await service.patch_user(user_id, payload)
     if not updated:
         raise HTTPException(status_code=404, detail="User not found.")
-    await write_audit_log(
-        service.session,
+    await service.write_audit_log(
         current_user_id=current_user.id,
         action="admin.user.patch",
         resource_type="user",
@@ -210,9 +228,14 @@ async def reset_user_password(
         raise HTTPException(status_code=404, detail="User not found.")
 
     target.password_hash = hash_password(payload.password)
-    # Invalidate all existing tokens for the target user (R-SEC-08).
-    # Without this, stolen tokens remain valid until natural expiry (up to 60 min).
-    target.tokens_valid_after = datetime.now(UTC).replace(microsecond=0)
+    reset_timestamp = datetime.now(UTC).replace(microsecond=0)
+    token_repository = TokenRepository(session, redis=get_job_queue(request))
+    AuthService.invalidate_user_token_state(target, now=reset_timestamp)
+    revocations: list[SessionTokenRevocation] = await token_repository.revoke_all_user_sessions(
+        target.id,
+        now=reset_timestamp,
+        commit=False,
+    )
 
     logger.warning(
         "admin.user.reset_password",
@@ -239,6 +262,9 @@ async def reset_user_password(
             error=str(exc),
         )
         raise HTTPException(status_code=503, detail="Security audit subsystem unavailable. Retry later.") from exc
+
+    for record in revocations:
+        await token_repository.cache_revoked_token(record.jti, record.expires_at)
 
 
 # ── Analysis Jobs (all orgs) ───────────────────────────────────────────────────
@@ -536,7 +562,11 @@ async def get_audit_log(
             "action": row.action,
             "resourceType": row.resource_type,
             "resourceId": row.resource_id,
-            "detail": row.detail,
+            "detail": (
+                json.dumps(row.detail, ensure_ascii=False)
+                if isinstance(row.detail, dict)
+                else row.detail
+            ),
             "impersonatedBy": row.impersonated_by,
             "ip": row.ip,
             "createdAt": row.created_at.isoformat(),
@@ -586,6 +616,7 @@ async def impersonate_user(
             "jti": jti,
             "type": "access",
             "exp": exp,
+            "ver": AuthService._user_token_version(target),
             "impersonated_by": current_user.id,
         },
         settings.jwt_secret,

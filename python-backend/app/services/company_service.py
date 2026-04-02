@@ -3,6 +3,7 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.audit import write_audit_log
 from app.models import Organization, User
 from app.schemas.company import (
     AdminUserCreate,
@@ -46,20 +47,54 @@ class CompanyService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    async def write_audit_log(
+        self,
+        *,
+        current_user_id: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        detail: dict,
+    ) -> None:
+        await write_audit_log(
+            self.session,
+            current_user_id=current_user_id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            detail=detail,
+        )
+
     # ── Organizations ────────────────────────────────────────────────────────
 
-    async def list_companies(self) -> list[CompanyRead]:
-        result = await self.session.execute(select(Organization).order_by(Organization.name))
-        orgs = result.scalars().all()
+    async def list_companies(
+        self,
+        *,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[CompanyRead], int]:
+        total_result = await self.session.execute(select(func.count(Organization.id)))
+        total = int(total_result.scalar_one() or 0)
 
-        # Fetch user counts in one query
+        result = await self.session.execute(
+            select(Organization)
+            .order_by(Organization.name, Organization.id)
+            .offset(offset)
+            .limit(limit)
+        )
+        orgs = result.scalars().all()
+        if not orgs:
+            return [], total
+
+        org_ids = [org.id for org in orgs]
         count_result = await self.session.execute(
             select(User.organization_id, func.count(User.id))
+            .where(User.organization_id.in_(org_ids))
             .group_by(User.organization_id)
         )
         counts = dict(count_result.all())
 
-        return [_org_to_read(org, counts.get(org.id, 0)) for org in orgs]
+        return [_org_to_read(org, counts.get(org.id, 0)) for org in orgs], total
 
     async def get_company(self, company_id: str) -> CompanyRead | None:
         org = await self.session.get(Organization, company_id)
@@ -107,13 +142,25 @@ class CompanyService:
 
     # ── Users ─────────────────────────────────────────────────────────────────
 
-    async def list_users(self, *, organization_id: str | None = None) -> list[AdminUserRead]:
+    async def list_users(
+        self,
+        *,
+        organization_id: str | None = None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[AdminUserRead], int]:
+        count_query = select(func.count(User.id)).select_from(User)
+        if organization_id:
+            count_query = count_query.where(User.organization_id == organization_id)
+        total_result = await self.session.execute(count_query)
+        total = int(total_result.scalar_one() or 0)
+
         query = select(User, Organization.name).join(Organization, User.organization_id == Organization.id)
         if organization_id:
             query = query.where(User.organization_id == organization_id)
-        query = query.order_by(Organization.name, User.full_name)
+        query = query.order_by(Organization.name, User.full_name, User.id).offset(offset).limit(limit)
         result = await self.session.execute(query)
-        return [_user_to_admin_read(user, org_name) for user, org_name in result.all()]
+        return [_user_to_admin_read(user, org_name) for user, org_name in result.all()], total
 
     async def get_user(self, user_id: str) -> AdminUserRead | None:
         result = await self.session.execute(

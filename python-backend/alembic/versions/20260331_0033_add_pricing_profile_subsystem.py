@@ -60,7 +60,7 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("source_type", sa.String(length=32), nullable=False),
         sa.Column("source_key", sa.String(length=64), nullable=False),
-        sa.Column("is_required", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("is_required", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default="100"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
@@ -230,7 +230,7 @@ def upgrade() -> None:
             "CASE WHEN condition_number_value IS NOT NULL THEN 1 ELSE 0 END + "
             "CASE WHEN condition_boolean_value IS NOT NULL THEN 1 ELSE 0 END + "
             "CASE WHEN condition_option_code IS NOT NULL THEN 1 ELSE 0 END) <= 1",
-            name="ck_catalog_pricing_profile_adjustment_rules_single_condition_value",
+            name="ck_pricing_adj_rules_single_condition_value",
         ),
     )
     op.create_index(

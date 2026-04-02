@@ -166,9 +166,36 @@ powershell -ExecutionPolicy Bypass -File scripts\start-dev.ps1 -DryRun
 Production `docker compose` startup expects a filled root
 [.env.production.example](.env.production.example) copy with at least:
 
+- Root `.env.production` is the authoritative runtime profile for compose deployments.
+- Do not rely on backend defaults for pilot/production knobs; critical values must stay explicit even when intentionally conservative.
+
 - `APP_BASE_URL`
 - `CORS_ALLOWED_ORIGINS`
+- `AI_ANALYSIS_PROVIDER`
+- `WORKER_CONCURRENCY`
+- `WORKER_HEAVY_CONCURRENCY`
+- `WORKER_JOB_LEASE_TIMEOUT_SECONDS`
+- `WORKER_JOB_REAP_INTERVAL_SECONDS`
+- `ANALYSIS_QUEUE_MAX_DEPTH`
+- `ANALYSIS_JOB_MAX_ATTEMPTS`
+- `ANALYSIS_RETRY_BACKOFF_BASE_SECONDS`
+- `ANALYSIS_RETRY_BACKOFF_MAX_SECONDS`
+- `ANALYSIS_JOBS_PER_TENANT_LIMIT`
+- `WORKER_DB_POOL_SIZE`
+- `WORKER_INSTANCE_COUNT`
+- `REDIS_FAILOVER_URLS`
+- `REDIS_SOCKET_CONNECT_TIMEOUT`
+- `REDIS_SOCKET_TIMEOUT`
+- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`
+- `JWT_REFRESH_TOKEN_EXPIRE_DAYS`
+- `REQUIRE_HTTPS`
+- `HSTS_MAX_AGE`
+- `RATE_LIMIT_LOGIN`
+- `RATE_LIMIT_UPLOAD`
+- `RATE_LIMIT_ANALYSIS_JOBS`
 - `METRICS_AUTH_TOKEN`
+- `WORKER_METRICS_ENABLED=true`
+- `SENTRY_DSN` or explicit empty disable
 - `STORAGE_BACKEND=s3`
 - `STORAGE_AUTHORITATIVE=true`
 - `S3_CONNECT_TIMEOUT_SECONDS>0`

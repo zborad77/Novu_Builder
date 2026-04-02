@@ -3,6 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.work_catalog.seed_ids import (
+    build_catalog_pricing_profile_component_id,
+    build_catalog_pricing_profile_id,
+)
+
 
 def _required_input(
     *,
@@ -2062,8 +2067,7 @@ def build_pricing_profile_catalog(
 
     for work_type_code, blueprint in _PROFILE_BLUEPRINTS.items():
         work_type = work_type_by_code[work_type_code]
-        work_type_snake = work_type_code.replace("-", "_")
-        profile_id = f"cpp_{work_type_snake}_pricing_v1"
+        profile_id = build_catalog_pricing_profile_id(work_type_code)
 
         profiles.append(
             {
@@ -2088,7 +2092,7 @@ def build_pricing_profile_catalog(
         for index, row in enumerate(blueprint["required_inputs"], start=1):
             required_inputs.append(
                 {
-                    "id": f"cppri_{work_type_snake}_{row['code'].replace('-', '_')}",
+                    "id": build_catalog_pricing_profile_component_id("cppri", work_type_code, row["code"]),
                     "catalog_pricing_profile_id": profile_id,
                     "code": row["code"],
                     "label": row["label"],
@@ -2103,7 +2107,7 @@ def build_pricing_profile_catalog(
         for index, row in enumerate(blueprint["labor_assumptions"], start=1):
             labor_assumptions.append(
                 {
-                    "id": f"cppla_{work_type_snake}_{row['code'].replace('-', '_')}",
+                    "id": build_catalog_pricing_profile_component_id("cppla", work_type_code, row["code"]),
                     "catalog_pricing_profile_id": profile_id,
                     "code": row["code"],
                     "label": row["label"],
@@ -2119,7 +2123,7 @@ def build_pricing_profile_catalog(
         for index, row in enumerate(blueprint["material_assumptions"], start=1):
             material_assumptions.append(
                 {
-                    "id": f"cppma_{work_type_snake}_{row['code'].replace('-', '_')}",
+                    "id": build_catalog_pricing_profile_component_id("cppma", work_type_code, row["code"]),
                     "catalog_pricing_profile_id": profile_id,
                     "code": row["code"],
                     "label": row["label"],
@@ -2137,7 +2141,7 @@ def build_pricing_profile_catalog(
         for index, row in enumerate(blueprint["base_rules"], start=1):
             base_rules.append(
                 {
-                    "id": f"cppbr_{work_type_snake}_{row['code'].replace('-', '_')}",
+                    "id": build_catalog_pricing_profile_component_id("cppbr", work_type_code, row["code"]),
                     "catalog_pricing_profile_id": profile_id,
                     "code": row["code"],
                     "label": row["label"],
@@ -2159,7 +2163,7 @@ def build_pricing_profile_catalog(
         for index, row in enumerate(blueprint["adjustment_rules"], start=1):
             adjustment_rules.append(
                 {
-                    "id": f"cppar_{work_type_snake}_{row['code'].replace('-', '_')}",
+                    "id": build_catalog_pricing_profile_component_id("cppar", work_type_code, row["code"]),
                     "catalog_pricing_profile_id": profile_id,
                     "code": row["code"],
                     "label": row["label"],

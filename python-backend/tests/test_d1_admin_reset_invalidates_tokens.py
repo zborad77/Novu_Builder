@@ -12,6 +12,8 @@ This test uses real HTTP (AsyncClient + ASGI), real DB (SQLite test session),
 and real JWT decode/verify — no mocks.
 """
 import uuid
+from datetime import UTC, datetime
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -139,6 +141,50 @@ class TestAdminResetInvalidatesOldTokens:
         )
         assert resp.status_code == 401, (
             f"Old token must be invalid after admin password reset, got {resp.status_code}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_admin_reset_rejects_old_token_issued_in_same_second(
+        self, app_client, superadmin_for_reset, target_user_with_old_token
+    ):
+        """Same-second issuance no longer bypasses invalidation because version is authoritative."""
+
+        frozen_now = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
+
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is None:
+                    return frozen_now.replace(tzinfo=None)
+                return frozen_now.astimezone(tz)
+
+        target_id = target_user_with_old_token["user_id"]
+        email = target_user_with_old_token["email"]
+
+        with (
+            patch("app.services.auth_service.datetime", FrozenDateTime),
+            patch("app.api.routes.admin.datetime", FrozenDateTime),
+        ):
+            login_resp = await app_client.post(
+                "/api/v1/auth/login",
+                json={"email": email, "password": target_user_with_old_token["original_password"]},
+            )
+            assert login_resp.status_code == 200, f"Login failed under frozen time: {login_resp.text}"
+            old_token = login_resp.json()["accessToken"]
+
+            reset_resp = await app_client.post(
+                f"/api/v1/admin/users/{target_id}/reset-password",
+                json={"password": "SameSecondReset@Pass1!"},
+                headers={"Authorization": f"Bearer {superadmin_for_reset['token']}"},
+            )
+            assert reset_resp.status_code == 204, f"Admin reset failed: {reset_resp.text}"
+
+        resp = await app_client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {old_token}"},
+        )
+        assert resp.status_code == 401, (
+            f"Same-second token must be invalid after admin reset, got {resp.status_code}"
         )
 
     @pytest.mark.asyncio

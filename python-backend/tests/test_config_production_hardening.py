@@ -25,15 +25,64 @@ def _set_valid_prod_env(monkeypatch, **overrides):
     env = {
         "APP_ENV": "production",
         "JWT_SECRET": _STRONG_JWT,
+        "JWT_ACCESS_TOKEN_EXPIRE_MINUTES": "30",
+        "JWT_REFRESH_TOKEN_EXPIRE_DAYS": "7",
         "REDIS_URL": _STRONG_REDIS,
+        "REDIS_FAILOVER_URLS": "",
+        "REDIS_SOCKET_CONNECT_TIMEOUT": "1.0",
+        "REDIS_SOCKET_TIMEOUT": "1.0",
+        "REDIS_HEALTH_CHECK_INTERVAL": "30",
+        "REDIS_RETRY_ATTEMPTS": "3",
+        "REDIS_RETRY_BACKOFF_BASE": "0.05",
+        "REDIS_RETRY_BACKOFF_CAP": "0.5",
         "METRICS_AUTH_TOKEN": _STRONG_METRICS,
         "METRICS_AUTH_ENABLED": "true",
+        "WORKER_METRICS_ENABLED": "true",
+        "WORKER_METRICS_HOST": "0.0.0.0",
+        "WORKER_METRICS_PORT": "9101",
+        "SENTRY_DSN": "",
+        "SENTRY_TRACES_SAMPLE_RATE": "0.05",
+        "SENTRY_PROFILES_SAMPLE_RATE": "0.0",
         "DATABASE_URL": _STRONG_DB,
+        "DB_POOL_SIZE": "10",
+        "DB_MAX_OVERFLOW": "10",
+        "DB_POOL_TIMEOUT": "30",
+        "DB_POOL_RECYCLE": "1800",
         "APP_BASE_URL": _STRONG_BASE_URL,
         "CORS_ALLOWED_ORIGINS": _STRONG_CORS,
+        "AI_ANALYSIS_PROVIDER": "mock",
+        "WORKER_CONCURRENCY": "2",
+        "WORKER_HEAVY_CONCURRENCY": "1",
+        "WORKER_JOB_LEASE_TIMEOUT_SECONDS": "600",
+        "WORKER_HEAVY_JOB_LEASE_TIMEOUT_SECONDS": "1800",
+        "WORKER_JOB_REAP_INTERVAL_SECONDS": "30",
+        "WORKER_HEAVY_JOB_REAP_INTERVAL_SECONDS": "30",
+        "READINESS_PROCESSING_GRACE_SECONDS": "75",
+        "ANALYSIS_QUEUE_MAX_DEPTH": "100",
+        "HEAVY_QUEUE_MAX_DEPTH": "50",
+        "ANALYSIS_JOB_MAX_ATTEMPTS": "3",
+        "ANALYSIS_RETRY_BACKOFF_BASE_SECONDS": "30",
+        "ANALYSIS_RETRY_BACKOFF_MAX_SECONDS": "300",
+        "ANALYSIS_JOBS_PER_TENANT_LIMIT": "10",
+        "WORKER_DB_POOL_SIZE": "0",
+        "WORKER_DB_POOL_TIMEOUT": "30",
+        "WORKER_INSTANCE_COUNT": "1",
+        "REQUIRE_HTTPS": "false",
+        "HSTS_MAX_AGE": "31536000",
+        "RATE_LIMIT_LOGIN": "5/minute",
+        "RATE_LIMIT_ADMIN": "30/minute",
+        "RATE_LIMIT_ADMIN_WRITE": "10/minute",
+        "RATE_LIMIT_ADMIN_SENSITIVE": "5/minute",
+        "RATE_LIMIT_UPLOAD": "30/minute",
+        "RATE_LIMIT_ANALYSIS_JOBS": "20/minute",
         "STORAGE_BACKEND": "s3",
+        "STORAGE_AUTHORITATIVE": "true",
         "S3_BUCKET": _STRONG_S3_BUCKET,
         "S3_REGION": _STRONG_S3_REGION,
+        "S3_CONNECT_TIMEOUT_SECONDS": "3",
+        "S3_READ_TIMEOUT_SECONDS": "10",
+        "STORAGE_SIGNED_URL_TTL_SECONDS": "3600",
+        "EXPORT_TTL_DAYS": "7",
     }
     env.update(overrides)
     for key, val in env.items():
@@ -96,6 +145,32 @@ def test_metrics_token_not_required_in_development(monkeypatch):
     monkeypatch.delenv("METRICS_AUTH_TOKEN", raising=False)
     s = Settings()
     assert s.metrics_auth_token is None
+
+
+def test_worker_metrics_cannot_be_disabled_in_production(monkeypatch):
+    _set_valid_prod_env(monkeypatch, WORKER_METRICS_ENABLED="false")
+    with pytest.raises(ValidationError, match="WORKER_METRICS_ENABLED must remain true"):
+        Settings()
+
+
+def test_strict_runtime_profile_requires_explicit_worker_concurrency(monkeypatch):
+    _set_valid_prod_env(monkeypatch)
+    monkeypatch.delenv("WORKER_CONCURRENCY", raising=False)
+    with pytest.raises(ValidationError, match="WORKER_CONCURRENCY"):
+        Settings()
+
+
+def test_strict_runtime_profile_requires_explicit_sentry_state(monkeypatch):
+    _set_valid_prod_env(monkeypatch)
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
+    with pytest.raises(ValidationError, match="SENTRY_DSN"):
+        Settings()
+
+
+def test_sentry_dsn_placeholder_rejected_in_production(monkeypatch):
+    _set_valid_prod_env(monkeypatch, SENTRY_DSN="https://examplePublicKey@o0.ingest.sentry.io/1")
+    with pytest.raises(ValidationError, match="SENTRY_DSN looks like an unfilled placeholder"):
+        Settings()
 
 
 # -- AI_ANALYSIS_PROVIDER ----------------------------------------------------
@@ -209,6 +284,32 @@ def test_redis_empty_url_fails_in_production(monkeypatch):
         Settings()
 
 
+def test_invalid_rate_limit_format_fails_fast(monkeypatch):
+    _set_valid_prod_env(monkeypatch, RATE_LIMIT_LOGIN="burst-mode")
+    with pytest.raises(ValidationError, match="RATE_LIMIT_LOGIN must use '<count>/<window>' format"):
+        Settings()
+
+
+def test_reap_interval_must_stay_below_lease_timeout(monkeypatch):
+    _set_valid_prod_env(
+        monkeypatch,
+        WORKER_JOB_LEASE_TIMEOUT_SECONDS="60",
+        WORKER_JOB_REAP_INTERVAL_SECONDS="60",
+    )
+    with pytest.raises(ValidationError, match="WORKER_JOB_REAP_INTERVAL_SECONDS must be < WORKER_JOB_LEASE_TIMEOUT_SECONDS"):
+        Settings()
+
+
+def test_tenant_job_limit_cannot_exceed_queue_depth(monkeypatch):
+    _set_valid_prod_env(
+        monkeypatch,
+        ANALYSIS_QUEUE_MAX_DEPTH="5",
+        ANALYSIS_JOBS_PER_TENANT_LIMIT="6",
+    )
+    with pytest.raises(ValidationError, match="ANALYSIS_JOBS_PER_TENANT_LIMIT must be <= ANALYSIS_QUEUE_MAX_DEPTH"):
+        Settings()
+
+
 # ── DATABASE_URL placeholder password ────────────────────────────────────────
 
 def test_database_placeholder_password_fails_in_production(monkeypatch):
@@ -289,7 +390,12 @@ def test_database_sync_override_async_driver_fails_in_production(monkeypatch):
 
 def test_storage_local_fails_in_production(monkeypatch):
     """STORAGE_BACKEND='local' must be rejected in production."""
-    _set_valid_prod_env(monkeypatch, STORAGE_BACKEND="local", S3_BUCKET=None)
+    _set_valid_prod_env(
+        monkeypatch,
+        STORAGE_BACKEND="local",
+        STORAGE_AUTHORITATIVE="false",
+        S3_BUCKET=None,
+    )
     with pytest.raises(ValidationError, match="Local storage is not allowed in production"):
         Settings()
 
@@ -355,14 +461,25 @@ def test_storage_unknown_backend_fails_in_development(monkeypatch):
 
 def test_storage_local_fails_in_staging(monkeypatch):
     """STORAGE_BACKEND='local' must also be rejected in staging (not only 'production')."""
-    _set_valid_prod_env(monkeypatch, APP_ENV="staging", STORAGE_BACKEND="local", S3_BUCKET=None)
+    _set_valid_prod_env(
+        monkeypatch,
+        APP_ENV="staging",
+        STORAGE_BACKEND="local",
+        STORAGE_AUTHORITATIVE="false",
+        S3_BUCKET=None,
+    )
     with pytest.raises(ValidationError, match="Local storage is not allowed in production"):
         Settings()
 
 
 def test_storage_production_guard(monkeypatch):
     """Production must fail fast when STORAGE_BACKEND falls back to local."""
-    _set_valid_prod_env(monkeypatch, STORAGE_BACKEND="local", S3_BUCKET=None)
+    _set_valid_prod_env(
+        monkeypatch,
+        STORAGE_BACKEND="local",
+        STORAGE_AUTHORITATIVE="false",
+        S3_BUCKET=None,
+    )
     with pytest.raises(ValidationError, match="Local storage is not allowed in production"):
         Settings()
 

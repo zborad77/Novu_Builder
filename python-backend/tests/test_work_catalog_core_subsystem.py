@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from app.models import (
@@ -21,6 +22,7 @@ from app.models import (
     CatalogPricingProfileMaterialAssumption,
     CatalogPricingProfileRequiredInput,
     Project,
+    ProjectWorkItem,
     ProjectWorkItemValue,
     TenantWorkTypeExtraParameter,
     TenantWorkTypeExtraParameterOption,
@@ -74,50 +76,74 @@ async def _ensure_global_catalog_seed(db_session) -> None:
 async def _ensure_tenant_setting(db_session, test_tenants) -> None:
     await _ensure_global_catalog_seed(db_session)
     row_id = "twts_test_org_a_roof_repair"
-    setting = await db_session.get(TenantWorkTypeSetting, row_id)
-    if setting is None:
-        setting = TenantWorkTypeSetting(
-            id=row_id,
-            organization_id=test_tenants["org_a"],
-            work_type_id="wt_roof_repair",
-            status="enabled",
-            custom_display_name="Tenant A Crack Repair",
-            catalog_pricing_profile_id="cpp_roof_repair_pricing_v1",
-            tenant_pricing_profile_id=test_tenants["pricebook_a"],
-            config_version=1,
+    organization_id = test_tenants["org_a"]
+    work_type_id = "wt_roof_repair"
+
+    # Rebuild a clean tenant-specific baseline so these tests stay stable even
+    # when earlier work-catalog tests mutated overrides or extra parameters.
+    await db_session.execute(delete(ProjectWorkItemValue))
+    await db_session.execute(delete(ProjectWorkItem))
+    extra_parameter_ids = list(
+        (
+            await db_session.execute(
+                select(TenantWorkTypeExtraParameter.id).where(
+                    TenantWorkTypeExtraParameter.organization_id == organization_id,
+                    TenantWorkTypeExtraParameter.work_type_id == work_type_id,
+                )
+            )
+        ).scalars()
+    )
+    if extra_parameter_ids:
+        await db_session.execute(
+            delete(TenantWorkTypeExtraParameterOption).where(
+                TenantWorkTypeExtraParameterOption.tenant_work_type_extra_parameter_id.in_(extra_parameter_ids)
+            )
         )
-        db_session.add(setting)
-    else:
-        setting.organization_id = test_tenants["org_a"]
-        setting.work_type_id = "wt_roof_repair"
-        setting.status = "enabled"
-        setting.custom_display_name = "Tenant A Crack Repair"
-        setting.catalog_pricing_profile_id = "cpp_roof_repair_pricing_v1"
-        setting.tenant_pricing_profile_id = test_tenants["pricebook_a"]
+    await db_session.execute(
+        delete(TenantWorkTypeParameterOverride).where(
+            TenantWorkTypeParameterOverride.organization_id == organization_id,
+            TenantWorkTypeParameterOverride.work_type_id == work_type_id,
+        )
+    )
+    await db_session.execute(
+        delete(TenantWorkTypeExtraParameter).where(
+            TenantWorkTypeExtraParameter.organization_id == organization_id,
+            TenantWorkTypeExtraParameter.work_type_id == work_type_id,
+        )
+    )
+    await db_session.execute(
+        delete(TenantWorkTypeSetting).where(
+            TenantWorkTypeSetting.organization_id == organization_id,
+            TenantWorkTypeSetting.work_type_id == work_type_id,
+        )
+    )
+    await db_session.commit()
+
+    setting = TenantWorkTypeSetting(
+        id=row_id,
+        organization_id=organization_id,
+        work_type_id=work_type_id,
+        status="enabled",
+        custom_display_name="Tenant A Crack Repair",
+        catalog_pricing_profile_id="cpp_roof_repair_pricing_v1",
+        tenant_pricing_profile_id=test_tenants["pricebook_a"],
+        config_version=1,
+    )
+    db_session.add(setting)
     await db_session.commit()
     parameter_override_id = "twpo_test_org_a_roof_repair_severity"
-    parameter_override = await db_session.get(TenantWorkTypeParameterOverride, parameter_override_id)
-    if parameter_override is None:
-        parameter_override = TenantWorkTypeParameterOverride(
-            id=parameter_override_id,
-            tenant_work_type_setting_id=row_id,
-            organization_id=test_tenants["org_a"],
-            work_type_id="wt_roof_repair",
-            work_type_parameter_id="wtp_roof_repair_severity",
-            override_status="optional",
-            custom_display_name="Zavaznost opravy",
-            sort_order_override=25,
-            config_version=1,
-        )
-        db_session.add(parameter_override)
-    else:
-        parameter_override.tenant_work_type_setting_id = row_id
-        parameter_override.organization_id = test_tenants["org_a"]
-        parameter_override.work_type_id = "wt_roof_repair"
-        parameter_override.work_type_parameter_id = "wtp_roof_repair_severity"
-        parameter_override.override_status = "optional"
-        parameter_override.custom_display_name = "Zavaznost opravy"
-        parameter_override.sort_order_override = 25
+    parameter_override = TenantWorkTypeParameterOverride(
+        id=parameter_override_id,
+        tenant_work_type_setting_id=row_id,
+        organization_id=organization_id,
+        work_type_id=work_type_id,
+        work_type_parameter_id="wtp_roof_repair_severity",
+        override_status="optional",
+        custom_display_name="Zavaznost opravy",
+        sort_order_override=25,
+        config_version=1,
+    )
+    db_session.add(parameter_override)
     await db_session.commit()
 
 
@@ -346,10 +372,15 @@ async def test_parameter_override_upsert_changes_effective_requiredness_without_
     assert global_parameter is not None
     assert global_parameter.name == "Severity Band"
 
-    tenant_override = await db_session.get(
-        TenantWorkTypeParameterOverride,
-        "twpo_test_org_a_roof_repair_severity",
-    )
+    tenant_override = (
+        await db_session.execute(
+            select(TenantWorkTypeParameterOverride).where(
+                TenantWorkTypeParameterOverride.organization_id == test_tenants["org_a"],
+                TenantWorkTypeParameterOverride.work_type_id == "wt_roof_repair",
+                TenantWorkTypeParameterOverride.work_type_parameter_id == "wtp_roof_repair_severity",
+            )
+        )
+    ).scalar_one_or_none()
     assert tenant_override is not None
     tenant_override.override_status = "optional"
     tenant_override.custom_display_name = "Zavaznost opravy"

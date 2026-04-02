@@ -260,17 +260,22 @@ def create_app() -> FastAPI:
         sentry_sdk.init(
             dsn=settings.sentry_dsn,
             environment=settings.app_env,
-            traces_sample_rate=0.0,
-            profiles_sample_rate=0.0,
+            traces_sample_rate=settings.sentry_traces_sample_rate,
+            profiles_sample_rate=settings.sentry_profiles_sample_rate,
         )
-        logger.info("sentry.initialized", environment=settings.app_env)
+        logger.info(
+            "sentry.initialized",
+            environment=settings.app_env,
+            traces_sample_rate=settings.sentry_traces_sample_rate,
+            profiles_sample_rate=settings.sentry_profiles_sample_rate,
+        )
 
     docs_url = "/docs" if settings.app_debug else None
     redoc_url = "/redoc" if settings.app_debug else None
 
     app = FastAPI(
         title=settings.app_name,
-        version="0.5.0",
+        version=settings.app_version,
         description="New target backend skeleton for FotoNabidka.",
         debug=settings.app_debug,
         docs_url=docs_url,

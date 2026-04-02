@@ -75,6 +75,79 @@ _PLACEHOLDER_EXACT: frozenset[str] = frozenset({
     "default",
 })
 
+_RATE_LIMIT_WINDOWS: frozenset[str] = frozenset({
+    "second",
+    "seconds",
+    "minute",
+    "minutes",
+    "hour",
+    "hours",
+    "day",
+    "days",
+})
+
+_STRICT_RUNTIME_EXPLICIT_FIELDS: tuple[str, ...] = (
+    "db_pool_size",
+    "db_max_overflow",
+    "db_pool_timeout",
+    "db_pool_recycle",
+    "redis_failover_urls",
+    "redis_socket_connect_timeout",
+    "redis_socket_timeout",
+    "redis_health_check_interval",
+    "redis_retry_attempts",
+    "redis_retry_backoff_base",
+    "redis_retry_backoff_cap",
+    "ai_analysis_provider",
+    "worker_concurrency",
+    "worker_heavy_concurrency",
+    "worker_job_lease_timeout_seconds",
+    "worker_heavy_job_lease_timeout_seconds",
+    "worker_job_reap_interval_seconds",
+    "worker_heavy_job_reap_interval_seconds",
+    "readiness_processing_grace_seconds",
+    "analysis_queue_max_depth",
+    "heavy_queue_max_depth",
+    "analysis_job_max_attempts",
+    "analysis_retry_backoff_base_seconds",
+    "analysis_retry_backoff_max_seconds",
+    "analysis_jobs_per_tenant_limit",
+    "worker_db_pool_size",
+    "worker_db_pool_timeout",
+    "worker_instance_count",
+    "jwt_access_token_expire_minutes",
+    "jwt_refresh_token_expire_days",
+    "require_https",
+    "hsts_max_age",
+    "rate_limit_login",
+    "rate_limit_admin",
+    "rate_limit_admin_write",
+    "rate_limit_admin_sensitive",
+    "rate_limit_upload",
+    "rate_limit_analysis_jobs",
+    "storage_authoritative",
+    "s3_connect_timeout_seconds",
+    "s3_read_timeout_seconds",
+    "storage_signed_url_ttl_seconds",
+    "export_ttl_days",
+    "metrics_auth_enabled",
+    "worker_metrics_enabled",
+    "worker_metrics_host",
+    "worker_metrics_port",
+    "sentry_dsn",
+    "sentry_traces_sample_rate",
+    "sentry_profiles_sample_rate",
+)
+
+_RATE_LIMIT_FIELD_NAMES: tuple[str, ...] = (
+    "rate_limit_login",
+    "rate_limit_admin",
+    "rate_limit_admin_write",
+    "rate_limit_admin_sensitive",
+    "rate_limit_upload",
+    "rate_limit_analysis_jobs",
+)
+
 
 def _is_insecure_placeholder(value: str) -> bool:
     """Return True if *value* is a well-known insecure placeholder string.
@@ -137,7 +210,7 @@ def _validate_redis_url_candidate(
     normalized = candidate.strip()
     if not normalized:
         raise ValueError(
-            f"{label} must be non-empty in APP_ENV={app_env!r}."
+            f"{label} must be set and non-empty in APP_ENV={app_env!r}."
         )
     scheme = _url_scheme(normalized)
     if scheme not in _REDIS_URL_SCHEMES:
@@ -202,6 +275,25 @@ def _looks_like_placeholder_url(url: str) -> bool:
     return _looks_like_placeholder_hostname(_url_hostname(stripped))
 
 
+def _validate_rate_limit_candidate(label: str, raw_value: str) -> None:
+    normalized = raw_value.strip().lower()
+    if not normalized:
+        raise ValueError(f"{label} must be non-empty.")
+
+    amount, separator, window = normalized.partition("/")
+    if separator != "/" or not amount or not window:
+        raise ValueError(
+            f"{label} must use '<count>/<window>' format, for example '10/minute'."
+        )
+    if not amount.isdigit() or int(amount) <= 0:
+        raise ValueError(f"{label} must start with a positive integer request count.")
+    if window not in _RATE_LIMIT_WINDOWS:
+        allowed = ", ".join(sorted(_RATE_LIMIT_WINDOWS))
+        raise ValueError(
+            f"{label} uses unsupported window {window!r}. Allowed values: {allowed}."
+        )
+
+
 def startup_failure_message(check: str, detail: str) -> str:
     return f"{_STARTUP_FAILURE_PREFIX} [{check}]: {detail}"
 
@@ -241,6 +333,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = Field(default="FotoNabidka API", alias="APP_NAME")
+    app_version: str = Field(default="0.6.003", alias="APP_VERSION")
     app_env: str = Field(default="development", alias="APP_ENV")
     app_debug: bool = Field(default=False, alias="APP_DEBUG")
     api_v1_prefix: str = Field(default="/api/v1", alias="API_V1_PREFIX")
@@ -298,6 +391,11 @@ class Settings(BaseSettings):
         default=10,
         alias="ANALYSIS_JOBS_PER_TENANT_LIMIT",
         ge=1,
+    )
+    analysis_job_inline_payload_max_bytes: int = Field(
+        default=32768,
+        alias="ANALYSIS_JOB_INLINE_PAYLOAD_MAX_BYTES",
+        ge=1024,
     )
     # Worker-specific DB pool (separate engine, isolated from API pool).
     # 0 = auto-derive pool size from WORKER_CONCURRENCY (recommended default).
@@ -365,9 +463,14 @@ class Settings(BaseSettings):
     # Configure Prometheus scrape_configs with bearer_token to match.
     metrics_auth_enabled: bool = Field(default=True, alias="METRICS_AUTH_ENABLED")
     metrics_auth_token: str | None = Field(default=None, alias="METRICS_AUTH_TOKEN")
+    worker_metrics_enabled: bool = Field(default=False, alias="WORKER_METRICS_ENABLED")
+    worker_metrics_host: str = Field(default="0.0.0.0", alias="WORKER_METRICS_HOST")
+    worker_metrics_port: int = Field(default=9101, alias="WORKER_METRICS_PORT")
 
     # Error monitoring — leave empty to disable Sentry (default: off)
     sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
+    sentry_traces_sample_rate: float = Field(default=0.05, alias="SENTRY_TRACES_SAMPLE_RATE")
+    sentry_profiles_sample_rate: float = Field(default=0.0, alias="SENTRY_PROFILES_SAMPLE_RATE")
 
     @property
     def cors_origins_list(self) -> list[str]:
@@ -469,6 +572,29 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _check_strict_runtime_profile_explicitness(self) -> "Settings":
+        if not _is_strict_environment(self.app_env):
+            return self
+
+        missing: list[str] = []
+        for field_name in _STRICT_RUNTIME_EXPLICIT_FIELDS:
+            if field_name in self.model_fields_set:
+                continue
+            field = type(self).model_fields[field_name]
+            missing.append(field.alias or field_name.upper())
+
+        if missing:
+            raise ValueError(
+                "Strict runtime profile requires explicit values for: "
+                + ", ".join(missing)
+                + ". Built-in defaults are for development only. "
+                  "Even intentionally disabled values must be set explicitly "
+                  "(for example REDIS_FAILOVER_URLS='', SENTRY_DSN='', "
+                  "WORKER_DB_POOL_SIZE=0, REQUIRE_HTTPS=false)."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _check_jwt_secret(self) -> "Settings":
         if not _is_strict_environment(self.app_env):
             return self
@@ -523,6 +649,18 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"METRICS_AUTH_TOKEN is too short ({len(token)} chars); "
                 "minimum 32 characters required outside development/test."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_sentry_configuration(self) -> "Settings":
+        dsn = (self.sentry_dsn or "").strip()
+        if not dsn:
+            return self
+        if _is_wrapped_placeholder(dsn) or _looks_like_placeholder_url(dsn) or "examplepublickey" in dsn.lower():
+            raise ValueError(
+                f"SENTRY_DSN looks like an unfilled placeholder in APP_ENV={self.app_env!r}. "
+                "Set the real DSN or an explicit empty value to disable Sentry intentionally."
             )
         return self
 
@@ -721,6 +859,70 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ANALYSIS_RETRY_BACKOFF_MAX_SECONDS must be >= ANALYSIS_RETRY_BACKOFF_BASE_SECONDS."
             )
+        if self.analysis_job_inline_payload_max_bytes < 1024:
+            raise ValueError(
+                "ANALYSIS_JOB_INLINE_PAYLOAD_MAX_BYTES must be >= 1024 so analysis payload offload remains meaningful."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_worker_runtime_relationships(self) -> "Settings":
+        if self.worker_job_reap_interval_seconds >= self.worker_job_lease_timeout_seconds:
+            raise ValueError(
+                "WORKER_JOB_REAP_INTERVAL_SECONDS must be < WORKER_JOB_LEASE_TIMEOUT_SECONDS "
+                "so stale analysis leases are reconciled before the full lease window elapses."
+            )
+        if self.worker_heavy_job_reap_interval_seconds >= self.worker_heavy_job_lease_timeout_seconds:
+            raise ValueError(
+                "WORKER_HEAVY_JOB_REAP_INTERVAL_SECONDS must be < WORKER_HEAVY_JOB_LEASE_TIMEOUT_SECONDS "
+                "so heavy-job leases are reaped predictably."
+            )
+        if self.readiness_processing_grace_seconds > self.worker_job_lease_timeout_seconds:
+            raise ValueError(
+                "READINESS_PROCESSING_GRACE_SECONDS must be <= WORKER_JOB_LEASE_TIMEOUT_SECONDS."
+            )
+        if self.analysis_jobs_per_tenant_limit > self.analysis_queue_max_depth:
+            raise ValueError(
+                "ANALYSIS_JOBS_PER_TENANT_LIMIT must be <= ANALYSIS_QUEUE_MAX_DEPTH."
+            )
+        if self.analysis_queue_max_depth < self.worker_concurrency:
+            raise ValueError(
+                "ANALYSIS_QUEUE_MAX_DEPTH must be >= WORKER_CONCURRENCY so the queue can absorb at least one full worker wave."
+            )
+        if self.worker_heavy_concurrency > 0 and self.heavy_queue_max_depth < self.worker_heavy_concurrency:
+            raise ValueError(
+                "HEAVY_QUEUE_MAX_DEPTH must be >= WORKER_HEAVY_CONCURRENCY."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_rate_limit_profile(self) -> "Settings":
+        for field_name in _RATE_LIMIT_FIELD_NAMES:
+            field = type(self).model_fields[field_name]
+            _validate_rate_limit_candidate(field.alias or field_name.upper(), getattr(self, field_name))
+        return self
+
+    @model_validator(mode="after")
+    def _check_worker_metrics(self) -> "Settings":
+        if _is_strict_environment(self.app_env) and not self.worker_metrics_enabled:
+            raise ValueError(
+                f"WORKER_METRICS_ENABLED must remain true in APP_ENV={self.app_env!r} "
+                "so worker throughput and liveness stay observable during pilot/production runs."
+            )
+        if not self.worker_metrics_host.strip():
+            raise ValueError("WORKER_METRICS_HOST must be non-empty.")
+        if self.worker_metrics_port <= 0 or self.worker_metrics_port > 65535:
+            raise ValueError("WORKER_METRICS_PORT must be between 1 and 65535.")
+        return self
+
+    @model_validator(mode="after")
+    def _check_sentry_sampling(self) -> "Settings":
+        for field_name in ("sentry_traces_sample_rate", "sentry_profiles_sample_rate"):
+            value = getattr(self, field_name)
+            if value < 0 or value > 1:
+                raise ValueError(
+                    f"{field_name.upper()} must be between 0.0 and 1.0."
+                )
         return self
 
     @model_validator(mode="after")

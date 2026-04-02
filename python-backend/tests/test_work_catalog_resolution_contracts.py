@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
 from app.models import TenantWorkTypeParameterOverride
 from app.repositories.work_catalog_repository import WorkCatalogRepository
@@ -220,10 +221,15 @@ async def test_resolution_fails_closed_when_override_scope_is_inconsistent(
 ):
     await _ensure_tenant_setting(db_session, test_tenants)
     await _ensure_global_catalog_seed(db_session)
-    override = await db_session.get(
-        TenantWorkTypeParameterOverride,
-        "twpo_test_org_a_roof_repair_severity",
-    )
+    override = (
+        await db_session.execute(
+            select(TenantWorkTypeParameterOverride).where(
+                TenantWorkTypeParameterOverride.organization_id == test_tenants["org_a"],
+                TenantWorkTypeParameterOverride.work_type_id == "wt_roof_repair",
+                TenantWorkTypeParameterOverride.work_type_parameter_id == "wtp_roof_repair_severity",
+            )
+        )
+    ).scalar_one_or_none()
     assert override is not None
 
     repository = WorkCatalogRepository(db_session)

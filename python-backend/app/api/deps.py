@@ -107,8 +107,11 @@ def get_work_catalog_service(
     return WorkCatalogService(WorkCatalogRepository(session), redis=redis)
 
 
-def get_auth_service(session: AsyncSession = Depends(get_db_session)) -> AuthService:
-    return AuthService(session)
+def get_auth_service(
+    session: AsyncSession = Depends(get_db_session),
+    redis=Depends(get_redis),
+) -> AuthService:
+    return AuthService(session, redis=redis)
 
 
 async def get_current_user(
@@ -248,7 +251,7 @@ async def require_manager(
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> AuthUserRead:
     """Manager or superadmin. Technician access is not allowed."""
-    if current_user.role not in ("manager", "superadmin") and not current_user.isSuperAdmin:
+    if current_user.role not in ("manager", "superadmin"):
         raise HTTPException(status_code=403, detail="Manager access required.")
     return current_user
 
