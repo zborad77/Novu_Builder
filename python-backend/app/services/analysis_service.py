@@ -462,6 +462,64 @@ class AnalysisService:
                 ),
             )
 
+    async def _enforce_daily_ai_quota(self, organization_id: str | None) -> None:
+        """Check and increment the per-tenant daily AI analysis call counter.
+
+        Quota is stored in Redis as a counter with a 25-hour TTL so it resets
+        naturally without a cron job.  When Redis is unavailable the quota check
+        is skipped (fail-open): the active-job DB limit still applies.
+
+        AI_ANALYSIS_DAILY_QUOTA_PER_TENANT=0 (default) disables the quota.
+        """
+        if not organization_id:
+            return
+        settings = get_settings()
+        quota = settings.ai_analysis_daily_quota_per_tenant
+        if quota == 0:
+            return
+        if self._redis is None:
+            logger.warning(
+                "ai_quota.redis_unavailable",
+                organization_id=organization_id,
+                note="daily quota check skipped; active-job DB limit still applies",
+            )
+            return
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        key = f"ai-daily-quota:{organization_id}:{today}"
+        try:
+            current = await self._redis.get(key)
+            count = int(current) if current is not None else 0
+            if count >= quota:
+                logger.warning(
+                    "ai_quota.daily_limit_reached",
+                    organization_id=organization_id,
+                    count=count,
+                    quota=quota,
+                    date=today,
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        f"Daily AI analysis quota ({quota}) reached for this tenant. "
+                        "Quota resets at midnight UTC."
+                    ),
+                )
+            # Increment and set TTL (25 h so the key is always cleaned up even if
+            # the increment fires late in the day).
+            new_count = await self._redis.incr(key)
+            if new_count == 1:
+                # Key was just created — set the TTL
+                await self._redis.expire(key, 25 * 3600)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "ai_quota.redis_error",
+                organization_id=organization_id,
+                error=str(exc),
+                note="daily quota check skipped due to Redis error",
+            )
+
     async def _enforce_queue_precheck(self, job_queue) -> None:
         if job_queue is None:
             return
@@ -799,6 +857,7 @@ class AnalysisService:
             organization_id=getattr(project, "organization_id", None),
             job_type=ANALYSIS_JOB_TYPE_MANUAL_TRIGGER,
         )
+        await self._enforce_daily_ai_quota(getattr(project, "organization_id", None))
         await self._enforce_queue_precheck(job_queue)
 
         resolved_profile = None

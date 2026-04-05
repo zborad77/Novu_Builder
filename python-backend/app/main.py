@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, text
+from sqlalchemy.exc import TimeoutError as SQLAlchemyPoolTimeoutError
 import structlog
 
 from app.api.router import api_router
@@ -15,6 +16,7 @@ from app.core.config import get_settings, startup_failure_message
 from app.core.limiter import limiter
 from app.core.logging import configure_logging
 from app.core.metrics import (
+    DB_POOL_EXHAUSTED_TOTAL,
     HTTP_REQUEST_DURATION_SECONDS,
     HTTP_REQUESTS_IN_PROGRESS,
     HTTP_REQUESTS_TOTAL,
@@ -336,6 +338,23 @@ def create_app() -> FastAPI:
     app.state.limiter = limiter
     if RateLimitExceeded is not None and _rate_limit_exceeded_handler is not None:
         app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+    @app.exception_handler(SQLAlchemyPoolTimeoutError)
+    async def db_pool_exhausted_handler(request: Request, exc: SQLAlchemyPoolTimeoutError) -> JSONResponse:
+        """DB connection pool exhausted — return 503 instead of 500 and increment metric."""
+        route = request.scope.get("route")
+        path_template = route.path if route else request.url.path
+        logger.error(
+            "db.pool_exhausted",
+            method=request.method,
+            path_template=path_template,
+            error=str(exc),
+        )
+        DB_POOL_EXHAUSTED_TOTAL.inc()
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Service temporarily unavailable. Please retry in a moment."},
+        )
 
     if settings.require_https:
         app.add_middleware(HTTPSRedirectMiddleware)

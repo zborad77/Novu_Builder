@@ -286,6 +286,11 @@ CACHE_OPERATION_DURATION_SECONDS = Histogram(
     buckets=[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
 )
 
+DB_POOL_EXHAUSTED_TOTAL = Counter(
+    "novu_db_pool_exhausted_total",
+    "Total requests rejected due to DB connection pool exhaustion (returns HTTP 503)",
+)
+
 WORK_CATALOG_RESOLUTION_DURATION_SECONDS = Histogram(
     "novu_work_catalog_resolution_duration_seconds",
     "Work catalog resolution latency by path and outcome",

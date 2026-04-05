@@ -415,6 +415,25 @@ class Settings(BaseSettings):
         alias="ANALYSIS_JOBS_PER_TENANT_LIMIT",
         ge=1,
     )
+    # Daily AI analysis call quota per tenant (0 = unlimited).
+    # When set, prevents cost explosion if a tenant triggers many analysis jobs
+    # in a single day.  Counter is stored in Redis with a 25-hour TTL so it
+    # resets naturally without a scheduled job.
+    ai_analysis_daily_quota_per_tenant: int = Field(
+        default=0,
+        alias="AI_ANALYSIS_DAILY_QUOTA_PER_TENANT",
+        ge=0,
+    )
+    # Hard server-side cap on case list page size.
+    # Prevents memory spikes from clients requesting very large pages.
+    # The API Query validator enforces this independently; this setting
+    # allows operators to tighten or loosen the cap per deployment.
+    cases_page_limit_max: int = Field(
+        default=200,
+        alias="CASES_PAGE_LIMIT_MAX",
+        ge=1,
+        le=500,
+    )
     analysis_job_inline_payload_max_bytes: int = Field(
         default=32768,
         alias="ANALYSIS_JOB_INLINE_PAYLOAD_MAX_BYTES",

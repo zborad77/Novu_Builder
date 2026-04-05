@@ -31,11 +31,14 @@ async def list_cases(
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> ProjectListResponse:
     effective_org_id = (org_id if org_id else None) if current_user.isSuperAdmin else current_user.organizationId
+    # Server-side hard cap: CASES_PAGE_LIMIT_MAX overrides any client-supplied limit
+    # that exceeds the operator-configured ceiling, preventing memory spikes.
+    hard_limit = min(limit, get_settings().cases_page_limit_max)
     items, next_cursor = await service.list_projects(
         organization_id=effective_org_id,
         status=status_filter,
         search=search,
-        limit=limit,
+        limit=hard_limit,
         cursor=cursor,
     )
     return ProjectListResponse(items=items, total=len(items), next_cursor=next_cursor)
