@@ -2,6 +2,79 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.7.002 - 2026-04-05
+
+Security audit hardening: read-path rate limiting, per-tenant/per-user quotas, DB pool 503, page cap, AI quota fail-closed, per-org rate limit key, and worker identity logging.
+
+### Read-Path Rate Limiting (P1 Fix)
+
+- Added `RATE_LIMIT_READ_LIST` (120/min) and `RATE_LIMIT_READ_DETAIL` (60/min) config settings — both in `_STRICT_REQUIRED_FIELDS`, startup fails in production if not set.
+- Applied `@limiter.limit` to 21 previously unprotected GET endpoints across `cases`, `pricebooks`, `suppliers`, `material_catalog`, `estimates`, `exports`, `images`, `work_catalog`, and `analysis_jobs` routes.
+
+### Material Catalog Tenant Isolation (P2 Fix)
+
+- Replaced `current_user.organizationId` with `resolve_org_id()` in all `material_catalog` handlers — prevents superadmin cross-tenant data leak.
+
+### ILIKE Wildcard Injection Hardening (P2 Fix)
+
+- Added `app/core/sql_like.py` with `escape_like()` helper.
+- Applied to admin audit log search and `material_catalog_repository` (consistent with existing `project_repository` pattern).
+
+### DB Pool Exhaustion → 503 (T1 Fix)
+
+- Added `SQLAlchemyPoolTimeoutError` exception handler in `main.py` — returns HTTP 503 with retryable error message instead of 500.
+- Increments `novu_db_pool_exhausted_total` Prometheus counter for alerting.
+
+### Config-Driven Case List Page Cap (T3 Fix)
+
+- Added `CASES_PAGE_LIMIT_MAX` setting (default 200, max 500).
+- Applied `min(requested_limit, hard_limit)` in `list_cases` handler — prevents memory spikes at scale as an independent layer from the query validator.
+
+### Per-User Rate Limiting (S4 Fix)
+
+- `limiter.py` key function extracts JWT `sub` claim from `Authorization` header — authenticated requests bucketed per user ID, not per IP.
+- Multiple users behind shared NAT/proxy get independent quotas.
+- Falls back to remote IP for unauthenticated endpoints; JWT signature not verified in key function (rate limit bucket only).
+
+### Per-Tenant Rate Limiting (Bod 2)
+
+- JWT access tokens now include an `org` claim (`organization_id`) for all non-superadmin users.
+- `_rate_limit_key()` prefers `org:<org_id>` over `user:<sub>` — rate limits enforced at tenant level matching billing semantics. Superadmins fall back to `user:<sub>`.
+
+### Daily AI Analysis Quota per Tenant (B2 Fix)
+
+- Added `AI_ANALYSIS_DAILY_QUOTA_PER_TENANT` setting (default 0 = unlimited).
+- Redis counter key: `ai-daily-quota:{org_id}:{YYYY-MM-DD UTC}`, TTL 25 h.
+- Quota check runs before `_enforce_queue_precheck` in `_create_analysis_job`.
+- **Fail-closed in production/staging**: when Redis is unavailable, returns HTTP 503 instead of silently bypassing quota — prevents unbounded AI spend.
+- Retries and dead-letter re-enqueues are exempt (not new AI calls).
+
+### Worker Instance Identity (Bod 3)
+
+- `worker.started` log now includes `hostname`, `pid`, and `worker_instance_count` explicitly.
+- `multi_instance_safe=True` documented — lease/heartbeat system is already safe for concurrent instances.
+
+### Repo Hygiene & CI Gates
+
+- `.gitignore`: added `**/.env` and `**/.env.*` subdirectory-level guards.
+- `scripts/ci-check-no-secrets.sh`: CI gate that blocks tracked `.env` files.
+- `scripts/hooks/pre-commit`: pre-commit hook blocking `.env` commits and secret patterns.
+
+### SLO Subsystem
+
+- Added `app/core/slo.py` and `ops/alerting/slo-rules.yml` — SLO tracking layer with Prometheus rules.
+- Added `docs/production-slo-system.md` and `docs/incident-rehearsal-scenare.md`.
+
+### Security Audit Documentation
+
+- Added `docs/23_security_audit_2026-04-05.md` — binding security audit document covering all P0/P1/P2 findings and their resolution status.
+
+### Tests
+
+- 145 tests pass; new coverage added for CORS hardening, CSP hardening, seed password detection, material catalog tenant resolution, query hardening, SLO, retry system, and startup fail-fast messages.
+
+---
+
 ## v0.7.001 - 2026-04-02
 
 Backpressure subsystem, fail-closed auth throttle, timing oracle hardening, worker startup reconciliation, and expanded system health readiness endpoint.
