@@ -75,6 +75,7 @@ class AuthService:
         *,
         session_id: str | None = None,
         token_version: int = 0,
+        org_id: str | None = None,
     ) -> tuple[str, str, datetime]:
         """Returns (encoded_token, jti, expires_at)."""
         jti = uuid4().hex
@@ -82,6 +83,10 @@ class AuthService:
         payload = {"sub": user_id, "jti": jti, "type": "access", "exp": exp, "ver": token_version}
         if session_id is not None:
             payload["sid"] = session_id
+        # org claim enables per-tenant rate limit bucketing (see limiter.py _rate_limit_key).
+        # Superadmins have no org — their bucket falls back to user:<sub>.
+        if org_id:
+            payload["org"] = org_id
         token = jwt.encode(
             payload,
             self._settings.jwt_secret,
@@ -306,6 +311,7 @@ class AuthService:
                 user.id,
                 session_id=session_id,
                 token_version=token_version,
+                org_id=user.organization_id,
             )
             refresh_token, refresh_jti, refresh_exp = self._create_refresh_token(
                 user.id,
@@ -397,6 +403,7 @@ class AuthService:
             user.id,
             session_id=active_session_id,
             token_version=token_version,
+            org_id=user.organization_id,
         )
         new_refresh, refresh_jti, refresh_exp = self._create_refresh_token(
             user.id,

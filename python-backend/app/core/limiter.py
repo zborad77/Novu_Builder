@@ -16,19 +16,19 @@ def _is_strict_environment() -> bool:
 
 
 def _rate_limit_key(request) -> str:
-    """Per-user rate limit key for authenticated requests; falls back to IP.
+    """Per-tenant (or per-user) rate limit key for authenticated requests; falls back to IP.
 
-    For authenticated endpoints the JWT sub claim is used as the bucket key so
-    that multiple users behind the same NAT/proxy have independent quotas.
-    The JWT signature is NOT validated here — this function only reads the sub
-    claim to derive a stable per-user bucket.  Full auth validation happens
-    independently in get_current_user().  An attacker who forges a sub claim
-    merely isolates themselves to a bucket of their own choosing, which is
-    harmless for rate-limiting purposes.
+    Priority:
+      1. org:<org_id>  -- regular users; all users of the same tenant share one bucket,
+                          which matches billing/enforcement semantics.
+      2. user:<sub>    -- superadmins (no org claim); independent per-user bucket.
+      3. <remote IP>   -- unauthenticated or unparseable token (login, health, etc.)
 
-    Unauthenticated requests (missing or malformed Authorization header) fall
-    back to the remote IP address so that pre-auth endpoints (login, health)
-    are still protected.
+    The JWT signature is NOT validated here -- the function only reads claims to
+    derive a stable bucket key.  An attacker who forges an org/sub claim merely
+    isolates themselves to a bucket of their own choosing, which is harmless for
+    rate-limiting purposes.  Full auth validation happens independently in
+    get_current_user().
     """
     try:
         authorization = request.headers.get("Authorization", "")
@@ -40,6 +40,11 @@ def _rate_limit_key(request) -> str:
                 # Restore standard base64 padding
                 padded = payload_b64 + "=" * (4 - len(payload_b64) % 4)
                 payload = json.loads(base64.urlsafe_b64decode(padded))
+                # Prefer org claim (per-tenant bucket) -- present for all non-superadmin users.
+                org = payload.get("org")
+                if org and isinstance(org, str) and org.strip():
+                    return f"org:{org.strip()}"
+                # Superadmins have no org: fall back to per-user bucket.
                 sub = payload.get("sub")
                 if sub and isinstance(sub, str) and sub.strip():
                     return f"user:{sub.strip()}"
@@ -73,5 +78,6 @@ except ModuleNotFoundError as exc:
     limiter = _NoopLimiter()
 else:
     # Single shared limiter instance - registered on app.state in main.py.
-    # key_func: per-user for authenticated requests, per-IP for unauthenticated.
+    # key_func: per-org for authenticated requests, per-user for superadmins,
+    # per-IP for unauthenticated.
     limiter = Limiter(key_func=_rate_limit_key, default_limits=[])

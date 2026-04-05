@@ -1651,10 +1651,14 @@ async def run(redis_url: str | None = None) -> None:
         runtime.redis = _build_worker_redis(settings, url)
         await asyncio.sleep(1)
 
+    import os as _os, socket as _socket
     logger.info(
         "worker.started",
         provider=settings.ai_analysis_provider,
         instance_id=worker_instance_id,
+        hostname=_os.getenv("HOSTNAME") or _socket.gethostname(),
+        pid=_os.getpid(),
+        worker_instance_count=settings.worker_instance_count,
         heartbeat_key=heartbeat_key,
         concurrency=worker_concurrency,
         heavy_concurrency=worker_heavy_concurrency,
@@ -1663,6 +1667,7 @@ async def run(redis_url: str | None = None) -> None:
         max_retry_inflight=settings.effective_backpressure_max_retry_inflight,
         lease_timeout_seconds=job_lease_timeout_seconds,
         heavy_lease_timeout_seconds=heavy_job_lease_timeout_seconds,
+        multi_instance_safe=True,
     )
     try:
         while True:

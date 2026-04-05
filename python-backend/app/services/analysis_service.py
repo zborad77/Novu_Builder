@@ -477,13 +477,31 @@ class AnalysisService:
         quota = settings.ai_analysis_daily_quota_per_tenant
         if quota == 0:
             return
+        # Determine strict mode from APP_ENV (same logic as startup guards).
+        import os as _os
+        _strict = _os.environ.get("APP_ENV", "development").strip().lower() not in ("development", "test")
+
         if self._redis is None:
+            if _strict:
+                # Fail-closed in production/staging: unknown usage is financial risk.
+                logger.error(
+                    "SECURITY_EVENT: ai_quota.redis_unavailable_strict",
+                    organization_id=organization_id,
+                    quota=quota,
+                    note="quota enforced via fail-closed: Redis is required when AI_ANALYSIS_DAILY_QUOTA_PER_TENANT > 0",
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="AI analysis quota service temporarily unavailable. Retry later.",
+                )
+            # Fail-open in development/test only.
             logger.warning(
                 "ai_quota.redis_unavailable",
                 organization_id=organization_id,
-                note="daily quota check skipped; active-job DB limit still applies",
+                note="daily quota check skipped in dev/test; active-job DB limit still applies",
             )
             return
+
         today = datetime.now(UTC).strftime("%Y-%m-%d")
         key = f"ai-daily-quota:{organization_id}:{today}"
         try:
@@ -508,16 +526,27 @@ class AnalysisService:
             # the increment fires late in the day).
             new_count = await self._redis.incr(key)
             if new_count == 1:
-                # Key was just created — set the TTL
+                # Key was just created — set the TTL.
                 await self._redis.expire(key, 25 * 3600)
         except HTTPException:
             raise
         except Exception as exc:
+            if _strict:
+                logger.error(
+                    "SECURITY_EVENT: ai_quota.redis_error_strict",
+                    organization_id=organization_id,
+                    error=str(exc),
+                    note="quota enforced via fail-closed in strict environment",
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="AI analysis quota service temporarily unavailable. Retry later.",
+                ) from exc
             logger.warning(
                 "ai_quota.redis_error",
                 organization_id=organization_id,
                 error=str(exc),
-                note="daily quota check skipped due to Redis error",
+                note="daily quota check skipped due to Redis error (dev/test only)",
             )
 
     async def _enforce_queue_precheck(self, job_queue) -> None:
