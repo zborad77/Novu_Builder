@@ -59,6 +59,9 @@ def _set_valid_prod_env(monkeypatch, **overrides):
         "READINESS_PROCESSING_GRACE_SECONDS": "75",
         "ANALYSIS_QUEUE_MAX_DEPTH": "100",
         "HEAVY_QUEUE_MAX_DEPTH": "50",
+        "BACKPRESSURE_MAX_CONCURRENT_JOBS": "0",
+        "BACKPRESSURE_MAX_QUEUED_JOBS": "0",
+        "BACKPRESSURE_MAX_RETRY_INFLIGHT": "0",
         "ANALYSIS_JOB_MAX_ATTEMPTS": "3",
         "ANALYSIS_RETRY_BACKOFF_BASE_SECONDS": "30",
         "ANALYSIS_RETRY_BACKOFF_MAX_SECONDS": "300",
@@ -74,6 +77,8 @@ def _set_valid_prod_env(monkeypatch, **overrides):
         "RATE_LIMIT_ADMIN_SENSITIVE": "5/minute",
         "RATE_LIMIT_UPLOAD": "30/minute",
         "RATE_LIMIT_ANALYSIS_JOBS": "20/minute",
+        "RATE_LIMIT_READ_LIST": "120/minute",
+        "RATE_LIMIT_READ_DETAIL": "60/minute",
         "STORAGE_BACKEND": "s3",
         "STORAGE_AUTHORITATIVE": "true",
         "S3_BUCKET": _STRONG_S3_BUCKET,
@@ -150,11 +155,17 @@ async def test_health_and_alive_smoke(app_client):
 
     health = await app_client.get("/api/v1/health")
     assert health.status_code == 200
-    assert health.json() == {"status": "ok", "service": "python-backend"}
+    health_data = health.json()
+    assert health_data["service"] == "python-backend"
+    assert health_data["status"] in {"ok", "degraded"}
+    assert "security" in health_data
+    assert "authProtection" in health_data["security"]
 
     ready = await app_client.get("/api/v1/ready")
     assert ready.status_code == 200
-    assert ready.json() == {"status": "ready", "service": "python-backend"}
+    ready_data = ready.json()
+    assert ready_data["service"] == "python-backend"
+    assert ready_data["status"] in {"ready", "degraded"}
 
 
 async def test_auth_me_requires_bearer_token(app_client):

@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.api.deps import (
     get_analysis_service,
     get_current_user,
@@ -19,8 +21,10 @@ router = APIRouter(tags=["estimates"])
 
 
 @router.get("/cases/{case_id}/estimates", response_model=QuoteVariantListResponse)
+@limiter.limit(get_settings().rate_limit_read_list)
 async def list_case_estimates(
     case_id: str,
+    request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     quote_service: QuoteVariantService = Depends(get_quote_variant_service),

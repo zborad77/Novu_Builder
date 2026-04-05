@@ -1,8 +1,10 @@
 from time import perf_counter
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import get_current_user, get_redis, get_supplier_service, require_org_id
+from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.core.cache import delete_cached, get_cache_tag, get_cached, invalidate_cache_tag, set_cached
 from app.core.tenant_timing import (
     TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
@@ -29,7 +31,9 @@ def _list_scope(org_id: str) -> str:
 
 
 @router.get("")
+@limiter.limit(get_settings().rate_limit_read_list)
 async def list_suppliers(
+    request: Request,
     includeInactive: bool = Query(default=False),
     current_user: AuthUserRead = Depends(get_current_user),
     service: SupplierService = Depends(get_supplier_service),

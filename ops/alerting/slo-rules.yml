@@ -1,0 +1,288 @@
+groups:
+  - name: novu_slo_recording
+    rules:
+      - record: novu:slo_api_availability:ratio_30d
+        expr: |
+          1 -
+          (
+            sum(increase(http_requests_total{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code=~"5.."}[30d]))
+            /
+            clamp_min(sum(increase(http_requests_total{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)"}[30d])), 1)
+          )
+
+      - record: novu:slo_job_completion_success:ratio_30d
+        expr: |
+          sum(increase(novu_job_outcomes_total{job="novu-backend",status="completed"}[30d]))
+          /
+          clamp_min(sum(increase(novu_job_outcomes_total{job="novu-backend",status=~"completed|failed|dead_letter"}[30d])), 1)
+
+      - record: novu:slo_auth_success:ratio_30d
+        expr: |
+          1 -
+          (
+            sum(increase(http_requests_total{job="novu-backend",path_template=~"/api/v1/auth/(login|refresh)",status_code=~"5.."}[30d]))
+            /
+            clamp_min(sum(increase(http_requests_total{job="novu-backend",path_template=~"/api/v1/auth/(login|refresh)"}[30d])), 1)
+          )
+
+      - record: novu:slo_api_latency_p95:ratio_30d
+        expr: |
+          sum(increase(http_request_duration_seconds_bucket{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5..",le="1.0"}[30d]))
+          /
+          clamp_min(sum(increase(http_request_duration_seconds_count{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5.."}[30d])), 1)
+
+      - record: novu:slo_api_latency_p99:ratio_30d
+        expr: |
+          sum(increase(http_request_duration_seconds_bucket{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5..",le="2.0"}[30d]))
+          /
+          clamp_min(sum(increase(http_request_duration_seconds_count{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5.."}[30d])), 1)
+
+      - record: novu:slo_api_latency:p95_seconds_30d
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              increase(http_request_duration_seconds_bucket{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5.."}[30d])
+            )
+          )
+
+      - record: novu:slo_api_latency:p99_seconds_30d
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (
+              increase(http_request_duration_seconds_bucket{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5.."}[30d])
+            )
+          )
+
+  - name: novu_slo_alerts
+    rules:
+      - alert: SLOApiAvailabilityBudgetBurnCritical
+        expr: |
+          (
+            sum(increase(http_requests_total{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code=~"5.."}[5m]))
+            /
+            clamp_min(sum(increase(http_requests_total{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)"}[5m])), 1)
+          ) > (14.4 * 0.001)
+          and
+          (
+            sum(increase(http_requests_total{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code=~"5.."}[1h]))
+            /
+            clamp_min(sum(increase(http_requests_total{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)"}[1h])), 1)
+          ) > (14.4 * 0.001)
+        for: 5m
+        labels:
+          severity: critical
+          slo: api_availability
+        annotations:
+          summary: "API availability SLO budget is burning too fast"
+          description: "API 5xx ratio is burning the 99.9% 30d budget at critical speed."
+
+      - alert: SLOApiAvailabilityBudgetBurnWarning
+        expr: |
+          (
+            sum(increase(http_requests_total{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code=~"5.."}[30m]))
+            /
+            clamp_min(sum(increase(http_requests_total{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)"}[30m])), 1)
+          ) > (6 * 0.001)
+          and
+          (
+            sum(increase(http_requests_total{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code=~"5.."}[6h]))
+            /
+            clamp_min(sum(increase(http_requests_total{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)"}[6h])), 1)
+          ) > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: warning
+          slo: api_availability
+        annotations:
+          summary: "API availability SLO budget burn warning"
+          description: "API 5xx ratio is consuming the 99.9% 30d budget faster than planned."
+
+      - alert: SLOApiAvailabilityBudgetExhausted
+        expr: novu:slo_api_availability:ratio_30d < 0.999
+        for: 30m
+        labels:
+          severity: critical
+          slo: api_availability
+        annotations:
+          summary: "API availability SLO budget exhausted"
+          description: "Trailing 30d API availability dropped below 99.9%."
+
+      - alert: SLOJobCompletionBudgetBurnCritical
+        expr: |
+          (
+            sum(increase(novu_job_outcomes_total{job="novu-backend",status=~"failed|dead_letter"}[5m]))
+            /
+            clamp_min(sum(increase(novu_job_outcomes_total{job="novu-backend",status=~"completed|failed|dead_letter"}[5m])), 1)
+          ) > (14.4 * 0.01)
+          and
+          (
+            sum(increase(novu_job_outcomes_total{job="novu-backend",status=~"failed|dead_letter"}[1h]))
+            /
+            clamp_min(sum(increase(novu_job_outcomes_total{job="novu-backend",status=~"completed|failed|dead_letter"}[1h])), 1)
+          ) > (14.4 * 0.01)
+        for: 10m
+        labels:
+          severity: critical
+          slo: job_completion_success
+        annotations:
+          summary: "Job completion SLO budget is burning too fast"
+          description: "Failed or dead-lettered jobs are burning the 99.0% completion budget at critical speed."
+
+      - alert: SLOJobCompletionBudgetBurnWarning
+        expr: |
+          (
+            sum(increase(novu_job_outcomes_total{job="novu-backend",status=~"failed|dead_letter"}[30m]))
+            /
+            clamp_min(sum(increase(novu_job_outcomes_total{job="novu-backend",status=~"completed|failed|dead_letter"}[30m])), 1)
+          ) > (6 * 0.01)
+          and
+          (
+            sum(increase(novu_job_outcomes_total{job="novu-backend",status=~"failed|dead_letter"}[6h]))
+            /
+            clamp_min(sum(increase(novu_job_outcomes_total{job="novu-backend",status=~"completed|failed|dead_letter"}[6h])), 1)
+          ) > (6 * 0.01)
+        for: 30m
+        labels:
+          severity: warning
+          slo: job_completion_success
+        annotations:
+          summary: "Job completion SLO budget burn warning"
+          description: "Failed or dead-lettered jobs are consuming the 99.0% completion budget faster than planned."
+
+      - alert: SLOJobCompletionBudgetExhausted
+        expr: novu:slo_job_completion_success:ratio_30d < 0.99
+        for: 30m
+        labels:
+          severity: critical
+          slo: job_completion_success
+        annotations:
+          summary: "Job completion SLO budget exhausted"
+          description: "Trailing 30d job completion success dropped below 99.0%."
+
+      - alert: SLOAuthBudgetBurnCritical
+        expr: |
+          (
+            sum(increase(http_requests_total{job="novu-backend",path_template=~"/api/v1/auth/(login|refresh)",status_code=~"5.."}[5m]))
+            /
+            clamp_min(sum(increase(http_requests_total{job="novu-backend",path_template=~"/api/v1/auth/(login|refresh)"}[5m])), 1)
+          ) > (14.4 * 0.0005)
+          and
+          (
+            sum(increase(http_requests_total{job="novu-backend",path_template=~"/api/v1/auth/(login|refresh)",status_code=~"5.."}[1h]))
+            /
+            clamp_min(sum(increase(http_requests_total{job="novu-backend",path_template=~"/api/v1/auth/(login|refresh)"}[1h])), 1)
+          ) > (14.4 * 0.0005)
+        for: 5m
+        labels:
+          severity: critical
+          slo: auth_success
+        annotations:
+          summary: "Auth SLO budget is burning too fast"
+          description: "Login/refresh 5xx responses are burning the 99.95% auth budget at critical speed."
+
+      - alert: SLOAuthBudgetBurnWarning
+        expr: |
+          (
+            sum(increase(http_requests_total{job="novu-backend",path_template=~"/api/v1/auth/(login|refresh)",status_code=~"5.."}[30m]))
+            /
+            clamp_min(sum(increase(http_requests_total{job="novu-backend",path_template=~"/api/v1/auth/(login|refresh)"}[30m])), 1)
+          ) > (6 * 0.0005)
+          and
+          (
+            sum(increase(http_requests_total{job="novu-backend",path_template=~"/api/v1/auth/(login|refresh)",status_code=~"5.."}[6h]))
+            /
+            clamp_min(sum(increase(http_requests_total{job="novu-backend",path_template=~"/api/v1/auth/(login|refresh)"}[6h])), 1)
+          ) > (6 * 0.0005)
+        for: 15m
+        labels:
+          severity: warning
+          slo: auth_success
+        annotations:
+          summary: "Auth SLO budget burn warning"
+          description: "Login/refresh 5xx responses are consuming the 99.95% auth budget faster than planned."
+
+      - alert: SLOAuthBudgetExhausted
+        expr: novu:slo_auth_success:ratio_30d < 0.9995
+        for: 30m
+        labels:
+          severity: critical
+          slo: auth_success
+        annotations:
+          summary: "Auth SLO budget exhausted"
+          description: "Trailing 30d auth success dropped below 99.95%."
+
+      - alert: SLOApiLatencyP99BudgetBurnCritical
+        expr: |
+          (
+            1 -
+            (
+              sum(increase(http_request_duration_seconds_bucket{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5..",le="2.0"}[5m]))
+              /
+              clamp_min(sum(increase(http_request_duration_seconds_count{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5.."}[5m])), 1)
+            )
+          ) > (14.4 * 0.01)
+          and
+          (
+            1 -
+            (
+              sum(increase(http_request_duration_seconds_bucket{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5..",le="2.0"}[1h]))
+              /
+              clamp_min(sum(increase(http_request_duration_seconds_count{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5.."}[1h])), 1)
+            )
+          ) > (14.4 * 0.01)
+        for: 10m
+        labels:
+          severity: critical
+          slo: api_latency_p99
+        annotations:
+          summary: "API p99 latency SLO budget is burning too fast"
+          description: "Requests slower than 2.0s are burning the 99% p99 latency budget at critical speed."
+
+      - alert: SLOApiLatencyP99BudgetBurnWarning
+        expr: |
+          (
+            1 -
+            (
+              sum(increase(http_request_duration_seconds_bucket{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5..",le="2.0"}[30m]))
+              /
+              clamp_min(sum(increase(http_request_duration_seconds_count{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5.."}[30m])), 1)
+            )
+          ) > (6 * 0.01)
+          and
+          (
+            1 -
+            (
+              sum(increase(http_request_duration_seconds_bucket{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5..",le="2.0"}[6h]))
+              /
+              clamp_min(sum(increase(http_request_duration_seconds_count{job="novu-backend",path_template!~"/api/v1/(health|ready|ready/processing|health/internal|metrics|alive)",status_code!~"5.."}[6h])), 1)
+            )
+          ) > (6 * 0.01)
+        for: 30m
+        labels:
+          severity: warning
+          slo: api_latency_p99
+        annotations:
+          summary: "API p99 latency SLO budget burn warning"
+          description: "Requests slower than 2.0s are consuming the 99% p99 latency budget faster than planned."
+
+      - alert: SLOApiLatencyP99BudgetExhausted
+        expr: novu:slo_api_latency_p99:ratio_30d < 0.99
+        for: 30m
+        labels:
+          severity: critical
+          slo: api_latency_p99
+        annotations:
+          summary: "API p99 latency SLO budget exhausted"
+          description: "Trailing 30d API p99 latency objective dropped below 99% <= 2.0s."
+
+      - alert: SLOApiLatencyP95BudgetExhausted
+        expr: novu:slo_api_latency_p95:ratio_30d < 0.95
+        for: 30m
+        labels:
+          severity: warning
+          slo: api_latency_p95
+        annotations:
+          summary: "API p95 latency SLO budget exhausted"
+          description: "Trailing 30d API p95 latency objective dropped below 95% <= 1.0s."

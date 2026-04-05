@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import ipaddress
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ import structlog
 
 from app.api.deps import require_superadmin
 from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.core.metrics import (
     AUTH_PROTECTION_ENFORCED,
     BACKPRESSURE_CURRENT_CONCURRENT,
@@ -78,6 +80,26 @@ _SYSTEM_STATE_SEVERITY = {
     _SYSTEM_STATE_DEGRADED: 1,
     _SYSTEM_STATE_UNAVAILABLE: 2,
 }
+
+def _is_ip_allowlisted(client_ip: str | None, allowlist: str) -> bool:
+    """Return True if client_ip matches any entry in a comma-separated IP/CIDR allowlist."""
+    if not client_ip:
+        return False
+    try:
+        addr = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return False
+    for entry in allowlist.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            if addr in ipaddress.ip_network(entry, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
 
 try:
     from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -984,6 +1006,7 @@ def _set_probe_state_status(response: Response, *, state: str) -> None:
 
 
 @router.get("/metrics", include_in_schema=False)
+@limiter.limit(get_settings().rate_limit_metrics)
 async def metrics(request: Request) -> RawResponse:
     """Prometheus scrape endpoint. Not a health or readiness probe."""
     if not PROMETHEUS_CLIENT_AVAILABLE or generate_latest is None:
@@ -994,15 +1017,46 @@ async def metrics(request: Request) -> RawResponse:
         )
 
     settings = get_settings()
-    if settings.metrics_auth_enabled:
-        if not settings.metrics_auth_token:
-            raise HTTPException(status_code=401, detail="Metrics auth token not configured.")
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Missing Bearer token.")
-        provided = auth_header[len("Bearer "):]
-        if not secrets.compare_digest(provided, settings.metrics_auth_token):
-            raise HTTPException(status_code=401, detail="Invalid metrics token.")
+    if not settings.metrics_auth_enabled:
+        logger.error("metrics.auth_disabled", app_env=settings.app_env)
+        raise HTTPException(
+            status_code=503,
+            detail="Metrics endpoint is unavailable because authentication is disabled.",
+        )
+
+    # Enforce IP allowlist when configured (defense-in-depth before token check).
+    # Recommended in production: METRICS_IP_ALLOWLIST=10.0.0.0/8,192.168.0.0/16
+    allowlist = (settings.metrics_ip_allowlist or "").strip()
+    if allowlist:
+        client_ip = request.client.host if request.client else None
+        if not _is_ip_allowlisted(client_ip, allowlist):
+            logger.warning(
+                "metrics.access_denied",
+                reason="ip_not_allowlisted",
+                client_ip=client_ip,
+                app_env=settings.app_env,
+            )
+            raise HTTPException(status_code=403, detail="Access denied: client IP not in allowlist.")
+
+    if not settings.metrics_auth_token:
+        logger.warning("metrics.auth_denied", reason="token_not_configured")
+        raise HTTPException(status_code=401, detail="Metrics auth token not configured.")
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        logger.warning(
+            "metrics.auth_denied",
+            reason="missing_bearer",
+            client_ip=request.client.host if request.client else None,
+        )
+        raise HTTPException(status_code=401, detail="Missing Bearer token.")
+    provided = auth_header[len("Bearer "):]
+    if not secrets.compare_digest(provided, settings.metrics_auth_token):
+        logger.warning(
+            "metrics.auth_denied",
+            reason="invalid_token",
+            client_ip=request.client.host if request.client else None,
+        )
+        raise HTTPException(status_code=401, detail="Invalid metrics token.")
 
     await _refresh_operational_metrics(request)
     return RawResponse(

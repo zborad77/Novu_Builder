@@ -26,7 +26,7 @@ groups:
 
       - alert: High5xxRate
         expr: |
-          rate(http_requests_total{status=~"5..", job="novu-backend"}[5m]) > 0.05
+          rate(http_requests_total{status_code=~"5..", job="novu-backend"}[5m]) > 0.05
         for: 2m
         labels:
           severity: warning
@@ -36,7 +36,7 @@ groups:
 
       - alert: High429Rate
         expr: |
-          rate(http_requests_total{status="429", job="novu-backend"}[5m]) > 0.1
+          rate(http_requests_total{status_code="429", job="novu-backend"}[5m]) > 0.1
         for: 2m
         labels:
           severity: warning

@@ -102,7 +102,12 @@ async def get_analysis_job(
     job_queue=Depends(get_job_queue),
 ) -> dict:
     org_id = resolve_org_id(current_user)
-    job = await analysis_service.get_job(job_id, organization_id=org_id, job_queue=job_queue)
+    job = await analysis_service.get_job(
+        job_id,
+        organization_id=org_id,
+        is_superadmin_context=current_user.isSuperAdmin,
+        job_queue=job_queue,
+    )
     if not job:
         if not current_user.isSuperAdmin:
             log_cross_tenant_denied(
@@ -122,7 +127,11 @@ async def cancel_analysis_job(
     project_service: ProjectService = Depends(get_project_service),
 ) -> dict:
     org_id = resolve_org_id(current_user)
-    updated = await analysis_service.cancel_analysis_job(job_id, organization_id=org_id)
+    updated = await analysis_service.cancel_analysis_job(
+        job_id,
+        organization_id=org_id,
+        is_superadmin_context=current_user.isSuperAdmin,
+    )
     if not updated:
         if not current_user.isSuperAdmin:
             log_cross_tenant_denied(
@@ -182,7 +191,11 @@ async def retry_analysis_job(
     org_id = resolve_org_id(current_user)
     if job_queue is None:
         raise HTTPException(status_code=503, detail="Analysis queue is unavailable.")
-    original_job = await analysis_service.get_job(job_id, organization_id=org_id)
+    original_job = await analysis_service.get_job(
+        job_id,
+        organization_id=org_id,
+        is_superadmin_context=current_user.isSuperAdmin,
+    )
     if not original_job:
         if not current_user.isSuperAdmin:
             log_cross_tenant_denied(

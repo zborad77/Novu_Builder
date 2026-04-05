@@ -60,6 +60,9 @@ def _set_valid_prod_env(monkeypatch, **overrides):
         "READINESS_PROCESSING_GRACE_SECONDS": "75",
         "ANALYSIS_QUEUE_MAX_DEPTH": "100",
         "HEAVY_QUEUE_MAX_DEPTH": "50",
+        "BACKPRESSURE_MAX_CONCURRENT_JOBS": "0",
+        "BACKPRESSURE_MAX_QUEUED_JOBS": "0",
+        "BACKPRESSURE_MAX_RETRY_INFLIGHT": "0",
         "ANALYSIS_JOB_MAX_ATTEMPTS": "3",
         "ANALYSIS_RETRY_BACKOFF_BASE_SECONDS": "30",
         "ANALYSIS_RETRY_BACKOFF_MAX_SECONDS": "300",
@@ -75,6 +78,8 @@ def _set_valid_prod_env(monkeypatch, **overrides):
         "RATE_LIMIT_ADMIN_SENSITIVE": "5/minute",
         "RATE_LIMIT_UPLOAD": "30/minute",
         "RATE_LIMIT_ANALYSIS_JOBS": "20/minute",
+        "RATE_LIMIT_READ_LIST": "120/minute",
+        "RATE_LIMIT_READ_DETAIL": "60/minute",
         "STORAGE_BACKEND": "s3",
         "STORAGE_AUTHORITATIVE": "true",
         "S3_BUCKET": _STRONG_S3_BUCKET,
@@ -131,6 +136,24 @@ def test_metrics_token_too_short_rejected_in_production(monkeypatch):
         Settings()
 
 
+def test_metrics_ip_allowlist_valid_cidr_accepted(monkeypatch):
+    _set_valid_prod_env(monkeypatch, METRICS_IP_ALLOWLIST="10.0.0.0/8,192.168.0.0/16")
+    s = Settings()
+    assert s.metrics_ip_allowlist == "10.0.0.0/8,192.168.0.0/16"
+
+
+def test_metrics_ip_allowlist_invalid_cidr_rejected(monkeypatch):
+    _set_valid_prod_env(monkeypatch, METRICS_IP_ALLOWLIST="not-an-ip")
+    with pytest.raises(ValidationError, match="invalid IP/CIDR"):
+        Settings()
+
+
+def test_metrics_ip_allowlist_empty_is_accepted(monkeypatch):
+    _set_valid_prod_env(monkeypatch, METRICS_IP_ALLOWLIST="")
+    s = Settings()
+    assert s.metrics_ip_allowlist == ""
+
+
 def test_metrics_token_not_required_when_guard_disabled_in_development(monkeypatch):
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("METRICS_AUTH_ENABLED", "false")
@@ -145,6 +168,29 @@ def test_metrics_token_not_required_in_development(monkeypatch):
     monkeypatch.delenv("METRICS_AUTH_TOKEN", raising=False)
     s = Settings()
     assert s.metrics_auth_token is None
+
+
+def test_db_seed_on_startup_fails_in_production(monkeypatch):
+    _set_valid_prod_env(monkeypatch, DB_SEED_ON_STARTUP="true")
+    with pytest.raises(ValidationError, match="DB_SEED_ON_STARTUP=true is allowed only in APP_ENV='development'"):
+        Settings()
+
+
+def test_db_seed_on_startup_defaults_false_in_development(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.delenv("DB_SEED_ON_STARTUP", raising=False)
+    assert Settings.model_fields["db_seed_on_startup"].default is False
+    s = Settings(DB_SEED_ON_STARTUP=False)
+    assert s.db_seed_on_startup is False
+    assert s.should_seed_on_startup is False
+
+
+def test_db_seed_on_startup_can_be_enabled_explicitly_in_development(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("DB_SEED_ON_STARTUP", "true")
+    s = Settings()
+    assert s.db_seed_on_startup is True
+    assert s.should_seed_on_startup is True
 
 
 def test_worker_metrics_cannot_be_disabled_in_production(monkeypatch):

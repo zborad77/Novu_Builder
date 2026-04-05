@@ -1,5 +1,7 @@
 import base64
+from dataclasses import dataclass
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.seed_runtime import (
@@ -8,7 +10,7 @@ from app.db.seed_runtime import (
     SeedWriteMode,
     execute_seed_plan,
 )
-from app.services.auth_service import hash_password
+from app.services.auth_service import hash_password, verify_password
 from app.models import (
     AnalysisJob,
     AnalysisResult,
@@ -50,6 +52,42 @@ from app.models import (
 )
 from app.storage.local_photo_storage import STORAGE_ROOT, ensure_directory
 from app.work_catalog.seeds import GLOBAL_WORK_CATALOG_SEED
+
+logger = structlog.get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class SeedAccountMonitor:
+    user_id: str
+    email: str
+    role: str
+    default_password: str
+
+
+_MONITORED_SEED_ACCOUNTS: tuple[SeedAccountMonitor, ...] = (
+    SeedAccountMonitor(
+        user_id="usr_novu_admin",
+        email="admin@novu.cz",
+        role="superadmin",
+        default_password="NovuAdmin2024!",
+    ),
+    SeedAccountMonitor(
+        user_id="usr_1",
+        email="demo@novu.local",
+        role="manager",
+        default_password="demo1234",
+    ),
+    SeedAccountMonitor(
+        user_id="usr_2",
+        email="tech@novu.local",
+        role="technician",
+        default_password="tech1234",
+    ),
+)
+_MONITORED_SEED_ACCOUNTS_BY_ID = {
+    account.user_id: account
+    for account in _MONITORED_SEED_ACCOUNTS
+}
 
 
 _SEED_PHOTO_BYTES = {
@@ -205,6 +243,47 @@ async def _seed_dev_work_catalog_overrides(session: AsyncSession) -> SeedPlanRep
     )
 
 
+async def audit_seed_default_passwords(
+    session: AsyncSession,
+    *,
+    app_env: str,
+    strict_environment: bool,
+) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    log = logger.critical if strict_environment else logger.warning
+
+    for monitored_account in _MONITORED_SEED_ACCOUNTS:
+        user = await session.get(User, monitored_account.user_id)
+        if user is None or not user.is_active or not user.password_hash:
+            continue
+        if not verify_password(monitored_account.default_password, user.password_hash):
+            continue
+
+        finding = {
+            "user_id": user.id,
+            "email": user.email,
+            "role": user.role,
+            "organization_id": user.organization_id,
+        }
+        findings.append(finding)
+        log(
+            "SECURITY_EVENT: seed_default_password_detected",
+            app_env=app_env,
+            strict_environment=strict_environment,
+            fail_fast=False,
+            user_id=user.id,
+            email=user.email,
+            role=user.role,
+            organization_id=user.organization_id,
+            is_active=user.is_active,
+            reason="Active seeded account still matches a bundled default credential.",
+            impact="Known bootstrap credentials can grant privileged access if not rotated.",
+            remediation="Change the password immediately, disable the account, or reseed with rotated credentials.",
+        )
+
+    return findings
+
+
 async def ensure_dev_seed(session: AsyncSession) -> None:
     # NOVU platform organization (super-admin home)
     novu_org = await session.get(Organization, "org_novu")
@@ -223,14 +302,15 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
     # NOVU super-admin account
     novu_admin = await session.get(User, "usr_novu_admin")
     if novu_admin is None:
+        novu_admin_seed = _MONITORED_SEED_ACCOUNTS_BY_ID["usr_novu_admin"]
         session.add(
             User(
                 id="usr_novu_admin",
                 organization_id="org_novu",
-                email="admin@novu.cz",
-                password_hash=hash_password("NovuAdmin2024!"),
+                email=novu_admin_seed.email,
+                password_hash=hash_password(novu_admin_seed.default_password),
                 full_name="NOVU Admin",
-                role="superadmin",
+                role=novu_admin_seed.role,
                 is_active=True,
                 is_superadmin=True,
             )
@@ -252,14 +332,15 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
 
     user = await session.get(User, "usr_1")
     if user is None:
+        manager_seed = _MONITORED_SEED_ACCOUNTS_BY_ID["usr_1"]
         session.add(
             User(
                 id="usr_1",
                 organization_id="org_1",
-                email="demo@novu.local",
-                password_hash=hash_password("demo1234"),
+                email=manager_seed.email,
+                password_hash=hash_password(manager_seed.default_password),
                 full_name="Demo Manager",
-                role="manager",
+                role=manager_seed.role,
                 is_active=True,
                 is_superadmin=False,
             )
@@ -267,14 +348,15 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
 
     tech = await session.get(User, "usr_2")
     if tech is None:
+        technician_seed = _MONITORED_SEED_ACCOUNTS_BY_ID["usr_2"]
         session.add(
             User(
                 id="usr_2",
                 organization_id="org_1",
-                email="tech@novu.local",
-                password_hash=hash_password("tech1234"),
+                email=technician_seed.email,
+                password_hash=hash_password(technician_seed.default_password),
                 full_name="Demo Technician",
-                role="technician",
+                role=technician_seed.role,
                 is_active=True,
                 is_superadmin=False,
             )

@@ -54,6 +54,18 @@ class ExportRepository:
     async def get_by_id(self, export_id: str) -> ProjectExport | None:
         return await self.session.get(ProjectExport, export_id)
 
+    async def get_by_id_in_org(self, export_id: str, organization_id: str) -> ProjectExport | None:
+        result = await self.session.execute(
+            select(ProjectExport)
+            .join(Project, Project.id == ProjectExport.project_id)
+            .where(
+                ProjectExport.id == export_id,
+                Project.organization_id == organization_id,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def update_state(
         self,
         export: ProjectExport,

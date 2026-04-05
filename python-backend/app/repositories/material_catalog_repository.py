@@ -2,6 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.sql_like import LIKE_ESCAPE_CHAR, build_contains_ilike_pattern
 from app.models import MaterialCatalog, Supplier, SupplierMaterialPrice
 
 
@@ -18,7 +19,12 @@ class MaterialCatalogRepository:
         if active_only:
             query = query.where(MaterialCatalog.is_active.is_(True))
         if search:
-            query = query.where(MaterialCatalog.name.ilike(f"%{search}%"))
+            query = query.where(
+                MaterialCatalog.name.ilike(
+                    build_contains_ilike_pattern(search),
+                    escape=LIKE_ESCAPE_CHAR,
+                )
+            )
         query = query.order_by(MaterialCatalog.name.asc())
         result = await self.session.execute(query)
         return list(result.scalars().all())

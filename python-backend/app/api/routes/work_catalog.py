@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from time import perf_counter
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api.deps import get_current_user, get_redis, get_work_catalog_service, require_org_id
+from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.core.cache import get_cache_tag, get_cached, set_cached
 from app.core.tenant_timing import (
     TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
@@ -52,7 +54,9 @@ from app.work_catalog.domain import CatalogValidationError
 
 router = APIRouter(tags=["work-catalog"])
 @router.get("/work-catalog/work-types", response_model=EffectiveWorkTypeListResponse)
+@limiter.limit(get_settings().rate_limit_read_list)
 async def list_effective_work_types(
+    request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
     service: WorkCatalogService = Depends(get_work_catalog_service),
     redis=Depends(get_redis),
@@ -84,7 +88,9 @@ async def list_effective_work_types(
 
 
 @router.get("/work-catalog/catalog/categories", response_model=CatalogCategoryListResponse)
+@limiter.limit(get_settings().rate_limit_read_list)
 async def list_catalog_categories(
+    request: Request,
     service: WorkCatalogService = Depends(get_work_catalog_service),
     redis=Depends(get_redis),
 ):
@@ -107,7 +113,9 @@ async def list_catalog_categories(
 
 
 @router.get("/work-catalog/catalog/work-types", response_model=CatalogWorkTypeListResponse)
+@limiter.limit(get_settings().rate_limit_read_list)
 async def list_catalog_work_types(
+    request: Request,
     service: WorkCatalogService = Depends(get_work_catalog_service),
     redis=Depends(get_redis),
 ):
@@ -130,8 +138,10 @@ async def list_catalog_work_types(
 
 
 @router.get("/work-catalog/catalog/work-types/{work_type_code}", response_model=CatalogWorkTypeDetailRead)
+@limiter.limit(get_settings().rate_limit_read_detail)
 async def get_catalog_work_type_detail(
     work_type_code: str,
+    request: Request,
     service: WorkCatalogService = Depends(get_work_catalog_service),
     redis=Depends(get_redis),
 ):
@@ -155,9 +165,11 @@ async def get_catalog_work_type_detail(
     "/work-catalog/catalog/work-types/{work_type_code}/parameters/{parameter_code}",
     response_model=ParameterSchemaDetailRead,
 )
+@limiter.limit(get_settings().rate_limit_read_detail)
 async def get_parameter_schema_detail(
     work_type_code: str,
     parameter_code: str,
+    request: Request,
     service: WorkCatalogService = Depends(get_work_catalog_service),
     redis=Depends(get_redis),
 ):
@@ -181,8 +193,10 @@ async def get_parameter_schema_detail(
 
 
 @router.get("/work-catalog/work-types/{work_type_code}/effective", response_model=EffectiveWorkTypeRead)
+@limiter.limit(get_settings().rate_limit_read_detail)
 async def get_effective_work_type(
     work_type_code: str,
+    request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
     service: WorkCatalogService = Depends(get_work_catalog_service),
     redis=Depends(get_redis),
@@ -236,8 +250,10 @@ async def upsert_tenant_work_type_setting(
 
 
 @router.get("/cases/{case_id}/work-items", response_model=ProjectWorkItemListResponse)
+@limiter.limit(get_settings().rate_limit_read_list)
 async def list_project_work_items(
     case_id: str,
+    request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
     service: WorkCatalogService = Depends(get_work_catalog_service),
 ):
@@ -260,9 +276,11 @@ async def list_project_work_items(
     "/cases/{case_id}/work-types/{work_type_code}/effective-configuration",
     response_model=ProjectWorkItemEffectiveConfigurationRead,
 )
+@limiter.limit(get_settings().rate_limit_read_detail)
 async def get_project_work_item_effective_configuration(
     case_id: str,
     work_type_code: str,
+    request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
     service: WorkCatalogService = Depends(get_work_catalog_service),
     redis=Depends(get_redis),
@@ -300,9 +318,11 @@ async def get_project_work_item_effective_configuration(
 
 
 @router.get("/cases/{case_id}/work-items/{project_work_item_id}", response_model=ProjectWorkItemDetailRead)
+@limiter.limit(get_settings().rate_limit_read_detail)
 async def get_project_work_item_detail(
     case_id: str,
     project_work_item_id: str,
+    request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
     service: WorkCatalogService = Depends(get_work_catalog_service),
 ):

@@ -23,7 +23,7 @@ from app.core.metrics import (
 from app.core.request_id import sanitize_request_id
 from app.core.redis_client import build_queue_redis_client_from_settings
 from app.db.base import Base
-from app.db.bootstrap import ensure_dev_seed
+from app.db.bootstrap import audit_seed_default_passwords, ensure_dev_seed
 from app.db.session import AsyncSessionFactory, engine
 from app.models import Project
 from app.repositories.token_repository import TokenRepository
@@ -31,6 +31,29 @@ from app.storage.backend import verify_storage_health
 
 
 logger = structlog.get_logger(__name__)
+
+_CONTENT_SECURITY_POLICY_DIRECTIVES: tuple[str, ...] = (
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+)
+_CORS_ALLOW_METHODS: tuple[str, ...] = (
+    "GET",
+    "POST",
+    "PATCH",
+    "PUT",
+    "DELETE",
+    "OPTIONS",
+)
+_CORS_ALLOW_HEADERS: tuple[str, ...] = (
+    "Authorization",
+    "Content-Type",
+    "X-Request-ID",
+)
 
 try:
     from slowapi import _rate_limit_exceeded_handler
@@ -105,6 +128,15 @@ async def verify_application_schema() -> None:
         ) from exc
 
 
+async def verify_seed_credentials_on_startup(settings) -> list[dict[str, str]]:
+    async with AsyncSessionFactory() as session:
+        return await audit_seed_default_passwords(
+            session,
+            app_env=settings.app_env,
+            strict_environment=_is_strict_startup_environment(settings),
+        )
+
+
 async def verify_storage_backend(settings) -> None:
     try:
         await verify_storage_health()
@@ -126,6 +158,10 @@ def _build_redis_client(settings):
         settings,
         client_name="novu-backend",
     )
+
+
+def build_content_security_policy() -> str:
+    return "; ".join(_CONTENT_SECURITY_POLICY_DIRECTIVES)
 
 
 async def initialize_job_queue(settings):
@@ -213,6 +249,7 @@ async def lifespan(app: FastAPI):
     startup_checks["database"] = "ok"
     await verify_application_schema()
     startup_checks["schema"] = "ok"
+    await verify_seed_credentials_on_startup(settings)
     try:
         await verify_storage_backend(settings)
     except Exception as exc:
@@ -255,6 +292,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_file, settings.log_error_file)
     sentry_sdk = verify_runtime_dependency_guards(settings)
+    csp_policy = build_content_security_policy()
 
     if settings.sentry_dsn and sentry_sdk is not None:
         sentry_sdk.init(
@@ -288,6 +326,12 @@ def create_app() -> FastAPI:
         "storage": "pending",
     }
     app.state.readiness_started_at_monotonic = time.monotonic()
+    app.state.content_security_policy = csp_policy if settings.csp_enabled else None
+
+    if settings.csp_enabled:
+        logger.info("security.csp.enabled", policy=csp_policy)
+    else:
+        logger.warning("security.csp.disabled", app_env=settings.app_env)
 
     app.state.limiter = limiter
     if RateLimitExceeded is not None and _rate_limit_exceeded_handler is not None:
@@ -297,25 +341,15 @@ def create_app() -> FastAPI:
         app.add_middleware(HTTPSRedirectMiddleware)
 
     app.add_middleware(AuditMiddleware)
+    # Keep the browser-facing CORS profile explicit and minimal.
+    # Extend these allowlists only when a real client method/header is required.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=list(_CORS_ALLOW_METHODS),
+        allow_headers=list(_CORS_ALLOW_HEADERS),
     )
-
-    @app.middleware("http")
-    async def security_headers(request: Request, call_next) -> Response:
-        response = await call_next(request)
-        if settings.require_https or settings.app_env != "development":
-            response.headers["Strict-Transport-Security"] = (
-                f"max-age={settings.hsts_max_age}; includeSubDomains"
-            )
-        response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("X-Frame-Options", "DENY")
-        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-        return response
 
     @app.middleware("http")
     async def log_requests(request: Request, call_next) -> Response:
@@ -361,6 +395,31 @@ def create_app() -> FastAPI:
         response.headers["X-Request-ID"] = request_id
         return response
 
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next) -> Response:
+        response = await call_next(request)
+        if settings.require_https or settings.app_env != "development":
+            response.headers["Strict-Transport-Security"] = (
+                f"max-age={settings.hsts_max_age}; includeSubDomains"
+            )
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+
+        effective_csp_policy = app.state.content_security_policy
+        if effective_csp_policy:
+            existing_csp_policy = response.headers.get("Content-Security-Policy")
+            if existing_csp_policy and existing_csp_policy != effective_csp_policy:
+                logger.warning(
+                    "security.csp.override",
+                    method=request.method,
+                    path=request.url.path,
+                    existing_policy=existing_csp_policy,
+                    enforced_policy=effective_csp_policy,
+                )
+            response.headers["Content-Security-Policy"] = effective_csp_policy
+        return response
+
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         route = request.scope.get("route")
@@ -379,10 +438,14 @@ def create_app() -> FastAPI:
                 sentry_sdk.capture_exception(exc)
             except ImportError:
                 pass
-        return JSONResponse(
+        response = JSONResponse(
             status_code=500,
             content={"detail": "Internal server error"},
         )
+        effective_csp_policy = app.state.content_security_policy
+        if effective_csp_policy:
+            response.headers["Content-Security-Policy"] = effective_csp_policy
+        return response
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 

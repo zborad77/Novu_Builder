@@ -63,8 +63,10 @@ def _upload_error_reason(exc: UploadValidationError) -> str:
 
 
 @router.get("/cases/{case_id}/images", response_model=PhotoListResponse)
+@limiter.limit(get_settings().rate_limit_read_list)
 async def list_case_images(
     case_id: str,
+    request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
@@ -147,8 +149,10 @@ async def upload_case_images(
 
 
 @router.get("/images/{image_id}/preview")
+@limiter.limit(get_settings().rate_limit_read_detail)
 async def get_image_preview(
     image_id: str,
+    request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
     photo_service: PhotoService = Depends(get_photo_service),
 ):

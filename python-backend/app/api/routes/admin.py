@@ -26,6 +26,7 @@ from app.schemas.company import (
     CompanyRead,
 )
 from app.core.limiter import limiter
+from app.core.sql_like import LIKE_ESCAPE_CHAR, build_contains_ilike_pattern
 from app.core.security import enforce_password_strength
 from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit
 from app.repositories.token_repository import SessionTokenRevocation, TokenRepository
@@ -447,7 +448,11 @@ async def admin_retry_job(
                 max_depth=settings.analysis_queue_max_depth,
             )
         except AnalysisJobQueueCapacityExceededError:
-            await analysis_service.cancel_analysis_job(new_job.id, organization_id=None)
+            await analysis_service.cancel_analysis_job(
+                new_job.id,
+                organization_id=None,
+                is_superadmin_context=True,
+            )
             raise HTTPException(status_code=429, detail="Analysis queue is full. Please retry later.")
     else:
         logger.warning("job_queue.unavailable", job_id=new_job.id, action="admin_retry_job")
@@ -546,7 +551,12 @@ async def get_audit_log(
     if org_id:
         query = query.where(AuditLog.org_id == org_id)
     if action:
-        query = query.where(AuditLog.action.ilike(f"%{action}%"))
+        query = query.where(
+            AuditLog.action.ilike(
+                build_contains_ilike_pattern(action),
+                escape=LIKE_ESCAPE_CHAR,
+            )
+        )
     if user_id:
         query = query.where(AuditLog.user_id == user_id)
 

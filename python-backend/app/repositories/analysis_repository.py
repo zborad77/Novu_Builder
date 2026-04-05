@@ -334,6 +334,23 @@ class AnalysisRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_analysis_result_by_job_id_in_org(
+        self,
+        job_id: str,
+        organization_id: str,
+    ) -> AnalysisResult | None:
+        result = await self.session.execute(
+            select(AnalysisResult)
+            .join(Project, Project.id == AnalysisResult.project_id)
+            .where(
+                AnalysisResult.analysis_job_id == job_id,
+                Project.organization_id == organization_id,
+            )
+            .order_by(AnalysisResult.created_at.desc(), AnalysisResult.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def get_analysis_job_in_org(self, job_id: str, organization_id: str) -> AnalysisJob | None:
         """Fetch an AnalysisJob only if its parent project belongs to organization_id."""
         result = await self.session.execute(

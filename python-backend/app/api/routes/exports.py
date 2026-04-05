@@ -1,12 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.deps import get_export_service, get_current_user, get_project_service, require_manager, resolve_org_id
+from app.core.config import get_settings
+from app.core.limiter import limiter
+from app.core.audit import log_cross_tenant_denied
 from app.schemas.auth import AuthUserRead
 from app.schemas.export import ExportCreateResponse, ExportRead
 from app.services.export_service import ExportService
 from app.services.project_service import ProjectService
 
 router = APIRouter(tags=["exports"])
+logger = structlog.get_logger(__name__)
 
 
 @router.post("/cases/{case_id}/exports/report-pdf", response_model=ExportCreateResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -92,19 +97,34 @@ async def create_case_zip(
 
 
 @router.get("/exports/{export_id}", response_model=ExportRead)
+@limiter.limit(get_settings().rate_limit_read_detail)
 async def get_export(
     export_id: str,
+    request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportRead:
-    export = await export_service.get_export(export_id)
+    org_id = resolve_org_id(current_user)
+    export = await export_service.get_export(
+        export_id,
+        organization_id=org_id,
+        is_superadmin_context=current_user.isSuperAdmin,
+    )
     if not export:
+        if not current_user.isSuperAdmin:
+            log_cross_tenant_denied(
+                logger,
+                resource="export",
+                resource_id=export_id,
+                user_id=current_user.id,
+                org_id=current_user.organizationId,
+            )
         raise HTTPException(status_code=404, detail="Export not found.")
     if not current_user.isSuperAdmin:
         project = await project_service.get_project(
             export.caseId,
-            organization_id=current_user.organizationId,
+            organization_id=org_id,
         )
         if not project:
             raise HTTPException(status_code=404, detail="Export not found.")

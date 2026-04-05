@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.api.deps import get_current_user, get_project_service, require_manager, resolve_org_id
+from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.schemas.auth import AuthUserRead
 from app.schemas.project import (
     ProjectCreate,
@@ -17,7 +19,9 @@ router = APIRouter(prefix="/cases", tags=["cases"])
 
 
 @router.get("", response_model=ProjectListResponse)
+@limiter.limit(get_settings().rate_limit_read_list)
 async def list_cases(
+    request: Request,
     status_filter: str | None = Query(default=None, alias="status"),
     search: str | None = Query(default=None),
     org_id: str | None = Query(default=None, description="Super-admin only: filter by organization"),
@@ -60,8 +64,10 @@ async def create_case(
 
 
 @router.get("/{case_id}", response_model=ProjectDetail)
+@limiter.limit(get_settings().rate_limit_read_detail)
 async def get_case(
     case_id: str,
+    request: Request,
     service: ProjectService = Depends(get_project_service),
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> ProjectDetail:
@@ -163,8 +169,10 @@ async def send_case(
 
 
 @router.get("/{case_id}/timeline", response_model=list[dict])
+@limiter.limit(get_settings().rate_limit_read_detail)
 async def get_case_timeline(
     case_id: str,
+    request: Request,
     service: ProjectService = Depends(get_project_service),
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> list[dict]:

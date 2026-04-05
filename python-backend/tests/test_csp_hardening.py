@@ -1,7 +1,9 @@
-import pytest
+from httpx import ASGITransport, AsyncClient
+from fastapi.responses import HTMLResponse
 
 from app.core.config import Settings, get_settings
-from app.main import initialize_job_queue
+from app.main import build_content_security_policy, create_app
+
 
 _STRONG_JWT = "a-very-strong-jwt-secret-for-testing-x99-minimum-32chars!"
 _STRONG_REDIS = "redis://:a-strong-redis-password-xyz123@localhost:6379/0"
@@ -87,40 +89,99 @@ def _set_valid_prod_env(monkeypatch, **overrides):
             monkeypatch.delenv(key, raising=False)
         else:
             monkeypatch.setenv(key, val)
-
-
-def test_get_settings_wraps_validation_errors_with_startup_prefix(monkeypatch):
-    get_settings.cache_clear()
-    _set_valid_prod_env(monkeypatch, METRICS_AUTH_ENABLED="false")
-
-    with pytest.raises(RuntimeError, match=r"^Startup validation failed \[config\]:"):
-        get_settings()
-
     get_settings.cache_clear()
 
 
-def test_get_settings_fails_fast_when_production_seed_is_enabled(monkeypatch):
+async def _request(app, path: str):
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.get(path)
+
+
+async def test_all_success_responses_include_csp_header(monkeypatch):
     get_settings.cache_clear()
-    _set_valid_prod_env(monkeypatch, DB_SEED_ON_STARTUP="true")
+    app = create_app()
 
-    with pytest.raises(RuntimeError, match=r"^Startup validation failed \[config\]:.*DB_SEED_ON_STARTUP=true"):
-        get_settings()
+    try:
+        response = await _request(app, "/api/v1/alive")
+    finally:
+        get_settings.cache_clear()
 
+    assert response.status_code == 200
+    assert response.headers["Content-Security-Policy"] == build_content_security_policy()
+
+
+async def test_404_response_includes_csp_header(monkeypatch):
     get_settings.cache_clear()
+    app = create_app()
+
+    try:
+        response = await _request(app, "/api/v1/does-not-exist")
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 404
+    assert response.headers["Content-Security-Policy"] == build_content_security_policy()
 
 
-async def test_initialize_job_queue_uses_consistent_startup_prefix(monkeypatch):
-    class FailingRedis:
-        async def ping(self):
-            raise RuntimeError("connection refused")
+async def test_unhandled_exception_response_includes_csp_header(monkeypatch):
+    get_settings.cache_clear()
+    app = create_app()
 
-        async def aclose(self):
-            return None
+    @app.get("/__csp-test-error")
+    async def csp_test_error():
+        raise RuntimeError("boom")
 
-    _set_valid_prod_env(monkeypatch)
-    settings = Settings()
+    try:
+        response = await _request(app, "/__csp-test-error")
+    finally:
+        get_settings.cache_clear()
 
-    monkeypatch.setattr("app.main._build_redis_client", lambda _settings: FailingRedis())
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
+    assert response.headers["Content-Security-Policy"] == build_content_security_policy()
 
-    with pytest.raises(RuntimeError, match=r"^Startup validation failed \[redis\]:"):
-        await initialize_job_queue(settings)
+
+async def test_inline_script_payload_is_blocked_by_csp_policy(monkeypatch):
+    get_settings.cache_clear()
+    app = create_app()
+
+    @app.get("/__csp-test-inline-script")
+    async def csp_test_inline_script():
+        return HTMLResponse("<html><body><script>window.__xss = true</script></body></html>")
+
+    try:
+        response = await _request(app, "/__csp-test-inline-script")
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 200
+    assert "<script>window.__xss = true</script>" in response.text
+    assert response.headers["Content-Security-Policy"] == build_content_security_policy()
+    assert "script-src 'self'" in response.headers["Content-Security-Policy"]
+    assert "'unsafe-inline'" not in response.headers["Content-Security-Policy"]
+
+
+async def test_csp_header_can_be_disabled_only_via_explicit_config(monkeypatch):
+    monkeypatch.setenv("CSP_ENABLED", "false")
+    get_settings.cache_clear()
+    app = create_app()
+
+    try:
+        response = await _request(app, "/api/v1/alive")
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 200
+    assert "Content-Security-Policy" not in response.headers
+
+
+def test_csp_enabled_defaults_true_in_production_when_flag_is_omitted(monkeypatch):
+    _set_valid_prod_env(monkeypatch, CSP_ENABLED=None)
+
+    try:
+        settings = Settings()
+    finally:
+        get_settings.cache_clear()
+
+    assert settings.csp_enabled is True

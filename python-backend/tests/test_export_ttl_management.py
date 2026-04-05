@@ -247,7 +247,7 @@ async def test_get_export_marks_missing_completed_artifact_as_failed(monkeypatch
     monkeypatch.setattr(export_service_mod, "storage_key_exists", AsyncMock(return_value=False))
 
     service = ExportService(ExportRepository(db_session))
-    export = await service.get_export(export_id)
+    export = await service.get_export(export_id, organization_id=test_tenants["org_a"])
 
     row = await db_session.get(ProjectExport, export_id)
     assert export is not None
@@ -282,7 +282,7 @@ async def test_get_export_rejects_expired_records(db_session, test_tenants):
     await db_session.commit()
 
     service = ExportService(ExportRepository(db_session))
-    result = await service.get_export(export_id)
+    result = await service.get_export(export_id, organization_id=test_tenants["org_a"])
 
     assert result is None
 

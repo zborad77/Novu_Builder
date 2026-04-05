@@ -1341,8 +1341,19 @@ class ExportService:
             now=now,
         )
 
-    async def get_export(self, export_id: str) -> ExportRead | None:
-        export = await self.repository.get_by_id(export_id)
+    async def get_export(
+        self,
+        export_id: str,
+        *,
+        organization_id: str | None = None,
+        is_superadmin_context: bool = False,
+    ) -> ExportRead | None:
+        if organization_id is not None:
+            export = await self.repository.get_by_id_in_org(export_id, organization_id)
+        elif is_superadmin_context:
+            export = await self.repository.get_by_id(export_id)
+        else:
+            return None
         if export is None:
             return None
         expires_at = _as_utc(export.expires_at)

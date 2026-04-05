@@ -19,7 +19,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import secrets
 import sys
+from threading import Thread
 import time
 from datetime import UTC, datetime
 
@@ -101,9 +104,10 @@ from app.worker.queue import (
 logger = structlog.get_logger(__name__)
 
 try:
-    from prometheus_client import start_http_server
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 except ModuleNotFoundError:
-    start_http_server = None
+    CONTENT_TYPE_LATEST = None
+    generate_latest = None
 
 
 class WorkerPayloadValidationError(ValueError):
@@ -126,6 +130,103 @@ class WorkerJobExecutionError(RuntimeError):
         self.project_id = project_id
         self.organization_id = organization_id
         self.cause = cause
+
+
+@dataclass
+class WorkerMetricsServerHandle:
+    server: ThreadingHTTPServer
+    thread: Thread
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+
+
+def _worker_metrics_auth_reason(auth_header: str | None, expected_token: str | None) -> str | None:
+    if not expected_token:
+        return "token_not_configured"
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return "missing_bearer"
+    provided = auth_header[len("Bearer "):].strip()
+    if not provided:
+        return "missing_bearer"
+    if not secrets.compare_digest(provided, expected_token):
+        return "invalid_token"
+    return None
+
+
+def _build_worker_metrics_handler(expected_token: str):
+    class AuthenticatedWorkerMetricsHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path not in ("/", "/metrics"):
+                self.send_error(404)
+                return
+
+            reason = _worker_metrics_auth_reason(
+                self.headers.get("Authorization"),
+                expected_token,
+            )
+            if reason is not None:
+                logger.warning(
+                    "worker.metrics_unauthorized",
+                    reason=reason,
+                    path=self.path,
+                    client_ip=self.client_address[0] if self.client_address else None,
+                )
+                self.send_response(401)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("WWW-Authenticate", "Bearer")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(b"Unauthorized")
+                return
+
+            payload = generate_latest()
+            self.send_response(200)
+            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Robots-Tag", "noindex, nofollow")
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format: str, *args) -> None:  # noqa: A003
+            return
+
+    return AuthenticatedWorkerMetricsHandler
+
+
+def _start_worker_metrics_http_server(settings) -> WorkerMetricsServerHandle:
+    token = (settings.metrics_auth_token or "").strip()
+    if not token:
+        raise RuntimeError(
+            startup_failure_message(
+                "worker_metrics",
+                "METRICS_AUTH_TOKEN must be set when WORKER_METRICS_ENABLED=true.",
+            )
+        )
+
+    try:
+        server = ThreadingHTTPServer(
+            (settings.worker_metrics_host, settings.worker_metrics_port),
+            _build_worker_metrics_handler(token),
+        )
+    except OSError as exc:
+        raise RuntimeError(
+            startup_failure_message(
+                "worker_metrics",
+                f"Failed to bind worker metrics listener on "
+                f"{settings.worker_metrics_host}:{settings.worker_metrics_port}: {exc}",
+            )
+        ) from exc
+
+    thread = Thread(
+        target=server.serve_forever,
+        name="novu-worker-metrics",
+        daemon=True,
+    )
+    thread.start()
+    return WorkerMetricsServerHandle(server=server, thread=thread)
 
 
 class HeavyWorkerJobExecutionError(RuntimeError):
@@ -423,6 +524,14 @@ _PHOTO_DELETE_CLEANUP_INTERVAL_SECONDS = 30
 _IDLE_LOOP_SLEEP_SECONDS = 1.0
 _LEASE_RENEWAL_INTERVAL_SECONDS = 30.0
 _LEASE_REAPER_BATCH_SIZE = 100
+_FINALIZE_STATE_SUCCESS = "success"
+_FINALIZE_STATE_FAILED = "failed"
+_FINALIZE_STATE_RETRY = "retry"
+_FINALIZE_STATE_WHITELIST = frozenset({
+    _FINALIZE_STATE_SUCCESS,
+    _FINALIZE_STATE_FAILED,
+    _FINALIZE_STATE_RETRY,
+})
 
 
 def _is_strict_worker_environment(settings) -> bool:
@@ -675,23 +784,84 @@ async def _resolve_job_failure_finalization(
     return "ack", None, attempt_count, failure_reason
 
 
+async def _mark_job_failed_for_unknown_finalize_state(
+    runtime: WorkerRuntime,
+    lease: LeasedAnalysisJob,
+    *,
+    unknown_state: str,
+) -> str:
+    error_message = (
+        f"Worker finalize rejected unknown state: {unknown_state!r}. "
+        "Lease released fail-safe."
+    )
+    logger.error(
+        "worker.job_finalize_unknown_state",
+        job_id=lease.job_id,
+        project_id=lease.project_id,
+        tenant_id=lease.organization_id,
+        lease_token=lease.token,
+        worker_id=lease.worker_id,
+        reason="unknown_state",
+        unknown_state=unknown_state,
+    )
+    service = _build_worker_analysis_service(runtime.settings)
+    try:
+        failed = await service.fail_job_before_processing(
+            lease.job_id,
+            message=error_message,
+        )
+    except Exception as exc:
+        logger.error(
+            "worker.job_finalize_unknown_state_fail_job_failed",
+            job_id=lease.job_id,
+            project_id=lease.project_id,
+            tenant_id=lease.organization_id,
+            lease_token=lease.token,
+            worker_id=lease.worker_id,
+            reason="unknown_state",
+            unknown_state=unknown_state,
+            error=str(exc),
+            exc_info=True,
+        )
+    else:
+        logger.info(
+            "worker.job_finalize_unknown_state_failed",
+            job_id=lease.job_id,
+            tenant_id=lease.organization_id,
+            lease_token=lease.token,
+            worker_id=lease.worker_id,
+            reason="unknown_state",
+            unknown_state=unknown_state,
+            marked_failed=failed,
+        )
+    return error_message
+
+
 async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> None:
     renewal_task = asyncio.create_task(_renew_job_lease_loop(runtime, lease))
-    finalize_action = "ack"
+    finalize_state = _FINALIZE_STATE_SUCCESS
     retry_at: datetime | None = None
     dlq_reason: str | None = None
     attempt_count = 0
+    move_to_dlq = False
+    unknown_finalize_state: str | None = None
     try:
         result = await runtime.job_executor.execute_lease(lease, job_queue=runtime.redis)
-        finalize_action = "ack"
         if result is not None:
             attempt_count = int(getattr(result, "attempt_count", 0) or 0)
             retry_at = getattr(result, "retry_at", None)
             dlq_reason = getattr(result, "failure_reason", None)
-            if result.disposition == "retry_scheduled":
-                finalize_action = "retry"
-            elif result.disposition == "dead_lettered":
-                finalize_action = "dlq"
+            disposition = str(getattr(result, "disposition", "") or "")
+            if disposition in {"completed", "skipped"}:
+                finalize_state = _FINALIZE_STATE_SUCCESS
+            elif disposition == "retry_scheduled" and retry_at is not None:
+                finalize_state = _FINALIZE_STATE_RETRY
+            elif disposition == "dead_lettered":
+                finalize_state = _FINALIZE_STATE_FAILED
+                move_to_dlq = True
+            else:
+                finalize_state = _FINALIZE_STATE_FAILED
+                unknown_finalize_state = disposition or "<empty>"
     except asyncio.CancelledError:
         raise
     except AnalysisJobLeaseOwnershipError as exc:
@@ -704,7 +874,7 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
             status="aborted",
             error=str(exc),
         )
-        finalize_action = "ack"
+        finalize_state = _FINALIZE_STATE_SUCCESS
     except WorkerJobExecutionError as exc:
         logger.error(
             "worker.job_unhandled_error",
@@ -723,6 +893,16 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
             lease,
             cause=exc.cause,
         )
+        if finalize_action == "ack":
+            finalize_state = _FINALIZE_STATE_SUCCESS
+        elif finalize_action == "retry" and retry_at is not None:
+            finalize_state = _FINALIZE_STATE_RETRY
+        elif finalize_action == "dlq":
+            finalize_state = _FINALIZE_STATE_FAILED
+            move_to_dlq = True
+        else:
+            finalize_state = _FINALIZE_STATE_FAILED
+            unknown_finalize_state = str(finalize_action or "<empty>")
     except InvalidAnalysisJobPayloadError as exc:
         logger.error(
             "worker.invalid_queue_payload",
@@ -733,7 +913,7 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
             error=str(exc),
             lease_token=lease.token,
         )
-        finalize_action = "ack"
+        finalize_state = _FINALIZE_STATE_SUCCESS
     except Exception as exc:
         logger.error(
             "worker.job_task_error",
@@ -752,10 +932,36 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
             lease,
             cause=exc,
         )
+        if finalize_action == "ack":
+            finalize_state = _FINALIZE_STATE_SUCCESS
+        elif finalize_action == "retry" and retry_at is not None:
+            finalize_state = _FINALIZE_STATE_RETRY
+        elif finalize_action == "dlq":
+            finalize_state = _FINALIZE_STATE_FAILED
+            move_to_dlq = True
+        else:
+            finalize_state = _FINALIZE_STATE_FAILED
+            unknown_finalize_state = str(finalize_action or "<empty>")
     finally:
         renewal_task.cancel()
         await asyncio.gather(renewal_task, return_exceptions=True)
-        if finalize_action == "ack":
+        if finalize_state not in _FINALIZE_STATE_WHITELIST:
+            unknown_finalize_state = str(finalize_state)
+            finalize_state = _FINALIZE_STATE_FAILED
+            move_to_dlq = False
+
+        if unknown_finalize_state is not None:
+            dlq_reason = await _mark_job_failed_for_unknown_finalize_state(
+                runtime,
+                lease,
+                unknown_state=unknown_finalize_state,
+            )
+            finalize_state = _FINALIZE_STATE_FAILED
+            move_to_dlq = False
+            retry_at = None
+            attempt_count = 0
+
+        if finalize_state == _FINALIZE_STATE_SUCCESS:
             try:
                 acked = await ack_analysis_job(runtime.redis, lease)
                 if not acked:
@@ -784,7 +990,7 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
                     worker_id=lease.worker_id,
                     error=str(exc),
                 )
-        elif finalize_action == "retry" and retry_at is not None:
+        elif finalize_state == _FINALIZE_STATE_RETRY and retry_at is not None:
             try:
                 scheduled = await schedule_analysis_job_retry(
                     runtime.redis,
@@ -819,7 +1025,7 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
                     retry_at=retry_at.isoformat(),
                     error=str(exc),
                 )
-        elif finalize_action == "dlq":
+        elif finalize_state == _FINALIZE_STATE_FAILED and move_to_dlq:
             try:
                 moved = await move_analysis_job_to_dlq(
                     runtime.redis,
@@ -851,6 +1057,38 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
                     tenant_id=lease.organization_id,
                     lease_token=lease.token,
                     worker_id=lease.worker_id,
+                    error=str(exc),
+                )
+        elif finalize_state == _FINALIZE_STATE_FAILED:
+            try:
+                acked = await ack_analysis_job(runtime.redis, lease)
+                if not acked:
+                    logger.error(
+                        "worker.job_failed_release_skipped",
+                        job_id=lease.job_id,
+                        tenant_id=lease.organization_id,
+                        lease_token=lease.token,
+                        worker_id=lease.worker_id,
+                        reason="unknown_state" if unknown_finalize_state is not None else "failed",
+                    )
+            except LostAnalysisJobLeaseError as exc:
+                logger.error(
+                    "worker.job_failed_release_lost_lease",
+                    job_id=lease.job_id,
+                    tenant_id=lease.organization_id,
+                    lease_token=lease.token,
+                    worker_id=lease.worker_id,
+                    reason="unknown_state" if unknown_finalize_state is not None else "failed",
+                    error=str(exc),
+                )
+            except Exception as exc:
+                logger.error(
+                    "worker.job_failed_release_error",
+                    job_id=lease.job_id,
+                    tenant_id=lease.organization_id,
+                    lease_token=lease.token,
+                    worker_id=lease.worker_id,
+                    reason="unknown_state" if unknown_finalize_state is not None else "failed",
                     error=str(exc),
                 )
         runtime.concurrency_limiter.release()
@@ -1456,7 +1694,7 @@ def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     if settings.worker_metrics_enabled:
-        if start_http_server is None or not PROMETHEUS_CLIENT_AVAILABLE:
+        if generate_latest is None or CONTENT_TYPE_LATEST is None or not PROMETHEUS_CLIENT_AVAILABLE:
             if settings.app_env.lower() not in ("development", "test"):
                 raise RuntimeError(
                     startup_failure_message(
@@ -1466,14 +1704,12 @@ def main() -> None:
                 )
             logger.warning("worker.metrics_disabled", reason="prometheus_client_not_installed")
         else:
-            start_http_server(
-                port=settings.worker_metrics_port,
-                addr=settings.worker_metrics_host,
-            )
+            _start_worker_metrics_http_server(settings)
             logger.info(
                 "worker.metrics_started",
                 host=settings.worker_metrics_host,
                 port=settings.worker_metrics_port,
+                auth="bearer",
             )
     try:
         asyncio.run(run())

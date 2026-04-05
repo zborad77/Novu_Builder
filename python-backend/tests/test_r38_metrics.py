@@ -9,6 +9,11 @@ import pytest
 
 _METRICS_URL = "/api/v1/metrics"
 _ALIVE_URL = "/api/v1/alive"
+_METRICS_TOKEN = "test-scrape-secret"
+
+
+def _metrics_auth_headers(token: str = _METRICS_TOKEN) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _metric_value(body: str, metric_name: str, labels: dict[str, str] | None = None) -> float | None:
@@ -83,21 +88,44 @@ def _reset_metrics_state():
     _clear_readiness_storage_cache(fastapi_app)
 
 
+@pytest.fixture(autouse=True)
+def _enforce_metrics_auth():
+    from app.core.config import get_settings
+
+    previous_enabled = os.environ.get("METRICS_AUTH_ENABLED")
+    previous_token = os.environ.get("METRICS_AUTH_TOKEN")
+    os.environ["METRICS_AUTH_ENABLED"] = "true"
+    os.environ["METRICS_AUTH_TOKEN"] = _METRICS_TOKEN
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        if previous_enabled is None:
+            os.environ.pop("METRICS_AUTH_ENABLED", None)
+        else:
+            os.environ["METRICS_AUTH_ENABLED"] = previous_enabled
+        if previous_token is None:
+            os.environ.pop("METRICS_AUTH_TOKEN", None)
+        else:
+            os.environ["METRICS_AUTH_TOKEN"] = previous_token
+        get_settings.cache_clear()
+
+
 class TestMetricsEndpoint:
     @pytest.mark.asyncio
     async def test_metrics_endpoint_returns_200(self, app_client):
-        resp = await app_client.get(_METRICS_URL)
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
         assert resp.status_code == 200
 
     @pytest.mark.asyncio
     async def test_metrics_content_type_is_prometheus(self, app_client):
-        resp = await app_client.get(_METRICS_URL)
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
         assert "text/plain" in resp.headers["content-type"]
 
     @pytest.mark.asyncio
     async def test_metrics_body_contains_expected_metric_names(self, app_client):
         await app_client.get(_ALIVE_URL)
-        resp = await app_client.get(_METRICS_URL)
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
         body = resp.text
         assert "http_requests_total" in body
         assert "http_request_duration_seconds" in body
@@ -117,7 +145,7 @@ class TestMetricsEndpoint:
     @pytest.mark.asyncio
     async def test_alive_request_appears_in_metrics(self, app_client):
         await app_client.get(_ALIVE_URL)
-        resp = await app_client.get(_METRICS_URL)
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
         assert "/alive" in resp.text
 
 
@@ -226,7 +254,7 @@ class TestMetricsModule:
 class TestOperationalMetricsExported:
     @pytest.mark.asyncio
     async def test_metrics_body_contains_operational_gauge_names(self, app_client):
-        resp = await app_client.get(_METRICS_URL)
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
         body = resp.text
         assert "novu_db_alive" in body
         assert "novu_worker_alive" in body
@@ -241,7 +269,7 @@ class TestOperationalMetricsExported:
 
     @pytest.mark.asyncio
     async def test_db_alive_gauge_is_1_after_scrape(self, app_client):
-        resp = await app_client.get(_METRICS_URL)
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
         assert resp.status_code == 200
         assert "novu_db_alive 1.0" in resp.text
 
@@ -253,7 +281,7 @@ class TestOperationalMetricsExported:
             record_reaper_requeues,
         )
 
-        baseline = await app_client.get(_METRICS_URL)
+        baseline = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
         baseline_requeues = _metric_value(baseline.text, "novu_reaper_requeues_total") or 0.0
         baseline_duplicates = (
             _metric_value(
@@ -269,7 +297,7 @@ class TestOperationalMetricsExported:
         record_reaper_requeues(2)
         record_duplicate_prevented("test_guard")
 
-        resp = await app_client.get(_METRICS_URL)
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
         assert _metric_value(resp.text, "novu_job_fail_rate") == pytest.approx(0.5)
         assert _metric_value(resp.text, "novu_job_duration_seconds_avg") == pytest.approx(7.0)
         assert _metric_value(resp.text, "novu_job_duration_seconds_p95") == pytest.approx(10.0)
@@ -291,14 +319,14 @@ class TestOperationalMetricsExported:
 
     @pytest.mark.asyncio
     async def test_metrics_headers_disable_caching_and_indexing(self, app_client):
-        resp = await app_client.get(_METRICS_URL)
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
         assert resp.headers["cache-control"] == "no-store"
         assert resp.headers["x-robots-tag"] == "noindex, nofollow"
 
     @pytest.mark.asyncio
     async def test_failed_login_increments_auth_failure_counter(self, app_client):
         await app_client.post("/api/v1/auth/login", json={"email": "manager_a@test.local", "password": "wrong-pass"})
-        resp = await app_client.get(_METRICS_URL)
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
         assert 'novu_auth_failures_total{endpoint="login",reason="invalid_credentials"}' in resp.text
 
     @pytest.mark.asyncio
@@ -306,7 +334,7 @@ class TestOperationalMetricsExported:
         from app.core.metrics import UPLOAD_REJECTIONS_TOTAL
 
         UPLOAD_REJECTIONS_TOTAL.labels(reason="invalid_upload", status_code="400").inc()
-        resp = await app_client.get(_METRICS_URL)
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
         assert 'novu_upload_rejections_total{reason="invalid_upload",status_code="400"}' in resp.text
 
     @pytest.mark.asyncio
@@ -339,7 +367,7 @@ class TestOperationalMetricsExported:
             reason="invalid_effective_configuration",
         )
 
-        resp = await app_client.get(_METRICS_URL)
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
         assert 'novu_cache_requests_total{namespace="work-catalog",operation="get",outcome="hit"}' in resp.text
         assert "novu_work_catalog_resolution_input_rows_bucket" in resp.text
         assert 'path="tenant_work_type_resolution.batch_inputs"' in resp.text
@@ -452,8 +480,6 @@ class TestMetricsAuthGuard:
 
     @pytest.mark.asyncio
     async def test_no_token_returns_401_when_guard_enabled(self, app_client):
-        os.environ["METRICS_AUTH_ENABLED"] = "true"
-        os.environ["METRICS_AUTH_TOKEN"] = "test-scrape-secret"
         from app.core.config import get_settings
 
         get_settings.cache_clear()
@@ -461,14 +487,10 @@ class TestMetricsAuthGuard:
             resp = await app_client.get(_METRICS_URL)
             assert resp.status_code == 401
         finally:
-            os.environ["METRICS_AUTH_ENABLED"] = "false"
-            os.environ.pop("METRICS_AUTH_TOKEN", None)
             get_settings.cache_clear()
 
     @pytest.mark.asyncio
     async def test_wrong_token_returns_401(self, app_client):
-        os.environ["METRICS_AUTH_ENABLED"] = "true"
-        os.environ["METRICS_AUTH_TOKEN"] = "test-scrape-secret"
         from app.core.config import get_settings
 
         get_settings.cache_clear()
@@ -476,24 +498,18 @@ class TestMetricsAuthGuard:
             resp = await app_client.get(_METRICS_URL, headers={"Authorization": "Bearer wrong-token"})
             assert resp.status_code == 401
         finally:
-            os.environ["METRICS_AUTH_ENABLED"] = "false"
-            os.environ.pop("METRICS_AUTH_TOKEN", None)
             get_settings.cache_clear()
 
     @pytest.mark.asyncio
     async def test_correct_token_returns_200(self, app_client):
-        os.environ["METRICS_AUTH_ENABLED"] = "true"
-        os.environ["METRICS_AUTH_TOKEN"] = "test-scrape-secret"
         from app.core.config import get_settings
 
         get_settings.cache_clear()
         try:
-            resp = await app_client.get(_METRICS_URL, headers={"Authorization": "Bearer test-scrape-secret"})
+            resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
             assert resp.status_code == 200
             assert "text/plain" in resp.headers["content-type"]
         finally:
-            os.environ["METRICS_AUTH_ENABLED"] = "false"
-            os.environ.pop("METRICS_AUTH_TOKEN", None)
             get_settings.cache_clear()
 
     @pytest.mark.asyncio
@@ -507,17 +523,85 @@ class TestMetricsAuthGuard:
             resp = await app_client.get(_METRICS_URL, headers={"Authorization": "Bearer anything"})
             assert resp.status_code == 401
         finally:
-            os.environ["METRICS_AUTH_ENABLED"] = "false"
             get_settings.cache_clear()
 
     @pytest.mark.asyncio
-    async def test_guard_disabled_allows_unauthenticated(self, app_client):
+    async def test_guard_disabled_returns_503(self, app_client):
         os.environ["METRICS_AUTH_ENABLED"] = "false"
         from app.core.config import get_settings
 
         get_settings.cache_clear()
         try:
             resp = await app_client.get(_METRICS_URL)
+            assert resp.status_code == 503
+        finally:
+            get_settings.cache_clear()
+
+
+class TestMetricsIpAllowlist:
+    """R-SEC-02: IP allowlist enforcement on /metrics (active whenever METRICS_IP_ALLOWLIST is set)."""
+
+    @pytest.mark.asyncio
+    async def test_non_allowlisted_ip_returns_403(self, app_client):
+        # testclient connects from 127.0.0.1 which is not in 10.0.0.0/8
+        os.environ["METRICS_IP_ALLOWLIST"] = "10.0.0.0/8"
+        from app.core.config import get_settings
+
+        get_settings.cache_clear()
+        try:
+            resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
+            assert resp.status_code == 403
+        finally:
+            os.environ.pop("METRICS_IP_ALLOWLIST", None)
+            get_settings.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_allowlisted_ip_passes_through_to_auth(self, app_client):
+        # 127.0.0.1 (testclient) is in 127.0.0.0/8 → IP passes, auth succeeds
+        os.environ["METRICS_IP_ALLOWLIST"] = "127.0.0.0/8"
+        from app.core.config import get_settings
+
+        get_settings.cache_clear()
+        try:
+            resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
+            assert resp.status_code == 200
+        finally:
+            os.environ.pop("METRICS_IP_ALLOWLIST", None)
+            get_settings.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_allowlisted_ip_wrong_token_still_returns_401(self, app_client):
+        # IP passes allowlist but token is wrong → 401
+        os.environ["METRICS_IP_ALLOWLIST"] = "127.0.0.0/8"
+        from app.core.config import get_settings
+
+        get_settings.cache_clear()
+        try:
+            resp = await app_client.get(_METRICS_URL, headers={"Authorization": "Bearer wrong"})
+            assert resp.status_code == 401
+        finally:
+            os.environ.pop("METRICS_IP_ALLOWLIST", None)
+            get_settings.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_empty_allowlist_skips_ip_check(self, app_client):
+        """No METRICS_IP_ALLOWLIST set → IP check is skipped, only auth matters."""
+        os.environ.pop("METRICS_IP_ALLOWLIST", None)
+        from app.core.config import get_settings
+
+        get_settings.cache_clear()
+        try:
+            resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
             assert resp.status_code == 200
         finally:
             get_settings.cache_clear()
+
+    def test_invalid_cidr_rejected_at_startup(self, monkeypatch):
+        from app.core.config import Settings
+        from pydantic import ValidationError
+
+        monkeypatch.setenv("APP_ENV", "development")
+        monkeypatch.setenv("METRICS_AUTH_ENABLED", "false")
+        monkeypatch.setenv("METRICS_IP_ALLOWLIST", "not-a-valid-cidr")
+        with pytest.raises(ValidationError, match="invalid IP/CIDR"):
+            Settings()

@@ -13,8 +13,21 @@ class QuoteVariantRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_analysis_job(self, job_id: str) -> AnalysisJob | None:
-        return await self.session.get(AnalysisJob, job_id)
+    async def get_analysis_job_in_org(
+        self,
+        job_id: str,
+        organization_id: str,
+    ) -> AnalysisJob | None:
+        result = await self.session.execute(
+            select(AnalysisJob)
+            .join(Project, Project.id == AnalysisJob.project_id)
+            .where(
+                AnalysisJob.id == job_id,
+                Project.organization_id == organization_id,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def get_project(self, project_id: str) -> Project | None:
         return await self.session.get(Project, project_id)

@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# pre-commit secret-leak guard
+# Install: cp scripts/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# Or:      ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+#
+# Blocks commits that:
+#   (A) include a .env or .env.production file (non-.example)
+#   (B) include lines that look like real secrets (patterns below)
+
+set -euo pipefail
+
+STAGED=$(git diff --cached --name-only 2>/dev/null)
+
+# ── (A) Block .env files that are not .example templates ────────────────────
+ENV_VIOLATIONS=$(echo "$STAGED" | grep -E "(^|\/).env(\.[^e]|\.[e][^x]|$)" | grep -v "\.example$" || true)
+
+if [[ -n "$ENV_VIOLATIONS" ]]; then
+  echo ""
+  echo "  [pre-commit] BLOCKED: Attempted to commit secret file(s):"
+  echo "$ENV_VIOLATIONS" | sed 's/^/    /'
+  echo ""
+  echo "  Real .env files must never be committed."
+  echo "  Only .env.example and .env.production.example are allowed."
+  echo ""
+  exit 1
+fi
+
+# ── (B) Block lines containing real secret patterns ─────────────────────────
+# Patterns: non-placeholder values for known secret keys.
+SECRET_PATTERNS=(
+  'JWT_SECRET="[^<][^>]{15,}"'
+  'JWT_SECRET='"'"'[^<][^>]{15,}'"'"
+  'DATABASE_URL=.*:[^C][^H][^A][^N][^G][^E].*@'
+  'REDIS_URL=.*:(?!change-me|<generated).*@'
+  'OPENAI_API_KEY="sk-[^."]'
+  'ANTHROPIC_API_KEY="sk-ant-'
+  'S3_SECRET_ACCESS_KEY="[A-Za-z0-9/+]{20,}"'
+  'METRICS_AUTH_TOKEN="[^<c][^>h]{10,}"'
+)
+
+DIFF=$(git diff --cached 2>/dev/null)
+FOUND_SECRETS=0
+
+for pattern in "${SECRET_PATTERNS[@]}"; do
+  if echo "$DIFF" | grep -qE "^\+.*${pattern}" 2>/dev/null; then
+    if [[ $FOUND_SECRETS -eq 0 ]]; then
+      echo ""
+      echo "  [pre-commit] BLOCKED: Possible secret value detected in staged diff."
+      echo "  Matched pattern: ${pattern}"
+      echo ""
+      echo "  Use a secrets manager (Vault, Doppler, AWS Secrets Manager) or"
+      echo "  environment variable injection instead of hardcoding secrets."
+      echo ""
+    fi
+    FOUND_SECRETS=1
+  fi
+done
+
+if [[ $FOUND_SECRETS -ne 0 ]]; then
+  exit 1
+fi
+
+exit 0

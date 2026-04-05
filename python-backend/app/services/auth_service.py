@@ -40,6 +40,10 @@ def hash_password(plain: str) -> str:
 _DUMMY_PASSWORD_HASH = hash_password("NOVU_BUILDER_AUTH_DUMMY_PASSWORD")
 
 
+def verify_password(plain: str, hashed: str) -> bool:
+    return _verify_password(plain, hashed)
+
+
 def _verify_password(plain: str, hashed: str) -> bool:
     try:
         return bcrypt.checkpw(plain.encode(), hashed.encode())

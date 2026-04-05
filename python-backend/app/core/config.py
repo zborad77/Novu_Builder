@@ -128,6 +128,8 @@ _STRICT_RUNTIME_EXPLICIT_FIELDS: tuple[str, ...] = (
     "rate_limit_admin_sensitive",
     "rate_limit_upload",
     "rate_limit_analysis_jobs",
+    "rate_limit_read_list",
+    "rate_limit_read_detail",
     "storage_authoritative",
     "s3_connect_timeout_seconds",
     "s3_read_timeout_seconds",
@@ -149,6 +151,9 @@ _RATE_LIMIT_FIELD_NAMES: tuple[str, ...] = (
     "rate_limit_admin_sensitive",
     "rate_limit_upload",
     "rate_limit_analysis_jobs",
+    "rate_limit_metrics",
+    "rate_limit_read_list",
+    "rate_limit_read_detail",
 )
 
 
@@ -343,7 +348,7 @@ class Settings(BaseSettings):
     database_url: str = Field(default="sqlite+aiosqlite:///./python-backend.db", alias="DATABASE_URL")
     database_url_sync_override: str | None = Field(default=None, alias="DATABASE_URL_SYNC")
     db_auto_create_schema: bool = Field(default=True, alias="DB_AUTO_CREATE_SCHEMA")
-    db_seed_on_startup: bool = Field(default=True, alias="DB_SEED_ON_STARTUP")
+    db_seed_on_startup: bool = Field(default=False, alias="DB_SEED_ON_STARTUP")
     db_pool_size: int = Field(default=10, alias="DB_POOL_SIZE")
     db_max_overflow: int = Field(default=10, alias="DB_MAX_OVERFLOW")
     db_pool_timeout: int = Field(default=30, alias="DB_POOL_TIMEOUT")
@@ -441,6 +446,7 @@ class Settings(BaseSettings):
     # Security hardening
     require_https: bool = Field(default=False, alias="REQUIRE_HTTPS")
     hsts_max_age: int = Field(default=31536000, alias="HSTS_MAX_AGE")  # 1 year
+    csp_enabled: bool = Field(default=True, alias="CSP_ENABLED")
 
     # Rate limiting (requests / window per IP)
     rate_limit_login: str = Field(default="10/minute", alias="RATE_LIMIT_LOGIN")
@@ -449,6 +455,9 @@ class Settings(BaseSettings):
     rate_limit_admin_sensitive: str = Field(default="5/minute", alias="RATE_LIMIT_ADMIN_SENSITIVE")
     rate_limit_upload: str = Field(default="30/minute", alias="RATE_LIMIT_UPLOAD")
     rate_limit_analysis_jobs: str = Field(default="20/minute", alias="RATE_LIMIT_ANALYSIS_JOBS")
+    rate_limit_metrics: str = Field(default="60/minute", alias="RATE_LIMIT_METRICS")
+    rate_limit_read_list: str = Field(default="120/minute", alias="RATE_LIMIT_READ_LIST")
+    rate_limit_read_detail: str = Field(default="60/minute", alias="RATE_LIMIT_READ_DETAIL")
 
     # Email — password reset and transactional emails (C7)
     smtp_host: str = Field(default="", alias="SMTP_HOST")
@@ -479,8 +488,12 @@ class Settings(BaseSettings):
     # Prometheus /metrics auth guard (R-SEC-01)
     # Set METRICS_AUTH_ENABLED=true and a strong METRICS_AUTH_TOKEN in production.
     # Configure Prometheus scrape_configs with bearer_token to match.
+    # Optionally restrict access to specific IPs/CIDRs via METRICS_IP_ALLOWLIST.
     metrics_auth_enabled: bool = Field(default=True, alias="METRICS_AUTH_ENABLED")
     metrics_auth_token: str | None = Field(default=None, alias="METRICS_AUTH_TOKEN")
+    # Comma-separated IPs or CIDR blocks; empty = no IP restriction (auth still required).
+    # Example: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    metrics_ip_allowlist: str = Field(default="", alias="METRICS_IP_ALLOWLIST")
     worker_metrics_enabled: bool = Field(default=False, alias="WORKER_METRICS_ENABLED")
     worker_metrics_host: str = Field(default="0.0.0.0", alias="WORKER_METRICS_HOST")
     worker_metrics_port: int = Field(default=9101, alias="WORKER_METRICS_PORT")
@@ -608,6 +621,15 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _check_seed_bootstrap_guard(self) -> "Settings":
+        if self.db_seed_on_startup and self.app_env.lower() != "development":
+            raise ValueError(
+                "DB_SEED_ON_STARTUP=true is allowed only in APP_ENV='development'. "
+                "Disable startup seeding outside development; production must never seed default accounts."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _check_strict_runtime_profile_explicitness(self) -> "Settings":
         if not _is_strict_environment(self.app_env):
             return self
@@ -686,6 +708,27 @@ class Settings(BaseSettings):
                 f"METRICS_AUTH_TOKEN is too short ({len(token)} chars); "
                 "minimum 32 characters required outside development/test."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_metrics_ip_allowlist(self) -> "Settings":
+        """Validate METRICS_IP_ALLOWLIST contains only valid IPs/CIDRs."""
+        import ipaddress
+        raw = (self.metrics_ip_allowlist or "").strip()
+        if not raw:
+            return self
+        for entry in raw.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            try:
+                ipaddress.ip_network(entry, strict=False)
+            except ValueError:
+                raise ValueError(
+                    f"METRICS_IP_ALLOWLIST contains an invalid IP/CIDR: {entry!r}. "
+                    "Use comma-separated IPs or CIDR blocks, "
+                    "e.g. 'METRICS_IP_ALLOWLIST=10.0.0.0/8,192.168.0.0/16'."
+                )
         return self
 
     @model_validator(mode="after")

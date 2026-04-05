@@ -1,8 +1,10 @@
 from time import perf_counter
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.deps import get_current_user, get_pricebook_service, get_redis, require_org_id
+from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.core.cache import delete_cached, get_cache_tag, get_cached, invalidate_cache_tag, set_cached
 from app.core.tenant_timing import (
     TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
@@ -28,7 +30,9 @@ def _list_scope(org_id: str) -> str:
 
 
 @router.get("/pricebooks", response_model=PricebookListResponse)
+@limiter.limit(get_settings().rate_limit_read_list)
 async def list_pricebooks(
+    request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
     service: PricebookService = Depends(get_pricebook_service),
     redis=Depends(get_redis),
@@ -74,8 +78,10 @@ async def create_pricebook(
 
 
 @router.get("/pricebooks/{pricebook_id}/items", response_model=list[PricebookItemRead])
+@limiter.limit(get_settings().rate_limit_read_list)
 async def list_pricebook_items(
     pricebook_id: str,
+    request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
     service: PricebookService = Depends(get_pricebook_service),
 ) -> list[PricebookItemRead]:

@@ -61,6 +61,13 @@ Doporucene rezimy:
   - `DB_SEED_ON_STARTUP=false`
   - schema pripravit prikazem `alembic upgrade head`
 
+Seed credential monitoring:
+
+- startup kontrola monitoruje seed ucty `usr_novu_admin`, `usr_1`, `usr_2`
+- check se spousti po DB/schema overeni pri startu aplikace
+- pokud aktivni seed ucet stale odpovida puvodnimu seed heslu, mimo `development`/`test` se zaloguje `CRITICAL` `SECURITY_EVENT: seed_default_password_detected`
+- log nikdy nevypisuje plaintext heslo ani hash; operator ma okamzite zmenit heslo, ucet zakazat nebo prostredi reseedovat s rotovanymi kredencialy
+
 Zakladni prikazy:
 
 ```bash

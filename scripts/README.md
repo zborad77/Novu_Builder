@@ -26,6 +26,10 @@ Prakticky verification balik je ted postaveny nad temito skripty:
   - nejdriv spusti import/startup preflight
   - migraci provede jen pri explicitnim `--apply-migrations`
   - potom spusti deploy verification bundle nad danym `--base-url`
+- `python scripts/report_slo.py --prometheus-url http://127.0.0.1:9090 --window 30d`
+  - vygeneruje production SLO report z Prometheus API
+  - vypocita observed SLI, error budget remaining a budget exhaustion flag
+  - umi zapsat JSON i Markdown report do `artifacts/`
 
 Kompatibilni aliasy pro existujici workflow zustaly zachovane:
 
@@ -41,6 +45,7 @@ python scripts/verify_deploy.py --base-url http://127.0.0.1:8000
 python scripts/verify_core_api_smoke.py --base-url http://127.0.0.1:8000 --email ops@example.com --password '***'
 python scripts/verify_deploy.py --base-url https://api.example.com --auth-email ops@example.com --auth-password '***'
 python scripts/verify_release_gate.py --base-url https://api.example.com --apply-migrations --auth-email ops@example.com --auth-password '***'
+python scripts/report_slo.py --prometheus-url http://127.0.0.1:9090 --window 30d --json-out artifacts/slo-report.json --markdown-out artifacts/slo-report.md
 ```
 
 Exit codes:

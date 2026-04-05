@@ -122,6 +122,25 @@ scrape_configs:
       credentials: "<METRICS_AUTH_TOKEN>"
 ```
 
+### SLO / error budget
+
+Production SLO definitions, Prometheus recording rules a reporting workflow jsou v:
+
+- [docs/production-slo-system.md](docs/production-slo-system.md)
+- `ops/alerting/slo-rules.yml`
+- `scripts/report_slo.py`
+
+Typický weekly report:
+
+```bash
+python scripts/report_slo.py \
+  --prometheus-url http://127.0.0.1:9090 \
+  --window 30d \
+  --job novu-backend \
+  --json-out artifacts/slo-report.json \
+  --markdown-out artifacts/slo-report.md
+```
+
 ---
 
 ## Redis caching (R-32)

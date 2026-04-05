@@ -107,8 +107,8 @@ class QuoteVariantService:
         self.work_catalog_repository = work_catalog_repository
         self.pricing_profile_service = PricingProfileService(work_catalog_repository, redis=redis)
 
-    async def get_analysis_job(self, job_id: str) -> AnalysisJobRead | None:
-        job = await self.repository.get_analysis_job(job_id)
+    async def get_analysis_job(self, job_id: str, *, organization_id: str) -> AnalysisJobRead | None:
+        job = await self.repository.get_analysis_job_in_org(job_id, organization_id)
         return to_job_read(job) if job else None
 
     async def list_quote_variants(self, project_id: str) -> list[QuoteVariantRead]:

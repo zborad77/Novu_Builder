@@ -1,6 +1,8 @@
 import asyncio
 import inspect
 import time
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -529,23 +531,28 @@ class TestWorkerMetricsStartup:
     def test_main_starts_worker_metrics_endpoint_when_enabled(self):
         from app.worker import runner
 
+        def _interrupting_asyncio_run(coro):
+            coro.close()
+            raise KeyboardInterrupt
+
         settings = MagicMock()
         settings.log_level = "INFO"
         settings.worker_metrics_enabled = True
         settings.worker_metrics_host = "0.0.0.0"
         settings.worker_metrics_port = 9101
+        settings.metrics_auth_token = "test-scrape-secret-12345678901234567890"
         settings.app_env = "development"
 
         with (
             patch("app.worker.runner.get_settings", return_value=settings),
             patch("app.worker.runner.configure_logging"),
-            patch("app.worker.runner.start_http_server") as start_http_server,
-            patch("app.worker.runner.asyncio.run", side_effect=KeyboardInterrupt),
+            patch("app.worker.runner._start_worker_metrics_http_server") as start_server,
+            patch("app.worker.runner.asyncio.run", side_effect=_interrupting_asyncio_run),
             patch("app.worker.runner.sys.exit"),
         ):
             runner.main()
 
-        start_http_server.assert_called_once_with(port=9101, addr="0.0.0.0")
+        start_server.assert_called_once_with(settings)
 
     def test_main_fails_fast_when_worker_metrics_enabled_without_prometheus_in_production(self):
         from app.worker import runner
@@ -560,11 +567,52 @@ class TestWorkerMetricsStartup:
         with (
             patch("app.worker.runner.get_settings", return_value=settings),
             patch("app.worker.runner.configure_logging"),
-            patch("app.worker.runner.start_http_server", None),
+            patch("app.worker.runner.generate_latest", None),
+            patch("app.worker.runner.CONTENT_TYPE_LATEST", None),
             patch("app.worker.runner.PROMETHEUS_CLIENT_AVAILABLE", False),
         ):
             with pytest.raises(RuntimeError, match="worker_metrics"):
                 runner.main()
+
+    def test_worker_metrics_http_server_requires_bearer_token(self):
+        from app.worker import runner
+
+        settings = MagicMock()
+        settings.worker_metrics_host = "127.0.0.1"
+        settings.worker_metrics_port = 0
+        settings.metrics_auth_token = "test-scrape-secret-12345678901234567890"
+
+        handle = runner._start_worker_metrics_http_server(settings)
+        try:
+            port = handle.server.server_address[1]
+            with pytest.raises(HTTPError) as exc_info:
+                urlopen(f"http://127.0.0.1:{port}/metrics")
+            assert exc_info.value.code == 401
+        finally:
+            handle.close()
+
+    def test_worker_metrics_http_server_allows_bearer_token(self):
+        from app.worker import runner
+
+        settings = MagicMock()
+        settings.worker_metrics_host = "127.0.0.1"
+        settings.worker_metrics_port = 0
+        settings.metrics_auth_token = "test-scrape-secret-12345678901234567890"
+
+        handle = runner._start_worker_metrics_http_server(settings)
+        try:
+            port = handle.server.server_address[1]
+            request = Request(
+                f"http://127.0.0.1:{port}/metrics",
+                headers={"Authorization": f"Bearer {settings.metrics_auth_token}"},
+            )
+            with urlopen(request) as response:
+                body = response.read().decode("utf-8")
+                assert response.status == 200
+                assert "text/plain" in response.headers["Content-Type"]
+                assert "python_info" in body
+        finally:
+            handle.close()
 
     @pytest.mark.asyncio
     async def test_run_one_iteration_dequeues_heavy_job_even_when_analysis_slot_is_busy(self):

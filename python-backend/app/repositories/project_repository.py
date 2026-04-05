@@ -8,10 +8,10 @@ from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.sql_like import LIKE_ESCAPE_CHAR, build_contains_ilike_pattern
 from app.models import Client, Project
 
 logger = structlog.get_logger(__name__)
-_LIKE_ESCAPE_CHAR = "\\"
 
 
 def _decode_project_list_cursor(cursor: str) -> tuple[datetime, str] | None:
@@ -24,17 +24,6 @@ def _decode_project_list_cursor(cursor: str) -> tuple[datetime, str] | None:
     except (BinasciiError, UnicodeDecodeError, ValueError) as exc:
         logger.warning("projects.list.invalid_cursor", error=str(exc))
         return None
-
-
-def _build_project_search_pattern(search: str) -> str:
-    escaped = (
-        search
-        .replace(_LIKE_ESCAPE_CHAR, _LIKE_ESCAPE_CHAR * 2)
-        .replace("%", _LIKE_ESCAPE_CHAR + "%")
-        .replace("_", _LIKE_ESCAPE_CHAR + "_")
-    )
-    return f"%{escaped}%"
-
 
 class ProjectRepository:
     def __init__(self, session: AsyncSession):
@@ -62,11 +51,11 @@ class ProjectRepository:
             query = query.where(Project.status == status)
 
         if normalized_search:
-            like_value = _build_project_search_pattern(normalized_search)
+            like_value = build_contains_ilike_pattern(normalized_search)
             query = query.where(
                 or_(
-                    Project.title.ilike(like_value, escape=_LIKE_ESCAPE_CHAR),
-                    Project.description.ilike(like_value, escape=_LIKE_ESCAPE_CHAR),
+                    Project.title.ilike(like_value, escape=LIKE_ESCAPE_CHAR),
+                    Project.description.ilike(like_value, escape=LIKE_ESCAPE_CHAR),
                 )
             )
 

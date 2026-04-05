@@ -3,7 +3,9 @@ from uuid import uuid4
 
 import pytest
 
+from app.api.routes.admin import get_audit_log
 from app.models import MaterialCatalog, PricingProfile, Project, ProjectPhoto, Supplier
+from app.models.domain import AuditLog
 from app.repositories.photo_repository import PhotoRepository
 from app.repositories.pricebook_repository import PricebookRepository
 from app.repositories.material_catalog_repository import MaterialCatalogRepository
@@ -171,6 +173,127 @@ async def test_material_catalog_service_uses_loaded_supplier_relation_for_listin
     assert len(items) == 1
     assert items[0].id == material.id
     assert items[0].default_supplier_name == supplier.name
+
+
+@pytest.mark.parametrize(
+    ("search", "literal_fragment", "decoy_fragment"),
+    [
+        ("abc", "abc", "zzz"),
+        ("%", "%", "plain"),
+        ("_", "_", "plain"),
+        ("a%b", "a%b", "axb"),
+        ("\\", "\\", "slash"),
+    ],
+)
+async def test_material_catalog_search_treats_like_metacharacters_as_literals(
+    db_session,
+    test_tenants,
+    search,
+    literal_fragment,
+    decoy_fragment,
+):
+    token = uuid4().hex[:8]
+    repo = MaterialCatalogRepository(db_session)
+    supplier = Supplier(
+        id=f"sup_like_{token}",
+        organization_id=test_tenants["org_a"],
+        name=f"Supplier like {token}",
+        integration_type="manual",
+        is_active=True,
+    )
+    literal_material = MaterialCatalog(
+        id=f"mat_like_literal_{token}",
+        organization_id=test_tenants["org_a"],
+        name=f"Literal {literal_fragment} token {token}",
+        unit="m2",
+        norm_per_sqm=1.0,
+        default_unit_price=100.0,
+        default_supplier_id=supplier.id,
+        is_active=True,
+    )
+    decoy_material = MaterialCatalog(
+        id=f"mat_like_decoy_{token}",
+        organization_id=test_tenants["org_a"],
+        name=f"Decoy {decoy_fragment} token {token}",
+        unit="m2",
+        norm_per_sqm=1.0,
+        default_unit_price=101.0,
+        default_supplier_id=supplier.id,
+        is_active=True,
+    )
+    db_session.add_all([supplier, literal_material, decoy_material])
+    await db_session.commit()
+
+    items = await repo.list_material_catalog(
+        organization_id=test_tenants["org_a"],
+        search=search,
+    )
+    item_ids = {item.id for item in items}
+
+    assert literal_material.id in item_ids
+    assert decoy_material.id not in item_ids
+
+
+@pytest.mark.parametrize(
+    ("action_filter", "literal_action", "decoy_action"),
+    [
+        ("abc", "admin.audit.abc.event", "admin.audit.zzz.event"),
+        ("%", "admin.audit.literal%.event", "admin.audit.plain.event"),
+        ("_", "admin.audit.literal_.event", "admin.audit.plain.event"),
+        ("a%b", "admin.audit.a%b.event", "admin.audit.axb.event"),
+        ("\\", r"admin.audit.literal\\.event", "admin.audit.slash.event"),
+    ],
+)
+async def test_admin_audit_search_treats_like_metacharacters_as_literals(
+    db_session,
+    action_filter,
+    literal_action,
+    decoy_action,
+):
+    token = uuid4().hex[:8]
+    literal_log = AuditLog(
+        id=f"audit_like_literal_{token}",
+        user_id="usr_e2e_a1",
+        user_email="manager_a@test.local",
+        org_id="org_e2e_a",
+        action=literal_action,
+        resource_type="test",
+        resource_id=token,
+        detail={"token": token},
+        impersonated_by=None,
+        ip="127.0.0.1",
+    )
+    decoy_log = AuditLog(
+        id=f"audit_like_decoy_{token}",
+        user_id="usr_e2e_a1",
+        user_email="manager_a@test.local",
+        org_id="org_e2e_a",
+        action=decoy_action,
+        resource_type="test",
+        resource_id=token,
+        detail={"token": token},
+        impersonated_by=None,
+        ip="127.0.0.1",
+    )
+    db_session.add_all([literal_log, decoy_log])
+    await db_session.commit()
+
+    rows = await get_audit_log(
+        org_id="org_e2e_a",
+        action=action_filter,
+        user_id=None,
+        limit=200,
+        session=db_session,
+        _=object(),
+    )
+    actions = {
+        row["action"]
+        for row in rows
+        if row["resourceId"] == token
+    }
+
+    assert literal_action in actions
+    assert decoy_action not in actions
 
 
 def test_hot_path_indexes_are_present_in_metadata():

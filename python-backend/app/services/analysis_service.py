@@ -747,11 +747,20 @@ class AnalysisService:
             ]
         return [to_job_read(job) for job in jobs]
 
-    async def get_job(self, job_id: str, *, organization_id: str | None = None, job_queue=None) -> dict | None:
+    async def get_job(
+        self,
+        job_id: str,
+        *,
+        organization_id: str | None = None,
+        is_superadmin_context: bool = False,
+        job_queue=None,
+    ) -> dict | None:
         if organization_id is not None:
             job = await self.repository.get_analysis_job_in_org(job_id, organization_id)
-        else:
+        elif is_superadmin_context:
             job = await self.repository.get_analysis_job(job_id)
+        else:
+            return None
         if not job:
             return None
         transport_snapshot = None
@@ -1953,7 +1962,10 @@ class AnalysisService:
                 surface="analysis_dead_letter_api",
             )
 
-            job_inner = await repo_inner.get_analysis_job(job_id)
+            if organization_id is not None:
+                job_inner = await repo_inner.get_analysis_job_in_org(job_id, organization_id)
+            else:
+                job_inner = await repo_inner.get_analysis_job(job_id)
             if not job_inner:
                 raise HTTPException(status_code=404, detail="Analysis job not found.")
 
@@ -1994,11 +2006,19 @@ class AnalysisService:
             await session.refresh(job_inner)
             return job_inner
 
-    async def cancel_analysis_job(self, job_id: str, *, organization_id: str | None = None) -> dict | None:
+    async def cancel_analysis_job(
+        self,
+        job_id: str,
+        *,
+        organization_id: str | None = None,
+        is_superadmin_context: bool = False,
+    ) -> dict | None:
         if organization_id is not None:
             job = await self.repository.get_analysis_job_in_org(job_id, organization_id)
-        else:
+        elif is_superadmin_context:
             job = await self.repository.get_analysis_job(job_id)
+        else:
+            return None
         if not job:
             return None
         if job.status in ANALYSIS_JOB_FINAL_STATUSES:
