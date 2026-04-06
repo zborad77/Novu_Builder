@@ -55,14 +55,13 @@ async def test_health_returns_unavailable_when_integrity_dependencies_fail(app_c
 
 
 @pytest.mark.asyncio
-async def test_ready_reports_degraded_when_worker_subsystem_is_not_green(app_client):
+async def test_ready_returns_503_when_worker_is_not_alive(app_client):
+    # Worker invariant: /ready must return 503 when no live worker heartbeat exists.
     response = await app_client.get("/api/v1/ready")
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "degraded"
-    assert response.json()["ready"] is True
+    assert response.status_code == 503
+    assert response.json()["ready"] is False
     assert response.json()["apiState"] == "ready"
-    assert response.json()["processingState"] == "degraded"
 
 
 @pytest.mark.asyncio
@@ -111,7 +110,8 @@ async def test_health_reports_degraded_when_worker_is_down_but_api_is_servable(a
 
     assert response.status_code == 200
     assert response.json()["status"] == "degraded"
-    assert response.json()["ready"] is True
+    # Worker invariant: ready=False even on /health when worker is dead.
+    assert response.json()["ready"] is False
     assert response.json()["worker"]["state"] == "stale"
 
 

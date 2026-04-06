@@ -1,6 +1,7 @@
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
+import structlog.contextvars
 
 from app.core.audit import bind_request_audit_actor
 from app.core.config import get_settings
@@ -171,6 +172,10 @@ async def get_current_user(
         )
         raise HTTPException(status_code=401, detail="Invalid or expired token.")
     bind_request_audit_actor(request, user)
+    structlog.contextvars.bind_contextvars(
+        tenant_id=str(user.organizationId) if user.organizationId else "superadmin",
+        user_id=str(user.id),
+    )
     return user
 
 

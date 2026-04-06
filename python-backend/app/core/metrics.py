@@ -180,8 +180,8 @@ JOB_STUCK_MAX_AGE_SECONDS = Gauge(
 
 JOB_DURATION_SECONDS = Histogram(
     "novu_job_duration_seconds",
-    "Analysis job duration in seconds by terminal status",
-    ["status"],
+    "Analysis job duration in seconds by terminal status and tenant",
+    ["status", "tenant_id"],
     buckets=[0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 180.0, 300.0, 600.0],
 )
 
@@ -197,8 +197,8 @@ JOB_DURATION_SECONDS_P95 = Gauge(
 
 JOB_OUTCOMES_TOTAL = Counter(
     "novu_job_outcomes_total",
-    "Total completed analysis jobs by terminal status",
-    ["status"],
+    "Total completed analysis jobs by terminal status and tenant",
+    ["status", "tenant_id"],
 )
 
 JOB_FAIL_RATE = Gauge(
@@ -263,14 +263,27 @@ AUDIT_WRITE_FAILED_TOTAL = Counter(
 
 AUTH_FAILURES_TOTAL = Counter(
     "novu_auth_failures_total",
-    "Total auth failures by endpoint and coarse-grained reason",
-    ["endpoint", "reason"],
+    "Total auth failures by endpoint, reason, and tenant",
+    ["endpoint", "reason", "tenant_id"],
 )
 
 UPLOAD_REJECTIONS_TOTAL = Counter(
     "novu_upload_rejections_total",
     "Total rejected uploads by coarse-grained reason and HTTP status",
     ["reason", "status_code"],
+)
+
+STORAGE_OPERATIONS_TOTAL = Counter(
+    "novu_storage_operations_total",
+    "Total storage operations by operation type, backend, and outcome",
+    ["operation", "backend", "outcome"],
+)
+
+STORAGE_OPERATION_DURATION_SECONDS = Histogram(
+    "novu_storage_operation_duration_seconds",
+    "Storage operation latency in seconds by operation type, backend, and outcome",
+    ["operation", "backend", "outcome"],
+    buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0],
 )
 
 CACHE_REQUESTS_TOTAL = Counter(
@@ -326,11 +339,22 @@ def _percentile(sorted_values: list[float], quantile: float) -> float:
     return float(sorted_values[index])
 
 
-def observe_job_outcome(*, status: str, duration_seconds: float | None) -> None:
-    """Record terminal job outcome metrics and refresh rolling duration gauges."""
+def observe_job_outcome(
+    *,
+    status: str,
+    duration_seconds: float | None,
+    tenant_id: str | None = None,
+) -> None:
+    """Record terminal job outcome metrics and refresh rolling duration gauges.
+
+    tenant_id should be the organization_id string; pass None or omit for
+    superadmin cross-tenant jobs (stored as "superadmin") or unknown context
+    (stored as "unknown").
+    """
     global _JOB_FAIL_RATE_CURRENT, _JOB_DURATION_AVG_CURRENT, _JOB_DURATION_P95_CURRENT
     normalized_status = status.strip().lower() or "unknown"
-    JOB_OUTCOMES_TOTAL.labels(status=normalized_status).inc()
+    normalized_tenant = (tenant_id or "").strip() or "unknown"
+    JOB_OUTCOMES_TOTAL.labels(status=normalized_status, tenant_id=normalized_tenant).inc()
     with _JOB_DURATION_LOCK:
         if normalized_status in _JOB_OUTCOME_COUNTS:
             _JOB_OUTCOME_COUNTS[normalized_status] += 1
@@ -348,7 +372,7 @@ def observe_job_outcome(*, status: str, duration_seconds: float | None) -> None:
             return
 
         duration = max(0.0, float(duration_seconds))
-        JOB_DURATION_SECONDS.labels(status=normalized_status).observe(duration)
+        JOB_DURATION_SECONDS.labels(status=normalized_status, tenant_id=normalized_tenant).observe(duration)
         _JOB_DURATION_WINDOW.append(duration)
         samples = sorted(_JOB_DURATION_WINDOW)
         _JOB_DURATION_AVG_CURRENT = sum(samples) / len(samples)
@@ -431,12 +455,35 @@ def record_work_catalog_validation_failure(*, operation: str, reason: str) -> No
     ).inc()
 
 
+def observe_storage_operation(
+    *,
+    operation: str,
+    backend: str,
+    outcome: str,
+    duration_seconds: float,
+) -> None:
+    """Record a single storage I/O operation (upload, read, delete, etc.)."""
+    norm_op = operation.strip().lower() or "unknown"
+    norm_backend = backend.strip().lower() or "unknown"
+    norm_outcome = outcome.strip().lower() or "unknown"
+    STORAGE_OPERATIONS_TOTAL.labels(
+        operation=norm_op,
+        backend=norm_backend,
+        outcome=norm_outcome,
+    ).inc()
+    STORAGE_OPERATION_DURATION_SECONDS.labels(
+        operation=norm_op,
+        backend=norm_backend,
+        outcome=norm_outcome,
+    ).observe(max(0.0, float(duration_seconds)))
+
+
 def refresh_job_observability_gauges() -> None:
     """Expose current in-process aggregate job gauges during every scrape."""
-    JOB_DURATION_SECONDS.labels(status="completed")
-    JOB_DURATION_SECONDS.labels(status="failed")
-    JOB_OUTCOMES_TOTAL.labels(status="completed").inc(0)
-    JOB_OUTCOMES_TOTAL.labels(status="failed").inc(0)
+    JOB_DURATION_SECONDS.labels(status="completed", tenant_id="unknown")
+    JOB_DURATION_SECONDS.labels(status="failed", tenant_id="unknown")
+    JOB_OUTCOMES_TOTAL.labels(status="completed", tenant_id="unknown").inc(0)
+    JOB_OUTCOMES_TOTAL.labels(status="failed", tenant_id="unknown").inc(0)
     JOB_FAIL_RATE.set(_JOB_FAIL_RATE_CURRENT)
     JOB_DURATION_SECONDS_AVG.set(_JOB_DURATION_AVG_CURRENT)
     JOB_DURATION_SECONDS_P95.set(_JOB_DURATION_P95_CURRENT)

@@ -266,7 +266,7 @@ class TestAnalysisServiceFailureGuards:
             dlq_job_ids=frozenset(),
         )
         job_queue = AsyncMock()
-        job_queue.eval = AsyncMock(return_value=[1, 1, 0])
+        job_queue.eval = AsyncMock(return_value=[1, 1, 0, 1])
 
         with patch("app.services.analysis_service.inspect_analysis_job_transport", new=AsyncMock(return_value=snapshot)):
             results = await service.list_jobs("proj_1", job_queue=job_queue)

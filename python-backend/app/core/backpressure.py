@@ -212,6 +212,24 @@ def ensure_heavy_intake_capacity(snapshot: BackpressureSnapshot, *, settings, su
         raise HTTPException(status_code=429, detail="System queue capacity is exhausted. Please retry later.")
 
 
+def require_worker_capacity(surface: str, *, settings) -> None:
+    """Hard guard: raise HTTP 503 when the heavy-lane worker pool is unavailable.
+
+    Call this at the start of any operation that requires background processing.
+    The invariant it enforces: the API **never** performs heavy CPU/I/O work
+    inline — no fallback, no sync mode.
+
+    Raises 503 when:
+    - ``worker_heavy_concurrency == 0``  (lane not configured / worker stopped)
+    """
+    if _int_setting(settings, "worker_heavy_concurrency", 0) == 0:
+        record_backpressure_rejection(surface=surface, reason="heavy_lane_disabled")
+        raise HTTPException(
+            status_code=503,
+            detail="Heavy work lane is unavailable. Ensure the worker is running.",
+        )
+
+
 def ensure_retry_budget(retry_inflight: int, *, settings, surface: str) -> None:
     if _counter_value(retry_inflight) >= effective_backpressure_max_retry_inflight(settings):
         record_backpressure_rejection(surface=surface, reason="retry_budget_exhausted")

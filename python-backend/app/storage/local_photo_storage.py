@@ -6,11 +6,13 @@ import warnings
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from time import time_ns
+from time import time_ns, monotonic as _time_mono
 from uuid import uuid4
 
 import structlog
 from fastapi import UploadFile
+
+from app.core.metrics import observe_storage_operation
 
 logger = structlog.get_logger(__name__)
 
@@ -484,20 +486,36 @@ def _sync_delete_storage_file(*, relative_storage_key: str) -> None:
 async def save_original_photo(
     *, project_id: str, original_filename: str | None, content: bytes
 ) -> tuple[str, Path]:
-    return await asyncio.to_thread(
-        _sync_save_original_photo,
-        project_id=project_id,
-        original_filename=original_filename,
-        content=content,
-    )
+    _t0 = _time_mono()
+    _outcome = "success"
+    try:
+        return await asyncio.to_thread(
+            _sync_save_original_photo,
+            project_id=project_id,
+            original_filename=original_filename,
+            content=content,
+        )
+    except Exception:
+        _outcome = "error"
+        raise
+    finally:
+        observe_storage_operation(operation="upload", backend="local", outcome=_outcome, duration_seconds=_time_mono() - _t0)
 
 
 async def write_storage_file(*, relative_storage_key: str, content: bytes) -> Path:
-    return await asyncio.to_thread(
-        _sync_write_storage_file,
-        relative_storage_key=relative_storage_key,
-        content=content,
-    )
+    _t0 = _time_mono()
+    _outcome = "success"
+    try:
+        return await asyncio.to_thread(
+            _sync_write_storage_file,
+            relative_storage_key=relative_storage_key,
+            content=content,
+        )
+    except Exception:
+        _outcome = "error"
+        raise
+    finally:
+        observe_storage_operation(operation="write", backend="local", outcome=_outcome, duration_seconds=_time_mono() - _t0)
 
 
 async def verify_storage_health() -> None:
@@ -505,11 +523,19 @@ async def verify_storage_health() -> None:
 
 
 async def copy_storage_file(*, source_storage_key: str, target_storage_key: str) -> Path:
-    return await asyncio.to_thread(
-        _sync_copy_storage_file,
-        source_storage_key=source_storage_key,
-        target_storage_key=target_storage_key,
-    )
+    _t0 = _time_mono()
+    _outcome = "success"
+    try:
+        return await asyncio.to_thread(
+            _sync_copy_storage_file,
+            source_storage_key=source_storage_key,
+            target_storage_key=target_storage_key,
+        )
+    except Exception:
+        _outcome = "error"
+        raise
+    finally:
+        observe_storage_operation(operation="copy", backend="local", outcome=_outcome, duration_seconds=_time_mono() - _t0)
 
 
 def _sync_read_storage_file(*, relative_storage_key: str) -> bytes | None:
@@ -529,10 +555,21 @@ def _sync_read_storage_file(*, relative_storage_key: str) -> bytes | None:
 
 
 async def read_storage_file(*, relative_storage_key: str) -> bytes | None:
-    return await asyncio.to_thread(
-        _sync_read_storage_file,
-        relative_storage_key=relative_storage_key,
-    )
+    _t0 = _time_mono()
+    _outcome = "success"
+    try:
+        result = await asyncio.to_thread(
+            _sync_read_storage_file,
+            relative_storage_key=relative_storage_key,
+        )
+        if result is None:
+            _outcome = "not_found"
+        return result
+    except Exception:
+        _outcome = "error"
+        raise
+    finally:
+        observe_storage_operation(operation="read", backend="local", outcome=_outcome, duration_seconds=_time_mono() - _t0)
 
 
 def _sync_storage_key_exists(*, relative_storage_key: str) -> bool:
@@ -541,10 +578,18 @@ def _sync_storage_key_exists(*, relative_storage_key: str) -> bool:
 
 
 async def storage_key_exists(*, relative_storage_key: str) -> bool:
-    return await asyncio.to_thread(
-        _sync_storage_key_exists,
-        relative_storage_key=relative_storage_key,
-    )
+    _t0 = _time_mono()
+    _outcome = "success"
+    try:
+        return await asyncio.to_thread(
+            _sync_storage_key_exists,
+            relative_storage_key=relative_storage_key,
+        )
+    except Exception:
+        _outcome = "error"
+        raise
+    finally:
+        observe_storage_operation(operation="exists", backend="local", outcome=_outcome, duration_seconds=_time_mono() - _t0)
 
 
 def _sync_list_storage_keys(*, prefix: str | None = None) -> list[str]:
@@ -609,22 +654,46 @@ def _sync_list_storage_objects(*, prefix: str | None = None) -> list[dict[str, o
 
 
 async def list_storage_keys(*, prefix: str | None = None) -> list[str]:
-    return await asyncio.to_thread(
-        _sync_list_storage_keys,
-        prefix=prefix,
-    )
+    _t0 = _time_mono()
+    _outcome = "success"
+    try:
+        return await asyncio.to_thread(
+            _sync_list_storage_keys,
+            prefix=prefix,
+        )
+    except Exception:
+        _outcome = "error"
+        raise
+    finally:
+        observe_storage_operation(operation="list", backend="local", outcome=_outcome, duration_seconds=_time_mono() - _t0)
 
 
 async def list_storage_objects(*, prefix: str | None = None) -> list[dict[str, object]]:
-    return await asyncio.to_thread(
-        _sync_list_storage_objects,
-        prefix=prefix,
-    )
+    _t0 = _time_mono()
+    _outcome = "success"
+    try:
+        return await asyncio.to_thread(
+            _sync_list_storage_objects,
+            prefix=prefix,
+        )
+    except Exception:
+        _outcome = "error"
+        raise
+    finally:
+        observe_storage_operation(operation="list_objects", backend="local", outcome=_outcome, duration_seconds=_time_mono() - _t0)
 
 
 async def delete_storage_file(*, relative_storage_key: str) -> None:
     """R-14: async-safe delete; silent if file is already absent."""
-    await asyncio.to_thread(
-        _sync_delete_storage_file,
-        relative_storage_key=relative_storage_key,
-    )
+    _t0 = _time_mono()
+    _outcome = "success"
+    try:
+        await asyncio.to_thread(
+            _sync_delete_storage_file,
+            relative_storage_key=relative_storage_key,
+        )
+    except Exception:
+        _outcome = "error"
+        raise
+    finally:
+        observe_storage_operation(operation="delete", backend="local", outcome=_outcome, duration_seconds=_time_mono() - _t0)

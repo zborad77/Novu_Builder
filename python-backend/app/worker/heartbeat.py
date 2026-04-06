@@ -113,6 +113,60 @@ async def clear_local_worker_heartbeat() -> None:
     await asyncio.to_thread(_clear_local_worker_heartbeat_sync)
 
 
+async def scan_alive_workers(redis) -> tuple[int, str | None]:
+    """Scan all worker heartbeat keys in Redis.
+
+    Returns ``(alive_count, last_seen_at_iso)``:
+    - *alive_count* — number of workers whose heartbeat is fresher than
+      ``WORKER_HEARTBEAT_FRESHNESS_SECONDS``.
+    - *last_seen_at_iso* — ISO timestamp of the most recently seen worker,
+      or ``None`` when no heartbeat exists.
+
+    Returns ``(-1, None)`` when Redis is unavailable or the scan fails.
+    """
+    if redis is None:
+        return -1, None
+    try:
+        now = datetime.now(UTC)
+        timestamps: list[datetime] = []
+
+        scan_iter = getattr(redis, "scan_iter", None)
+        if scan_iter is not None:
+            keys: list = []
+            async for raw_key in scan_iter(match=WORKER_HEARTBEAT_KEY_PATTERN):
+                keys.append(raw_key)
+            if keys:
+                raw_values = await redis.mget(keys)
+                for raw_value in raw_values:
+                    if raw_value is None:
+                        continue
+                    ts = _payload_timestamp(
+                        {"timestamp": raw_value.decode("utf-8") if isinstance(raw_value, bytes) else raw_value}
+                    )
+                    if ts is not None:
+                        timestamps.append(ts)
+
+        raw_legacy = await redis.get(WORKER_HEARTBEAT_LEGACY_KEY)
+        if raw_legacy is not None:
+            ts = _payload_timestamp(
+                {"timestamp": raw_legacy.decode("utf-8") if isinstance(raw_legacy, bytes) else raw_legacy}
+            )
+            if ts is not None:
+                timestamps.append(ts)
+
+        if not timestamps:
+            return 0, None
+
+        last_seen_at = max(timestamps).isoformat()
+        alive_count = sum(
+            1 for ts in timestamps
+            if (now - ts).total_seconds() < WORKER_HEARTBEAT_FRESHNESS_SECONDS
+        )
+        return alive_count, last_seen_at
+    except Exception:
+        return -1, None
+
+
 def _read_local_worker_heartbeat_payload() -> dict | None:
     path = worker_local_health_path()
     if not path.exists():

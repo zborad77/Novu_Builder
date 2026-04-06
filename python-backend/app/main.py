@@ -283,6 +283,29 @@ async def lifespan(app: FastAPI):
 
     app.state.job_queue = await initialize_job_queue(settings)
 
+    # Startup worker detection guard.
+    # The system will NOT be considered READY until a worker registers a fresh
+    # heartbeat.  Log an ERROR here so operators know the gap exists.
+    _startup_redis = app.state.job_queue
+    if _startup_redis is not None:
+        from app.worker.heartbeat import scan_alive_workers  # noqa: PLC0415
+        try:
+            _alive_count, _last_seen = await scan_alive_workers(_startup_redis)
+            if _alive_count == 0:
+                logger.error(
+                    "startup.worker_not_detected",
+                    reason="no_fresh_heartbeat",
+                    last_seen_at=_last_seen,
+                    hint="system will not be READY until worker registers a heartbeat",
+                )
+            elif _alive_count > 0:
+                logger.info("startup.worker_detected", alive_count=_alive_count)
+            # _alive_count == -1: Redis scan failed (already flagged as unavailable)
+        except Exception as exc:
+            logger.error("startup.worker_detection_failed", error=str(exc))
+    else:
+        logger.info("startup.worker_detection_skipped", reason="no_redis")
+
     yield
 
     if getattr(app.state, "job_queue", None) is not None:

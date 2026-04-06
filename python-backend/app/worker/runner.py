@@ -1596,9 +1596,57 @@ async def _reconcile_startup_exports(runtime: WorkerRuntime) -> None:
         )
 
 
+async def _reconcile_startup_photos(runtime: WorkerRuntime) -> None:
+    """Re-enqueue photos whose heavy-lane transport was lost (e.g. Redis restart).
+
+    Mirrors ``_reconcile_startup_exports`` for the photo variant processing lane.
+    Covers ``processing_status in ('uploaded', 'processing')`` — states where a
+    heavy-lane job should exist but may be missing after a Redis flush or restart.
+    """
+    if runtime.worker_heavy_concurrency <= 0:
+        return
+
+    snapshot = await inspect_heavy_job_transport(runtime.redis)
+    requeued = 0
+    failed = 0
+    async with WorkerAsyncSessionFactory() as session:
+        photos = await PhotoRepository(session).list_incomplete_photos()
+        for photo in photos:
+            if snapshot.has_photo(photo.id):
+                continue
+            try:
+                await enqueue_heavy_job(
+                    runtime.redis,
+                    job_type="photo_variant_processing",
+                    project_id=photo.project_id,
+                    organization_id=None,  # cross-tenant startup path
+                    photo_id=photo.id,
+                    max_depth=runtime.settings.heavy_queue_max_depth,
+                    max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
+                    priority=heavy_job_priority_for_type("photo_variant_processing"),
+                )
+                requeued += 1
+            except Exception as exc:
+                failed += 1
+                logger.warning(
+                    "worker.startup_photo_requeue_failed",
+                    photo_id=photo.id,
+                    project_id=photo.project_id,
+                    processing_status=photo.processing_status,
+                    error=str(exc),
+                )
+    if requeued or failed:
+        logger.warning(
+            "worker.startup_photo_reconciliation_completed",
+            requeued=requeued,
+            failed=failed,
+        )
+
+
 async def _reconcile_startup_runtime_state(runtime: WorkerRuntime) -> None:
     await _reconcile_startup_analysis_jobs(runtime)
     await _reconcile_startup_exports(runtime)
+    await _reconcile_startup_photos(runtime)
 
 
 async def run(redis_url: str | None = None) -> None:
@@ -1640,6 +1688,14 @@ async def run(redis_url: str | None = None) -> None:
         await _reconcile_startup_runtime_state(runtime)
     except Exception as exc:
         logger.error("worker.startup_reconciliation_failed", error=str(exc), exc_info=True)
+        if _is_strict_worker_environment(settings):
+            raise RuntimeError(
+                startup_failure_message(
+                    "worker_reconciliation",
+                    f"Startup reconciliation failed in strict environment: {exc}. "
+                    "Fix the underlying inconsistency before restarting the worker.",
+                )
+            ) from exc
     try:
         await _write_heartbeat_if_due(runtime)
     except Exception as exc:

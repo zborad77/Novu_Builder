@@ -574,7 +574,11 @@ class AnalysisService:
         duration = _job_duration_seconds(job)
         attempt_count = _job_attempt_count(job)
         max_attempts = max(1, int(settings.analysis_job_max_attempts))
-        observe_job_outcome(status="failed", duration_seconds=duration)
+        observe_job_outcome(
+            status="failed",
+            duration_seconds=duration,
+            tenant_id=str(getattr(job, "organization_id", None) or "unknown"),
+        )
 
         if retryable and attempt_count < max_attempts:
             retry_inflight = _normalized_counter(await repo.count_retry_inflight_jobs())
@@ -1220,7 +1224,11 @@ class AnalysisService:
             )
             duration = _job_duration_seconds(job)
 
-        observe_job_outcome(status="completed", duration_seconds=duration)
+        observe_job_outcome(
+            status="completed",
+            duration_seconds=duration,
+            tenant_id=str(organization_id or "unknown"),
+        )
         log.info(
             "worker.quote_recalculation_finished",
             status="completed",
@@ -1653,7 +1661,11 @@ class AnalysisService:
             duration = _job_duration_seconds(job)
         # Phase 3 session CLOSED.
 
-        observe_job_outcome(status="completed", duration_seconds=duration)
+        observe_job_outcome(
+            status="completed",
+            duration_seconds=duration,
+            tenant_id=str(organization_id or "unknown"),
+        )
         log.info(
             "worker.job_finished",
             status="completed",
@@ -1705,7 +1717,11 @@ class AnalysisService:
             try:
                 await repo.fail_job(job, message=message, error_traceback=error_traceback)
                 duration = _job_duration_seconds(job)
-                observe_job_outcome(status="failed", duration_seconds=duration)
+                observe_job_outcome(
+                    status="failed",
+                    duration_seconds=duration,
+                    tenant_id=str(getattr(job, "organization_id", None) or "unknown"),
+                )
                 logger.error(
                     "worker.job_finished",
                     job_id=job_id,

@@ -398,6 +398,25 @@ def _readiness_now() -> float:
     return time.monotonic()
 
 
+_WORKER_NOT_ALIVE_LOG_INTERVAL_SECONDS = 60.0
+
+
+def _log_worker_not_alive_if_due(request: Request, *, worker_alive, worker_state_str, seen_instances, last_seen_at) -> None:
+    """Emit an ERROR log when the worker is not alive, at most once per minute."""
+    now = _readiness_now()
+    last_logged = getattr(request.app.state, "_worker_not_alive_last_logged", 0.0)
+    if now - last_logged < _WORKER_NOT_ALIVE_LOG_INTERVAL_SECONDS:
+        return
+    request.app.state._worker_not_alive_last_logged = now
+    logger.error(
+        "readiness.worker_not_alive",
+        worker_alive=worker_alive,
+        worker_state=worker_state_str,
+        seen_instances=seen_instances,
+        last_seen_at=last_seen_at,
+    )
+
+
 def _get_readiness_db_cache(request: Request) -> _ReadinessDbCache:
     cache = getattr(request.app.state, "readiness_db_cache", None)
     if not isinstance(cache, _ReadinessDbCache):
@@ -893,14 +912,17 @@ async def _get_job_processing_readiness(
     *,
     strict: bool,
 ) -> _JobProcessingReadinessSnapshot:
-    api_ready = await _is_ready(request)
-    snapshot = await _get_operational_metrics_snapshot_cached(request)
+    # Use api_state (startup/db/storage/auth) rather than snapshot.ready so
+    # that the worker-liveness invariant does not collapse the apiReady field
+    # in /ready/processing responses.
+    snapshot = await _collect_system_state_snapshot(request)
+    api_ready = _state_is_servable(snapshot.api_state)
     return _evaluate_job_processing_readiness(
         request,
         api_ready=api_ready,
-        queue_monitoring_available=snapshot.queue_monitoring_available,
-        queue_state=snapshot.queue_state,
-        worker_snapshot=snapshot.worker,
+        queue_monitoring_available=snapshot.operational.queue_monitoring_available,
+        queue_state=snapshot.operational.queue_state,
+        worker_snapshot=snapshot.operational.worker,
         strict=strict,
     )
 
@@ -937,7 +959,19 @@ async def _collect_system_state_snapshot(request: Request) -> _SystemStateSnapsh
         processing_state = _SYSTEM_STATE_DEGRADED
     redis_state = _worst_system_state(queue_state, auth_protection.state)
     state = _worst_system_state(api_state, processing_state)
-    ready = _state_is_servable(api_state)
+    # Hard invariant: system is not READY without an alive worker and a
+    # serviceable queue.  API can run, but readiness is denied.
+    worker_alive = operational.worker.alive is True
+    queue_ok = _state_is_healthy(queue_state)
+    if not worker_alive:
+        _log_worker_not_alive_if_due(
+            request,
+            worker_alive=operational.worker.alive,
+            worker_state_str=_worker_state(operational.worker),
+            seen_instances=operational.worker.seen_instances,
+            last_seen_at=operational.worker.last_seen_at,
+        )
+    ready = _state_is_servable(api_state) and worker_alive and queue_ok
     healthy = _state_is_healthy(state)
 
     return _SystemStateSnapshot(

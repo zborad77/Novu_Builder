@@ -49,8 +49,8 @@ def _email_domain(email: str) -> str | None:
     return parts[1] if len(parts) == 2 and parts[1] else None
 
 
-def _record_auth_failure(endpoint: str, reason: str) -> None:
-    AUTH_FAILURES_TOTAL.labels(endpoint=endpoint, reason=reason).inc()
+def _record_auth_failure(endpoint: str, reason: str, tenant_id: str = "unknown") -> None:
+    AUTH_FAILURES_TOTAL.labels(endpoint=endpoint, reason=reason, tenant_id=tenant_id).inc()
 
 
 def _shared_auth_redis(request: Request):

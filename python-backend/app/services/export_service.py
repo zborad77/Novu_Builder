@@ -17,6 +17,7 @@ from app.core.backpressure import (
     effective_backpressure_max_queued_jobs,
     ensure_heavy_intake_capacity,
     heavy_job_priority_for_type,
+    require_worker_capacity,
 )
 from app.core.config import get_settings
 from app.models import ProjectExport
@@ -1091,54 +1092,42 @@ class ExportService:
         base_name = sanitize_filename(case_detail.finalProposal.subject or case_detail.title or "nabidka")
         file_name = f"{base_name}.docx"
         settings = get_settings()
-        queue_enabled = settings.worker_heavy_concurrency > 0
-        if queue_enabled:
-            await self._enforce_export_backpressure(surface="export_api")
-            export = await self._create_pending_export_record(
-                export_id=export_id,
-                project_id=case_detail.id,
-                export_type="quote-docx",
-                file_name=file_name,
-                created_at=now,
-            )
-            try:
-                await self._enqueue_export_generation(export)
-                return _to_export_read(export)
-            except HeavyJobQueueCapacityExceededError as exc:
-                await self._fail_export(export)
-                logger.warning(
-                    "export.queue_enqueue_rejected",
-                    export_id=export.id,
-                    project_id=case_detail.id,
-                    export_type="quote-docx",
-                    error=str(exc),
-                    queued=exc.queued,
-                    processing=exc.processing,
-                    max_depth=exc.max_depth,
-                )
-                raise HTTPException(status_code=429, detail="Export queue is full. Please retry later.")
-            except Exception as exc:
-                await self._fail_export(export)
-                logger.warning(
-                    "export.queue_enqueue_unavailable",
-                    export_id=export.id,
-                    project_id=case_detail.id,
-                    export_type="quote-docx",
-                    error=str(exc),
-                    exc_info=True,
-                )
-                raise HTTPException(status_code=503, detail="Export queue is unavailable.")
-
-        relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        return await self._create_storage_backed_export(
+        require_worker_capacity("export_api", settings=settings)
+        await self._enforce_export_backpressure(surface="export_api")
+        export = await self._create_pending_export_record(
             export_id=export_id,
             project_id=case_detail.id,
             export_type="quote-docx",
             file_name=file_name,
-            storage_key=relative_storage_key.as_posix(),
-            content=_build_docx_bytes(case_detail),
-            now=now,
+            created_at=now,
         )
+        try:
+            await self._enqueue_export_generation(export)
+            return _to_export_read(export)
+        except HeavyJobQueueCapacityExceededError as exc:
+            await self._fail_export(export)
+            logger.warning(
+                "export.queue_enqueue_rejected",
+                export_id=export.id,
+                project_id=case_detail.id,
+                export_type="quote-docx",
+                error=str(exc),
+                queued=exc.queued,
+                processing=exc.processing,
+                max_depth=exc.max_depth,
+            )
+            raise HTTPException(status_code=429, detail="Export queue is full. Please retry later.")
+        except Exception as exc:
+            await self._fail_export(export)
+            logger.warning(
+                "export.queue_enqueue_unavailable",
+                export_id=export.id,
+                project_id=case_detail.id,
+                export_type="quote-docx",
+                error=str(exc),
+                exc_info=True,
+            )
+            raise HTTPException(status_code=503, detail="Export queue is unavailable.")
 
     async def create_proposal_docx_export(self, *, case_detail: ProjectDetail) -> ExportRead:
         if case_detail.proposalDraft is None:
@@ -1149,54 +1138,42 @@ class ExportService:
         base_name = sanitize_filename(case_detail.proposalDraft.subject or case_detail.title or "pracovni-navrh")
         file_name = f"{base_name}.docx"
         settings = get_settings()
-        queue_enabled = settings.worker_heavy_concurrency > 0
-        if queue_enabled:
-            await self._enforce_export_backpressure(surface="export_api")
-            export = await self._create_pending_export_record(
-                export_id=export_id,
-                project_id=case_detail.id,
-                export_type="proposal-docx",
-                file_name=file_name,
-                created_at=now,
-            )
-            try:
-                await self._enqueue_export_generation(export)
-                return _to_export_read(export)
-            except HeavyJobQueueCapacityExceededError as exc:
-                await self._fail_export(export)
-                logger.warning(
-                    "export.queue_enqueue_rejected",
-                    export_id=export.id,
-                    project_id=case_detail.id,
-                    export_type="proposal-docx",
-                    error=str(exc),
-                    queued=exc.queued,
-                    processing=exc.processing,
-                    max_depth=exc.max_depth,
-                )
-                raise HTTPException(status_code=429, detail="Export queue is full. Please retry later.")
-            except Exception as exc:
-                await self._fail_export(export)
-                logger.warning(
-                    "export.queue_enqueue_unavailable",
-                    export_id=export.id,
-                    project_id=case_detail.id,
-                    export_type="proposal-docx",
-                    error=str(exc),
-                    exc_info=True,
-                )
-                raise HTTPException(status_code=503, detail="Export queue is unavailable.")
-
-        relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        return await self._create_storage_backed_export(
+        require_worker_capacity("export_api", settings=settings)
+        await self._enforce_export_backpressure(surface="export_api")
+        export = await self._create_pending_export_record(
             export_id=export_id,
             project_id=case_detail.id,
             export_type="proposal-docx",
             file_name=file_name,
-            storage_key=relative_storage_key.as_posix(),
-            content=_build_proposal_docx_bytes(case_detail),
-            now=now,
+            created_at=now,
         )
+        try:
+            await self._enqueue_export_generation(export)
+            return _to_export_read(export)
+        except HeavyJobQueueCapacityExceededError as exc:
+            await self._fail_export(export)
+            logger.warning(
+                "export.queue_enqueue_rejected",
+                export_id=export.id,
+                project_id=case_detail.id,
+                export_type="proposal-docx",
+                error=str(exc),
+                queued=exc.queued,
+                processing=exc.processing,
+                max_depth=exc.max_depth,
+            )
+            raise HTTPException(status_code=429, detail="Export queue is full. Please retry later.")
+        except Exception as exc:
+            await self._fail_export(export)
+            logger.warning(
+                "export.queue_enqueue_unavailable",
+                export_id=export.id,
+                project_id=case_detail.id,
+                export_type="proposal-docx",
+                error=str(exc),
+                exc_info=True,
+            )
+            raise HTTPException(status_code=503, detail="Export queue is unavailable.")
 
     async def create_quote_pdf_export(self, *, case_detail: ProjectDetail) -> ExportRead:
         if case_detail.finalProposal is None:
@@ -1207,54 +1184,42 @@ class ExportService:
         base_name = sanitize_filename(case_detail.finalProposal.subject or case_detail.title or "nabidka")
         file_name = f"{base_name}.pdf"
         settings = get_settings()
-        queue_enabled = settings.worker_heavy_concurrency > 0
-        if queue_enabled:
-            await self._enforce_export_backpressure(surface="export_api")
-            export = await self._create_pending_export_record(
-                export_id=export_id,
-                project_id=case_detail.id,
-                export_type="quote-pdf",
-                file_name=file_name,
-                created_at=now,
-            )
-            try:
-                await self._enqueue_export_generation(export)
-                return _to_export_read(export)
-            except HeavyJobQueueCapacityExceededError as exc:
-                await self._fail_export(export)
-                logger.warning(
-                    "export.queue_enqueue_rejected",
-                    export_id=export.id,
-                    project_id=case_detail.id,
-                    export_type="quote-pdf",
-                    error=str(exc),
-                    queued=exc.queued,
-                    processing=exc.processing,
-                    max_depth=exc.max_depth,
-                )
-                raise HTTPException(status_code=429, detail="Export queue is full. Please retry later.")
-            except Exception as exc:
-                await self._fail_export(export)
-                logger.warning(
-                    "export.queue_enqueue_unavailable",
-                    export_id=export.id,
-                    project_id=case_detail.id,
-                    export_type="quote-pdf",
-                    error=str(exc),
-                    exc_info=True,
-                )
-                raise HTTPException(status_code=503, detail="Export queue is unavailable.")
-
-        relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
-        return await self._create_storage_backed_export(
+        require_worker_capacity("export_api", settings=settings)
+        await self._enforce_export_backpressure(surface="export_api")
+        export = await self._create_pending_export_record(
             export_id=export_id,
             project_id=case_detail.id,
             export_type="quote-pdf",
             file_name=file_name,
-            storage_key=relative_storage_key.as_posix(),
-            content=_build_pdf_bytes(case_detail),
-            now=now,
+            created_at=now,
         )
+        try:
+            await self._enqueue_export_generation(export)
+            return _to_export_read(export)
+        except HeavyJobQueueCapacityExceededError as exc:
+            await self._fail_export(export)
+            logger.warning(
+                "export.queue_enqueue_rejected",
+                export_id=export.id,
+                project_id=case_detail.id,
+                export_type="quote-pdf",
+                error=str(exc),
+                queued=exc.queued,
+                processing=exc.processing,
+                max_depth=exc.max_depth,
+            )
+            raise HTTPException(status_code=429, detail="Export queue is full. Please retry later.")
+        except Exception as exc:
+            await self._fail_export(export)
+            logger.warning(
+                "export.queue_enqueue_unavailable",
+                export_id=export.id,
+                project_id=case_detail.id,
+                export_type="quote-pdf",
+                error=str(exc),
+                exc_info=True,
+            )
+            raise HTTPException(status_code=503, detail="Export queue is unavailable.")
 
     async def create_final_proposal_exports(self, *, case_detail: ProjectDetail) -> list[ExportRead]:
         return [
@@ -1268,45 +1233,8 @@ class ExportService:
         base_name = sanitize_filename(case_detail.title or case_detail.id)
         file_name = f"{base_name}.zip"
         settings = get_settings()
-        queue_enabled = settings.worker_heavy_concurrency > 0
-        if queue_enabled:
-            await self._enforce_export_backpressure(surface="export_api")
-            export = await self._create_pending_export_record(
-                export_id=export_id,
-                project_id=case_detail.id,
-                export_type="case-zip",
-                file_name=file_name,
-                created_at=now,
-            )
-            try:
-                await self._enqueue_export_generation(export)
-                return _to_export_read(export)
-            except HeavyJobQueueCapacityExceededError as exc:
-                await self._fail_export(export)
-                logger.warning(
-                    "export.queue_enqueue_rejected",
-                    export_id=export.id,
-                    project_id=case_detail.id,
-                    export_type="case-zip",
-                    error=str(exc),
-                    queued=exc.queued,
-                    processing=exc.processing,
-                    max_depth=exc.max_depth,
-                )
-                raise HTTPException(status_code=429, detail="Export queue is full. Please retry later.")
-            except Exception as exc:
-                await self._fail_export(export)
-                logger.warning(
-                    "export.queue_enqueue_unavailable",
-                    export_id=export.id,
-                    project_id=case_detail.id,
-                    export_type="case-zip",
-                    error=str(exc),
-                    exc_info=True,
-                )
-                raise HTTPException(status_code=503, detail="Export queue is unavailable.")
-
-        relative_storage_key = Path("exports") / case_detail.id / f"{export_id}-{file_name}"
+        require_worker_capacity("export_api", settings=settings)
+        await self._enforce_export_backpressure(surface="export_api")
         export = await self._create_pending_export_record(
             export_id=export_id,
             project_id=case_detail.id,
@@ -1314,32 +1242,33 @@ class ExportService:
             file_name=file_name,
             created_at=now,
         )
-        await self.repository.update_state(
-            export,
-            status="generating",
-            storage_key=None,
-            completed_at=None,
-        )
         try:
-            content = await _build_case_zip_bytes(case_detail)
+            await self._enqueue_export_generation(export)
+            return _to_export_read(export)
+        except HeavyJobQueueCapacityExceededError as exc:
+            await self._fail_export(export)
+            logger.warning(
+                "export.queue_enqueue_rejected",
+                export_id=export.id,
+                project_id=case_detail.id,
+                export_type="case-zip",
+                error=str(exc),
+                queued=exc.queued,
+                processing=exc.processing,
+                max_depth=exc.max_depth,
+            )
+            raise HTTPException(status_code=429, detail="Export queue is full. Please retry later.")
         except Exception as exc:
-            logger.error(
-                "export.generation_failed",
-                export_id=export_id,
+            await self._fail_export(export)
+            logger.warning(
+                "export.queue_enqueue_unavailable",
+                export_id=export.id,
                 project_id=case_detail.id,
                 export_type="case-zip",
                 error=str(exc),
                 exc_info=True,
             )
-            return await self._fail_export(export)
-        return await self._write_generated_export(
-            export,
-            project_id=case_detail.id,
-            export_type="case-zip",
-            storage_key=relative_storage_key.as_posix(),
-            content=content,
-            now=now,
-        )
+            raise HTTPException(status_code=503, detail="Export queue is unavailable.")
 
     async def get_export(
         self,

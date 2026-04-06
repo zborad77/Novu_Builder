@@ -77,6 +77,22 @@ class PhotoRepository:
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
+    async def list_incomplete_photos(self) -> Sequence[ProjectPhoto]:
+        """Return all active photos with an in-flight processing_status.
+
+        Used by worker startup reconciliation to re-enqueue any photo whose
+        heavy-lane transport entry was lost (e.g. after Redis restart).
+        """
+        result = await self.session.execute(
+            select(ProjectPhoto)
+            .where(
+                ProjectPhoto.status == "active",
+                ProjectPhoto.processing_status.in_(("uploaded", "processing")),
+            )
+            .order_by(ProjectPhoto.created_at.asc(), ProjectPhoto.id.asc())
+        )
+        return result.scalars().all()
+
     async def list_pending_delete(self, *, limit: int = 100) -> Sequence[ProjectPhoto]:
         result = await self.session.execute(
             select(ProjectPhoto)

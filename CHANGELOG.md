@@ -2,6 +2,63 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.7.003 - 2026-04-06
+
+Observability & resilience hardening: per-tenant metrics, storage instrumentation, worker readiness invariant, multi-instance heartbeat scan, photo startup reconciliation, export sync-fallback removal, and five new Prometheus alerts.
+
+### Prometheus Alerting (5 new rules)
+
+- `DeadLetterQueueGrowing` — warns when jobs accumulate in dead-letter queue for >5 min.
+- `RetryQueueSurge` — warns on retry rate >0.5/s over 10 min (retry storm detection).
+- `HeavyQueueBacklog` — warns when heavy (export/media) queue exceeds 20 jobs for 15 min.
+- `AuthFailureSpike` — warns on auth failure rate >0.5/s for 2 min (brute-force / credential stuffing).
+- `RedisRuntimeDegraded` — warns when worker heartbeat falls into degraded Redis mode.
+
+### Per-Tenant Metrics
+
+- `novu_job_outcomes_total` and `novu_job_duration_seconds` gain a `tenant_id` label — enables per-org job analysis.
+- `novu_auth_failures_total` gains a `tenant_id` label — enables per-tenant auth anomaly detection.
+- `observe_job_outcome()` accepts optional `tenant_id` parameter; unknown context stored as `"unknown"`.
+
+### Storage Instrumentation
+
+- Added `novu_storage_operations_total` counter — tracks every storage op by `operation`, `backend`, and `outcome`.
+- Added `novu_storage_operation_duration_seconds` histogram — storage latency distribution by operation, backend, outcome.
+- Both local and S3 storage backends instrumented.
+
+### Worker Readiness Invariant
+
+- `/ready` now requires a live worker **and** a healthy queue in addition to API state — prevents routing traffic when background processing is unavailable.
+- Worker-not-alive condition logs an ERROR at most once per 60 s (throttled via `_log_worker_not_alive_if_due`).
+- `/ready/processing` uses `api_state` independently so worker-liveness invariant does not collapse `apiReady` in processing-readiness responses.
+
+### Multi-Instance Heartbeat Scan (`scan_alive_workers`)
+
+- New `scan_alive_workers(redis)` in `heartbeat.py` — scans all `worker:heartbeat:*` keys in Redis.
+- Returns `(alive_count, last_seen_at_iso)`; handles legacy single-key format; returns `(-1, None)` on Redis failure.
+- Enables correct liveness detection when multiple worker instances run concurrently.
+
+### Photo Startup Reconciliation
+
+- New `_reconcile_startup_photos()` in `runner.py` — mirrors export reconciliation for the photo variant processing lane.
+- Re-enqueues photos stuck in `uploaded`/`processing` state after a Redis restart or flush — prevents silent stalls.
+
+### Export Sync-Fallback Removal
+
+- Removed inline synchronous DOCX/PDF generation path (`queue_enabled` branching) from `ExportService`.
+- Exports now unconditionally require a running worker; returns HTTP 503 via `require_worker_capacity()` when heavy lane is disabled — eliminates hidden sync execution and unpredictable latency spikes.
+
+### Backpressure Guard
+
+- `require_worker_capacity(surface, *, settings)` added to `backpressure.py` — raises HTTP 503 when `worker_heavy_concurrency == 0`; records `backpressure_rejection` metric with `reason="heavy_lane_disabled"`.
+
+### Audit Documentation
+
+- `docs/monitoring_observability_audit_2026-04-06.md` — full monitoring & observability audit.
+- `docs/chaos_failure_audit_2026-04-06.md` — chaos/failure scenario audit.
+- `docs/infra_hardening_audit_2026-04-06.md` — infrastructure hardening audit.
+- `docs/backup_restore_readiness_audit_2026-04-06.md` — backup & restore readiness audit.
+
 ## v0.7.002 - 2026-04-05
 
 Security audit hardening: read-path rate limiting, per-tenant/per-user quotas, DB pool 503, page cap, AI quota fail-closed, per-org rate limit key, and worker identity logging.
