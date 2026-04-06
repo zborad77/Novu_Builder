@@ -25,3 +25,69 @@ __pycache__/
 .claude/
 backups/
 nginx/certs/*.pem
+
+# === TEST / RUNTIME TEMP (KRITICKÉ) ===
+tmp_*
+**/tmp_*
+*_tmp/
+temp/
+**/temp/
+
+# pytest / orchestrace
+pytest-local/
+tmp_pytest/
+tmp_pytest_orch/
+
+# runtime test data (NOVU specifické)
+python-backend/tmp_test_runtime/
+python-backend/tmp_*
+
+# session & worker runtime
+**/session_*/
+**/*heartbeat*.json
+
+# artifacts & rehearsal
+artifacts/
+**/artifacts/
+codex_tmp_validation/
+_debug_*/
+
+# === DB / TEST DB ===
+*.db
+*.sqlite3
+
+# === LOGS ===
+*.log
+python-backend/log-test-*.json
+
+# === CACHE ===
+__pycache__/
+*.pyc
+
+# === NOVU RUNTIME / TEST CLEANUP (SAFE) ===
+
+# hidden debug / validation dirs
+.codex_tmp_validation/
+.debug_*/
+**/.codex_tmp_validation/
+**/.debug_*/
+
+# pytest / temp dirs
+tmp_*/
+**/tmp_*/
+pytest-local/
+tmp_pytest/
+tmp_pytest_orch/
+
+# runtime test data (backend)
+python-backend/tmp_test_runtime/
+python-backend/tmp_*
+
+# logs (including JSON test logs)
+*.log
+python-backend/log-test-*.json
+**/log-test-*.json
+
+# test databases
+*.db
+*.sqlite3
