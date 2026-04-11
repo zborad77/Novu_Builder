@@ -276,24 +276,25 @@ class PhotoService:
             return None
         return to_read_model(photo)
 
-    async def create_multipart_photo(self, project: Project, file: UploadFile, *, is_primary: bool) -> ProjectPhotoRead:
-        settings = get_settings()
-        require_worker_capacity("photo_upload_api", settings=settings)
+    async def _enforce_upload_backpressure(self, *, settings, surface: str) -> None:
+        require_worker_capacity(surface, settings=settings)
         snapshot = await collect_backpressure_snapshot(
             settings=settings,
             job_queue=self.work_queue,
         )
-        ensure_heavy_intake_capacity(
-            snapshot,
-            settings=settings,
-            surface="photo_upload_api",
-        )
+        ensure_heavy_intake_capacity(snapshot, settings=settings, surface=surface)
 
+    async def create_multipart_photo(self, project: Project, file: UploadFile, *, is_primary: bool) -> ProjectPhotoRead:
+        settings = get_settings()
         max_upload_size_mb = settings.max_upload_size_mb
         validated_upload = await validate_photo_upload(
             file,
             max_bytes=max_upload_size_mb * 1024 * 1024,
             max_upload_size_mb=max_upload_size_mb,
+        )
+        await self._enforce_upload_backpressure(
+            settings=settings,
+            surface="photo_upload_api",
         )
         content = validated_upload.content
         actual_mime_type = validated_upload.actual_mime_type
@@ -359,6 +360,17 @@ class PhotoService:
             )
             await self._cleanup_storage_keys(storage_key)
             raise
+        if self.work_queue is None:
+            # Legacy direct-call escape hatch: the API path is rejected earlier by
+            # _enforce_upload_backpressure before we get here.
+            logger.warning(
+                "photo.variant_queue_skipped",
+                photo_id=created_photo.id,
+                project_id=project.id,
+                reason="work_queue_unavailable",
+            )
+            return to_read_model(created_photo)
+
         try:
             await enqueue_heavy_job(
                 self.work_queue,

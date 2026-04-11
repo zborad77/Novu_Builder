@@ -44,6 +44,7 @@ os.environ["APP_DEBUG"] = "false"
 os.environ["RATE_LIMIT_LOGIN"] = "1000/minute"
 os.environ["RATE_LIMIT_ADMIN"] = "1000/minute"
 os.environ["METRICS_AUTH_ENABLED"] = "false"
+os.environ["WORKER_HEAVY_CONCURRENCY"] = "1"
 
 from app.core.config import get_settings  # noqa: E402
 
@@ -99,10 +100,46 @@ class _InMemoryAuthRedis:
         self._purge_if_expired(key)
         return self._values.get(key)
 
+    async def set(self, key: str, value, ex: int | None = None) -> bool:
+        self._values[key] = value.decode("utf-8") if isinstance(value, bytes) else str(value)
+        if ex is not None:
+            self._expires_at[key] = datetime.now(UTC) + timedelta(seconds=max(1, int(ex)))
+        else:
+            self._expires_at.pop(key, None)
+        return True
+
     async def setex(self, key: str, ttl_seconds: int, value) -> bool:
         self._values[key] = value.decode("utf-8") if isinstance(value, bytes) else str(value)
         self._expires_at[key] = datetime.now(UTC) + timedelta(seconds=max(1, int(ttl_seconds)))
         return True
+
+    async def mget(self, keys: list) -> list:
+        result = []
+        for key in keys:
+            k = key.decode("utf-8") if isinstance(key, bytes) else str(key)
+            self._purge_if_expired(k)
+            v = self._values.get(k)
+            result.append(v.encode("utf-8") if v is not None else None)
+        return result
+
+    async def scan_iter(self, match: str = "*"):
+        import fnmatch
+        for key in list(self._values.keys()):
+            self._purge_if_expired(key)
+            if key in self._values and fnmatch.fnmatch(key, match):
+                yield key.encode("utf-8")
+
+    async def llen(self, key: str) -> int:
+        return 0
+
+    async def zcard(self, key: str) -> int:
+        return 0
+
+    async def zcount(self, key: str, min, max) -> int:
+        return 0
+
+    async def scard(self, key: str) -> int:
+        return 0
 
     async def delete(self, *keys: str) -> int:
         deleted = 0

@@ -55,13 +55,34 @@ async def test_health_returns_unavailable_when_integrity_dependencies_fail(app_c
 
 
 @pytest.mark.asyncio
-async def test_ready_returns_503_when_worker_is_not_alive(app_client):
-    # Worker invariant: /ready must return 503 when no live worker heartbeat exists.
-    response = await app_client.get("/api/v1/ready")
+async def test_ready_returns_200_when_worker_is_not_alive_but_critical_dependencies_are_healthy(app_client):
+    from app.main import app as fastapi_app
 
-    assert response.status_code == 503
-    assert response.json()["ready"] is False
+    worker_snapshot = SimpleNamespace(
+        alive=False,
+        last_seen_at=None,
+        alive_instances=0,
+        seen_instances=0,
+    )
+    original_job_queue = getattr(fastapi_app.state, "job_queue", None)
+    original_auth_store = getattr(fastapi_app.state, "auth_token_store", None)
+    fastapi_app.state.job_queue = _ReadyRuntime()
+    fastapi_app.state.auth_token_store = _ReadyRuntime()
+    try:
+        with (
+            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+        ):
+            response = await app_client.get("/api/v1/ready")
+    finally:
+        fastapi_app.state.job_queue = original_job_queue
+        fastapi_app.state.auth_token_store = original_auth_store
+
+    assert response.status_code == 200
+    assert response.json()["ready"] is True
+    assert response.json()["status"] == "degraded"
     assert response.json()["apiState"] == "ready"
+    assert response.json()["worker"]["state"] == "missing"
 
 
 @pytest.mark.asyncio
@@ -80,6 +101,7 @@ async def test_ready_returns_503_when_redis_runtime_is_unavailable(app_client):
 
     assert response.status_code == 503
     assert response.json()["status"] == "unavailable"
+    assert response.json()["ready"] is False
     assert response.json()["dependencies"]["redis"] == "unavailable"
     assert response.json()["security"]["authProtection"]["state"] == "unavailable"
 
@@ -110,8 +132,7 @@ async def test_health_reports_degraded_when_worker_is_down_but_api_is_servable(a
 
     assert response.status_code == 200
     assert response.json()["status"] == "degraded"
-    # Worker invariant: ready=False even on /health when worker is dead.
-    assert response.json()["ready"] is False
+    assert response.json()["ready"] is True
     assert response.json()["worker"]["state"] == "stale"
 
 
@@ -344,6 +365,7 @@ async def test_internal_health_returns_503_when_service_is_not_ready():
     }
     mock_request.app.state.job_queue = None
     mock_request.app.state.auth_token_store = None
+    mock_request.app.state._worker_not_alive_last_logged = 0.0
     response = Response()
 
     current_user = AuthUserRead(

@@ -27,21 +27,21 @@ void SessionService::clear()
 {
     m_accessToken.clear();
     m_refreshToken.clear();
-    QSettings settings("NovuHub", "FotoNabidka");
+    QSettings settings("NOVU", "NovuBuilder");
     settings.remove("session/accessToken");
     settings.remove("session/refreshToken");
 }
 
 void SessionService::saveToSettings() const
 {
-    QSettings settings("NovuHub", "FotoNabidka");
+    QSettings settings("NOVU", "NovuBuilder");
     settings.setValue("session/accessToken", m_accessToken);
     settings.setValue("session/refreshToken", m_refreshToken);
 }
 
 void SessionService::loadFromSettings()
 {
-    QSettings settings("NovuHub", "FotoNabidka");
+    QSettings settings("NOVU", "NovuBuilder");
     m_accessToken = settings.value("session/accessToken").toString();
     m_refreshToken = settings.value("session/refreshToken").toString();
 }

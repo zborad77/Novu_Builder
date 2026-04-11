@@ -15,10 +15,57 @@ so job creation succeeds and produces a queued/running job record.
 No worker process is running — jobs remain in 'queued' state.
 """
 import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 _CASES_URL = "/api/v1/cases"
 _JOBS_URL = "/api/v1/analysis-jobs"
+
+
+@pytest_asyncio.fixture
+async def app_client(test_tenants):
+    """Per-test ASGI client so async resources never cross event loops."""
+    from app.main import app as fastapi_app  # noqa: PLC0415
+    from tests.conftest import _InMemoryAuthRedis  # noqa: PLC0415
+
+    async with fastapi_app.router.lifespan_context(fastapi_app):
+        auth_token_store = _InMemoryAuthRedis()
+        original_auth_token_store = getattr(fastapi_app.state, "auth_token_store", None)
+        fastapi_app.state.auth_token_store = auth_token_store
+        transport = ASGITransport(app=fastapi_app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client
+        fastapi_app.state.auth_token_store = original_auth_token_store
+
+
+@pytest_asyncio.fixture
+async def token_a(app_client, test_tenants):
+    resp = await app_client.post("/api/v1/auth/login", json=test_tenants["user_a"])
+    assert resp.status_code == 200, f"Login A failed: {resp.text}"
+    return resp.json()["accessToken"]
+
+
+@pytest_asyncio.fixture
+async def token_b(app_client, test_tenants):
+    resp = await app_client.post("/api/v1/auth/login", json=test_tenants["user_b"])
+    assert resp.status_code == 200, f"Login B failed: {resp.text}"
+    return resp.json()["accessToken"]
+
+
+@pytest_asyncio.fixture
+async def case_a_id(app_client, token_a):
+    return await _create_case(app_client, token_a, "E2E Isolation Test Case - Tenant A")
+
+
+@pytest_asyncio.fixture
+async def job_a_id(app_client, token_a, case_a_id):
+    resp = await app_client.post(
+        f"{_CASES_URL}/{case_a_id}/analysis-jobs",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert resp.status_code == 202, f"Create job A failed: {resp.text}"
+    return resp.json()["jobId"]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

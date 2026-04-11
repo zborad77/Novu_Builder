@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(FotoNabidkaDesktop VERSION 0.1.0 LANGUAGES CXX)
+project(NovuBuilder VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,7 +12,7 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 
 qt_standard_project_setup()
 
-qt_add_executable(FotoNabidkaDesktop
+qt_add_executable(NovuBuilder
     src/main.cpp
     src/mainwindow.cpp
     src/mainwindow.h
@@ -44,9 +44,15 @@ qt_add_executable(FotoNabidkaDesktop
     src/services/sessionservice.h
     src/dto/adminjobdto.h
     src/dto/adminuserdto.h
+    src/dto/auditlogdto.h
     src/dto/casedto.h
+    src/dto/companydto.h
+    src/dto/exportdto.h
     src/dto/imagedto.h
+    src/dto/impersonatedto.h
     src/dto/logindto.h
+    src/dto/loginresultdto.h
+    src/dto/proposaldraftpatchdto.h
     src/dto/uploadimagedto.h
     src/widgets/imageoverlaywidget.cpp
     src/widgets/imageoverlaywidget.h
@@ -54,10 +60,10 @@ qt_add_executable(FotoNabidkaDesktop
     src/views/serversetupdialog.h
 )
 
-target_include_directories(FotoNabidkaDesktop PRIVATE src)
+target_include_directories(NovuBuilder PRIVATE src)
 
-target_link_libraries(FotoNabidkaDesktop PRIVATE Qt6::Widgets Qt6::Network)
+target_link_libraries(NovuBuilder PRIVATE Qt6::Widgets Qt6::Network)
 
-set_target_properties(FotoNabidkaDesktop PROPERTIES
+set_target_properties(NovuBuilder PROPERTIES
     WIN32_EXECUTABLE TRUE
 )

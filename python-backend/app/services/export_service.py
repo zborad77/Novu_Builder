@@ -884,6 +884,7 @@ class ExportService:
 
     async def _enforce_export_backpressure(self, *, surface: str) -> None:
         settings = get_settings()
+        require_worker_capacity(surface, settings=settings)
         snapshot = await collect_backpressure_snapshot(
             settings=settings,
             job_queue=self.work_queue,
@@ -1091,8 +1092,6 @@ class ExportService:
         now = datetime.now(UTC)
         base_name = sanitize_filename(case_detail.finalProposal.subject or case_detail.title or "nabidka")
         file_name = f"{base_name}.docx"
-        settings = get_settings()
-        require_worker_capacity("export_api", settings=settings)
         await self._enforce_export_backpressure(surface="export_api")
         export = await self._create_pending_export_record(
             export_id=export_id,
@@ -1137,8 +1136,6 @@ class ExportService:
         now = datetime.now(UTC)
         base_name = sanitize_filename(case_detail.proposalDraft.subject or case_detail.title or "pracovni-navrh")
         file_name = f"{base_name}.docx"
-        settings = get_settings()
-        require_worker_capacity("export_api", settings=settings)
         await self._enforce_export_backpressure(surface="export_api")
         export = await self._create_pending_export_record(
             export_id=export_id,
@@ -1183,8 +1180,6 @@ class ExportService:
         now = datetime.now(UTC)
         base_name = sanitize_filename(case_detail.finalProposal.subject or case_detail.title or "nabidka")
         file_name = f"{base_name}.pdf"
-        settings = get_settings()
-        require_worker_capacity("export_api", settings=settings)
         await self._enforce_export_backpressure(surface="export_api")
         export = await self._create_pending_export_record(
             export_id=export_id,
@@ -1232,8 +1227,6 @@ class ExportService:
         now = datetime.now(UTC)
         base_name = sanitize_filename(case_detail.title or case_detail.id)
         file_name = f"{base_name}.zip"
-        settings = get_settings()
-        require_worker_capacity("export_api", settings=settings)
         await self._enforce_export_backpressure(surface="export_api")
         export = await self._create_pending_export_record(
             export_id=export_id,

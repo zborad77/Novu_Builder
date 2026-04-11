@@ -29,14 +29,15 @@ def _list_scope(org_id: str) -> str:
     return f"pricebooks:{org_id}"
 
 
-@router.get("/pricebooks", response_model=PricebookListResponse)
-@limiter.limit(get_settings().rate_limit_read_list)
-async def list_pricebooks(
-    request: Request,
-    current_user: AuthUserRead = Depends(get_current_user),
-    service: PricebookService = Depends(get_pricebook_service),
-    redis=Depends(get_redis),
+async def _list_pricebooks_core(
+    current_user: AuthUserRead,
+    service: PricebookService,
+    redis,
 ) -> PricebookListResponse:
+    """Pure application logic: org guard, cache lookup, DB fallback.
+
+    No Request dependency — directly testable without framework context.
+    """
     started_at = perf_counter()
     try:
         org_id = require_org_id(current_user)
@@ -59,6 +60,17 @@ async def list_pricebooks(
             started_at,
             minimum_seconds=TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
         )
+
+
+@router.get("/pricebooks", response_model=PricebookListResponse)
+@limiter.limit(get_settings().rate_limit_read_list)
+async def list_pricebooks(
+    request: Request,
+    current_user: AuthUserRead = Depends(get_current_user),
+    service: PricebookService = Depends(get_pricebook_service),
+    redis=Depends(get_redis),
+) -> PricebookListResponse:
+    return await _list_pricebooks_core(current_user=current_user, service=service, redis=redis)
 
 
 @router.post("/pricebooks", response_model=PricebookRead, status_code=status.HTTP_201_CREATED)

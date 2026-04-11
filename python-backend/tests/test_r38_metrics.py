@@ -32,6 +32,21 @@ def _metric_value(body: str, metric_name: str, labels: dict[str, str] | None = N
     return None
 
 
+def _metric_line(body: str, prefix: str) -> str | None:
+    for line in body.splitlines():
+        if line.startswith(prefix):
+            return line
+    return None
+
+
+def _metric_labels_fragment(line: str) -> str | None:
+    start = line.find("{")
+    end = line.find("}")
+    if start == -1 or end == -1 or end < start:
+        return None
+    return line[start + 1:end]
+
+
 @pytest.fixture(autouse=True)
 def _reset_metrics_state():
     from app.api.routes.system import (
@@ -191,21 +206,48 @@ class TestMetricsModule:
         assert REAPER_REQUEUES_TOTAL is not None
         assert DUPLICATE_PREVENTED_COUNT is not None
 
-    def test_counter_has_correct_labels(self):
-        from app.core.metrics import HTTP_REQUESTS_TOTAL
+    def test_metric_label_contracts_are_exact(self):
+        from app.core.metrics import (
+            AUTH_FAILURES_TOTAL,
+            BACKPRESSURE_REJECTIONS_TOTAL,
+            CACHE_OPERATION_DURATION_SECONDS,
+            CACHE_REQUESTS_TOTAL,
+            DUPLICATE_PREVENTED_COUNT,
+            HTTP_REQUEST_DURATION_SECONDS,
+            HTTP_REQUESTS_IN_PROGRESS,
+            HTTP_REQUESTS_TOTAL,
+            JOB_DURATION_SECONDS,
+            JOB_OUTCOMES_TOTAL,
+            STORAGE_OPERATIONS_TOTAL,
+            STORAGE_OPERATION_DURATION_SECONDS,
+            UPLOAD_REJECTIONS_TOTAL,
+            WORK_CATALOG_RESOLUTION_DURATION_SECONDS,
+            WORK_CATALOG_RESOLUTION_INPUT_ROWS,
+            WORK_CATALOG_VALIDATION_FAILURES_TOTAL,
+            metric_label_names,
+        )
 
-        labels = HTTP_REQUESTS_TOTAL._labelnames
-        assert "method" in labels
-        assert "path_template" in labels
-        assert "status_code" in labels
+        expected = {
+            HTTP_REQUESTS_TOTAL: ("method", "path_template", "status_code"),
+            HTTP_REQUEST_DURATION_SECONDS: ("method", "path_template", "status_code"),
+            HTTP_REQUESTS_IN_PROGRESS: ("method",),
+            JOB_DURATION_SECONDS: ("status", "tenant_id"),
+            JOB_OUTCOMES_TOTAL: ("status", "tenant_id"),
+            DUPLICATE_PREVENTED_COUNT: ("reason",),
+            BACKPRESSURE_REJECTIONS_TOTAL: ("surface", "reason"),
+            AUTH_FAILURES_TOTAL: ("endpoint", "reason", "tenant_id"),
+            UPLOAD_REJECTIONS_TOTAL: ("reason", "status_code"),
+            STORAGE_OPERATIONS_TOTAL: ("operation", "backend", "outcome"),
+            STORAGE_OPERATION_DURATION_SECONDS: ("operation", "backend", "outcome"),
+            CACHE_REQUESTS_TOTAL: ("namespace", "operation", "outcome"),
+            CACHE_OPERATION_DURATION_SECONDS: ("namespace", "operation", "outcome"),
+            WORK_CATALOG_RESOLUTION_DURATION_SECONDS: ("path", "outcome"),
+            WORK_CATALOG_RESOLUTION_INPUT_ROWS: ("path", "kind"),
+            WORK_CATALOG_VALIDATION_FAILURES_TOTAL: ("operation", "reason"),
+        }
 
-    def test_histogram_has_correct_labels(self):
-        from app.core.metrics import HTTP_REQUEST_DURATION_SECONDS, JOB_DURATION_SECONDS
-
-        assert "method" in HTTP_REQUEST_DURATION_SECONDS._labelnames
-        assert "path_template" in HTTP_REQUEST_DURATION_SECONDS._labelnames
-        assert "status_code" in HTTP_REQUEST_DURATION_SECONDS._labelnames
-        assert JOB_DURATION_SECONDS._labelnames == ("status",)
+        for metric, label_names in expected.items():
+            assert metric_label_names(metric) == label_names
 
     def test_operational_metric_names(self):
         from app.core.metrics import (
@@ -225,30 +267,64 @@ class TestMetricsModule:
             WORKER_ALIVE_INSTANCES,
             WORKER_MONITORING_AVAILABLE,
             WORKER_SEEN_INSTANCES,
+            metric_export_name,
         )
 
-        assert DB_ALIVE._name == "novu_db_alive"
-        assert WORKER_ALIVE._name == "novu_worker_alive"
-        assert WORKER_ALIVE_INSTANCES._name == "novu_worker_alive_instances"
-        assert WORKER_SEEN_INSTANCES._name == "novu_worker_seen_instances"
-        assert WORKER_MONITORING_AVAILABLE._name == "novu_worker_monitoring_available"
-        assert JOBS_QUEUED._name == "novu_jobs_queued"
-        assert JOBS_RUNNING._name == "novu_jobs_running"
-        assert QUEUE_LENGTH._name == "novu_queue_length"
-        assert PROCESSING_JOBS._name == "novu_processing_jobs"
-        assert JOB_STUCK_MAX_AGE_SECONDS._name == "novu_job_stuck_max_age_seconds"
-        assert JOB_DURATION_SECONDS._name == "novu_job_duration_seconds"
-        assert JOB_DURATION_SECONDS_AVG._name == "novu_job_duration_seconds_avg"
-        assert JOB_DURATION_SECONDS_P95._name == "novu_job_duration_seconds_p95"
-        assert JOB_FAIL_RATE._name == "novu_job_fail_rate"
-        assert REAPER_REQUEUES_TOTAL._name == "novu_reaper_requeues"
-        assert DUPLICATE_PREVENTED_COUNT._name == "novu_duplicate_prevented_count"
+        assert metric_export_name(DB_ALIVE) == "novu_db_alive"
+        assert metric_export_name(WORKER_ALIVE) == "novu_worker_alive"
+        assert metric_export_name(WORKER_ALIVE_INSTANCES) == "novu_worker_alive_instances"
+        assert metric_export_name(WORKER_SEEN_INSTANCES) == "novu_worker_seen_instances"
+        assert metric_export_name(WORKER_MONITORING_AVAILABLE) == "novu_worker_monitoring_available"
+        assert metric_export_name(JOBS_QUEUED) == "novu_jobs_queued"
+        assert metric_export_name(JOBS_RUNNING) == "novu_jobs_running"
+        assert metric_export_name(QUEUE_LENGTH) == "novu_queue_length"
+        assert metric_export_name(PROCESSING_JOBS) == "novu_processing_jobs"
+        assert metric_export_name(JOB_STUCK_MAX_AGE_SECONDS) == "novu_job_stuck_max_age_seconds"
+        assert metric_export_name(JOB_DURATION_SECONDS) == "novu_job_duration_seconds"
+        assert metric_export_name(JOB_DURATION_SECONDS_AVG) == "novu_job_duration_seconds_avg"
+        assert metric_export_name(JOB_DURATION_SECONDS_P95) == "novu_job_duration_seconds_p95"
+        assert metric_export_name(JOB_FAIL_RATE) == "novu_job_fail_rate"
+        assert metric_export_name(REAPER_REQUEUES_TOTAL) == "novu_reaper_requeues_total"
+        assert metric_export_name(DUPLICATE_PREVENTED_COUNT) == "novu_duplicate_prevented_count_total"
 
     def test_failure_counter_names(self):
-        from app.core.metrics import AUTH_FAILURES_TOTAL, UPLOAD_REJECTIONS_TOTAL
+        from app.core.metrics import AUTH_FAILURES_TOTAL, UPLOAD_REJECTIONS_TOTAL, metric_export_name
 
-        assert AUTH_FAILURES_TOTAL._name == "novu_auth_failures"
-        assert UPLOAD_REJECTIONS_TOTAL._name == "novu_upload_rejections"
+        assert metric_export_name(AUTH_FAILURES_TOTAL) == "novu_auth_failures_total"
+        assert metric_export_name(UPLOAD_REJECTIONS_TOTAL) == "novu_upload_rejections_total"
+
+    def test_metric_labels_enforce_exact_label_set(self):
+        from app.core.metrics import HTTP_REQUESTS_TOTAL, metric_labels
+
+        with pytest.raises(ValueError, match="expects labels"):
+            metric_labels(HTTP_REQUESTS_TOTAL, method="GET", path_template="/alive")
+
+        with pytest.raises(ValueError, match="expects labels"):
+            metric_labels(
+                HTTP_REQUESTS_TOTAL,
+                method="GET",
+                path_template="/alive",
+                status_code="200",
+                extra_label="unexpected",
+            )
+
+    def test_metric_labels_normalize_keyword_order(self):
+        from app.core.metrics import HTTP_REQUESTS_TOTAL, metric_labels
+
+        labeled_metric = metric_labels(
+            HTTP_REQUESTS_TOTAL,
+            status_code="200",
+            path_template="/api/v1/alive",
+            method="GET",
+        )
+        assert labeled_metric is not None
+
+    def test_normalize_tenant_metric_label_is_fail_closed(self):
+        from app.core.metrics import normalize_tenant_metric_label
+
+        assert normalize_tenant_metric_label(" tenant-a ") == "tenant-a"
+        assert normalize_tenant_metric_label(None) == "unknown"
+        assert normalize_tenant_metric_label("", is_superadmin_context=True) == "superadmin"
 
 
 class TestOperationalMetricsExported:
@@ -316,6 +392,102 @@ class TestOperationalMetricsExported:
             )
             or 0.0
         ) >= baseline_duplicates + 1.0
+        job_outcomes_line = _metric_line(
+            resp.text,
+            'novu_job_outcomes_total{status="completed",tenant_id="unknown"}',
+        )
+        assert job_outcomes_line is not None
+
+    @pytest.mark.asyncio
+    async def test_job_duration_histogram_contract_is_stable_for_tenant_context(self, app_client):
+        from app.core.metrics import observe_job_outcome
+
+        observe_job_outcome(status="completed", duration_seconds=4.0, tenant_id="tenant-a")
+
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
+        count_line = _metric_line(
+            resp.text,
+            'novu_job_duration_seconds_count{status="completed",tenant_id="tenant-a"}',
+        )
+        sum_line = _metric_line(
+            resp.text,
+            'novu_job_duration_seconds_sum{status="completed",tenant_id="tenant-a"}',
+        )
+        bucket_value = _metric_value(
+            resp.text,
+            "novu_job_duration_seconds_bucket",
+            {"status": "completed", "tenant_id": "tenant-a", "le": "5.0"},
+        )
+
+        assert count_line is not None
+        assert sum_line is not None
+        assert bucket_value is not None
+        assert _metric_labels_fragment(count_line) == 'status="completed",tenant_id="tenant-a"'
+        assert _metric_labels_fragment(sum_line) == 'status="completed",tenant_id="tenant-a"'
+
+    @pytest.mark.asyncio
+    async def test_job_outcome_metrics_use_superadmin_tenant_label_when_explicit(self, app_client):
+        from app.core.metrics import observe_job_outcome
+
+        observe_job_outcome(
+            status="completed",
+            duration_seconds=1.0,
+            tenant_id=None,
+            is_superadmin_context=True,
+        )
+
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
+        line = _metric_line(
+            resp.text,
+            'novu_job_outcomes_total{status="completed",tenant_id="superadmin"}',
+        )
+        assert line is not None
+        assert _metric_labels_fragment(line) == 'status="completed",tenant_id="superadmin"'
+
+    @pytest.mark.asyncio
+    async def test_auth_failure_metric_uses_unknown_tenant_when_context_is_missing(self, app_client):
+        from app.api.routes.auth import _record_auth_failure
+
+        _record_auth_failure("refresh", "missing_token")
+
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
+        line = _metric_line(
+            resp.text,
+            'novu_auth_failures_total{endpoint="refresh",reason="missing_token",tenant_id="unknown"}',
+        )
+        assert line is not None
+        assert _metric_labels_fragment(line) == 'endpoint="refresh",reason="missing_token",tenant_id="unknown"'
+
+    @pytest.mark.asyncio
+    async def test_auth_failure_metric_uses_explicit_tenant_and_superadmin_invariants(self, app_client):
+        from app.api.routes.auth import _record_auth_failure
+
+        _record_auth_failure(
+            "change_password",
+            "invalid_current_password",
+            tenant_id="tenant-a",
+        )
+        _record_auth_failure(
+            "change_password",
+            "token_state_unavailable",
+            tenant_id=None,
+            is_superadmin_context=True,
+        )
+
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
+        tenant_line = _metric_line(
+            resp.text,
+            'novu_auth_failures_total{endpoint="change_password",reason="invalid_current_password",tenant_id="tenant-a"}',
+        )
+        superadmin_line = _metric_line(
+            resp.text,
+            'novu_auth_failures_total{endpoint="change_password",reason="token_state_unavailable",tenant_id="superadmin"}',
+        )
+
+        assert tenant_line is not None
+        assert superadmin_line is not None
+        assert _metric_labels_fragment(tenant_line) == 'endpoint="change_password",reason="invalid_current_password",tenant_id="tenant-a"'
+        assert _metric_labels_fragment(superadmin_line) == 'endpoint="change_password",reason="token_state_unavailable",tenant_id="superadmin"'
 
     @pytest.mark.asyncio
     async def test_metrics_headers_disable_caching_and_indexing(self, app_client):
@@ -324,18 +496,53 @@ class TestOperationalMetricsExported:
         assert resp.headers["x-robots-tag"] == "noindex, nofollow"
 
     @pytest.mark.asyncio
+    async def test_metrics_text_export_help_and_type_lines_are_exact(self, app_client):
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
+        lines = resp.text.splitlines()
+        expected_lines = [
+            "# HELP http_requests_total Total HTTP requests",
+            "# TYPE http_requests_total counter",
+            "# HELP http_request_duration_seconds HTTP request latency in seconds",
+            "# TYPE http_request_duration_seconds histogram",
+            "# HELP novu_db_alive 1 if the database is reachable, 0 otherwise",
+            "# TYPE novu_db_alive gauge",
+            "# HELP novu_reaper_requeues_total Total analysis jobs requeued by the lease reaper",
+            "# TYPE novu_reaper_requeues_total counter",
+            "# HELP novu_auth_failures_total Total auth failures by endpoint, reason, and tenant",
+            "# TYPE novu_auth_failures_total counter",
+        ]
+
+        for expected_line in expected_lines:
+            assert expected_line in lines
+
+    @pytest.mark.asyncio
+    async def test_metrics_text_export_uses_stable_lf_format(self, app_client):
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
+        assert "\r" not in resp.text
+        assert resp.text.endswith("\n")
+
+    @pytest.mark.asyncio
     async def test_failed_login_increments_auth_failure_counter(self, app_client):
         await app_client.post("/api/v1/auth/login", json={"email": "manager_a@test.local", "password": "wrong-pass"})
         resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
-        assert 'novu_auth_failures_total{endpoint="login",reason="invalid_credentials"}' in resp.text
+        line = _metric_line(resp.text, 'novu_auth_failures_total{endpoint="login",reason="invalid_credentials"')
+        assert line is not None
+        assert _metric_labels_fragment(line) == 'endpoint="login",reason="invalid_credentials",tenant_id="unknown"'
+        assert 'tenant_id="unknown"' in line
 
     @pytest.mark.asyncio
     async def test_upload_rejection_counter_is_exported(self, app_client):
-        from app.core.metrics import UPLOAD_REJECTIONS_TOTAL
+        from app.core.metrics import UPLOAD_REJECTIONS_TOTAL, metric_labels
 
-        UPLOAD_REJECTIONS_TOTAL.labels(reason="invalid_upload", status_code="400").inc()
+        metric_labels(
+            UPLOAD_REJECTIONS_TOTAL,
+            status_code="400",
+            reason="invalid_upload",
+        ).inc()
         resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
-        assert 'novu_upload_rejections_total{reason="invalid_upload",status_code="400"}' in resp.text
+        line = _metric_line(resp.text, 'novu_upload_rejections_total{reason="invalid_upload",status_code="400"}')
+        assert line is not None
+        assert _metric_labels_fragment(line) == 'reason="invalid_upload",status_code="400"'
 
     @pytest.mark.asyncio
     async def test_work_catalog_cache_and_validation_metrics_are_exported(self, app_client):
@@ -379,6 +586,17 @@ class TestOperationalMetricsExported:
         assert "novu_work_catalog_resolution_duration_seconds_bucket" in resp.text
         assert 'path="work_catalog.get_effective_work_type"' in resp.text
         assert 'outcome="success"' in resp.text
+
+    @pytest.mark.asyncio
+    async def test_http_request_metric_labels_are_exported_in_declared_order(self, app_client):
+        await app_client.get(_ALIVE_URL)
+        resp = await app_client.get(_METRICS_URL, headers=_metrics_auth_headers())
+        line = _metric_line(
+            resp.text,
+            'http_requests_total{method="GET",path_template="/api/v1/alive",status_code="200"}',
+        )
+        assert line is not None
+        assert _metric_labels_fragment(line) == 'method="GET",path_template="/api/v1/alive",status_code="200"'
 
     @pytest.mark.asyncio
     async def test_operational_metrics_cache_hits_within_ttl(self):

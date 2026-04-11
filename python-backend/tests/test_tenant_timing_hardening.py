@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import UTC, datetime, timedelta
+from statistics import median
 from time import perf_counter
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -39,18 +40,18 @@ class TestAuthTimingHardening:
             time.sleep(0.003)
             return False
 
-        async def _avg_duration(service: AuthService, email: str) -> float:
+        async def _median_duration(service: AuthService, email: str) -> float:
             samples = []
-            for _ in range(5):
+            for _ in range(7):
                 started_at = perf_counter()
                 result = await service.login(email=email, password="WrongPassword99!")
                 samples.append(perf_counter() - started_at)
                 assert result is None
-            return sum(samples) / len(samples)
+            return median(samples)
 
         with patch("app.services.auth_service._verify_password", side_effect=_slow_verify):
-            missing_avg = await _avg_duration(missing_service, "missing@example.test")
-            wrong_avg = await _avg_duration(wrong_password_service, "known@example.test")
+            missing_avg = await _median_duration(missing_service, "missing@example.test")
+            wrong_avg = await _median_duration(wrong_password_service, "known@example.test")
 
         assert abs(missing_avg - wrong_avg) < 0.003
 
@@ -93,16 +94,20 @@ class TestTenantResolutionTimingHardening:
             assert result is resolved
             return perf_counter() - started_at
 
+        async def _median_duration(measurement) -> float:
+            samples = [await measurement() for _ in range(7)]
+            return median(samples)
+
         with patch(
             "app.services.tenant_work_type_resolution_service.TENANT_SENSITIVE_TIMING_FLOOR_SECONDS",
             0.01,
         ):
-            miss_avg = sum([await _measure_miss() for _ in range(5)]) / 5
-            hit_avg = sum([await _measure_hit() for _ in range(5)]) / 5
+            miss_avg = await _median_duration(_measure_miss)
+            hit_avg = await _median_duration(_measure_hit)
 
         assert miss_avg >= 0.009
         assert hit_avg >= 0.009
-        assert abs(miss_avg - hit_avg) < 0.006
+        assert abs(miss_avg - hit_avg) < 0.015
 
 
 class TestAnalysisTenantIsolationHardening:

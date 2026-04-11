@@ -80,9 +80,6 @@ async def test_reset_user_password_returns_503_when_security_audit_enforcement_f
     ), patch(
         "app.api.routes.admin.TokenRepository.revoke_all_user_sessions",
         new=AsyncMock(return_value=[]),
-    ), patch(
-        "app.api.routes.admin.get_job_queue",
-        return_value=None,
     ):
         with pytest.raises(HTTPException) as exc_info:
             await reset_user_password(
@@ -91,6 +88,7 @@ async def test_reset_user_password_returns_503_when_security_audit_enforcement_f
                 payload=ResetPasswordPayload(password="NewPass123!"),
                 current_user=_current_user(user_id="admin-1"),
                 session=session,
+                auth_redis=None,
             )
 
     assert exc_info.value.status_code == 503

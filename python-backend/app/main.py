@@ -21,6 +21,7 @@ from app.core.metrics import (
     HTTP_REQUESTS_IN_PROGRESS,
     HTTP_REQUESTS_TOTAL,
     PROMETHEUS_CLIENT_AVAILABLE,
+    metric_labels,
 )
 from app.core.request_id import sanitize_request_id
 from app.core.redis_client import build_queue_redis_client_from_settings
@@ -296,7 +297,7 @@ async def lifespan(app: FastAPI):
                     "startup.worker_not_detected",
                     reason="no_fresh_heartbeat",
                     last_seen_at=_last_seen,
-                    hint="system will not be READY until worker registers a heartbeat",
+                    hint="job processing will not be READY until worker registers a heartbeat",
                 )
             elif _alive_count > 0:
                 logger.info("startup.worker_detected", alive_count=_alive_count)
@@ -396,23 +397,25 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def log_requests(request: Request, call_next) -> Response:
         start = time.monotonic()
-        HTTP_REQUESTS_IN_PROGRESS.labels(method=request.method).inc()
+        metric_labels(HTTP_REQUESTS_IN_PROGRESS, method=request.method).inc()
         route = request.scope.get("route")
         path_template = route.path if route else request.url.path
         try:
             response = await call_next(request)
         finally:
-            HTTP_REQUESTS_IN_PROGRESS.labels(method=request.method).dec()
+            metric_labels(HTTP_REQUESTS_IN_PROGRESS, method=request.method).dec()
         elapsed = time.monotonic() - start
         duration_ms = round(elapsed * 1000)
         if not request.url.path.startswith("/mock-storage"):
             status_str = str(response.status_code)
-            HTTP_REQUESTS_TOTAL.labels(
+            metric_labels(
+                HTTP_REQUESTS_TOTAL,
                 method=request.method,
                 path_template=path_template,
                 status_code=status_str,
             ).inc()
-            HTTP_REQUEST_DURATION_SECONDS.labels(
+            metric_labels(
+                HTTP_REQUEST_DURATION_SECONDS,
                 method=request.method,
                 path_template=path_template,
                 status_code=status_str,

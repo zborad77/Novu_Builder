@@ -29,9 +29,15 @@ def _make_project(project_id: str = "prj_test") -> MagicMock:
     return project
 
 
-def _make_fake_settings(limit_mb: int = 20) -> MagicMock:
+def _make_fake_settings(limit_mb: int = 20, *, heavy_concurrency: int = 1) -> MagicMock:
     settings = MagicMock()
     settings.max_upload_size_mb = limit_mb
+    settings.worker_heavy_concurrency = heavy_concurrency
+    settings.worker_concurrency = 2
+    settings.analysis_queue_max_depth = 50
+    settings.heavy_queue_max_depth = 50
+    settings.backpressure_max_queued_jobs = 100
+    settings.backpressure_max_concurrent_jobs = 4
     return settings
 
 
@@ -78,7 +84,7 @@ class TestPathAndFilenameGuards:
         mock_file = _make_upload_file("../../etc/passwd")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()):
+        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings(heavy_concurrency=0)):
             with pytest.raises(ValueError, match="path traversal"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
@@ -262,12 +268,15 @@ class TestValidUploadFlow:
         mock_repo.update_photo = AsyncMock(side_effect=lambda photo: photo)
         mock_repo.save_changes = AsyncMock()
 
-        service = PhotoService(mock_repo)
+        service = PhotoService(mock_repo, work_queue=MagicMock())
         mock_file = _make_upload_file("photo.jpg", jpeg_bytes, content_type="image/jpeg")
 
-        with patch(
-            "app.services.photo_service.save_original_photo",
-            return_value=("projects/prj_test/photo.jpg", None),
+        with (
+            patch(
+                "app.services.photo_service.save_original_photo",
+                return_value=("projects/prj_test/photo.jpg", None),
+            ),
+            patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()),
         ):
             result = await service.create_multipart_photo(project, mock_file, is_primary=True)
 
@@ -290,12 +299,15 @@ class TestValidUploadFlow:
         mock_repo.update_photo = AsyncMock(side_effect=lambda photo: photo)
         mock_repo.save_changes = AsyncMock()
 
-        service = PhotoService(mock_repo)
+        service = PhotoService(mock_repo, work_queue=MagicMock())
         mock_file = _make_upload_file("photo.png", png_bytes, content_type="image/png")
 
-        with patch(
-            "app.services.photo_service.save_original_photo",
-            return_value=("projects/prj_test/photo.png", None),
+        with (
+            patch(
+                "app.services.photo_service.save_original_photo",
+                return_value=("projects/prj_test/photo.png", None),
+            ),
+            patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()),
         ):
             result = await service.create_multipart_photo(project, mock_file, is_primary=True)
 
@@ -318,12 +330,15 @@ class TestValidUploadFlow:
         mock_repo.update_photo = AsyncMock(side_effect=lambda photo: photo)
         mock_repo.save_changes = AsyncMock()
 
-        service = PhotoService(mock_repo)
+        service = PhotoService(mock_repo, work_queue=MagicMock())
         mock_file = _make_upload_file("photo.jpg", jpeg_bytes, content_type=None)
 
-        with patch(
-            "app.services.photo_service.save_original_photo",
-            return_value=("projects/prj_test/photo.jpg", None),
+        with (
+            patch(
+                "app.services.photo_service.save_original_photo",
+                return_value=("projects/prj_test/photo.jpg", None),
+            ),
+            patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()),
         ):
             result = await service.create_multipart_photo(project, mock_file, is_primary=True)
 
@@ -345,7 +360,7 @@ class TestValidUploadFlow:
         mock_repo.update_photo = AsyncMock(side_effect=lambda photo: photo)
         mock_repo.save_changes = AsyncMock()
 
-        service = PhotoService(mock_repo)
+        service = PhotoService(mock_repo, work_queue=MagicMock())
         mock_file = _make_upload_file("", jpeg_bytes, content_type="image/jpeg")
         validated_upload = SimpleNamespace(
             original_filename="upload-safe.jpg",
@@ -360,6 +375,7 @@ class TestValidUploadFlow:
         with (
             patch("app.services.photo_service.validate_photo_upload", return_value=validated_upload),
             patch("app.services.photo_service.save_original_photo", return_value=("projects/prj_test/upload-safe.jpg", None)),
+            patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()),
         ):
             result = await service.create_multipart_photo(project, mock_file, is_primary=True)
 

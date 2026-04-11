@@ -38,6 +38,22 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+async def _create_pending_export(
+    service: ExportService,
+    *,
+    project_id: str,
+    export_type: str,
+    file_name: str,
+) -> ProjectExport:
+    return await service._create_pending_export_record(
+        export_id=f"exp_{uuid4().hex[:8]}",
+        project_id=project_id,
+        export_type=export_type,
+        file_name=file_name,
+        created_at=datetime.now(UTC),
+    )
+
+
 @pytest.mark.asyncio
 async def test_create_export_persists_db_expires_at(db_session, test_tenants):
     await db_session.execute(delete(ProjectExport))
@@ -73,13 +89,20 @@ async def test_quote_pdf_export_fails_closed_when_artifact_is_missing(monkeypatc
     monkeypatch.setattr(export_service_mod, "delete_storage_file", AsyncMock(return_value=None))
     monkeypatch.setattr(export_service_mod, "_build_pdf_bytes", lambda _detail: b"pdf-bytes")
 
-    export = await service.create_quote_pdf_export(case_detail=case_detail)
+    created = await _create_pending_export(
+        service,
+        project_id=project_id,
+        export_type="quote-pdf",
+        file_name="nabidka.pdf",
+    )
+    export = await service.process_export_by_id(created.id, case_detail=case_detail)
 
-    row = await db_session.get(ProjectExport, export.id)
+    row = await db_session.get(ProjectExport, created.id)
     assert row is not None
     assert row.status == "failed"
     assert row.storage_key is None
     assert row.completed_at is None
+    assert export is not None
     assert export.status == "failed"
 
 
@@ -98,13 +121,20 @@ async def test_quote_pdf_export_records_completed_only_after_verified_storage(mo
     monkeypatch.setattr(export_service_mod, "storage_key_exists", storage_exists)
     monkeypatch.setattr(export_service_mod, "_build_pdf_bytes", lambda _detail: b"pdf-bytes")
 
-    export = await service.create_quote_pdf_export(case_detail=case_detail)
+    created = await _create_pending_export(
+        service,
+        project_id=project_id,
+        export_type="quote-pdf",
+        file_name="nabidka.pdf",
+    )
+    export = await service.process_export_by_id(created.id, case_detail=case_detail)
 
-    row = await db_session.get(ProjectExport, export.id)
+    row = await db_session.get(ProjectExport, created.id)
     assert row is not None
     assert row.status == "completed"
     assert row.storage_key is not None
     assert row.completed_at is not None
+    assert export is not None
     assert export.status == "completed"
     write_storage.assert_awaited_once()
     storage_exists.assert_awaited_once()
@@ -128,12 +158,19 @@ async def test_case_zip_export_fails_closed_when_any_photo_is_missing(monkeypatc
     monkeypatch.setattr(export_service_mod, "read_storage_file", AsyncMock(return_value=None))
     monkeypatch.setattr(export_service_mod, "delete_storage_file", AsyncMock(return_value=None))
 
-    export = await service.create_case_zip_export(case_detail=case_detail)
+    created = await _create_pending_export(
+        service,
+        project_id=project_id,
+        export_type="case-zip",
+        file_name="zip.zip",
+    )
+    export = await service.process_export_by_id(created.id, case_detail=case_detail)
 
-    row = await db_session.get(ProjectExport, export.id)
+    row = await db_session.get(ProjectExport, created.id)
     assert row is not None
     assert row.status == "failed"
     assert row.storage_key is None
+    assert export is not None
     assert export.status == "failed"
 
 
@@ -154,13 +191,20 @@ async def test_export_interruption_marks_generating_export_failed(monkeypatch, d
     )
     monkeypatch.setattr(export_service_mod, "delete_storage_file", AsyncMock(return_value=None))
 
-    export = await service.create_quote_pdf_export(case_detail=case_detail)
+    created = await _create_pending_export(
+        service,
+        project_id=project_id,
+        export_type="quote-pdf",
+        file_name="nabidka.pdf",
+    )
+    export = await service.process_export_by_id(created.id, case_detail=case_detail)
 
-    row = await db_session.get(ProjectExport, export.id)
+    row = await db_session.get(ProjectExport, created.id)
     assert row is not None
     assert row.status == "failed"
     assert row.storage_key is None
     assert row.completed_at is None
+    assert export is not None
     assert export.status == "failed"
 
 

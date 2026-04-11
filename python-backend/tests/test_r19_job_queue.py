@@ -825,6 +825,15 @@ class TestCreateAnalysisJobRoute:
         result = get_job_queue(mock_request)
         assert result is None
 
+    def test_framework_runtime_helpers_return_none_without_app_context(self):
+        from app.api.deps import get_auth_redis, get_job_queue, get_redis
+
+        request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+
+        assert get_job_queue(request) is None
+        assert get_redis(request) is None
+        assert get_auth_redis(request) is None
+
 
 class TestDuplicateEnqueueGuard:
     @pytest.mark.asyncio

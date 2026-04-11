@@ -34,6 +34,7 @@ from app.core.metrics import (
     JOB_DURATION_SECONDS_AVG,
     JOB_DURATION_SECONDS_P95,
     PROMETHEUS_CLIENT_AVAILABLE,
+    PROMETHEUS_TEXT_CONTENT_TYPE,
     PROCESSING_JOBS,
     QUEUE_DEAD_LETTER_ACTIVE,
     QUEUE_LENGTH,
@@ -44,6 +45,8 @@ from app.core.metrics import (
     STORAGE_READY,
     DUPLICATE_PREVENTED_COUNT,
     REAPER_REQUEUES_TOTAL,
+    metric_labels,
+    render_metrics_text,
     refresh_job_observability_gauges,
     WORKER_ALIVE,
     WORKER_ALIVE_INSTANCES,
@@ -99,13 +102,6 @@ def _is_ip_allowlisted(client_ip: str | None, allowlist: str) -> bool:
         except ValueError:
             continue
     return False
-
-
-try:
-    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-except ModuleNotFoundError:
-    CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
-    generate_latest = None
 
 
 @dataclass
@@ -252,6 +248,13 @@ def _state_is_healthy(state: str) -> bool:
     return _normalize_system_state(state) != _SYSTEM_STATE_UNAVAILABLE
 
 
+def _noncritical_signal_state(state: str | None) -> str:
+    normalized = _normalize_system_state(state)
+    if normalized == _SYSTEM_STATE_UNAVAILABLE:
+        return _SYSTEM_STATE_DEGRADED
+    return normalized
+
+
 def _queue_runtime_state(job_queue) -> str:
     if job_queue is None:
         return _SYSTEM_STATE_UNAVAILABLE
@@ -364,7 +367,7 @@ async def _refresh_operational_metrics(request: Request) -> None:
     JOB_STUCK_MAX_AGE_SECONDS.set(snapshot.job_stuck_max_age_seconds)
     refresh_job_observability_gauges()
     REAPER_REQUEUES_TOTAL.inc(0)
-    DUPLICATE_PREVENTED_COUNT.labels(reason="active_job_exists").inc(0)
+    metric_labels(DUPLICATE_PREVENTED_COUNT, reason="active_job_exists").inc(0)
 
     worker = snapshot.worker
     if worker.alive is None:
@@ -933,12 +936,7 @@ async def _collect_system_state_snapshot(request: Request) -> _SystemStateSnapsh
     storage_state = _state_from_ready_flag(await _storage_ready_cached(request))
     db_state = _state_from_ready_flag(operational.db_alive)
     auth_protection = await _get_auth_protection_snapshot(request)
-    api_state = _worst_system_state(
-        startup_state,
-        db_state,
-        storage_state,
-        auth_protection.state,
-    )
+    api_state = _worst_system_state(startup_state, db_state, storage_state)
     job_processing = _evaluate_job_processing_readiness(
         request,
         api_ready=_state_is_servable(api_state),
@@ -957,12 +955,14 @@ async def _collect_system_state_snapshot(request: Request) -> _SystemStateSnapsh
     processing_state = _worst_system_state(queue_state, worker_state)
     if job_processing.grace_active and not job_processing.strict_job_processing_ready:
         processing_state = _SYSTEM_STATE_DEGRADED
-    redis_state = _worst_system_state(queue_state, auth_protection.state)
-    state = _worst_system_state(api_state, processing_state)
-    # Hard invariant: system is not READY without an alive worker and a
-    # serviceable queue.  API can run, but readiness is denied.
+    redis_state = queue_state
+    critical_dependency_state = _worst_system_state(api_state, queue_state)
+    state = _worst_system_state(
+        critical_dependency_state,
+        _noncritical_signal_state(processing_state),
+        _noncritical_signal_state(auth_protection.state),
+    )
     worker_alive = operational.worker.alive is True
-    queue_ok = _state_is_healthy(queue_state)
     if not worker_alive:
         _log_worker_not_alive_if_due(
             request,
@@ -971,7 +971,7 @@ async def _collect_system_state_snapshot(request: Request) -> _SystemStateSnapsh
             seen_instances=operational.worker.seen_instances,
             last_seen_at=operational.worker.last_seen_at,
         )
-    ready = _state_is_servable(api_state) and worker_alive and queue_ok
+    ready = _state_is_servable(api_state) and _state_is_healthy(queue_state)
     healthy = _state_is_healthy(state)
 
     return _SystemStateSnapshot(
@@ -1043,7 +1043,7 @@ def _set_probe_state_status(response: Response, *, state: str) -> None:
 @limiter.limit(get_settings().rate_limit_metrics)
 async def metrics(request: Request) -> RawResponse:
     """Prometheus scrape endpoint. Not a health or readiness probe."""
-    if not PROMETHEUS_CLIENT_AVAILABLE or generate_latest is None:
+    if not PROMETHEUS_CLIENT_AVAILABLE:
         logger.warning("metrics.scrape_unavailable", reason="prometheus_client_not_installed")
         raise HTTPException(
             status_code=503,
@@ -1094,8 +1094,8 @@ async def metrics(request: Request) -> RawResponse:
 
     await _refresh_operational_metrics(request)
     return RawResponse(
-        content=generate_latest(),
-        media_type=CONTENT_TYPE_LATEST,
+        content=render_metrics_text(),
+        media_type=PROMETHEUS_TEXT_CONTENT_TYPE,
         headers={
             "Cache-Control": "no-store",
             "X-Robots-Tag": "noindex, nofollow",

@@ -2,6 +2,7 @@ import collections
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -218,6 +219,7 @@ async def reset_user_password(
     payload: ResetPasswordPayload,
     current_user: AuthUserRead = Depends(require_admin_capability("admin:write")),
     session: AsyncSession = Depends(get_db_session),
+    auth_redis: Annotated[object | None, Depends(get_auth_redis)] = None,
 ) -> None:
     try:
         enforce_password_strength(payload.password)
@@ -230,7 +232,7 @@ async def reset_user_password(
 
     target.password_hash = hash_password(payload.password)
     reset_timestamp = datetime.now(UTC).replace(microsecond=0)
-    token_repository = TokenRepository(session, redis=get_auth_redis(request))
+    token_repository = TokenRepository(session, redis=auth_redis)
     AuthService.invalidate_user_token_state(target, now=reset_timestamp)
     revocations: list[SessionTokenRevocation] = await token_repository.revoke_all_user_sessions(
         target.id,

@@ -191,19 +191,6 @@ async def retry_analysis_job(
     org_id = resolve_org_id(current_user)
     if job_queue is None:
         raise HTTPException(status_code=503, detail="Analysis queue is unavailable.")
-    original_job = await analysis_service.get_job(
-        job_id,
-        organization_id=org_id,
-        is_superadmin_context=current_user.isSuperAdmin,
-    )
-    if not original_job:
-        if not current_user.isSuperAdmin:
-            log_cross_tenant_denied(
-                logger,
-                resource="analysis_job_retry", resource_id=job_id,
-                user_id=current_user.id, org_id=current_user.organizationId,
-            )
-        raise HTTPException(status_code=404, detail="Analysis job not found.")
     settings = get_settings()
     new_job = await analysis_service.retry_job(
         job_id,
@@ -211,8 +198,6 @@ async def retry_analysis_job(
         is_superadmin_context=current_user.isSuperAdmin,
         job_queue=job_queue,
     )
-    if not new_job:
-        raise HTTPException(status_code=404, detail="Analysis job not found.")
     if job_queue is not None:
         try:
             await enqueue_analysis_job(

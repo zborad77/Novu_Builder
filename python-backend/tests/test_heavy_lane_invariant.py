@@ -40,6 +40,7 @@ def _settings(*, heavy_concurrency: int = 0, analysis_queue_max_depth: int = 50,
         backpressure_max_queued_jobs=backpressure_max_queued_jobs,
         backpressure_max_concurrent_jobs=backpressure_max_concurrent_jobs,
         max_upload_size_mb=20,
+        export_ttl_days=7,
     )
 
 
@@ -126,6 +127,15 @@ class TestExportHeavyLaneDisabled:
         assert exc_info.value.status_code == 503
 
     @pytest.mark.asyncio
+    async def test_quote_docx_precondition_beats_lane_503(self):
+        service = self._make_service()
+        settings_stub = _settings(heavy_concurrency=0)
+
+        with patch("app.services.export_service.get_settings", return_value=settings_stub):
+            with pytest.raises(ValueError, match="Final proposal is required"):
+                await service.create_quote_docx_export(case_detail=_case_detail(has_final_proposal=False))
+
+    @pytest.mark.asyncio
     async def test_proposal_docx_raises_503_when_lane_disabled(self):
         service = self._make_service()
         settings_stub = _settings(heavy_concurrency=0)
@@ -171,23 +181,57 @@ class TestExportHeavyLaneDisabled:
 
 class TestPhotoUploadHeavyLaneDisabled:
     @pytest.mark.asyncio
-    async def test_photo_upload_raises_503_when_lane_disabled(self):
+    async def test_photo_upload_raises_503_when_lane_disabled_before_persistence(self):
+        """Valid uploads must fail closed before storage persistence when heavy lane is unavailable."""
         from app.services.photo_service import PhotoService
 
         repo = MagicMock()
         service = PhotoService(repository=repo, work_queue=MagicMock())
         settings_stub = _settings(heavy_concurrency=0)
         project = SimpleNamespace(id="prj_001", organization_id="org_001")
-        upload_file = MagicMock()
-        upload_file.filename = "photo.jpg"
+        mock_upload = MagicMock()
+        mock_upload.filename = "photo.jpg"
+        mock_upload.content_type = "image/jpeg"
+        validated = SimpleNamespace(
+            content=b"fake_image_bytes",
+            actual_mime_type="image/jpeg",
+            file_size=1024,
+            original_filename="photo.jpg",
+            storage_filename="photo.jpg",
+            filename_was_missing=False,
+            content_type_was_missing=False,
+        )
 
         with (
             patch("app.services.photo_service.get_settings", return_value=settings_stub),
+            patch("app.services.photo_service.validate_photo_upload", new=AsyncMock(return_value=validated)),
+            patch("app.services.photo_service.save_original_photo", new=AsyncMock()) as mock_save_original,
         ):
             with pytest.raises(HTTPException) as exc_info:
-                await service.create_multipart_photo(project, upload_file, is_primary=False)
+                await service.create_multipart_photo(project, mock_upload, is_primary=False)
 
         assert exc_info.value.status_code == 503
+        mock_save_original.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_photo_upload_validation_is_not_masked_when_lane_disabled(self):
+        """Invalid filename/path guards must beat 503 heavy-lane unavailability."""
+        from app.services.photo_service import PhotoService
+
+        service = PhotoService(repository=MagicMock(), work_queue=MagicMock())
+        settings_stub = _settings(heavy_concurrency=0)
+        mock_upload = MagicMock()
+        mock_upload.filename = "../../etc/passwd"
+        mock_upload.content_type = "image/jpeg"
+        mock_upload.read = AsyncMock(return_value=b"unused")
+
+        with patch("app.services.photo_service.get_settings", return_value=settings_stub):
+            with pytest.raises(ValueError, match="path traversal"):
+                await service.create_multipart_photo(
+                    SimpleNamespace(id="prj_001", organization_id="org_001"),
+                    mock_upload,
+                    is_primary=False,
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +266,7 @@ class TestExportEnqueuesWhenLaneActive:
             patch("app.services.export_service.collect_backpressure_snapshot", new=AsyncMock(return_value=snapshot)),
             patch("app.services.export_service.ensure_heavy_intake_capacity"),
             patch("app.services.export_service.enqueue_heavy_job", new=AsyncMock()) as mock_enqueue,
+            patch("app.services.export_service._to_export_read", return_value=MagicMock()),
         ):
             await service.create_quote_docx_export(case_detail=_case_detail())
 
@@ -256,7 +301,6 @@ class TestPhotoEnqueuesWhenLaneActive:
 
         service = PhotoService(repository=repo, work_queue=MagicMock())
         settings_stub = _settings(heavy_concurrency=2)
-        snapshot = _ready_backpressure_snapshot(settings_stub)
         project = SimpleNamespace(id="prj_001", organization_id="org_001")
 
         mock_upload = MagicMock()
@@ -275,8 +319,6 @@ class TestPhotoEnqueuesWhenLaneActive:
 
         with (
             patch("app.services.photo_service.get_settings", return_value=settings_stub),
-            patch("app.services.photo_service.collect_backpressure_snapshot", new=AsyncMock(return_value=snapshot)),
-            patch("app.services.photo_service.ensure_heavy_intake_capacity"),
             patch("app.services.photo_service.validate_photo_upload", new=AsyncMock(return_value=validated)),
             patch("app.services.photo_service.get_image_dimensions", return_value=(1920, 1080)),
             patch("app.services.photo_service.save_original_photo", new=AsyncMock(return_value=("key/path.jpg", 1024))),
@@ -287,6 +329,7 @@ class TestPhotoEnqueuesWhenLaneActive:
                 "ai_input_width": 640, "ai_input_height": 480,
             }),
             patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()) as mock_enqueue,
+            patch("app.services.photo_service.to_read_model", return_value=MagicMock()),
         ):
             await service.create_multipart_photo(project, mock_upload, is_primary=False)
 

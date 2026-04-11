@@ -79,8 +79,8 @@ class TestUploadRouteStructure:
 
     def test_preview_route_validates_org(self):
         """get_image_preview must verify the photo's project belongs to the user's org."""
-        from app.api.routes.images import get_image_preview
-        src = inspect.getsource(get_image_preview)
+        from app.api.routes.images import _get_image_preview_core
+        src = inspect.getsource(_get_image_preview_core)
         assert "organization_id=org_id" in src
         assert "get_photo_by_id_in_org" in src
 
@@ -101,6 +101,27 @@ class TestUploadRouteStructure:
         src = inspect.getsource(upload_case_images)
         assert "JSON metadata-only uploads are not supported" in src
         assert "create_json_photo" not in src
+
+    def test_upload_route_keeps_heavy_gate_out_of_http_guards(self):
+        """Route-level org/content-type/form guards must run before any heavy-lane gating."""
+        from app.api.routes.images import upload_case_images
+        src = inspect.getsource(upload_case_images)
+        assert "ensure_heavy_intake_capacity" not in src
+        assert "require_worker_capacity" not in src
+
+    def test_photo_service_gates_after_upload_validation_and_before_persistence(self):
+        """Cheap upload validation must run before runtime gating and before storage writes."""
+        from app.services.photo_service import PhotoService
+        src = inspect.getsource(PhotoService.create_multipart_photo)
+        assert src.index("validate_photo_upload") < src.index("_enforce_upload_backpressure")
+        assert src.index("_enforce_upload_backpressure") < src.index("save_original_photo")
+
+    def test_export_service_gates_after_filename_prep_and_before_enqueue_persistence(self):
+        """Export preconditions/filename sanitization must happen before heavy enqueue gating."""
+        from app.services.export_service import ExportService
+        src = inspect.getsource(ExportService.create_quote_docx_export)
+        assert src.index("sanitize_filename") < src.index("_enforce_export_backpressure")
+        assert src.index("_enforce_export_backpressure") < src.index("_create_pending_export_record")
 
 
 def test_upload_goes_to_s3_only(monkeypatch):
@@ -261,7 +282,7 @@ class TestPreviewOrgCheck:
     @pytest.mark.asyncio
     async def test_preview_fails_for_foreign_org_photo(self):
         """get_image_preview raises 404 if photo's project belongs to a different org."""
-        from app.api.routes.images import get_image_preview
+        from app.api.routes.images import _get_image_preview_core
         from app.services.photo_service import PhotoService
 
         mock_user = MagicMock()
@@ -272,7 +293,7 @@ class TestPreviewOrgCheck:
         mock_photo_service.get_photo_by_id_in_org = AsyncMock(return_value=None)
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_image_preview(
+            await _get_image_preview_core(
                 image_id="pho_X",
                 current_user=mock_user,
                 photo_service=mock_photo_service,
@@ -287,7 +308,7 @@ class TestPreviewOrgCheck:
     @pytest.mark.asyncio
     async def test_preview_fails_for_nonexistent_photo(self):
         """get_image_preview raises 404 if photo does not exist."""
-        from app.api.routes.images import get_image_preview
+        from app.api.routes.images import _get_image_preview_core
         from app.services.photo_service import PhotoService
 
         mock_user = MagicMock()
@@ -298,7 +319,7 @@ class TestPreviewOrgCheck:
         mock_photo_service.get_photo_by_id_in_org = AsyncMock(return_value=None)
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_image_preview(
+            await _get_image_preview_core(
                 image_id="pho_nonexistent",
                 current_user=mock_user,
                 photo_service=mock_photo_service,
@@ -314,7 +335,7 @@ class TestPreviewOrgCheck:
     async def test_preview_succeeds_for_own_org_photo(self):
         """get_image_preview returns RedirectResponse for photo in user's org."""
         from fastapi.responses import RedirectResponse
-        from app.api.routes.images import get_image_preview
+        from app.api.routes.images import _get_image_preview_core
         from app.services.photo_service import PhotoService
 
         mock_user = MagicMock()
@@ -331,7 +352,7 @@ class TestPreviewOrgCheck:
         mock_photo_service = AsyncMock(spec=PhotoService)
         mock_photo_service.get_photo_by_id_in_org = AsyncMock(return_value=read_model)
 
-        response = await get_image_preview(
+        response = await _get_image_preview_core(
             image_id="pho_X",
             current_user=mock_user,
             photo_service=mock_photo_service,
@@ -347,7 +368,7 @@ class TestPreviewOrgCheck:
     async def test_superadmin_bypasses_org_check_on_preview(self):
         """Superadmin can access preview of any org's photo."""
         from fastapi.responses import RedirectResponse
-        from app.api.routes.images import get_image_preview
+        from app.api.routes.images import _get_image_preview_core
         from app.services.photo_service import PhotoService
 
         mock_user = MagicMock()
@@ -364,7 +385,7 @@ class TestPreviewOrgCheck:
         mock_photo_service = AsyncMock(spec=PhotoService)
         mock_photo_service.get_photo_by_id_in_org = AsyncMock(return_value=read_model)
 
-        response = await get_image_preview(
+        response = await _get_image_preview_core(
             image_id="pho_X",
             current_user=mock_user,
             photo_service=mock_photo_service,

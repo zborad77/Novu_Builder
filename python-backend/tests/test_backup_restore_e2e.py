@@ -1386,7 +1386,7 @@ class TestRestoreProductionS3FullState:
             s3_media_manifest_file=f"db_{_TS}.s3-media.json",
             s3_media_manifest_format="novu-s3-media-manifest-v1",
             s3_media_restore_strategy="versioned-copy-to-isolated-bucket-v1",
-            s3_object_count=2 if object_count_override is None else object_count_override,
+            s3_object_count=2,  # DB manifest always declares 2; override only affects media manifest
         )
         fx.make_s3_media_manifest(
             db_backup_file=dump.name,

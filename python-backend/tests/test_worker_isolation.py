@@ -5,6 +5,7 @@ cannot access projects from a different organization.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, call
 import inspect
+from types import SimpleNamespace
 from fastapi import HTTPException
 
 from app.services.analysis_service import _MAX_JOB_RETRY_COUNT
@@ -217,7 +218,7 @@ class TestRetryJobOrgScope:
 
     def test_retry_job_uses_org_scoped_fetch(self):
         from app.services.analysis_service import AnalysisService
-        src = inspect.getsource(AnalysisService.retry_job)
+        src = inspect.getsource(AnalysisService._resolve_retry_project_scope)
         assert "get_project_in_org" in src
         assert "organization_id is not None" in src
 
@@ -233,7 +234,7 @@ class TestRetryJobOrgScope:
         session = AsyncMock()
 
         mock_outer_repo = AsyncMock(spec=AnalysisRepository)
-        mock_outer_repo.get_analysis_job = AsyncMock(return_value=original_job)
+        mock_outer_repo.get_analysis_job_in_org = AsyncMock(return_value=original_job)
 
         mock_inner_repo = AsyncMock(spec=AnalysisRepository)
         # project not in org_B
@@ -343,8 +344,8 @@ class TestSuperadminBypass:
     def test_retry_job_org_id_none_uses_session_get_path(self):
         """When organization_id=None (superadmin), retry_job uses session.get — no org filter."""
         from app.services.analysis_service import AnalysisService
-        src = inspect.getsource(AnalysisService.retry_job)
-        assert "session.get(Project, original.project_id)" in src
+        src = inspect.getsource(AnalysisService._resolve_retry_project_scope)
+        assert "session.get(Project, project_id)" in src
         assert "if organization_id is not None:" in src
         # 400 guard must not exist for None case
         assert "status_code=400" not in src
@@ -476,7 +477,7 @@ class TestRetryJobGuards:
         from app.repositories.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
-        mock_repo.get_analysis_job = AsyncMock(return_value=job)
+        mock_repo.get_analysis_job_in_org = AsyncMock(return_value=job)
         return AnalysisService(
             repository=mock_repo,
             photo_repository=AsyncMock(spec=PhotoRepository),
@@ -537,7 +538,7 @@ class TestRetryJobGuards:
         from app.repositories.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
-        mock_repo.get_analysis_job = AsyncMock(return_value=job)
+        mock_repo.get_analysis_job_in_org = AsyncMock(return_value=job)
         mock_inner_repo = AsyncMock(spec=AnalysisRepository)
         mock_inner_repo.get_project_in_org = AsyncMock(return_value=None)  # → 403 (not 409)
 
@@ -572,7 +573,7 @@ class TestRetryJobGuards:
         from app.repositories.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
-        mock_repo.get_analysis_job = AsyncMock(return_value=job)
+        mock_repo.get_analysis_job_in_org = AsyncMock(return_value=job)
         mock_inner_repo = AsyncMock(spec=AnalysisRepository)
         mock_inner_repo.get_project_in_org = AsyncMock(return_value=None)  # → 403
 
@@ -602,9 +603,31 @@ class TestRetryJobGuards:
         job.status = "failed"
         job.retry_count = _MAX_JOB_RETRY_COUNT  # At the ceiling
 
-        service = self._make_service(job)
-        with pytest.raises(HTTPException) as exc_info:
-            await service.retry_job("job_1", organization_id="org_A")
+        from app.services.analysis_service import AnalysisService
+        from app.repositories.analysis_repository import AnalysisRepository
+        from app.repositories.photo_repository import PhotoRepository
+
+        project = MagicMock(id="prj_A", organization_id="org_A")
+        mock_repo = AsyncMock(spec=AnalysisRepository)
+        mock_repo.get_analysis_job_in_org = AsyncMock(return_value=job)
+        mock_inner_repo = AsyncMock(spec=AnalysisRepository)
+        mock_inner_repo.get_project_in_org = AsyncMock(return_value=project)
+
+        session = AsyncMock()
+        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory, \
+             patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo):
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=session)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_factory.return_value = mock_ctx
+
+            service = AnalysisService(
+                repository=mock_repo,
+                photo_repository=AsyncMock(spec=PhotoRepository),
+                provider_key="mock",
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await service.retry_job("job_1", organization_id="org_A")
 
         assert exc_info.value.status_code == 409
         assert str(_MAX_JOB_RETRY_COUNT) in exc_info.value.detail
@@ -621,7 +644,7 @@ class TestRetryJobGuards:
         from app.repositories.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
-        mock_repo.get_analysis_job = AsyncMock(return_value=job)
+        mock_repo.get_analysis_job_in_org = AsyncMock(return_value=job)
         mock_inner_repo = AsyncMock(spec=AnalysisRepository)
         mock_inner_repo.get_project_in_org = AsyncMock(return_value=None)  # → 403 (not 409)
 
@@ -655,16 +678,16 @@ class TestRetryJobGuards:
         from app.repositories.photo_repository import PhotoRepository
 
         project = MagicMock(id="prj_A", organization_id="org_A")
-        mock_repo = AsyncMock(spec=AnalysisRepository)
-        mock_repo.get_analysis_job = AsyncMock(return_value=job)
-        mock_inner_repo = AsyncMock(spec=AnalysisRepository)
-        mock_inner_repo.get_project_in_org = AsyncMock(return_value=project)
-        mock_inner_repo.count_active_jobs_for_organization = AsyncMock(return_value=10)
+        outer_repo = AsyncMock(spec=AnalysisRepository)
+        outer_repo.get_analysis_job_in_org = AsyncMock(return_value=job)
+        inner_repo = AsyncMock(spec=AnalysisRepository)
+        inner_repo.get_project_in_org = AsyncMock(return_value=project)
+        inner_repo.count_active_jobs_for_organization = AsyncMock(return_value=10)
 
         session = AsyncMock()
         with (
             patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory,
-            patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo),
+            patch("app.services.analysis_service.AnalysisRepository", return_value=inner_repo),
             patch("app.services.analysis_service.get_settings") as get_settings,
         ):
             get_settings.return_value.analysis_jobs_per_tenant_limit = 10
@@ -674,7 +697,7 @@ class TestRetryJobGuards:
             mock_factory.return_value = mock_ctx
 
             service = AnalysisService(
-                repository=mock_repo,
+                repository=outer_repo,
                 photo_repository=AsyncMock(spec=PhotoRepository),
                 provider_key="mock",
             )
@@ -682,7 +705,7 @@ class TestRetryJobGuards:
                 await service.retry_job("job_1", organization_id="org_A")
 
         assert exc_info.value.status_code == 429
-        mock_inner_repo.create_queued_job.assert_not_awaited()
+        inner_repo.create_queued_job.assert_not_awaited()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

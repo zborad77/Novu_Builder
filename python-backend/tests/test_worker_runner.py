@@ -332,11 +332,18 @@ class TestWorkerRedisConnectionHardening:
         redis.aclose = AsyncMock()
 
         valid_payload = _lease()
+        completed_result = MagicMock(
+            disposition="completed",
+            retry_at=None,
+            attempt_count=0,
+            failure_reason=None,
+        )
 
         with (
             patch("app.worker.runner.get_settings", return_value=settings),
             patch("app.worker.runner._build_worker_redis", return_value=redis),
             patch("app.worker.runner._verify_worker_redis_startup", new=AsyncMock()) as verify_startup,
+            patch("app.worker.runner.promote_scheduled_analysis_jobs", new=AsyncMock(return_value=0)),
             patch(
                 "app.worker.runner.dequeue_analysis_job",
                 side_effect=[
@@ -346,7 +353,10 @@ class TestWorkerRedisConnectionHardening:
                 ],
             ),
             patch("app.worker.runner.ack_analysis_job", new=AsyncMock(return_value=True)),
-            patch("app.worker.runner.WorkerJobExecutor.execute_lease", new=AsyncMock()) as execute_payload,
+            patch(
+                "app.worker.runner.WorkerJobExecutor.execute_lease",
+                new=AsyncMock(return_value=completed_result),
+            ) as execute_payload,
         ):
             await runner.run()
 
@@ -382,6 +392,7 @@ class TestWorkerRedisConnectionHardening:
             patch("app.worker.runner.get_settings", return_value=settings),
             patch("app.worker.runner._build_worker_redis", return_value=redis) as build_client,
             patch("app.worker.runner._verify_worker_redis_startup", new=AsyncMock()),
+            patch("app.worker.runner.promote_scheduled_analysis_jobs", new=AsyncMock(return_value=0)),
             patch(
                 "app.worker.runner.dequeue_analysis_job",
                 side_effect=[valid_payload, asyncio.CancelledError()],
@@ -474,6 +485,7 @@ class TestWorkerConcurrencyControl:
         )
 
         with (
+            patch("app.worker.runner.promote_scheduled_analysis_jobs", new=AsyncMock(return_value=0)),
             patch(
                 "app.worker.runner.dequeue_analysis_job",
                 new=AsyncMock(side_effect=[payload_one, payload_two]),
@@ -517,6 +529,7 @@ class TestWorkerConcurrencyControl:
         await runtime.concurrency_limiter.acquire()
 
         with (
+            patch("app.worker.runner.promote_scheduled_analysis_jobs", new=AsyncMock(return_value=0)),
             patch("app.worker.runner._seconds_until_next_heartbeat", return_value=0),
             patch("app.worker.runner.dequeue_analysis_job", new=AsyncMock()) as dequeue,
         ):
@@ -567,8 +580,6 @@ class TestWorkerMetricsStartup:
         with (
             patch("app.worker.runner.get_settings", return_value=settings),
             patch("app.worker.runner.configure_logging"),
-            patch("app.worker.runner.generate_latest", None),
-            patch("app.worker.runner.CONTENT_TYPE_LATEST", None),
             patch("app.worker.runner.PROMETHEUS_CLIENT_AVAILABLE", False),
         ):
             with pytest.raises(RuntimeError, match="worker_metrics"):
@@ -707,6 +718,8 @@ class TestWorkerMetricsStartup:
             patch("app.worker.runner.get_settings", return_value=settings),
             patch("app.worker.runner._build_worker_redis", return_value=redis),
             patch("app.worker.runner._verify_worker_redis_startup", new=AsyncMock()),
+            patch("app.worker.runner.promote_scheduled_analysis_jobs", new=AsyncMock(return_value=0)),
+            patch("app.worker.runner.asyncio.sleep", new=AsyncMock()),
             patch(
                 "app.worker.runner.dequeue_analysis_job",
                 new=AsyncMock(side_effect=_dequeue_payload),
@@ -835,6 +848,7 @@ class TestWorkerExportCleanup:
             patch("app.worker.runner._run_photo_cleanup_if_due", new=AsyncMock()) as photo_cleanup,
             patch("app.worker.runner._write_heartbeat_if_due", new=AsyncMock()) as heartbeat,
             patch("app.worker.runner._drain_finished_tasks", new=AsyncMock()) as drain,
+            patch("app.worker.runner.promote_scheduled_analysis_jobs", new=AsyncMock(return_value=0)),
             patch("app.worker.runner._acquire_job_slot", new=AsyncMock(return_value=False)) as acquire,
         ):
             await runner._run_one_iteration(runtime)

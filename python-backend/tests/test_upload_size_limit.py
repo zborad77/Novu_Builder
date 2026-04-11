@@ -25,6 +25,12 @@ def _make_project(project_id: str = "prj_test") -> MagicMock:
 def _make_fake_settings(limit_mb: int) -> MagicMock:
     settings = MagicMock()
     settings.max_upload_size_mb = limit_mb
+    settings.worker_heavy_concurrency = 1
+    settings.worker_concurrency = 2
+    settings.analysis_queue_max_depth = 50
+    settings.heavy_queue_max_depth = 50
+    settings.backpressure_max_queued_jobs = 100
+    settings.backpressure_max_concurrent_jobs = 4
     return settings
 
 
@@ -89,12 +95,13 @@ class TestPhotoServiceSizeFlow:
         mock_repo.update_photo = AsyncMock(side_effect=lambda photo: photo)
         mock_repo.save_changes = AsyncMock()
 
-        service = PhotoService(mock_repo)
+        service = PhotoService(mock_repo, work_queue=MagicMock())
 
         with (
             patch("app.services.photo_service.get_settings", return_value=_make_fake_settings(20)),
             patch("app.services.photo_service.validate_photo_upload", return_value=validated_upload),
             patch("app.services.photo_service.save_original_photo", return_value=("projects/prj_test/photo.jpg", None)),
+            patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()),
         ):
             result = await service.create_multipart_photo(project, _make_upload_file(content), is_primary=True)
 
@@ -142,12 +149,13 @@ class TestPhotoServiceSizeFlow:
         mock_repo.update_photo = AsyncMock(side_effect=lambda photo: photo)
         mock_repo.save_changes = AsyncMock()
 
-        service = PhotoService(mock_repo)
+        service = PhotoService(mock_repo, work_queue=MagicMock())
 
         with (
             patch("app.services.photo_service.get_settings", return_value=_make_fake_settings(limit_mb)),
             patch("app.services.photo_service.validate_photo_upload", return_value=validated_upload),
             patch("app.services.photo_service.save_original_photo", return_value=("projects/prj_test/photo.jpg", None)),
+            patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()),
         ):
             result = await service.create_multipart_photo(project, _make_upload_file(content), is_primary=False)
 

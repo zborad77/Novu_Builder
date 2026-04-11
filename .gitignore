@@ -1,93 +1,104 @@
-﻿node_modules/
-# Env files — only .example templates are tracked; never commit real secrets
+﻿# =========================================
+# NODE / FRONTEND
+# =========================================
+node_modules/
+
+# =========================================
+# ENVIRONMENT (CRITICAL — NEVER COMMIT SECRETS)
+# =========================================
 .env
 .env.*
 !.env.example
 !.env.production.example
-# Subdir-level env files (belt-and-suspenders)
+
+# also cover subdirectories
 **/.env
 **/.env.*
 !**/.env.example
 !**/.env.production.example
-.vscode/
-storage/
-!python-backend/app/storage/
-my-app/
-prisma/dev.db
-python-backend/.venv/
-python-backend/python-backend.db
-python-backend.db
-python-backend/*.log
-desktop-qt/.qtcreator/
 
+# =========================================
+# PYTHON
+# =========================================
 __pycache__/
 *.pyc
-.claude/
-backups/
-nginx/certs/*.pem
+*.pyo
+*.pyd
 
-# === TEST / RUNTIME TEMP (KRITICKÉ) ===
+python-backend/.venv/
+
+# =========================================
+# DATABASES (LOCAL / TEST ONLY)
+# =========================================
+*.db
+*.sqlite3
+
+prisma/dev.db
+python-backend/python-backend.db
+python-backend.db
+
+# =========================================
+# LOGS
+# =========================================
+*.log
+python-backend/log-test-*.json
+python-backend/.log-test-*.json
+**/log-test-*.json
+**/.log-test-*.json
+
+# =========================================
+# TEMP / RUNTIME FILES
+# =========================================
 tmp_*
 **/tmp_*
 *_tmp/
 temp/
 **/temp/
 
-# pytest / orchestrace
 pytest-local/
 tmp_pytest/
 tmp_pytest_orch/
+docs/.pdf-build/
 
-# runtime test data (NOVU specifické)
 python-backend/tmp_test_runtime/
 python-backend/tmp_*
 
-# session & worker runtime
+# =========================================
+# RUNTIME STATE (NEVER VERSION)
+# =========================================
 **/session_*/
 **/*heartbeat*.json
 
-# artifacts & rehearsal
+# =========================================
+# STORAGE / ARTIFACTS (RUNTIME DATA)
+# =========================================
+storage/
+backups/
 artifacts/
 **/artifacts/
-codex_tmp_validation/
-_debug_*/
 
-# === DB / TEST DB ===
-*.db
-*.sqlite3
-
-# === LOGS ===
-*.log
-python-backend/log-test-*.json
-
-# === CACHE ===
-__pycache__/
-*.pyc
-
-# === NOVU RUNTIME / TEST CLEANUP (SAFE) ===
-
-# hidden debug / validation dirs
+# =========================================
+# DEBUG / VALIDATION
+# =========================================
 .codex_tmp_validation/
 .debug_*/
+_debug_*/
 **/.codex_tmp_validation/
 **/.debug_*/
 
-# pytest / temp dirs
-tmp_*/
-**/tmp_*/
-pytest-local/
-tmp_pytest/
-tmp_pytest_orch/
+# =========================================
+# CERTIFICATES / SECRETS
+# =========================================
+nginx/certs/*.pem
 
-# runtime test data (backend)
-python-backend/tmp_test_runtime/
-python-backend/tmp_*
+# =========================================
+# IDE / LOCAL TOOLS
+# =========================================
+.vscode/
+desktop-qt/.qtcreator/
+.claude/
 
-# logs (including JSON test logs)
-*.log
-python-backend/log-test-*.json
-**/log-test-*.json
-
-# test databases
-*.db
-*.sqlite3
+# =========================================
+# MISC
+# =========================================
+my-app/

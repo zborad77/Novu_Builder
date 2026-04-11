@@ -27,10 +27,10 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    setWindowTitle("FotoNabidka Desktop");
+    setWindowTitle("NOVU Builder");
 
     // Load server URL from settings; prompt setup on first launch
-    QSettings settings("NOVU", "FotoNabidkaDesktop");
+    QSettings settings("NOVU", "NovuBuilder");
     const QString savedUrl = settings.value("server/url").toString();
     if (savedUrl.isEmpty()) {
         openServerSetupDialog(true);
@@ -935,7 +935,7 @@ bool MainWindow::confirmNavigateAway()
 
 void MainWindow::openServerSetupDialog(bool firstTime)
 {
-    QSettings settings("NOVU", "FotoNabidkaDesktop");
+    QSettings settings("NOVU", "NovuBuilder");
     const QString currentUrl = settings.value("server/url").toString();
 
     ServerSetupDialog dlg(currentUrl, this);

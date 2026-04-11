@@ -960,8 +960,8 @@ if grep -q '"app_env"[[:space:]]*:[[:space:]]*"production"' "$MANIFEST_FILE" \
   && grep -q '"storage_backend"[[:space:]]*:[[:space:]]*"s3"' "$MANIFEST_FILE"; then
   PRODUCTION_S3_MANIFEST=1
   if [[ $FULL_STATE_S3_MANIFEST -eq 0 ]]; then
-    set_step_status MEDIA_RESTORE "NOT IMPLEMENTED" "DB-only production+s3 backup set does not include media restore"
-    set_step_status MEDIA_VALIDATION "NOT VERIFIED" "DB-only production+s3 backup set does not include media validation"
+    set_step_status MEDIA_RESTORE "NOT EXECUTED" "DB-only production+s3 backup set does not include media restore"
+    set_step_status MEDIA_VALIDATION "NOT EXECUTED" "DB-only production+s3 backup set does not include media validation"
     PRODUCTION_DR_REASON="media restore and media validation are not implemented by this DB-only restore flow"
   fi
   if [[ $FULL_STATE_S3_MANIFEST -eq 0 ]] && grep -q '"storage_archive_included"[[:space:]]*:[[:space:]]*true' "$MANIFEST_FILE"; then
@@ -1162,6 +1162,18 @@ POST_MIGRATION_REV=$(docker compose -f "$COMPOSE_FILE" exec -T db \
 [[ "$POST_MIGRATION_REV" == "$EXPECTED_HEAD" ]] || fail_restore SCHEMA_HEAD_VALIDATION "schema revision '$POST_MIGRATION_REV' does not match repository HEAD '$EXPECTED_HEAD' after restore"
 log "  ✓ schema/head alignment verified: $POST_MIGRATION_REV"
 set_step_status SCHEMA_HEAD_VALIDATION "PASSED" "critical tables and schema/head alignment validated at revision $POST_MIGRATION_REV"
+
+# Derive verify-step statuses from schema/head validation when verify was skipped.
+# SCHEMA_HEAD_VALIDATION checks critical tables (db_query_usability) and alembic HEAD
+# (schema_head_alignment) — the same conditions verify_restore.sh would report.
+if [[ "$VERIFY_DB_QUERY_USABILITY_STATUS" == "NOT EXECUTED" ]]; then
+  VERIFY_DB_QUERY_USABILITY_STATUS="PASSED"
+  VERIFY_DB_QUERY_USABILITY_REASON="critical tables present and DB operational (derived from schema/head validation at $POST_MIGRATION_REV)"
+fi
+if [[ "$VERIFY_SCHEMA_HEAD_ALIGNMENT_STATUS" == "NOT EXECUTED" ]]; then
+  VERIFY_SCHEMA_HEAD_ALIGNMENT_STATUS="PASSED"
+  VERIFY_SCHEMA_HEAD_ALIGNMENT_REASON="schema revision $POST_MIGRATION_REV matches repository HEAD (derived from schema/head validation)"
+fi
 
 # ── 6. Restart backend + worker ────────────────────────────────────────────────
 set_step_status BACKEND_HANDOFF_READINESS "IN PROGRESS" "backend and worker restart requested; waiting for liveness confirmation"

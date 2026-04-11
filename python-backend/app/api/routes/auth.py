@@ -1,11 +1,11 @@
 import secrets
 from datetime import timedelta
-from typing import NoReturn
+from typing import Annotated, NoReturn
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
-from app.api.deps import get_auth_service, get_current_user
+from app.api.deps import get_auth_redis, get_auth_service, get_current_user
 from app.core.account_limiter import (
     AccountThrottleBackendUnavailableError,
     is_account_throttled,
@@ -16,7 +16,7 @@ from app.core.audit import SecurityAuditWriteError
 from app.core.config import get_settings
 from app.core.email import send_password_reset_email
 from app.core.limiter import limiter
-from app.core.metrics import AUTH_FAILURES_TOTAL
+from app.core.metrics import AUTH_FAILURES_TOTAL, metric_labels, normalize_tenant_metric_label
 from app.core.security import enforce_password_strength
 from app.models import PasswordResetToken
 from app.repositories.token_repository import TokenStateBackendUnavailableError
@@ -49,20 +49,22 @@ def _email_domain(email: str) -> str | None:
     return parts[1] if len(parts) == 2 and parts[1] else None
 
 
-def _record_auth_failure(endpoint: str, reason: str, tenant_id: str = "unknown") -> None:
-    AUTH_FAILURES_TOTAL.labels(endpoint=endpoint, reason=reason, tenant_id=tenant_id).inc()
-
-
-def _shared_auth_redis(request: Request):
-    scope = getattr(request, "scope", None)
-    if not isinstance(scope, dict):
-        return None
-    app = scope.get("app")
-    state = getattr(app, "state", None)
-    auth_store = getattr(state, "auth_token_store", None)
-    if auth_store is not None:
-        return auth_store
-    return getattr(state, "job_queue", None)
+def _record_auth_failure(
+    endpoint: str,
+    reason: str,
+    tenant_id: str | None = None,
+    *,
+    is_superadmin_context: bool = False,
+) -> None:
+    metric_labels(
+        AUTH_FAILURES_TOTAL,
+        endpoint=endpoint,
+        reason=reason,
+        tenant_id=normalize_tenant_metric_label(
+            tenant_id,
+            is_superadmin_context=is_superadmin_context,
+        ),
+    ).inc()
 
 
 def _raise_auth_protection_unavailable(
@@ -74,8 +76,14 @@ def _raise_auth_protection_unavailable(
     error: Exception,
     user_id: str | None = None,
     organization_id: str | None = None,
+    is_superadmin_context: bool = False,
 ) -> NoReturn:
-    _record_auth_failure(endpoint, "auth_protection_unavailable")
+    _record_auth_failure(
+        endpoint,
+        "auth_protection_unavailable",
+        tenant_id=organization_id,
+        is_superadmin_context=is_superadmin_context,
+    )
     logger.error(
         "SECURITY_EVENT: auth_protection_unavailable",
         endpoint=endpoint,
@@ -100,8 +108,14 @@ def _raise_token_state_unavailable(
     error: Exception,
     user_id: str | None = None,
     organization_id: str | None = None,
+    is_superadmin_context: bool = False,
 ) -> NoReturn:
-    _record_auth_failure(endpoint, "token_state_unavailable")
+    _record_auth_failure(
+        endpoint,
+        "token_state_unavailable",
+        tenant_id=organization_id,
+        is_superadmin_context=is_superadmin_context,
+    )
     logger.error(
         "SECURITY_EVENT: auth_token_state_unavailable",
         endpoint=endpoint,
@@ -162,11 +176,13 @@ async def _enforce_account_throttle(
     *,
     endpoint: str,
     email: str,
+    auth_redis=None,
     user_id: str | None = None,
     organization_id: str | None = None,
+    is_superadmin_context: bool = False,
 ):
     settings = get_settings()
-    shared_redis = _shared_auth_redis(request)
+    shared_redis = auth_redis
     try:
         throttled = await is_account_throttled(
             email,
@@ -182,9 +198,15 @@ async def _enforce_account_throttle(
             error=exc,
             user_id=user_id,
             organization_id=organization_id,
+            is_superadmin_context=is_superadmin_context,
         )
     if throttled:
-        _record_auth_failure(endpoint, "account_throttled")
+        _record_auth_failure(
+            endpoint,
+            "account_throttled",
+            tenant_id=organization_id,
+            is_superadmin_context=is_superadmin_context,
+        )
         logger.warning(
             "SECURITY_EVENT: auth_account_throttled",
             endpoint=endpoint,
@@ -207,11 +229,13 @@ async def login(
     request: Request,
     payload: LoginRequest,
     service: AuthService = Depends(get_auth_service),
+    auth_redis: Annotated[object | None, Depends(get_auth_redis)] = None,
 ) -> LoginResponse:
     settings, shared_redis = await _enforce_account_throttle(
         request,
         endpoint="login",
         email=payload.email,
+        auth_redis=auth_redis,
     )
     result = await service.login(email=payload.email, password=payload.password)
     if not result:
@@ -252,6 +276,7 @@ async def login(
             error=exc,
             user_id=result[2].id,
             organization_id=result[2].organizationId,
+            is_superadmin_context=result[2].isSuperAdmin,
         )
     access_token, refresh_token, user = result
     return LoginResponse(
@@ -378,6 +403,7 @@ async def revoke_session(
             error=exc,
             user_id=current_user.id,
             organization_id=current_user.organizationId,
+            is_superadmin_context=current_user.isSuperAdmin,
         )
     if not revoked:
         raise HTTPException(status_code=404, detail="Session not found.")
@@ -400,6 +426,7 @@ async def change_password(
     authorization: str | None = Header(None),
     current_user: AuthUserRead = Depends(get_current_user),
     service: AuthService = Depends(get_auth_service),
+    auth_redis: Annotated[object | None, Depends(get_auth_redis)] = None,
 ) -> ChangePasswordResponse:
     if not payload.currentPassword or not payload.newPassword:
         raise HTTPException(status_code=400, detail="Both passwords are required.")
@@ -412,8 +439,10 @@ async def change_password(
         request,
         endpoint="change_password",
         email=current_user.email,
+        auth_redis=auth_redis,
         user_id=current_user.id,
         organization_id=current_user.organizationId,
+        is_superadmin_context=current_user.isSuperAdmin,
     )
     verified = await service.login(email=current_user.email, password=payload.currentPassword)
     if not verified:
@@ -428,8 +457,14 @@ async def change_password(
                 error=exc,
                 user_id=current_user.id,
                 organization_id=current_user.organizationId,
+                is_superadmin_context=current_user.isSuperAdmin,
             )
-        _record_auth_failure("change_password", "invalid_current_password")
+        _record_auth_failure(
+            "change_password",
+            "invalid_current_password",
+            tenant_id=current_user.organizationId,
+            is_superadmin_context=current_user.isSuperAdmin,
+        )
         logger.warning(
             "SECURITY_EVENT: auth_change_password_failed",
             reason="invalid_current_password",
@@ -457,6 +492,7 @@ async def change_password(
             error=exc,
             user_id=current_user.id,
             organization_id=current_user.organizationId,
+            is_superadmin_context=current_user.isSuperAdmin,
         )
     try:
         changed = await service.change_password(
@@ -472,6 +508,7 @@ async def change_password(
             error=exc,
             user_id=current_user.id,
             organization_id=current_user.organizationId,
+            is_superadmin_context=current_user.isSuperAdmin,
         )
     except SecurityAuditWriteError as exc:
         logger.error(
@@ -496,6 +533,7 @@ async def change_password(
                 error=exc,
                 user_id=current_user.id,
                 organization_id=current_user.organizationId,
+                is_superadmin_context=current_user.isSuperAdmin,
             )
     logger.info(
         "auth.change_password_completed",

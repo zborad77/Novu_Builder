@@ -26,6 +26,12 @@ def _make_upload_file() -> MagicMock:
 def _make_fake_settings(limit_mb: int = 20) -> MagicMock:
     settings = MagicMock()
     settings.max_upload_size_mb = limit_mb
+    settings.worker_heavy_concurrency = 1
+    settings.worker_concurrency = 2
+    settings.analysis_queue_max_depth = 50
+    settings.heavy_queue_max_depth = 50
+    settings.backpressure_max_queued_jobs = 100
+    settings.backpressure_max_concurrent_jobs = 4
     return settings
 
 
@@ -63,7 +69,7 @@ class TestPhotoPersistenceCleanupHardening:
         repo.get_next_sort_order = AsyncMock(return_value=1)
         repo.add_photo = AsyncMock(side_effect=RuntimeError("db insert failed"))
 
-        service = PhotoService(repo)
+        service = PhotoService(repo, work_queue=MagicMock())
 
         with (
             patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()),

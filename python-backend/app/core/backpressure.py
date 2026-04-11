@@ -48,6 +48,9 @@ def _counter_value(value: object) -> int:
 def effective_backpressure_max_concurrent_jobs(settings) -> int:
     if hasattr(settings, "effective_backpressure_max_concurrent_jobs"):
         return max(1, _int_setting(settings, "effective_backpressure_max_concurrent_jobs", 1))
+    # Backpressure capacity is a runtime throughput concept spanning both
+    # standard and heavy worker lanes. This is intentionally broader than
+    # worker DB pool sizing, which is configured separately.
     worker_slots = _int_setting(settings, "worker_concurrency", 0) + _int_setting(
         settings,
         "worker_heavy_concurrency",

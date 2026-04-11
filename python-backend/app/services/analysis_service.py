@@ -4,7 +4,6 @@ from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import traceback
-from unittest.mock import Mock
 
 import structlog
 from fastapi import HTTPException
@@ -112,6 +111,21 @@ class AnalysisJobFailurePolicy:
     classification: str
 
 
+@dataclass(frozen=True)
+class RetryJobDecisionContext:
+    original_job: AnalysisJob
+    original_status: str
+    original_project_id: str
+    original_retry_count: int
+
+
+@dataclass(frozen=True)
+class DeadLetterReprocessDecisionContext:
+    original_job: AnalysisJob
+    original_status: str
+    original_project_id: str
+
+
 def to_read_model(result: AnalysisResult) -> AnalysisResultRead:
     return AnalysisResultRead(
         id=result.id,
@@ -205,12 +219,47 @@ def _job_attempt_count(job: AnalysisJob) -> int:
 
 
 def _normalized_counter(value: object) -> int:
-    if isinstance(value, Mock):
-        return 0
     try:
         return max(0, int(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _authoritative_job_status(job: AnalysisJob) -> str:
+    raw_status = getattr(job, "status", None)
+    if not isinstance(raw_status, str):
+        raise HTTPException(
+            status_code=409,
+            detail="Analysis job has invalid status metadata and cannot be retried.",
+        )
+    try:
+        return normalize_analysis_job_status(raw_status)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Analysis job has invalid status metadata and cannot be retried.",
+        ) from exc
+
+
+def _authoritative_retry_count(job: AnalysisJob) -> int:
+    raw_retry_count = getattr(job, "retry_count", 0)
+    try:
+        return max(0, int(raw_retry_count or 0))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Analysis job has invalid retry metadata and cannot be retried.",
+        ) from exc
+
+
+def _authoritative_project_id(job: AnalysisJob) -> str:
+    project_id = getattr(job, "project_id", None)
+    if not isinstance(project_id, str) or not project_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Analysis job has invalid project metadata and cannot be retried.",
+        )
+    return project_id
 
 
 def _retry_backoff_jitter_window_seconds(*, base_delay: int, settings) -> int:
@@ -559,6 +608,140 @@ class AnalysisService:
         )
         ensure_analysis_intake_capacity(snapshot, settings=settings)
 
+    async def _load_retry_job_authoritative(
+        self,
+        *,
+        job_id: str,
+        organization_id: str | None,
+    ) -> RetryJobDecisionContext:
+        return await self._build_retry_job_decision_context(
+            job_id=job_id,
+            organization_id=organization_id,
+        )
+
+    async def _resolve_retry_project_scope(
+        self,
+        repository: AnalysisRepository,
+        session,
+        *,
+        project_id: str,
+        organization_id: str | None,
+    ) -> Project:
+        if organization_id is not None:
+            project = await repository.get_project_in_org(project_id, organization_id)
+            if not project:
+                logger.warning(
+                    "SECURITY_EVENT: retry_project_not_found_in_scope",
+                    project_id=project_id,
+                    organization_id=organization_id,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Analysis job does not belong to the requested organization.",
+                )
+            return project
+
+        project = await session.get(Project, project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Analysis job not found.")
+        return project
+
+    async def _build_retry_job_decision_context(
+        self,
+        *,
+        job_id: str,
+        organization_id: str | None,
+    ) -> RetryJobDecisionContext:
+        if organization_id is not None:
+            original = await self.repository.get_analysis_job_in_org(job_id, organization_id)
+            if not original:
+                logger.warning(
+                    "SECURITY_EVENT: retry_job_not_found_in_scope",
+                    job_id=job_id,
+                    organization_id=organization_id,
+                )
+                raise HTTPException(status_code=404, detail="Analysis job not found.")
+        else:
+            original = await self.repository.get_analysis_job(job_id)
+            if not original:
+                raise HTTPException(status_code=404, detail="Analysis job not found.")
+
+        return RetryJobDecisionContext(
+            original_job=original,
+            original_status=_authoritative_job_status(original),
+            original_project_id=_authoritative_project_id(original),
+            original_retry_count=_authoritative_retry_count(original),
+        )
+
+    async def _build_dead_letter_reprocess_decision_context(
+        self,
+        *,
+        job_id: str,
+        organization_id: str | None,
+    ) -> DeadLetterReprocessDecisionContext:
+        if organization_id is not None:
+            original = await self.repository.get_analysis_job_in_org(job_id, organization_id)
+            if not original:
+                logger.warning(
+                    "SECURITY_EVENT: dead_letter_job_not_found_in_scope",
+                    job_id=job_id,
+                    organization_id=organization_id,
+                )
+                raise HTTPException(status_code=404, detail="Analysis job not found.")
+        else:
+            original = await self.repository.get_analysis_job(job_id)
+            if not original:
+                raise HTTPException(status_code=404, detail="Analysis job not found.")
+
+        return DeadLetterReprocessDecisionContext(
+            original_job=original,
+            original_status=_authoritative_job_status(original),
+            original_project_id=_authoritative_project_id(original),
+        )
+
+    def _enforce_retryable_job_state(self, *, job_id: str, job_status: str) -> None:
+        if job_status not in (ANALYSIS_JOB_STATUS_FAILED, ANALYSIS_JOB_STATUS_CANCELED):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cannot retry a job in '{job_status}' state. "
+                    "Only failed or canceled jobs can be retried."
+                ),
+            )
+
+    def _enforce_retry_count_limit(
+        self,
+        *,
+        job_id: str,
+        project_id: str,
+        retry_count: int,
+    ) -> None:
+        if retry_count >= _MAX_JOB_RETRY_COUNT:
+            logger.warning(
+                "worker.job_dead_letter",
+                job_id=job_id,
+                project_id=project_id,
+                retry_count=retry_count,
+                max_retry_count=_MAX_JOB_RETRY_COUNT,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Maximum retry count ({_MAX_JOB_RETRY_COUNT}) reached for job {job_id}. "
+                    "Contact an administrator to force-reset the job."
+                ),
+            )
+
+    def _enforce_dead_letter_reprocess_state(self, *, job_status: str) -> None:
+        if job_status != ANALYSIS_JOB_STATUS_DEAD_LETTER:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cannot reprocess a job in '{job_status}' state. "
+                    "Only dead-letter jobs can be reprocessed."
+                ),
+            )
+
     async def _handle_attempt_failure(
         self,
         repo: AnalysisRepository,
@@ -570,6 +753,7 @@ class AnalysisService:
         settings,
         retryable: bool = True,
         failure_classification: str = "exception",
+        is_superadmin_context: bool = False,
     ) -> AnalysisJobExecutionResult:
         duration = _job_duration_seconds(job)
         attempt_count = _job_attempt_count(job)
@@ -577,7 +761,8 @@ class AnalysisService:
         observe_job_outcome(
             status="failed",
             duration_seconds=duration,
-            tenant_id=str(getattr(job, "organization_id", None) or "unknown"),
+            tenant_id=getattr(job, "organization_id", None),
+            is_superadmin_context=is_superadmin_context,
         )
 
         if retryable and attempt_count < max_attempts:
@@ -1209,6 +1394,7 @@ class AnalysisService:
                         failure_classification=(
                             "exception" if failure_policy is None else failure_policy.classification
                         ),
+                        is_superadmin_context=is_superadmin_context,
                     )
                 except InvalidAnalysisJobStatusTransition:
                     log.warning(
@@ -1227,7 +1413,8 @@ class AnalysisService:
         observe_job_outcome(
             status="completed",
             duration_seconds=duration,
-            tenant_id=str(organization_id or "unknown"),
+            tenant_id=organization_id,
+            is_superadmin_context=is_superadmin_context,
         )
         log.info(
             "worker.quote_recalculation_finished",
@@ -1548,6 +1735,7 @@ class AnalysisService:
                         settings=settings,
                         retryable=_failure_policy.retryable,
                         failure_classification=_failure_policy.classification,
+                        is_superadmin_context=is_superadmin_context,
                     )
                 except InvalidAnalysisJobStatusTransition:
                     log.warning("worker.job_fail_rejected", job_id=job_id, current_status=job.status)
@@ -1571,6 +1759,7 @@ class AnalysisService:
                     settings=settings,
                     retryable=failure_policy.retryable,
                     failure_classification=failure_policy.classification,
+                    is_superadmin_context=is_superadmin_context,
                 )
 
             if (
@@ -1621,6 +1810,7 @@ class AnalysisService:
                         settings=settings,
                         retryable=failure_policy.retryable,
                         failure_classification=failure_policy.classification,
+                        is_superadmin_context=is_superadmin_context,
                     )
 
             try:
@@ -1652,6 +1842,7 @@ class AnalysisService:
                         settings=settings,
                         retryable=failure_policy.retryable,
                         failure_classification=failure_policy.classification,
+                        is_superadmin_context=is_superadmin_context,
                     )
                 except InvalidAnalysisJobStatusTransition:
                     log.warning("worker.job_fail_rejected_after_invalid_payload",
@@ -1664,7 +1855,8 @@ class AnalysisService:
         observe_job_outcome(
             status="completed",
             duration_seconds=duration,
-            tenant_id=str(organization_id or "unknown"),
+            tenant_id=organization_id,
+            is_superadmin_context=is_superadmin_context,
         )
         log.info(
             "worker.job_finished",
@@ -1720,7 +1912,7 @@ class AnalysisService:
                 observe_job_outcome(
                     status="failed",
                     duration_seconds=duration,
-                    tenant_id=str(getattr(job, "organization_id", None) or "unknown"),
+                    tenant_id=getattr(job, "organization_id", None),
                 )
                 logger.error(
                     "worker.job_finished",
@@ -1794,6 +1986,7 @@ class AnalysisService:
                     settings=settings,
                     retryable=failure_policy.retryable,
                     failure_classification=failure_policy.classification,
+                    is_superadmin_context=bool(lease.payload.get("is_superadmin_context", False)),
                 )
             except InvalidAnalysisJobStatusTransition:
                 log.warning(
@@ -1925,78 +2118,71 @@ class AnalysisService:
         if organization_id is None:
             # Superadmin path — no org filter; observable via log
             logger.info("worker.superadmin_bypass", job_id=job_id)
+        # Decision inputs come from the authoritative service repository.
+        decision = await self._load_retry_job_authoritative(
+            job_id=job_id,
+            organization_id=organization_id,
+        )
 
-        if organization_id is not None:
-            original = await self.repository.get_analysis_job_in_org(job_id, organization_id)
-        else:
-            original = await self.repository.get_analysis_job(job_id)
-        if not original:
-            raise HTTPException(status_code=404, detail="Analysis job not found.")
+        # Guard A: state guard over a real, normalized job.status value.
+        self._enforce_retryable_job_state(
+            job_id=job_id,
+            job_status=decision.original_status,
+        )
 
-        # Only terminal states can be retried — prevent two active jobs for the same project.
-        if original.status not in (ANALYSIS_JOB_STATUS_FAILED, ANALYSIS_JOB_STATUS_CANCELED):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Cannot retry a job in '{original.status}' state. "
-                    "Only failed or canceled jobs can be retried."
-                ),
-            )
-
-        # Enforce a hard ceiling to prevent runaway AI provider cost.
-        if (original.retry_count or 0) >= _MAX_JOB_RETRY_COUNT:
-            logger.warning(
-                "worker.job_dead_letter",
-                job_id=job_id,
-                project_id=original.project_id,
-                retry_count=original.retry_count,
-                max_retry_count=_MAX_JOB_RETRY_COUNT,
-            )
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Maximum retry count ({_MAX_JOB_RETRY_COUNT}) reached for job {job_id}. "
-                    "Contact an administrator to force-reset the job."
-                ),
-            )
-
-        # Single session for both the org-scope project fetch and new job creation,
-        # avoiding detached-instance access when project is used outside its session.
         async with AsyncSessionFactory() as session:
-            repo_inner = AnalysisRepository(session)
-            if organization_id is not None:
-                project = await repo_inner.get_project_in_org(original.project_id, organization_id)
-            else:
-                project = await session.get(Project, original.project_id)
-            if not project:
-                logger.warning(
-                    "SECURITY_EVENT: retry_project_not_found_in_scope",
-                    project_id=original.project_id,
-                    organization_id=organization_id,
-                )
-                raise HTTPException(status_code=404, detail="Analysis job not found.")
+            # Transactional repository is only for scoped project checks,
+            # capacity guards, and retry creation inside one write scope.
+            repo_tx = AnalysisRepository(session)
 
+            # Guard B: org/project scope guard.
+            project = await self._resolve_retry_project_scope(
+                repo_tx,
+                session,
+                project_id=decision.original_project_id,
+                organization_id=organization_id,
+            )
+
+            # Guard C: retry_count ceiling.
+            self._enforce_retry_count_limit(
+                job_id=job_id,
+                project_id=decision.original_project_id,
+                retry_count=decision.original_retry_count,
+            )
+
+            # Guard D: tenant active-job limit.
             await self._enforce_tenant_active_job_limit(
-                repo_inner,
+                repo_tx,
                 organization_id=project.organization_id,
             )
+
             await self._enforce_queue_precheck(job_queue)
+            retry_inflight = _normalized_counter(await repo_tx.count_retry_inflight_jobs())
             ensure_retry_budget(
-                _normalized_counter(await repo_inner.count_retry_inflight_jobs()),
-                settings=self._settings,
+                retry_inflight,
+                settings=get_settings(),
                 surface="analysis_retry_api",
             )
 
-            new_retry_count = (original.retry_count or 0) + 1
-            new_job = await repo_inner.create_queued_job(
+            new_retry_count = decision.original_retry_count + 1
+            new_job = await repo_tx.create_queued_job(
                 project,
-                user_id=original.requested_by_user_id,
-                parent_job_id=original.id,
+                user_id=_optional_str_attr(decision.original_job, "requested_by_user_id"),
+                parent_job_id=decision.original_job.id,
                 retry_count=new_retry_count,
-                requested_work_type_code=original.requested_work_type_code,
-                analysis_profile_id=original.analysis_profile_id,
-                resolved_analysis_profile_code=original.resolved_analysis_profile_code,
-                resolved_analysis_profile_version=original.resolved_analysis_profile_version,
+                requested_work_type_code=_optional_str_attr(
+                    decision.original_job,
+                    "requested_work_type_code",
+                ),
+                analysis_profile_id=getattr(decision.original_job, "analysis_profile_id", None),
+                resolved_analysis_profile_code=_optional_str_attr(
+                    decision.original_job,
+                    "resolved_analysis_profile_code",
+                ),
+                resolved_analysis_profile_version=_optional_int_attr(
+                    decision.original_job,
+                    "resolved_analysis_profile_version",
+                ),
             )
 
         logger.info(
@@ -2023,58 +2209,62 @@ class AnalysisService:
             raise HTTPException(
                 status_code=403,
                 detail="organization_id is required for non-superadmin context.",
-            )
+        )
 
         if organization_id is None:
             logger.info("worker.superadmin_bypass", job_id=job_id)
 
-        if organization_id is not None:
-            job = await self.repository.get_analysis_job_in_org(job_id, organization_id)
-        else:
-            job = await self.repository.get_analysis_job(job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="Analysis job not found.")
-        if job.status != ANALYSIS_JOB_STATUS_DEAD_LETTER:
-            raise HTTPException(
-                status_code=409,
-                detail="Only dead-letter jobs can be reprocessed.",
-            )
+        # Decision inputs come from the authoritative service repository.
+        decision = await self._build_dead_letter_reprocess_decision_context(
+            job_id=job_id,
+            organization_id=organization_id,
+        )
+
+        # Guard A: state guard over a real, normalized job.status value.
+        self._enforce_dead_letter_reprocess_state(
+            job_status=decision.original_status,
+        )
 
         async with AsyncSessionFactory() as session:
-            repo_inner = AnalysisRepository(session)
-            if organization_id is not None:
-                project = await repo_inner.get_project_in_org(job.project_id, organization_id)
-            else:
-                project = await session.get(Project, job.project_id)
-            if not project:
-                logger.warning(
-                    "SECURITY_EVENT: dead_letter_project_not_found_in_scope",
-                    project_id=job.project_id,
-                    organization_id=organization_id,
-                )
-                raise HTTPException(status_code=404, detail="Analysis job not found.")
+            # Transactional repository is only for scoped project checks,
+            # capacity guards, and DLQ requeue inside one write scope.
+            repo_tx = AnalysisRepository(session)
+
+            # Guard B: org/project scope guard.
+            project = await self._resolve_retry_project_scope(
+                repo_tx,
+                session,
+                project_id=decision.original_project_id,
+                organization_id=organization_id,
+            )
 
             settings = get_settings()
             await self._enforce_tenant_active_job_limit(
-                repo_inner,
+                repo_tx,
                 organization_id=project.organization_id,
             )
             await self._enforce_queue_precheck(job_queue)
+            retry_inflight = _normalized_counter(await repo_tx.count_retry_inflight_jobs())
             ensure_retry_budget(
-                _normalized_counter(await repo_inner.count_retry_inflight_jobs()),
-                settings=self._settings,
+                retry_inflight,
+                settings=settings,
                 surface="analysis_dead_letter_api",
             )
 
+            # Re-read inside the transactional scope before mutating job state.
             if organization_id is not None:
-                job_inner = await repo_inner.get_analysis_job_in_org(job_id, organization_id)
+                job_inner = await repo_tx.get_analysis_job_in_org(job_id, organization_id)
             else:
-                job_inner = await repo_inner.get_analysis_job(job_id)
+                job_inner = await repo_tx.get_analysis_job(job_id)
             if not job_inner:
                 raise HTTPException(status_code=404, detail="Analysis job not found.")
 
+            self._enforce_dead_letter_reprocess_state(
+                job_status=_authoritative_job_status(job_inner),
+            )
+
             prior_error_message = job_inner.error_message
-            await repo_inner.requeue_dead_letter_job(job_inner)
+            await repo_tx.requeue_dead_letter_job(job_inner)
 
             if job_queue is not None:
                 try:
@@ -2093,14 +2283,14 @@ class AnalysisService:
                             is_superadmin_context=is_superadmin_context,
                         )
                 except AnalysisJobQueueCapacityExceededError:
-                    await repo_inner.mark_job_dead_letter(
+                    await repo_tx.mark_job_dead_letter(
                         job_inner,
                         message=prior_error_message or "Dead-letter reprocess requeued to DLQ because the queue is full.",
                         error_traceback=job_inner.error_traceback,
                     )
                     raise
             else:
-                await repo_inner.mark_job_dead_letter(
+                await repo_tx.mark_job_dead_letter(
                     job_inner,
                     message=prior_error_message or "Dead-letter job cannot be reprocessed because the queue is unavailable.",
                     error_traceback=job_inner.error_traceback,

@@ -13,6 +13,7 @@ Tests cover:
   - supplier list route uses cache key scoped to org_id + includeInactive flag
 """
 import json
+from statistics import median
 from time import perf_counter
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -95,17 +96,17 @@ class TestGetCached:
         miss_redis = AsyncMock()
         miss_redis.get = AsyncMock(return_value=None)
 
-        async def _avg_duration(redis):
+        async def _median_duration(redis):
             samples = []
-            for _ in range(5):
+            for _ in range(7):
                 started_at = perf_counter()
                 await get_cached(redis, "tenant:key", tag="v1")
                 samples.append(perf_counter() - started_at)
-            return sum(samples) / len(samples)
+            return median(samples)
 
         with patch("app.core.cache.CACHE_ACCESS_TIMING_FLOOR_SECONDS", 0.01):
-            hit_avg = await _avg_duration(hit_redis)
-            miss_avg = await _avg_duration(miss_redis)
+            hit_avg = await _median_duration(hit_redis)
+            miss_avg = await _median_duration(miss_redis)
 
         assert hit_avg >= 0.009
         assert miss_avg >= 0.009
@@ -269,7 +270,7 @@ class TestTenantIsolation:
     @pytest.mark.asyncio
     async def test_pricebook_cache_miss_falls_through_to_db(self):
         """When Redis has no entry, the route must call the service (DB path)."""
-        from app.api.routes.pricebooks import list_pricebooks
+        from app.api.routes.pricebooks import _list_pricebooks_core
         from app.schemas.pricebook import PricebookListResponse
 
         mock_redis = AsyncMock()
@@ -284,7 +285,7 @@ class TestTenantIsolation:
 
         with patch("app.api.routes.pricebooks.get_cached", return_value=None):
             with patch("app.api.routes.pricebooks.set_cached", new_callable=AsyncMock) as mock_set:
-                result = await list_pricebooks(
+                result = await _list_pricebooks_core(
                     current_user=mock_user,
                     service=mock_service,
                     redis=mock_redis,
@@ -296,7 +297,7 @@ class TestTenantIsolation:
     @pytest.mark.asyncio
     async def test_pricebook_cache_hit_skips_db(self):
         """When Redis returns data, the service (DB) must NOT be called."""
-        from app.api.routes.pricebooks import list_pricebooks
+        from app.api.routes.pricebooks import _list_pricebooks_core
 
         mock_service = AsyncMock()
         mock_service.list_pricebooks = AsyncMock()
@@ -311,7 +312,7 @@ class TestTenantIsolation:
                         "createdAt": "2025-01-01T00:00:00", "updatedAt": "2025-01-01T00:00:00"}]
 
         with patch("app.api.routes.pricebooks.get_cached", return_value=cached_data):
-            result = await list_pricebooks(
+            result = await _list_pricebooks_core(
                 current_user=mock_user,
                 service=mock_service,
                 redis=AsyncMock(),
@@ -322,7 +323,7 @@ class TestTenantIsolation:
     @pytest.mark.asyncio
     async def test_superadmin_requires_explicit_org_context(self):
         """Tenant-scoped pricebook route must fail closed without an explicit org context."""
-        from app.api.routes.pricebooks import list_pricebooks
+        from app.api.routes.pricebooks import _list_pricebooks_core
         from fastapi import HTTPException
 
         mock_service = AsyncMock()
@@ -335,7 +336,7 @@ class TestTenantIsolation:
         with patch("app.api.routes.pricebooks.get_cached", new_callable=AsyncMock) as mock_get:
             with patch("app.api.routes.pricebooks.set_cached", new_callable=AsyncMock) as mock_set:
                 with pytest.raises(HTTPException) as exc_info:
-                    await list_pricebooks(
+                    await _list_pricebooks_core(
                         current_user=mock_user,
                         service=mock_service,
                         redis=AsyncMock(),

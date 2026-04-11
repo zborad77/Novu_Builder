@@ -2528,7 +2528,7 @@ void CaseDetailView::downloadExport(const QString &exportType)
     }
 
     const QString tempDir =
-        QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/FotoNabidka";
+        QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/NovuBuilder";
     QDir().mkpath(tempDir);
 
     const QString fileName = exportResult.fileName.isEmpty()
@@ -2576,7 +2576,7 @@ void CaseDetailView::exportAsZip()
 
     // Prepare temp working directory
     const QString tempBase = QStandardPaths::writableLocation(QStandardPaths::TempLocation)
-        + "/FotoNabidka/export_" + m_caseId;
+        + "/NovuBuilder/export_" + m_caseId;
     QDir(tempBase).removeRecursively();
     QDir().mkpath(tempBase + "/fotky");
 

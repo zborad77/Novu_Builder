@@ -53,8 +53,10 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 #   • max_overflow = 0: pool is exactly sized (no overflow connections).
 #   • Sessions are opened and closed within each Phase of execute_job;
 #     NO session is held during the AI analysis call (Phase 2).
-#   • Pool size = WORKER_CONCURRENCY (auto-derived) so every concurrent
-#     worker slot has exactly one dedicated pooled connection available.
+#   • Pool size = effective_worker_db_pool_size. With auto-derive enabled,
+#     that equals WORKER_CONCURRENCY exactly.
+#   • Heavy-lane concurrency participates in runtime/backpressure math, but
+#     it does NOT add hidden DB pool headroom or a +1 sizing offset here.
 #
 # Keeping pools separate prevents workers from starving API connections
 # regardless of concurrency level or AI call duration.

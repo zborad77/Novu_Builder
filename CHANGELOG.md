@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.7.004 - 2026-04-11
+
+Stabilization release focused on deterministic worker/runtime behavior, explicit retry and readiness contracts, stable Prometheus metrics, and integration hardening across security-critical routes and queue processing.
+
+### Backend Stability And Runtime Gating
+
+- Refactored retry and dead-letter reprocess decision flow in `analysis_service.py` so authoritative job reads, state guards, scope guards, retry ceilings, and tenant active-job limits execute in explicit deterministic order.
+- Narrowed top-level readiness gating to truly critical dependencies only: startup integrity, database, storage, and queue runtime.
+- Preserved fail-closed behavior for real outages while allowing clean recovery back to HTTP 200 after dependency restoration.
+- Clarified worker processing readiness vs API readiness so idle state and clean shutdown are treated as degraded or stopped, not as full incidents.
+
+### Metrics Contract Hardening
+
+- Stabilized Prometheus metric contracts for names, HELP/TYPE metadata, label names, label order, and shared text export formatting.
+- Added canonical tenant metric label normalization for `tenant_id`, including deterministic `unknown` and `superadmin` handling.
+- Unified API and worker metrics export rendering so observability surfaces share one authoritative contract.
+
+### Security And Dependency Wiring
+
+- Removed fragile implicit framework context coupling from security-critical route flows by moving Redis and queue handles to explicit dependencies where required.
+- Preserved production enforcement behavior while preventing `request.app` / `request.scope["app"]` leakage from deciding security outcomes in tests or direct-call paths.
+
+### Queue, Worker, And Test Hardening
+
+- Fixed worker DB pool sizing so pool size, effective pool size, engine `pool_size`, and capacity all match `worker_concurrency` with `max_overflow = 0`.
+- Fixed event-loop ownership issues in the D1 analysis end-to-end flow by creating async clients and related async fixtures per test loop.
+- Hardened flaky timing assertions to use repeated measurements with median-based evaluation instead of single noisy samples.
+- Fixed worker-runner teardown/test hangs by isolating scheduled retry promotion in unit tests that exercise invalid queue payload and background task flows.
+- Expanded regression coverage around readiness, metrics, worker isolation, retry flow, upload guards, and security-critical routes.
+
 ## v0.7.003 - 2026-04-06
 
 Observability & resilience hardening: per-tenant metrics, storage instrumentation, worker readiness invariant, multi-instance heartbeat scan, photo startup reconciliation, export sync-fallback removal, and five new Prometheus alerts.

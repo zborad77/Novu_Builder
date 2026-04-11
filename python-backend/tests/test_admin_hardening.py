@@ -359,16 +359,16 @@ class TestAdminPasswordResetInvalidatesTokens:
         before = datetime.now(UTC).replace(microsecond=0)
 
         with patch("app.api.routes.admin.commit_security_critical_audit", new_callable=AsyncMock):
-            with patch("app.api.routes.admin.get_auth_redis", return_value=None):
-                with patch("app.api.routes.admin.TokenRepository.revoke_all_user_sessions", new=AsyncMock(return_value=[])):
-                    with patch("app.api.routes.admin.logger"):
-                        await reset_user_password(
-                            request=mock_request,
-                            user_id="user-1",
-                            payload=ResetPasswordPayload(password="NewSecure@Pass1"),
-                            current_user=mock_current_user,
-                            session=mock_session,
-                        )
+            with patch("app.api.routes.admin.TokenRepository.revoke_all_user_sessions", new=AsyncMock(return_value=[])):
+                with patch("app.api.routes.admin.logger"):
+                    await reset_user_password(
+                        request=mock_request,
+                        user_id="user-1",
+                        payload=ResetPasswordPayload(password="NewSecure@Pass1"),
+                        current_user=mock_current_user,
+                        session=mock_session,
+                        auth_redis=None,
+                    )
 
         after = datetime.now(UTC).replace(microsecond=0)
 
@@ -436,7 +436,6 @@ class TestAdminPasswordResetInvalidatesTokens:
 
         with (
             patch("app.api.routes.admin.commit_security_critical_audit", new_callable=AsyncMock),
-            patch("app.api.routes.admin.get_auth_redis", return_value=object()),
             patch("app.api.routes.admin.TokenRepository.revoke_all_user_sessions", new=AsyncMock(return_value=revocations)),
             patch(
                 "app.api.routes.admin.TokenRepository.cache_revoked_token",
@@ -449,6 +448,7 @@ class TestAdminPasswordResetInvalidatesTokens:
                 payload=ResetPasswordPayload(password="NewSecure@Pass1"),
                 current_user=mock_current_user,
                 session=mock_session,
+                auth_redis=object(),
             )
 
 

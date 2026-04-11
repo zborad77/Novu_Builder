@@ -24,6 +24,17 @@ async def _scan_iter(*keys):
         yield key
 
 
+def _mock_health_internal_session():
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.execute = AsyncMock(
+        return_value=MagicMock(scalar_one=lambda: 0, scalar_one_or_none=lambda: None)
+    )
+    mock_session.scalar = AsyncMock(return_value=None)
+    return mock_session
+
+
 def _redis_with_heartbeats(values_by_key: dict[object, bytes | None]):
     redis = AsyncMock()
 
@@ -255,11 +266,7 @@ class TestHealthInternalWorkerSection:
         )
 
         with patch("app.api.routes.system.AsyncSessionFactory") as mock_factory:
-            mock_session = AsyncMock()
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one=lambda: 0, scalar_one_or_none=lambda: None))
-            mock_factory.return_value = mock_session
+            mock_factory.return_value = _mock_health_internal_session()
             response = Response()
 
             result = await health_internal(
@@ -287,6 +294,7 @@ class TestHealthInternalWorkerSection:
         mock_request.app.state.startup_checks = {"db": "ok"}
         mock_request.app.state.job_queue = mock_redis
         mock_request.app.state.auth_token_store = None
+        mock_request.app.state._worker_not_alive_last_logged = 0.0
 
         mock_current_user = AuthUserRead(
             id="sa-1", email="sa@test.com", fullName="SA", role="superadmin",
@@ -294,11 +302,7 @@ class TestHealthInternalWorkerSection:
         )
 
         with patch("app.api.routes.system.AsyncSessionFactory") as mock_factory:
-            mock_session = AsyncMock()
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one=lambda: 0, scalar_one_or_none=lambda: None))
-            mock_factory.return_value = mock_session
+            mock_factory.return_value = _mock_health_internal_session()
             response = Response()
 
             result = await health_internal(
@@ -320,6 +324,7 @@ class TestHealthInternalWorkerSection:
         mock_request.app.state.startup_checks = {"db": "ok"}
         mock_request.app.state.job_queue = None
         mock_request.app.state.auth_token_store = None
+        mock_request.app.state._worker_not_alive_last_logged = 0.0
 
         mock_current_user = AuthUserRead(
             id="sa-1", email="sa@test.com", fullName="SA", role="superadmin",
@@ -327,11 +332,7 @@ class TestHealthInternalWorkerSection:
         )
 
         with patch("app.api.routes.system.AsyncSessionFactory") as mock_factory:
-            mock_session = AsyncMock()
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one=lambda: 0, scalar_one_or_none=lambda: None))
-            mock_factory.return_value = mock_session
+            mock_factory.return_value = _mock_health_internal_session()
             response = Response()
 
             result = await health_internal(
@@ -363,11 +364,7 @@ class TestHealthInternalWorkerSection:
         )
 
         with patch("app.api.routes.system.AsyncSessionFactory") as mock_factory:
-            mock_session = AsyncMock()
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one=lambda: 0, scalar_one_or_none=lambda: None))
-            mock_factory.return_value = mock_session
+            mock_factory.return_value = _mock_health_internal_session()
             response = Response()
 
             result = await health_internal(
@@ -390,6 +387,7 @@ class TestHealthInternalWorkerSection:
         mock_request.app.state.startup_checks = {"db": "ok"}
         mock_request.app.state.job_queue = None  # Redis not available
         mock_request.app.state.auth_token_store = None
+        mock_request.app.state._worker_not_alive_last_logged = 0.0
 
         mock_current_user = AuthUserRead(
             id="sa-1", email="sa@test.com", fullName="SA", role="superadmin",
@@ -397,11 +395,7 @@ class TestHealthInternalWorkerSection:
         )
 
         with patch("app.api.routes.system.AsyncSessionFactory") as mock_factory:
-            mock_session = AsyncMock()
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one=lambda: 0, scalar_one_or_none=lambda: None))
-            mock_factory.return_value = mock_session
+            mock_factory.return_value = _mock_health_internal_session()
             response = Response()
 
             result = await health_internal(

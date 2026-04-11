@@ -35,7 +35,12 @@ from app.core.backpressure import (
 )
 from app.core.config import get_settings, startup_failure_message
 from app.core.logging import configure_logging
-from app.core.metrics import PROMETHEUS_CLIENT_AVAILABLE, record_reaper_requeues
+from app.core.metrics import (
+    PROMETHEUS_CLIENT_AVAILABLE,
+    PROMETHEUS_TEXT_CONTENT_TYPE,
+    record_reaper_requeues,
+    render_metrics_text,
+)
 from app.core.redis_client import build_queue_redis_client_from_settings
 from app.db.session import WorkerAsyncSessionFactory
 from app.repositories.analysis_repository import (
@@ -102,13 +107,6 @@ from app.worker.queue import (
 )
 
 logger = structlog.get_logger(__name__)
-
-try:
-    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-except ModuleNotFoundError:
-    CONTENT_TYPE_LATEST = None
-    generate_latest = None
-
 
 class WorkerPayloadValidationError(ValueError):
     """Raised when a queued worker payload is structurally invalid."""
@@ -182,9 +180,9 @@ def _build_worker_metrics_handler(expected_token: str):
                 self.wfile.write(b"Unauthorized")
                 return
 
-            payload = generate_latest()
+            payload = render_metrics_text()
             self.send_response(200)
-            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+            self.send_header("Content-Type", PROMETHEUS_TEXT_CONTENT_TYPE)
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Robots-Tag", "noindex, nofollow")
             self.end_headers()
@@ -1755,7 +1753,7 @@ def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     if settings.worker_metrics_enabled:
-        if generate_latest is None or CONTENT_TYPE_LATEST is None or not PROMETHEUS_CLIENT_AVAILABLE:
+        if not PROMETHEUS_CLIENT_AVAILABLE:
             if settings.app_env.lower() not in ("development", "test"):
                 raise RuntimeError(
                     startup_failure_message(

@@ -6,7 +6,7 @@ from app.api.deps import get_current_user, get_photo_service, get_project_servic
 from app.core.audit import log_cross_tenant_denied
 from app.core.config import get_settings
 from app.core.limiter import limiter
-from app.core.metrics import UPLOAD_REJECTIONS_TOTAL
+from app.core.metrics import UPLOAD_REJECTIONS_TOTAL, metric_labels
 from app.schemas.auth import AuthUserRead
 from app.schemas.photo import (
     AnalysisReferencePhotoResponse,
@@ -93,6 +93,7 @@ async def upload_case_images(
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
 
+    # Keep deterministic HTTP guardrails here; heavy-lane gating happens in PhotoService.
     content_type = request.headers.get("content-type", "")
     uploaded = []
     if "application/json" in content_type:
@@ -115,7 +116,8 @@ async def upload_case_images(
             except UploadValidationError as exc:
                 reason_code = _upload_error_reason(exc)
                 status_code = _upload_error_status_code(exc)
-                UPLOAD_REJECTIONS_TOTAL.labels(
+                metric_labels(
+                    UPLOAD_REJECTIONS_TOTAL,
                     reason=reason_code,
                     status_code=str(status_code),
                 ).inc()
@@ -148,14 +150,15 @@ async def upload_case_images(
     )
 
 
-@router.get("/images/{image_id}/preview")
-@limiter.limit(get_settings().rate_limit_read_detail)
-async def get_image_preview(
+async def _get_image_preview_core(
     image_id: str,
-    request: Request,
-    current_user: AuthUserRead = Depends(get_current_user),
-    photo_service: PhotoService = Depends(get_photo_service),
+    current_user: AuthUserRead,
+    photo_service: PhotoService,
 ):
+    """Pure application logic: org-scoped photo lookup and preview URL resolution.
+
+    No Request dependency — directly testable without framework context.
+    """
     org_id = resolve_org_id(current_user)
     photo = await photo_service.get_photo_by_id_in_org(
         image_id,
@@ -171,6 +174,21 @@ async def get_image_preview(
         raise HTTPException(status_code=404, detail="Image not found.")
     preview_url = photo.variants.preview.url or photo.url
     return RedirectResponse(url=preview_url)
+
+
+@router.get("/images/{image_id}/preview")
+@limiter.limit(get_settings().rate_limit_read_detail)
+async def get_image_preview(
+    image_id: str,
+    request: Request,
+    current_user: AuthUserRead = Depends(get_current_user),
+    photo_service: PhotoService = Depends(get_photo_service),
+):
+    return await _get_image_preview_core(
+        image_id=image_id,
+        current_user=current_user,
+        photo_service=photo_service,
+    )
 
 
 @router.patch("/cases/{case_id}/images/{image_id}/primary", response_model=PrimaryPhotoResponse)

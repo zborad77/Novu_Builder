@@ -62,8 +62,13 @@ _PLACEHOLDER_FRAGMENTS: frozenset[str] = frozenset({
 #   max_overflow is always 0: the worker pool is exactly sized, predictable,
 #   and never thrashes with transient overflow connections.
 #
+# IMPORTANT:
+#   worker_total_concurrency is still used elsewhere for throughput and
+#   backpressure math, but it must NOT be used for worker DB pool sizing.
+#
 # Multi-instance deployments (Kubernetes, multiple pods):
-#   Total worker DB connections = WORKER_CONCURRENCY × WORKER_INSTANCE_COUNT.
+#   Total worker DB connections = effective_worker_db_pool_size ×
+#   WORKER_INSTANCE_COUNT.
 #   Set WORKER_INSTANCE_COUNT so the guard can log the real total and warn
 #   when it approaches PostgreSQL max_connections.
 
@@ -566,10 +571,15 @@ class Settings(BaseSettings):
         """
         if self.worker_db_pool_size > 0:
             return self.worker_db_pool_size
-        return self.worker_total_concurrency
+        return self.worker_concurrency
 
     @property
     def worker_total_concurrency(self) -> int:
+        """Total runtime worker slots across standard + heavy lanes.
+
+        This is a throughput/backpressure concept only. Worker DB pool sizing
+        intentionally uses effective_worker_db_pool_size instead.
+        """
         return self.worker_concurrency + self.worker_heavy_concurrency
 
     @property
@@ -1083,12 +1093,12 @@ class Settings(BaseSettings):
         # Hard fail: explicit pool size smaller than concurrency slots needed.
         # With auto-derive (WORKER_DB_POOL_SIZE=0), effective == WORKER_CONCURRENCY
         # always, so this branch is only reachable with an explicit override.
-        required_pool_size = self.worker_total_concurrency
+        required_pool_size = self.worker_concurrency
         if effective < required_pool_size:
             raise ValueError(
                 f"WORKER_DB_POOL_SIZE={self.worker_db_pool_size} is insufficient: "
                 f"WORKER_CONCURRENCY={self.worker_concurrency} and "
-                f"WORKER_HEAVY_CONCURRENCY={self.worker_heavy_concurrency} require at least "
+                f"the worker DB pool contract requires at least "
                 f"{required_pool_size} connections in the worker pool "
                 f"(max_overflow is always 0 for the worker pool — no overflow safety net). "
                 f"Fix: set WORKER_DB_POOL_SIZE >= {required_pool_size}, "

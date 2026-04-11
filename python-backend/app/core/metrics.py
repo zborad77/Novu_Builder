@@ -23,7 +23,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 try:
-    from prometheus_client import Counter, Gauge, Histogram
+    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
     PROMETHEUS_CLIENT_AVAILABLE = True
 except ModuleNotFoundError as exc:
@@ -33,6 +33,8 @@ except ModuleNotFoundError as exc:
         error=str(exc),
     )
     PROMETHEUS_CLIENT_AVAILABLE = False
+    CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
+    generate_latest = None
 
     class _NoopMetric:
         def labels(self, *args, **kwargs):
@@ -339,22 +341,44 @@ def _percentile(sorted_values: list[float], quantile: float) -> float:
     return float(sorted_values[index])
 
 
+def normalize_tenant_metric_label(
+    tenant_id: str | None,
+    *,
+    is_superadmin_context: bool = False,
+) -> str:
+    normalized = (tenant_id or "").strip()
+    if normalized:
+        return normalized
+    if is_superadmin_context:
+        return "superadmin"
+    return "unknown"
+
+
 def observe_job_outcome(
     *,
     status: str,
     duration_seconds: float | None,
     tenant_id: str | None = None,
+    is_superadmin_context: bool = False,
 ) -> None:
     """Record terminal job outcome metrics and refresh rolling duration gauges.
 
-    tenant_id should be the organization_id string; pass None or omit for
-    superadmin cross-tenant jobs (stored as "superadmin") or unknown context
-    (stored as "unknown").
+    tenant_id should be the organization_id string.
+    Pass is_superadmin_context=True for explicit cross-tenant/superadmin
+    execution so unlabeled tenant context is exported as "superadmin".
+    Otherwise missing tenant context is exported as "unknown".
     """
     global _JOB_FAIL_RATE_CURRENT, _JOB_DURATION_AVG_CURRENT, _JOB_DURATION_P95_CURRENT
     normalized_status = status.strip().lower() or "unknown"
-    normalized_tenant = (tenant_id or "").strip() or "unknown"
-    JOB_OUTCOMES_TOTAL.labels(status=normalized_status, tenant_id=normalized_tenant).inc()
+    normalized_tenant = normalize_tenant_metric_label(
+        tenant_id,
+        is_superadmin_context=is_superadmin_context,
+    )
+    metric_labels(
+        JOB_OUTCOMES_TOTAL,
+        status=normalized_status,
+        tenant_id=normalized_tenant,
+    ).inc()
     with _JOB_DURATION_LOCK:
         if normalized_status in _JOB_OUTCOME_COUNTS:
             _JOB_OUTCOME_COUNTS[normalized_status] += 1
@@ -372,7 +396,11 @@ def observe_job_outcome(
             return
 
         duration = max(0.0, float(duration_seconds))
-        JOB_DURATION_SECONDS.labels(status=normalized_status, tenant_id=normalized_tenant).observe(duration)
+        metric_labels(
+            JOB_DURATION_SECONDS,
+            status=normalized_status,
+            tenant_id=normalized_tenant,
+        ).observe(duration)
         _JOB_DURATION_WINDOW.append(duration)
         samples = sorted(_JOB_DURATION_WINDOW)
         _JOB_DURATION_AVG_CURRENT = sum(samples) / len(samples)
@@ -388,13 +416,14 @@ def record_reaper_requeues(count: int = 1) -> None:
 
 def record_duplicate_prevented(reason: str) -> None:
     normalized_reason = reason.strip().lower() or "unknown"
-    DUPLICATE_PREVENTED_COUNT.labels(reason=normalized_reason).inc()
+    metric_labels(DUPLICATE_PREVENTED_COUNT, reason=normalized_reason).inc()
 
 
 def record_backpressure_rejection(*, surface: str, reason: str) -> None:
     normalized_surface = surface.strip().lower() or "unknown"
     normalized_reason = reason.strip().lower() or "unknown"
-    BACKPRESSURE_REJECTIONS_TOTAL.labels(
+    metric_labels(
+        BACKPRESSURE_REJECTIONS_TOTAL,
         surface=normalized_surface,
         reason=normalized_reason,
     ).inc()
@@ -410,13 +439,15 @@ def observe_cache_operation(
     normalized_namespace = namespace.strip().lower() or "unknown"
     normalized_operation = operation.strip().lower() or "unknown"
     normalized_outcome = outcome.strip().lower() or "unknown"
-    CACHE_REQUESTS_TOTAL.labels(
+    metric_labels(
+        CACHE_REQUESTS_TOTAL,
         namespace=normalized_namespace,
         operation=normalized_operation,
         outcome=normalized_outcome,
     ).inc()
     if duration_seconds is not None:
-        CACHE_OPERATION_DURATION_SECONDS.labels(
+        metric_labels(
+            CACHE_OPERATION_DURATION_SECONDS,
             namespace=normalized_namespace,
             operation=normalized_operation,
             outcome=normalized_outcome,
@@ -431,7 +462,8 @@ def observe_work_catalog_resolution(
 ) -> None:
     normalized_path = path.strip().lower() or "unknown"
     normalized_outcome = outcome.strip().lower() or "unknown"
-    WORK_CATALOG_RESOLUTION_DURATION_SECONDS.labels(
+    metric_labels(
+        WORK_CATALOG_RESOLUTION_DURATION_SECONDS,
         path=normalized_path,
         outcome=normalized_outcome,
     ).observe(max(0.0, float(duration_seconds)))
@@ -440,7 +472,8 @@ def observe_work_catalog_resolution(
 def observe_work_catalog_resolution_input(*, path: str, kind: str, count: int) -> None:
     normalized_path = path.strip().lower() or "unknown"
     normalized_kind = kind.strip().lower() or "unknown"
-    WORK_CATALOG_RESOLUTION_INPUT_ROWS.labels(
+    metric_labels(
+        WORK_CATALOG_RESOLUTION_INPUT_ROWS,
         path=normalized_path,
         kind=normalized_kind,
     ).observe(max(0, int(count)))
@@ -449,7 +482,8 @@ def observe_work_catalog_resolution_input(*, path: str, kind: str, count: int) -
 def record_work_catalog_validation_failure(*, operation: str, reason: str) -> None:
     normalized_operation = operation.strip().lower() or "unknown"
     normalized_reason = reason.strip().lower() or "unknown"
-    WORK_CATALOG_VALIDATION_FAILURES_TOTAL.labels(
+    metric_labels(
+        WORK_CATALOG_VALIDATION_FAILURES_TOTAL,
         operation=normalized_operation,
         reason=normalized_reason,
     ).inc()
@@ -466,12 +500,14 @@ def observe_storage_operation(
     norm_op = operation.strip().lower() or "unknown"
     norm_backend = backend.strip().lower() or "unknown"
     norm_outcome = outcome.strip().lower() or "unknown"
-    STORAGE_OPERATIONS_TOTAL.labels(
+    metric_labels(
+        STORAGE_OPERATIONS_TOTAL,
         operation=norm_op,
         backend=norm_backend,
         outcome=norm_outcome,
     ).inc()
-    STORAGE_OPERATION_DURATION_SECONDS.labels(
+    metric_labels(
+        STORAGE_OPERATION_DURATION_SECONDS,
         operation=norm_op,
         backend=norm_backend,
         outcome=norm_outcome,
@@ -480,11 +516,77 @@ def observe_storage_operation(
 
 def refresh_job_observability_gauges() -> None:
     """Expose current in-process aggregate job gauges during every scrape."""
-    JOB_DURATION_SECONDS.labels(status="completed", tenant_id="unknown")
-    JOB_DURATION_SECONDS.labels(status="failed", tenant_id="unknown")
-    JOB_OUTCOMES_TOTAL.labels(status="completed", tenant_id="unknown").inc(0)
-    JOB_OUTCOMES_TOTAL.labels(status="failed", tenant_id="unknown").inc(0)
+    metric_labels(JOB_DURATION_SECONDS, status="completed", tenant_id="unknown")
+    metric_labels(JOB_DURATION_SECONDS, status="failed", tenant_id="unknown")
+    metric_labels(JOB_OUTCOMES_TOTAL, status="completed", tenant_id="unknown").inc(0)
+    metric_labels(JOB_OUTCOMES_TOTAL, status="failed", tenant_id="unknown").inc(0)
     JOB_FAIL_RATE.set(_JOB_FAIL_RATE_CURRENT)
     JOB_DURATION_SECONDS_AVG.set(_JOB_DURATION_AVG_CURRENT)
     JOB_DURATION_SECONDS_P95.set(_JOB_DURATION_P95_CURRENT)
-    BACKPRESSURE_REJECTIONS_TOTAL.labels(surface="analysis_api", reason="queue_full").inc(0)
+    metric_labels(BACKPRESSURE_REJECTIONS_TOTAL, surface="analysis_api", reason="queue_full").inc(0)
+
+
+PROMETHEUS_TEXT_CONTENT_TYPE = CONTENT_TYPE_LATEST
+
+
+def metric_label_names(metric) -> tuple[str, ...]:
+    return tuple(str(label_name) for label_name in (getattr(metric, "_labelnames", ()) or ()))
+
+
+def metric_labels(metric, /, **label_values):
+    """Bind labels using the metric's declared label order and exact label set."""
+    expected = metric_label_names(metric)
+    if not expected:
+        if label_values:
+            raise ValueError(
+                f"Metric {getattr(metric, '_name', '<unknown>')} does not accept labels; "
+                f"got {tuple(label_values.keys())!r}."
+            )
+        return metric.labels()
+
+    provided_names = tuple(label_values.keys())
+    missing = tuple(label_name for label_name in expected if label_name not in label_values)
+    extra = tuple(label_name for label_name in provided_names if label_name not in expected)
+    if missing or extra:
+        raise ValueError(
+            f"Metric {getattr(metric, '_name', '<unknown>')} expects labels {expected!r}; "
+            f"got {provided_names!r}."
+        )
+
+    ordered_values = {label_name: label_values[label_name] for label_name in expected}
+    return metric.labels(**ordered_values)
+
+
+def metric_export_name(metric) -> str:
+    """Return the canonical Prometheus text-export family name for a collector."""
+    name = str(getattr(metric, "_name", "") or "")
+    metric_type = str(getattr(metric, "_type", "") or "")
+    if metric_type == "counter" and name and not name.endswith("_total"):
+        return f"{name}_total"
+    return name
+
+
+def metric_help_line(metric) -> str:
+    export_name = metric_export_name(metric)
+    help_text = str(getattr(metric, "_documentation", "") or "")
+    normalized_help = help_text.replace("\\", r"\\").replace("\n", r"\n")
+    return f"# HELP {export_name} {normalized_help}"
+
+
+def metric_type_line(metric) -> str:
+    export_name = metric_export_name(metric)
+    metric_type = str(getattr(metric, "_type", "untyped") or "untyped")
+    return f"# TYPE {export_name} {metric_type}"
+
+
+def render_metrics_text() -> bytes:
+    """Render Prometheus metrics using a normalized LF-only text payload."""
+    if not PROMETHEUS_CLIENT_AVAILABLE or generate_latest is None:
+        raise RuntimeError("prometheus_client_not_installed")
+
+    payload = generate_latest()
+    text = payload.decode("utf-8") if isinstance(payload, bytes) else str(payload)
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if normalized and not normalized.endswith("\n"):
+        normalized += "\n"
+    return normalized.encode("utf-8")
