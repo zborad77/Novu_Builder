@@ -42,7 +42,7 @@ async def test_health_internal_exposes_retry_dlq_and_queue_depth_details():
     session_ctx.__aexit__.return_value = False
     session_ctx.__aenter__.return_value.execute = AsyncMock(
         side_effect=[
-            AsyncMock(),
+            SimpleNamespace(scalar_one_or_none=lambda: None),
             SimpleNamespace(scalar_one_or_none=lambda: None),
         ]
     )
