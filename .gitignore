@@ -99,6 +99,26 @@ desktop-qt/.qtcreator/
 .claude/
 
 # =========================================
+# WEB FRONTEND BUILD ARTIFACTS
+# =========================================
+web/dist/
+web/*.tsbuildinfo
+web/tsconfig.node.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
+web/vite.config.placeholder.js
+web/vite.config.placeholder.d.ts
+web/vite.config.placeholder.ts
+# compiled JS outputs alongside TS/TSX source files
+web/src/**/*.js
+
+# =========================================
+# WINDOWS GENERATED DIRECTORY LISTINGS
+# =========================================
+files.txt
+structure.txt
+
+# =========================================
 # MISC
 # =========================================
 my-app/
