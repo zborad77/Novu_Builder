@@ -41,6 +41,7 @@ níže jsou věci, které nelze automatizovat.
 ## Cross-feature závislosti
 
 - [ ] Orchestrace mezi features patří do page / compose / layout vrstvy — **ne** přímo do business feature. Feature nesmí řídit jinou feature.
+- [ ] Feature **nemanipuluje** (`invalidateQueries`, `setQueryData`) s query keys jiné feature — `cases` nesmí invalidovat cache `photos`, `photos` nesmí sahat do `markers`. Křížová invalidace patří do page / compose vrstvy.
 - [ ] `photos` neimportuje z `markers` přímo — coupling je na úrovni `PhotoViewerPage` přes props.
 - [ ] `cases` neimportuje interní soubory `photos`, `markers`, `work-items`, `estimates`.
 - [ ] Business features (`cases`, `photos`…) nemají přímou závislost na `features/impersonation`.
