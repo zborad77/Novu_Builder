@@ -581,13 +581,27 @@ class CatalogPricingProfileAdjustmentRule(TimestampMixin, Base):
 
 
 class WorkType(TimestampMixin, Base):
-    """Global work type definition resolved into tenant-effective and runtime rows."""
+    """Global work type definition resolved into tenant-effective and runtime rows.
+
+    Extended fields
+    ---------------
+    kind                      — 'leaf' = standalone type, 'composite' = assembles from components
+    proposal_step             — true when AI returns a proposal that requires explicit approval
+                                before the final detailed solution is generated (e.g. FVE layout)
+    geometry_correction_type  — how raw measured area/length is corrected before pricing:
+                                'none' | 'slope_coefficient' | 'net_from_gross' |
+                                'pipe_length_from_drawing' | 'volume_from_depth'
+    output_types_json         — JSON array of what the analysis produces:
+                                'material_list' | 'work_procedure' | 'overlay' |
+                                'generated_diagram' | 'calculation'
+    """
     __tablename__ = "work_types"
     __table_args__ = (
         UniqueConstraint("code", name="uq_work_types_code"),
         UniqueConstraint("slug", name="uq_work_types_slug"),
         Index("idx_work_types_catalog_sort", "sort_order", "code"),
         Index("idx_work_types_category_state_sort", "category_id", "state", "sort_order", "code"),
+        Index("idx_work_types_kind_state", "kind", "state", "code"),
         Index(
             "idx_work_types_analysis_profile_resolution",
             "default_analysis_profile_id",
@@ -601,6 +615,13 @@ class WorkType(TimestampMixin, Base):
             "code",
         ),
         CheckConstraint("state IN ('active', 'hidden', 'deprecated')", name="ck_work_types_state"),
+        CheckConstraint("kind IN ('leaf', 'composite')", name="ck_work_types_kind"),
+        CheckConstraint(
+            "geometry_correction_type IN ("
+            "'none', 'slope_coefficient', 'net_from_gross', "
+            "'pipe_length_from_drawing', 'volume_from_depth')",
+            name="ck_work_types_geometry_correction_type",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -612,6 +633,10 @@ class WorkType(TimestampMixin, Base):
     default_unit: Mapped[str] = mapped_column(String(32), nullable=False)
     measurement_kind: Mapped[str] = mapped_column(String(32), default="area", nullable=False)
     state: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), default="leaf", nullable=False)
+    proposal_step: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    geometry_correction_type: Mapped[str] = mapped_column(String(32), default="none", nullable=False)
+    output_types_json: Mapped[str | None] = mapped_column(Text)
     default_analysis_profile_id: Mapped[str | None] = mapped_column(
         ForeignKey("catalog_analysis_profiles.id", ondelete="SET NULL")
     )
@@ -635,6 +660,12 @@ class WorkType(TimestampMixin, Base):
         back_populates="work_type",
         cascade="all, delete-orphan",
         order_by="WorkTypeParameter.sort_order",
+    )
+    components: Mapped[list["WorkTypeComponent"]] = relationship(
+        back_populates="parent_work_type",
+        foreign_keys="WorkTypeComponent.parent_work_type_id",
+        cascade="all, delete-orphan",
+        order_by="WorkTypeComponent.sort_order",
     )
     tenant_settings: Mapped[list["TenantWorkTypeSetting"]] = relationship(
         back_populates="work_type",
@@ -755,6 +786,62 @@ class WorkTypeParameterOption(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     parameter: Mapped["WorkTypeParameter"] = relationship(back_populates="options")
+
+
+class WorkTypeComponent(TimestampMixin, Base):
+    """Links a composite WorkType to its constituent leaf WorkTypes.
+
+    A composite type (e.g. 'rekonstrukce_strechy') assembles multiple leaf types
+    (demontaz_krytiny, oprava_krovu, montaz_lati, pokladka_krytiny, ...).
+    AI Vision detects which components are needed based on photos and parameters;
+    each component is then priced and planned independently.
+
+    condition_code
+    --------------
+    'always'        — always included when composite is selected
+    'if_detected'   — included only when AI Vision detects the need
+    'tenant_choice' — included if tenant has enabled it in their settings
+    """
+    __tablename__ = "work_type_components"
+    __table_args__ = (
+        UniqueConstraint(
+            "parent_work_type_id",
+            "component_work_type_id",
+            name="uq_work_type_components_parent_component",
+        ),
+        Index("idx_work_type_components_parent_sort", "parent_work_type_id", "sort_order", "component_work_type_id"),
+        Index("idx_work_type_components_component", "component_work_type_id"),
+        CheckConstraint(
+            "condition_code IN ('always', 'if_detected', 'tenant_choice')",
+            name="ck_work_type_components_condition_code",
+        ),
+        CheckConstraint(
+            "parent_work_type_id != component_work_type_id",
+            name="ck_work_type_components_no_self_reference",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    parent_work_type_id: Mapped[str] = mapped_column(
+        ForeignKey("work_types.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    component_work_type_id: Mapped[str] = mapped_column(
+        ForeignKey("work_types.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    condition_code: Mapped[str] = mapped_column(String(32), default="always", nullable=False)
+    quantity_multiplier: Mapped[float] = mapped_column(Numeric(14, 4), default=1.0, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    parent_work_type: Mapped["WorkType"] = relationship(
+        back_populates="components",
+        foreign_keys=[parent_work_type_id],
+    )
+    component_work_type: Mapped["WorkType"] = relationship(
+        foreign_keys=[component_work_type_id],
+    )
 
 
 class TenantWorkTypeSetting(TimestampMixin, Base):

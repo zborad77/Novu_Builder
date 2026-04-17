@@ -45,6 +45,7 @@ from app.models.work_catalog import (
     VisionDetection,
     WorkCategory,
     WorkType,
+    WorkTypeComponent,
     WorkTypeParameter,
     WorkTypeParameterOption,
 )
@@ -94,6 +95,7 @@ __all__ = [
     "VisionDetection",
     "WorkCategory",
     "WorkType",
+    "WorkTypeComponent",
     "WorkTypeParameter",
     "WorkTypeParameterOption",
 ]
