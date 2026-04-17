@@ -8,6 +8,7 @@ from app.api.routes.cases import router as cases_router
 from app.api.routes.estimates import router as estimates_router
 from app.api.routes.exports import router as exports_router
 from app.api.routes.images import router as images_router
+from app.api.routes.markers import router as markers_router
 from app.api.routes.material_catalog import router as material_catalog_router
 from app.api.routes.measurements import router as measurements_router
 from app.api.routes.pricebooks import router as pricebooks_router
@@ -29,6 +30,7 @@ api_router.include_router(auth_router)
 api_router.include_router(cases_router, **_protected)
 api_router.include_router(images_router, **_protected)
 api_router.include_router(analysis_jobs_router, **_protected)
+api_router.include_router(markers_router, **_protected)
 api_router.include_router(measurements_router, **_protected)
 api_router.include_router(estimates_router, **_protected)
 api_router.include_router(pricebooks_router, **_protected)

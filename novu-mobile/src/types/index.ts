@@ -73,6 +73,51 @@ export const REPAIR_SCOPES = [
   { label: 'Jiné', value: 'other' },
 ] as const;
 
+// ── Markers ────────────────────────────────────────────────────────────────
+
+export type MarkerType =
+  | 'note'
+  | 'defect'
+  | 'ai_detection'
+  | 'measurement';
+
+/** Controls mutability. 'user' = editable, 'ai' = immutable / pipeline-written. */
+export type MarkerSource = 'user' | 'ai';
+
+export interface Marker {
+  id: string;
+  caseId: string;
+  imageId: string | null;
+  markerType: MarkerType;
+  markerSource: MarkerSource;
+  x: number;       // normalised 0–1
+  y: number;       // normalised 0–1
+  width: number | null;
+  height: number | null;
+  label: string;
+  severity: string | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface MarkerCreate {
+  caseId: string;
+  imageId?: string;
+  markerType: MarkerType;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  label: string;
+  severity?: string;
+}
+
+export interface MarkerListResponse {
+  items: Marker[];
+}
+
+// ── Project status ──────────────────────────────────────────────────────────
+
 export const PROJECT_STATUS_LABELS: Record<string, string> = {
   new: 'Nová',
   in_progress: 'Zpracovává se',

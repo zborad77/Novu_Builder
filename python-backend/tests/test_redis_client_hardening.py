@@ -79,6 +79,7 @@ def _set_valid_prod_runtime(monkeypatch) -> None:
         "RATE_LIMIT_ADMIN_SENSITIVE": "5/minute",
         "RATE_LIMIT_UPLOAD": "30/minute",
         "RATE_LIMIT_ANALYSIS_JOBS": "20/minute",
+        "RATE_LIMIT_MARKER_WRITE": "30/minute",
         "RATE_LIMIT_READ_LIST": "120/minute",
         "RATE_LIMIT_READ_DETAIL": "60/minute",
         "STORAGE_BACKEND": "s3",

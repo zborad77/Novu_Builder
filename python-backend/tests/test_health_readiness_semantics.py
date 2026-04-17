@@ -469,6 +469,68 @@ async def test_internal_health_omits_debug_flag_and_keeps_internal_details():
 
 
 @pytest.mark.asyncio
+async def test_internal_health_keeps_api_ready_true_when_worker_processing_is_down():
+    from app.api.routes.system import health_internal
+    from app.schemas.auth import AuthUserRead
+
+    mock_request = AsyncMock()
+    mock_request.app.state.startup_checks = {
+        "database": "ok",
+        "schema": "ok",
+        "storage": "ok",
+    }
+    mock_request.app.state._worker_not_alive_last_logged = 0.0
+    mock_request.app.state.job_queue = _ReadyRuntime()
+    mock_request.app.state.auth_token_store = _ReadyRuntime()
+    response = Response()
+
+    current_user = AuthUserRead(
+        id="sa-1",
+        email="sa@test.com",
+        fullName="SA",
+        role="superadmin",
+        isActive=True,
+        organizationId="org-1",
+        isSuperAdmin=True,
+        impersonatedBy=None,
+    )
+
+    worker_snapshot = SimpleNamespace(
+        alive=False,
+        last_seen_at=None,
+        alive_instances=0,
+        seen_instances=0,
+    )
+
+    with (
+        patch("app.api.routes.system.AsyncSessionFactory") as mock_factory,
+        patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+        patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+    ):
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.execute = AsyncMock(side_effect=[
+            SimpleNamespace(one=lambda: (0, 0, 0, 0)),
+            SimpleNamespace(scalar_one_or_none=lambda: None),
+        ])
+        mock_session.scalar = AsyncMock(return_value=None)
+        mock_factory.return_value = mock_session
+
+        body = await health_internal(
+            request=mock_request,
+            response=response,
+            _=current_user,
+        )
+
+    assert response.status_code == 200
+    assert body["status"] == "degraded"
+    assert body["ready"] is True
+    assert body["apiReady"] is True
+    assert body["jobProcessingReady"] is False
+
+
+@pytest.mark.asyncio
 async def test_readiness_db_cache_hits_within_ttl():
     from app.api.routes.system import _database_ready_cached
 

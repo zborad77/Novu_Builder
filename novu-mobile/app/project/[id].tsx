@@ -7,13 +7,14 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   FlatList,
-  Image,
   Alert,
 } from 'react-native';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { PROJECT_STATUS_LABELS } from '../../src/types';
-import { PhotosApi, AnalysisApi, ProjectsApi, getBaseUrl } from '../../src/services/api';
+import type { Marker, MarkerType } from '../../src/types';
+import { PhotosApi, AnalysisApi, ProjectsApi, MarkersApi, getBaseUrl } from '../../src/services/api';
+import MarkerPhotoView from '../../src/components/MarkerPhotoView';
 
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -143,6 +144,7 @@ export default function ProjectDetailScreen() {
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [markers, setMarkers] = useState<Marker[]>([]);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [pollingJobId, setPollingJobId] = useState<string | null>(null);
@@ -159,12 +161,14 @@ export default function ProjectDetailScreen() {
     if (!id) return;
     setError(null);
     try {
-      const [data, result] = await Promise.all([
+      const [data, result, markerResponse] = await Promise.all([
         fetchProjectDetail(id),
         fetchLatestAnalysisResult(id).catch(() => null),
+        MarkersApi.listByCase(id).catch(() => null),
       ]);
       setProject(data);
       setAnalysisResult(result);
+      setMarkers(markerResponse?.items ?? []);
       navigation.setOptions({ title: data.title });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Chyba při načítání.');
@@ -223,6 +227,39 @@ export default function ProjectDetailScreen() {
       setUploading(false);
     }
   }, [id, load]);
+
+  const handleMarkerCreate = useCallback(async (
+    imageId: string,
+    x: number,
+    y: number,
+    markerType: MarkerType,
+    label: string,
+  ) => {
+    if (!id) return;
+    try {
+      const created = await MarkersApi.create({
+        caseId: id,
+        imageId,
+        markerType,
+        x,
+        y,
+        width: null,
+        height: null,
+        label,
+      });
+      setMarkers((prev) => [...prev, created]);
+    } catch (err) {
+      Alert.alert('Chyba', err instanceof Error ? err.message : 'Vytvoření markeru selhalo.');
+    }
+  }, [id]);
+
+  const handleMarkerTap = useCallback((imageId: string, x: number, y: number) => {
+    Alert.alert('Nový marker', 'Vyberte typ:', [
+      { text: 'Závada',   onPress: () => handleMarkerCreate(imageId, x, y, 'defect', 'Závada') },
+      { text: 'Poznámka', onPress: () => handleMarkerCreate(imageId, x, y, 'note',   'Poznámka') },
+      { text: 'Zrušit', style: 'cancel' },
+    ]);
+  }, [handleMarkerCreate]);
 
   const handleTakePhoto = useCallback(async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -381,9 +418,15 @@ export default function ProjectDetailScreen() {
             keyExtractor={(p) => p.id}
             renderItem={({ item }) => {
               const uri = photoThumbUrl(item, baseUrl);
-              return uri ? (
-                <Image source={{ uri }} style={styles.photoThumb} />
-              ) : null;
+              if (!uri) return null;
+              return (
+                <MarkerPhotoView
+                  uri={uri}
+                  markers={markers.filter((m) => m.imageId === item.id)}
+                  style={styles.photoThumb}
+                  onTap={(x, y) => handleMarkerTap(item.id, x, y)}
+                />
+              );
             }}
             style={{ marginTop: 12 }}
             contentContainerStyle={{ gap: 8 }}

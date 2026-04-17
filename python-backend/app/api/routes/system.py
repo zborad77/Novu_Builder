@@ -1222,7 +1222,7 @@ async def health_internal(
         "service": _PROBE_SERVICE_NAME,
         "ready": snapshot.ready,
         "healthy": snapshot.healthy,
-        "apiReady": snapshot.ready,
+        "apiReady": _state_is_servable(snapshot.api_state),
         "apiState": snapshot.api_state,
         "jobProcessingReady": snapshot.job_processing.strict_job_processing_ready,
         "jobProcessingState": snapshot.processing_state,

@@ -598,6 +598,45 @@ class PasswordResetToken(Base):
     user: Mapped["User"] = relationship()
 
 
+class Marker(Base):
+    """User/AI annotation on a project photo or case (normalized 0-1 coordinates).
+
+    marker_source controls mutability:
+      'user' — created by a human operator, editable
+      'ai'   — written by the analysis pipeline, immutable / append-only
+    Who exactly created it (role, superadmin) is derivable from created_by → users.
+    """
+    __tablename__ = "markers"
+    __table_args__ = (
+        CheckConstraint(
+            "marker_type IN ('defect', 'note', 'ai_detection', 'measurement')",
+            name="ck_markers_marker_type",
+        ),
+        CheckConstraint(
+            "marker_source IN ('user', 'ai')",
+            name="ck_markers_marker_source",
+        ),
+        Index("idx_markers_case_id", "case_id"),
+        Index("idx_markers_image_id", "image_id"),
+        Index("idx_markers_case_type", "case_id", "marker_type"),
+        Index("idx_markers_case_source", "case_id", "marker_source"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    case_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    image_id: Mapped[str | None] = mapped_column(ForeignKey("project_photos.id", ondelete="SET NULL"))
+    marker_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    marker_source: Mapped[str] = mapped_column(String(16), nullable=False, server_default="user")
+    x: Mapped[float] = mapped_column(Float, nullable=False)
+    y: Mapped[float] = mapped_column(Float, nullable=False)
+    width: Mapped[float | None] = mapped_column(Float)
+    height: Mapped[float | None] = mapped_column(Float)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str | None] = mapped_column(String(32))
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class AuditLog(Base):
     """Immutable audit trail — who did what and when."""
     __tablename__ = "audit_logs"

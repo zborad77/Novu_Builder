@@ -1258,6 +1258,25 @@ class TestRunHeavyJobTask:
 
         assert runtime.heavy_concurrency_limiter._value == 1
 
+    @pytest.mark.asyncio
+    async def test_cancellation_does_not_ack_heavy_lease(self):
+        from app.worker import runner
+
+        lease = _heavy_lease()
+        runtime = _make_runtime(worker_heavy_concurrency=1)
+        await runtime.heavy_concurrency_limiter.acquire()
+        runtime.heavy_job_executor.execute_lease = AsyncMock(side_effect=asyncio.CancelledError())
+
+        with (
+            patch("app.worker.runner.ack_heavy_job", new=AsyncMock()) as ack_mock,
+            patch("app.worker.runner.renew_heavy_job_lease", new=AsyncMock()),
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await runner._run_heavy_job_task(runtime, lease)
+
+        ack_mock.assert_not_awaited()
+        assert runtime.heavy_concurrency_limiter._value == 1
+
 
 class TestRunHeavyLeaseReaper:
     """Unit tests for _run_heavy_lease_reaper_if_due."""

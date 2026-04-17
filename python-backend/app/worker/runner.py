@@ -843,6 +843,7 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
     attempt_count = 0
     move_to_dlq = False
     unknown_finalize_state: str | None = None
+    cancelled = False
     try:
         result = await runtime.job_executor.execute_lease(lease, job_queue=runtime.redis)
         if result is not None:
@@ -861,6 +862,15 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
                 finalize_state = _FINALIZE_STATE_FAILED
                 unknown_finalize_state = disposition or "<empty>"
     except asyncio.CancelledError:
+        cancelled = True
+        logger.info(
+            "worker.job_cancelled",
+            job_id=lease.job_id,
+            tenant_id=lease.organization_id,
+            lease_token=lease.token,
+            worker_id=lease.worker_id,
+            reason="shutdown_or_task_cancellation",
+        )
         raise
     except AnalysisJobLeaseOwnershipError as exc:
         logger.warning(
@@ -943,152 +953,153 @@ async def _run_job_task(runtime: WorkerRuntime, lease: LeasedAnalysisJob) -> Non
     finally:
         renewal_task.cancel()
         await asyncio.gather(renewal_task, return_exceptions=True)
-        if finalize_state not in _FINALIZE_STATE_WHITELIST:
-            unknown_finalize_state = str(finalize_state)
-            finalize_state = _FINALIZE_STATE_FAILED
-            move_to_dlq = False
+        if not cancelled:
+            if finalize_state not in _FINALIZE_STATE_WHITELIST:
+                unknown_finalize_state = str(finalize_state)
+                finalize_state = _FINALIZE_STATE_FAILED
+                move_to_dlq = False
 
-        if unknown_finalize_state is not None:
-            dlq_reason = await _mark_job_failed_for_unknown_finalize_state(
-                runtime,
-                lease,
-                unknown_state=unknown_finalize_state,
-            )
-            finalize_state = _FINALIZE_STATE_FAILED
-            move_to_dlq = False
-            retry_at = None
-            attempt_count = 0
+            if unknown_finalize_state is not None:
+                dlq_reason = await _mark_job_failed_for_unknown_finalize_state(
+                    runtime,
+                    lease,
+                    unknown_state=unknown_finalize_state,
+                )
+                finalize_state = _FINALIZE_STATE_FAILED
+                move_to_dlq = False
+                retry_at = None
+                attempt_count = 0
 
-        if finalize_state == _FINALIZE_STATE_SUCCESS:
-            try:
-                acked = await ack_analysis_job(runtime.redis, lease)
-                if not acked:
+            if finalize_state == _FINALIZE_STATE_SUCCESS:
+                try:
+                    acked = await ack_analysis_job(runtime.redis, lease)
+                    if not acked:
+                        logger.error(
+                            "worker.job_ack_skipped",
+                            job_id=lease.job_id,
+                            tenant_id=lease.organization_id,
+                            lease_token=lease.token,
+                            worker_id=lease.worker_id,
+                        )
+                except LostAnalysisJobLeaseError as exc:
                     logger.error(
-                        "worker.job_ack_skipped",
+                        "worker.job_ack_lost_lease",
                         job_id=lease.job_id,
                         tenant_id=lease.organization_id,
                         lease_token=lease.token,
                         worker_id=lease.worker_id,
+                        error=str(exc),
                     )
-            except LostAnalysisJobLeaseError as exc:
-                logger.error(
-                    "worker.job_ack_lost_lease",
-                    job_id=lease.job_id,
-                    tenant_id=lease.organization_id,
-                    lease_token=lease.token,
-                    worker_id=lease.worker_id,
-                    error=str(exc),
-                )
-            except Exception as exc:
-                logger.error(
-                    "worker.job_ack_failed",
-                    job_id=lease.job_id,
-                    tenant_id=lease.organization_id,
-                    lease_token=lease.token,
-                    worker_id=lease.worker_id,
-                    error=str(exc),
-                )
-        elif finalize_state == _FINALIZE_STATE_RETRY and retry_at is not None:
-            try:
-                scheduled = await schedule_analysis_job_retry(
-                    runtime.redis,
-                    lease,
-                    retry_at=retry_at,
-                )
-                if not scheduled:
+                except Exception as exc:
                     logger.error(
-                        "worker.job_retry_schedule_failed",
+                        "worker.job_ack_failed",
+                        job_id=lease.job_id,
+                        tenant_id=lease.organization_id,
+                        lease_token=lease.token,
+                        worker_id=lease.worker_id,
+                        error=str(exc),
+                    )
+            elif finalize_state == _FINALIZE_STATE_RETRY and retry_at is not None:
+                try:
+                    scheduled = await schedule_analysis_job_retry(
+                        runtime.redis,
+                        lease,
+                        retry_at=retry_at,
+                    )
+                    if not scheduled:
+                        logger.error(
+                            "worker.job_retry_schedule_failed",
+                            job_id=lease.job_id,
+                            tenant_id=lease.organization_id,
+                            lease_token=lease.token,
+                            worker_id=lease.worker_id,
+                            retry_at=retry_at.isoformat(),
+                        )
+                except LostAnalysisJobLeaseError as exc:
+                    logger.error(
+                        "worker.job_retry_lost_lease",
+                        job_id=lease.job_id,
+                        tenant_id=lease.organization_id,
+                        lease_token=lease.token,
+                        worker_id=lease.worker_id,
+                        error=str(exc),
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "worker.job_retry_schedule_error",
                         job_id=lease.job_id,
                         tenant_id=lease.organization_id,
                         lease_token=lease.token,
                         worker_id=lease.worker_id,
                         retry_at=retry_at.isoformat(),
+                        error=str(exc),
                     )
-            except LostAnalysisJobLeaseError as exc:
-                logger.error(
-                    "worker.job_retry_lost_lease",
-                    job_id=lease.job_id,
-                    tenant_id=lease.organization_id,
-                    lease_token=lease.token,
-                    worker_id=lease.worker_id,
-                    error=str(exc),
-                )
-            except Exception as exc:
-                logger.error(
-                    "worker.job_retry_schedule_error",
-                    job_id=lease.job_id,
-                    tenant_id=lease.organization_id,
-                    lease_token=lease.token,
-                    worker_id=lease.worker_id,
-                    retry_at=retry_at.isoformat(),
-                    error=str(exc),
-                )
-        elif finalize_state == _FINALIZE_STATE_FAILED and move_to_dlq:
-            try:
-                moved = await move_analysis_job_to_dlq(
-                    runtime.redis,
-                    lease,
-                    attempt_count=attempt_count,
-                    reason=dlq_reason,
-                )
-                if not moved:
+            elif finalize_state == _FINALIZE_STATE_FAILED and move_to_dlq:
+                try:
+                    moved = await move_analysis_job_to_dlq(
+                        runtime.redis,
+                        lease,
+                        attempt_count=attempt_count,
+                        reason=dlq_reason,
+                    )
+                    if not moved:
+                        logger.error(
+                            "worker.job_dlq_move_failed",
+                            job_id=lease.job_id,
+                            tenant_id=lease.organization_id,
+                            lease_token=lease.token,
+                            worker_id=lease.worker_id,
+                        )
+                except LostAnalysisJobLeaseError as exc:
                     logger.error(
-                        "worker.job_dlq_move_failed",
+                        "worker.job_dlq_lost_lease",
                         job_id=lease.job_id,
                         tenant_id=lease.organization_id,
                         lease_token=lease.token,
                         worker_id=lease.worker_id,
+                        error=str(exc),
                     )
-            except LostAnalysisJobLeaseError as exc:
-                logger.error(
-                    "worker.job_dlq_lost_lease",
-                    job_id=lease.job_id,
-                    tenant_id=lease.organization_id,
-                    lease_token=lease.token,
-                    worker_id=lease.worker_id,
-                    error=str(exc),
-                )
-            except Exception as exc:
-                logger.error(
-                    "worker.job_dlq_move_error",
-                    job_id=lease.job_id,
-                    tenant_id=lease.organization_id,
-                    lease_token=lease.token,
-                    worker_id=lease.worker_id,
-                    error=str(exc),
-                )
-        elif finalize_state == _FINALIZE_STATE_FAILED:
-            try:
-                acked = await ack_analysis_job(runtime.redis, lease)
-                if not acked:
+                except Exception as exc:
                     logger.error(
-                        "worker.job_failed_release_skipped",
+                        "worker.job_dlq_move_error",
+                        job_id=lease.job_id,
+                        tenant_id=lease.organization_id,
+                        lease_token=lease.token,
+                        worker_id=lease.worker_id,
+                        error=str(exc),
+                    )
+            elif finalize_state == _FINALIZE_STATE_FAILED:
+                try:
+                    acked = await ack_analysis_job(runtime.redis, lease)
+                    if not acked:
+                        logger.error(
+                            "worker.job_failed_release_skipped",
+                            job_id=lease.job_id,
+                            tenant_id=lease.organization_id,
+                            lease_token=lease.token,
+                            worker_id=lease.worker_id,
+                            reason="unknown_state" if unknown_finalize_state is not None else "failed",
+                        )
+                except LostAnalysisJobLeaseError as exc:
+                    logger.error(
+                        "worker.job_failed_release_lost_lease",
                         job_id=lease.job_id,
                         tenant_id=lease.organization_id,
                         lease_token=lease.token,
                         worker_id=lease.worker_id,
                         reason="unknown_state" if unknown_finalize_state is not None else "failed",
+                        error=str(exc),
                     )
-            except LostAnalysisJobLeaseError as exc:
-                logger.error(
-                    "worker.job_failed_release_lost_lease",
-                    job_id=lease.job_id,
-                    tenant_id=lease.organization_id,
-                    lease_token=lease.token,
-                    worker_id=lease.worker_id,
-                    reason="unknown_state" if unknown_finalize_state is not None else "failed",
-                    error=str(exc),
-                )
-            except Exception as exc:
-                logger.error(
-                    "worker.job_failed_release_error",
-                    job_id=lease.job_id,
-                    tenant_id=lease.organization_id,
-                    lease_token=lease.token,
-                    worker_id=lease.worker_id,
-                    reason="unknown_state" if unknown_finalize_state is not None else "failed",
-                    error=str(exc),
-                )
+                except Exception as exc:
+                    logger.error(
+                        "worker.job_failed_release_error",
+                        job_id=lease.job_id,
+                        tenant_id=lease.organization_id,
+                        lease_token=lease.token,
+                        worker_id=lease.worker_id,
+                        reason="unknown_state" if unknown_finalize_state is not None else "failed",
+                        error=str(exc),
+                    )
         runtime.concurrency_limiter.release()
 
 
@@ -1135,9 +1146,19 @@ async def _renew_heavy_job_lease_loop(runtime: WorkerRuntime, lease: LeasedHeavy
 async def _run_heavy_job_task(runtime: WorkerRuntime, lease: LeasedHeavyJob) -> None:
     renewal_task = asyncio.create_task(_renew_heavy_job_lease_loop(runtime, lease))
     finalize_action = "ack"
+    cancelled = False
     try:
         await runtime.heavy_job_executor.execute_lease(lease)
     except asyncio.CancelledError:
+        cancelled = True
+        logger.info(
+            "worker.heavy_job_cancelled",
+            heavy_job_type=lease.job_type,
+            project_id=lease.project_id,
+            lease_token=lease.token,
+            worker_id=lease.worker_id,
+            reason="shutdown_or_task_cancellation",
+        )
         raise
     except HeavyWorkerJobExecutionError as exc:
         logger.error(
@@ -1177,7 +1198,7 @@ async def _run_heavy_job_task(runtime: WorkerRuntime, lease: LeasedHeavyJob) -> 
     finally:
         renewal_task.cancel()
         await asyncio.gather(renewal_task, return_exceptions=True)
-        if finalize_action == "ack":
+        if not cancelled and finalize_action == "ack":
             try:
                 acked = await ack_heavy_job(runtime.redis, lease)
                 if not acked:

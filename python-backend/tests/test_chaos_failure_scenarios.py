@@ -1183,3 +1183,22 @@ class TestC10AntiDomino:
                     )
                     return
         pytest.fail("WorkerDown alert rule not found")
+
+    def test_c10_9_worker_down_alert_ignores_monitoring_unknown_state(self):
+        """WorkerDown must distinguish unknown monitoring from confirmed worker loss."""
+        import pathlib
+        import yaml
+
+        alerts_path = pathlib.Path(__file__).parents[2] / "ops" / "alerting" / "alerts.yml"
+        if not alerts_path.exists():
+            pytest.skip("alerts.yml not available")
+
+        data = yaml.safe_load(alerts_path.read_text())
+        for group in data["groups"]:
+            for rule in group["rules"]:
+                if rule.get("alert") == "WorkerDown":
+                    expr = str(rule.get("expr", ""))
+                    assert "novu_worker_monitoring_available" in expr
+                    assert "novu_worker_alive" in expr
+                    return
+        pytest.fail("WorkerDown alert rule not found")

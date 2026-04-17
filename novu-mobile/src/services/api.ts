@@ -7,6 +7,9 @@ import type {
   ProjectCreate,
   ProjectCreateResponse,
   PhotoUploadResponse,
+  Marker,
+  MarkerCreate,
+  MarkerListResponse,
 } from '../types';
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -239,6 +242,27 @@ export const AnalysisApi = {
 
   async getJob(jobId: string): Promise<AnalysisJobStatus> {
     return requestJson<AnalysisJobStatus>(`/analysis-jobs/${jobId}`);
+  },
+};
+
+export const MarkersApi = {
+  async listByCase(caseId: string): Promise<MarkerListResponse> {
+    return requestJson<MarkerListResponse>(`/markers?case_id=${encodeURIComponent(caseId)}`);
+  },
+
+  async listByImage(imageId: string): Promise<MarkerListResponse> {
+    return requestJson<MarkerListResponse>(`/markers?image_id=${encodeURIComponent(imageId)}`);
+  },
+
+  async create(payload: MarkerCreate): Promise<Marker> {
+    return requestJson<Marker>('/markers', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async delete(markerId: string): Promise<void> {
+    await requestJson(`/markers/${encodeURIComponent(markerId)}`, { method: 'DELETE' });
   },
 };
 

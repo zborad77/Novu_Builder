@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.8.000 - 2026-04-17
+
+Markers system: user and AI annotations on project photos with normalized coordinates, full CRUD API, mobile integration, and web frontend architecture documentation.
+
+### Markers Feature
+
+- New `Marker` ORM model with four types: `defect`, `note`, `ai_detection`, `measurement`
+- Two immutability modes: `user` (operator-created, editable) and `ai` (pipeline-written, append-only)
+- Normalized 0–1 coordinate system with optional bounding box (`x`, `y`, `width`, `height`)
+- Indexed on `case_id`, `image_id`, and compound `(case_id, marker_type)` / `(case_id, marker_source)` for efficient filtering
+- Two Alembic migrations: add markers table + add `marker_source` column
+- Dedicated `MarkerRepository` with `create`, `list_by_case`, `list_by_image`, `get`, `delete`
+- REST API (`GET /markers`, `POST /markers`, `DELETE /markers/:id`) with tenant scoping and rate limit (`RATE_LIMIT_MARKER_WRITE`, default 30/minute)
+- Pydantic schemas with `field_validator` bounds-checking for normalized coordinates
+
+### Mobile App — Markers Integration
+
+- `MarkerOverlay.tsx` — SVG overlay component with normalized-to-pixel coordinate mapping
+- `MarkerPhotoView.tsx` — photo view with interactive marker layer
+- Marker API service and types in `api.ts` / `types/index.ts`
+- Project detail page updated to display and manage markers
+
+### Worker Cancellation Handling
+
+- Fixed `_run_job_task` to correctly handle `asyncio.CancelledError`: logs cancellation with full job/tenant context and skips finalize-state validation for cancelled tasks
+
+### Test Coverage Expansion
+
+- Expanded `test_health_readiness_semantics.py`, `test_retry_system.py`, `test_worker_runner.py`, `test_chaos_failure_scenarios.py` with additional scenario coverage
+- Minor assertion hardening in remaining test files
+
+### Documentation
+
+- `docs/web-frontend-architecture.md` — web frontend architecture document: feature structure, transport layer rules, actor API contract, cross-feature dependency matrix, query key naming, impersonation semantics, mutation ownership, implementation risk analysis, and enforcement tooling guidance
+
 ## v0.7.004 - 2026-04-11
 
 Stabilization release focused on deterministic worker/runtime behavior, explicit retry and readiness contracts, stable Prometheus metrics, and integration hardening across security-critical routes and queue processing.

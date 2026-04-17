@@ -133,6 +133,7 @@ _STRICT_RUNTIME_EXPLICIT_FIELDS: tuple[str, ...] = (
     "rate_limit_admin_sensitive",
     "rate_limit_upload",
     "rate_limit_analysis_jobs",
+    "rate_limit_marker_write",
     "rate_limit_read_list",
     "rate_limit_read_detail",
     "storage_authoritative",
@@ -156,6 +157,7 @@ _RATE_LIMIT_FIELD_NAMES: tuple[str, ...] = (
     "rate_limit_admin_sensitive",
     "rate_limit_upload",
     "rate_limit_analysis_jobs",
+    "rate_limit_marker_write",
     "rate_limit_metrics",
     "rate_limit_read_list",
     "rate_limit_read_detail",
@@ -479,6 +481,7 @@ class Settings(BaseSettings):
     rate_limit_admin_sensitive: str = Field(default="5/minute", alias="RATE_LIMIT_ADMIN_SENSITIVE")
     rate_limit_upload: str = Field(default="30/minute", alias="RATE_LIMIT_UPLOAD")
     rate_limit_analysis_jobs: str = Field(default="20/minute", alias="RATE_LIMIT_ANALYSIS_JOBS")
+    rate_limit_marker_write: str = Field(default="30/minute", alias="RATE_LIMIT_MARKER_WRITE")
     rate_limit_metrics: str = Field(default="60/minute", alias="RATE_LIMIT_METRICS")
     rate_limit_read_list: str = Field(default="120/minute", alias="RATE_LIMIT_READ_LIST")
     rate_limit_read_detail: str = Field(default="60/minute", alias="RATE_LIMIT_READ_DETAIL")

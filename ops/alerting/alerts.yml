@@ -14,7 +14,7 @@ groups:
           description: "The Python backend has been unreachable for more than 1 minute."
 
       - alert: WorkerDown
-        expr: novu_worker_alive == 0
+        expr: (novu_worker_monitoring_available == 1) and (novu_worker_alive == 0)
         for: 3m
         labels:
           severity: critical

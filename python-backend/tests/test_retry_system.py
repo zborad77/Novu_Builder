@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -852,3 +853,52 @@ class TestWorkerRetryFinalization:
         ack_job.assert_awaited_once_with(runtime.redis, lease)
         schedule_retry.assert_not_awaited()
         move_dlq.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_run_job_task_cancellation_does_not_ack_or_finalize(self):
+        from app.worker import runner
+
+        lease = LeasedAnalysisJob(
+            token="lease-1",
+            payload={
+                "job_id": "job-1",
+                "project_id": "proj-1",
+                "organization_id": "org-1",
+                "is_superadmin_context": False,
+            },
+            raw_payload='{"job_id":"job-1","project_id":"proj-1","organization_id":"org-1","is_superadmin_context":false}',
+            worker_id="worker-1",
+            leased_at_ms=1_700_000_000_000,
+            lease_timeout_ms=600_000,
+            expires_at_ms=1_700_000_600_000,
+        )
+
+        runtime = runner.WorkerRuntime(
+            settings=MagicMock(),
+            redis=AsyncMock(),
+            redis_url="redis://localhost:6379/0",
+            worker_instance_id="worker-1",
+            heartbeat_key="worker:heartbeat:worker-1",
+            job_executor=MagicMock(execute_lease=AsyncMock(side_effect=asyncio.CancelledError())),
+            heavy_job_executor=MagicMock(execute_lease=AsyncMock()),
+            worker_concurrency=1,
+            job_lease_timeout_seconds=600,
+            lease_reap_interval_seconds=30,
+            concurrency_limiter=AsyncMock(),
+            inflight_tasks=set(),
+        )
+
+        runtime.concurrency_limiter.release = MagicMock()
+
+        with (
+            patch("app.worker.runner.ack_analysis_job", new=AsyncMock()) as ack_job,
+            patch("app.worker.runner.schedule_analysis_job_retry", new=AsyncMock()) as schedule_retry,
+            patch("app.worker.runner.move_analysis_job_to_dlq", new=AsyncMock()) as move_dlq,
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await runner._run_job_task(runtime, lease)
+
+        ack_job.assert_not_awaited()
+        schedule_retry.assert_not_awaited()
+        move_dlq.assert_not_awaited()
+        runtime.concurrency_limiter.release.assert_called_once_with()
