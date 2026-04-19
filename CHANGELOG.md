@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.8.001 - 2026-04-19
+
+Case workflow and work catalog expansion: explicit project status machine, status transition actions with audit trail, phase-bound work type availability, large catalog seed expansion, and case-aware work item picker flows in the web UI.
+
+### Case Workflow And Status Machine
+
+- Added a dedicated backend `case_workflow` subsystem for valid transitions, action mapping, effects, and status guard logic
+- Introduced Alembic migration `20260417_0044_project_status_machine.py` with expanded project status enum, audit columns, organization+status index, and immutable `project_status_history`
+- Extended project domain models, schemas, repository paths, API dependencies, and service orchestration to support intake/analyzing/proposal/quote/cancel states plus transition reasons
+- Added backend regression coverage for status constraints, transition effects, and case workflow API flow
+
+### Work Catalog Expansion
+
+- Added explicit `phase_bindings.py` registry so each work type declares allowed case states, recommended case states, and AI-vision detectability
+- Expanded catalog seed data with a significantly broader set of work type parameters, pricing profiles, and granular tree-aligned intervention codes
+- Extended work catalog schemas and services so effective work types expose phase binding metadata to both backend consumers and the web frontend
+- Hardened work catalog API tests and core subsystem coverage around phase-aware effective configuration
+
+### Web Case Workspace
+
+- Added `features/cases` web module with status badge, phase indicator, workflow actions, typed case queries, and shared case workspace context owned by `CaseLayout`
+- Reworked the case work-items tab around a case-aware work type picker with `WorkTree`, search, and command palette entry points sharing one selection contract
+- Added command palette UX for work type creation: click-to-open trigger, keyboard shortcut, mobile full-screen presentation, and case-phase overlays for allowed/recommended items
+- Added action-layer stabilization for work item creation while preserving page-owned toast feedback and layout-owned case detail ownership
+
+### Documentation
+
+- Extended `docs/pr-checklist.md` with additional review guardrails for query boundaries, orchestration ownership, and cross-feature drift checks
+
 ## v0.8.000 - 2026-04-17
 
 Markers system: user and AI annotations on project photos with normalized coordinates, full CRUD API, mobile integration, and web frontend architecture documentation.

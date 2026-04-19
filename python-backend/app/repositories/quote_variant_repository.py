@@ -1,4 +1,5 @@
 import json
+import structlog
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -6,7 +7,10 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.case_workflow.transitions import TransitionError, apply_transition
 from app.models import AnalysisJob, AnalysisResult, MaterialCatalog, PricingProfile, Project, QuoteItem, QuoteVariant, SupplierMaterialPrice
+
+logger = structlog.get_logger(__name__)
 
 
 class QuoteVariantRepository:
@@ -162,7 +166,24 @@ class QuoteVariantRepository:
                     )
                 )
 
-        project.status = "quoted"
+        # Transition project to quote_ready after variants are generated.
+        # Guard: the project might have moved away from a quote-relevant status
+        # (e.g. returned to draft) between the quote request and this callback.
+        try:
+            apply_transition(
+                project,
+                "quote_ready",
+                actor_user_id=None,
+                reason="Quote variants generated",
+                session=self.session,
+            )
+        except TransitionError:
+            logger.warning(
+                "quote_variant.status_transition_skipped",
+                project_id=project.id,
+                current_status=project.status,
+                reason="Cannot transition to quote_ready from current status — status unchanged",
+            )
         project.updated_at = timestamp
         await self.session.commit()
 

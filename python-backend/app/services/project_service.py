@@ -14,6 +14,7 @@ from app.schemas.project import (
     ProjectDetail,
     ProjectDuplicateRequest,
     ProjectSummary,
+    TransitionRead,
     ProjectWorkflowPhotoReadiness,
     ProjectWorkflowStatusSummary,
 )
@@ -185,7 +186,8 @@ def _parse_json(value: str | None):
         return None
 
 
-def build_project_detail(project: Project) -> ProjectDetail:
+def build_project_detail(project: Project, *, actor_role: str = "manager") -> ProjectDetail:
+    from app.case_workflow.transitions import get_available_transitions
     from app.services.photo_service import to_read_model
 
     active_photos = _active_project_photos(project)
@@ -202,6 +204,11 @@ def build_project_detail(project: Project) -> ProjectDetail:
             reference_expectations = json.loads(project.reference_expectations_json)
         except json.JSONDecodeError:
             reference_expectations = None
+
+    available_transitions = [
+        TransitionRead(action=t.action, label=t.label, requires_reason=t.requires_reason)
+        for t in get_available_transitions(project, actor_role)
+    ]
 
     return ProjectDetail(
         id=project.id,
@@ -239,6 +246,7 @@ def build_project_detail(project: Project) -> ProjectDetail:
         ),
         quoteVariants=_build_quote_variants_list(project),
         referenceExpectations=reference_expectations,
+        availableTransitions=available_transitions,
         createdAt=project.created_at,
         updatedAt=project.updated_at,
     )
@@ -401,11 +409,17 @@ class ProjectService:
             next_cursor = base64.b64encode(raw.encode()).decode()
         return [build_project_summary(p) for p in page], next_cursor
 
-    async def get_project_detail(self, project_id: str, *, organization_id: str | None = None) -> ProjectDetail | None:
+    async def get_project_detail(
+        self,
+        project_id: str,
+        *,
+        organization_id: str | None = None,
+        actor_role: str = "manager",
+    ) -> ProjectDetail | None:
         project = await self.repository.get_project(project_id, organization_id=organization_id)
         if not project:
             return None
-        return build_project_detail(project)
+        return build_project_detail(project, actor_role=actor_role)
 
     async def create_project(self, payload: ProjectCreate, *, organization_id: str, created_by_user_id: str) -> Project:
         if payload.clientId is not None:
@@ -414,7 +428,7 @@ class ProjectService:
                 from fastapi import HTTPException
                 raise HTTPException(status_code=400, detail="Client does not belong to this organization.")
         project_id = f"prj_{uuid4().hex[:8]}"
-        return await self.repository.create_project(
+        project = await self.repository.create_project(
             project_id=project_id,
             organization_id=organization_id,
             created_by_user_id=created_by_user_id,
@@ -428,6 +442,24 @@ class ProjectService:
             address_label=payload.addressLabel,
             source=payload.source or "mobile",  # intentional business default — mobile is the canonical source for new projects
         )
+        # Write the initial history row so every project has a full audit trail
+        # from the moment of creation.  from_status=None signals "initial state"
+        # (not a transition from a previous status).
+        from datetime import datetime, timezone
+        from app.models.domain import ProjectStatusHistory
+        self.repository.session.add(
+            ProjectStatusHistory(
+                id=f"psh_{uuid4().hex[:10]}",
+                project_id=project.id,
+                from_status=None,
+                to_status="draft",
+                transitioned_by_user_id=created_by_user_id,
+                reason="Project created",
+                transitioned_at=datetime.now(timezone.utc),
+            )
+        )
+        await self.repository.session.commit()
+        return project
 
     async def duplicate_project(self, project_id: str, payload: ProjectDuplicateRequest, *, organization_id: str | None = None) -> Project | None:
         source_project = await self.repository.get_project(project_id, organization_id=organization_id)
@@ -459,23 +491,6 @@ class ProjectService:
             await self._rollback_duplicated_project(duplicated_project.id)
             raise
         return await self.repository.get_project(duplicated_project.id)
-
-    async def mark_project_sent(self, project_id: str, *, organization_id: str | None = None) -> ProjectDetail | None:
-        project = await self.repository.get_project(project_id, organization_id=organization_id)
-        if not project:
-            return None
-
-        latest_final = None
-        if getattr(project, "final_proposals", None):
-            latest_final = max(
-                project.final_proposals,
-                key=lambda proposal: ((proposal.created_at or project.created_at), proposal.id),
-            )
-        if latest_final is None:
-            raise ValueError("Final proposal must exist before sending the case.")
-
-        updated = await self.repository.update_project(project, {"status": "sent"})
-        return build_project_detail(updated)
 
     async def update_proposal_draft(self, project_id: str, payload: dict, *, organization_id: str | None = None) -> ProjectDetail | None:
         project = await self.repository.get_project(project_id, organization_id=organization_id)
@@ -525,7 +540,8 @@ class ProjectService:
         field_mapping = {
             "title": "title",
             "description": "description",
-            "status": "status",
+            # "status" intentionally excluded — all status transitions go through
+            # CaseActionService.apply_transition() to enforce the state machine.
             "propertyType": "property_type",
             "repairScope": "repair_scope",
             "locationLat": "location_lat",

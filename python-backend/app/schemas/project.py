@@ -150,6 +150,13 @@ class ProjectWorkflowStatusSummary(BaseModel):
     blockingReasons: list[str] = Field(default_factory=list)
 
 
+class TransitionRead(BaseModel):
+    """A single human-triggerable state machine action returned in the API response."""
+    action: str
+    label: str
+    requires_reason: bool
+
+
 class ProjectDetail(BaseModel):
     id: str
     title: str
@@ -168,6 +175,7 @@ class ProjectDetail(BaseModel):
     workflowStatus: ProjectWorkflowStatusSummary | None = None
     quoteVariants: list = Field(default_factory=list)
     referenceExpectations: ProjectReferenceExpectations | None = None
+    availableTransitions: list[TransitionRead] = Field(default_factory=list)
     createdAt: datetime | None = None
     updatedAt: datetime | None = None
 
@@ -203,13 +211,17 @@ class ProjectDuplicateRequest(BaseModel):
 class ProjectPatch(BaseModel):
     title: str | None = None
     description: str | None = None
-    status: str | None = None
     propertyType: str | None = None
     repairScope: str | None = None
     locationLat: float | None = None
     locationLng: float | None = None
     addressLabel: str | None = None
     clientId: str | None = None
+
+
+class CaseActionRequest(BaseModel):
+    """Optional body for explicit case action endpoints (submit, cancel, etc.)."""
+    reason: str | None = None
 
 
 class ORMProjectRead(BaseModel):

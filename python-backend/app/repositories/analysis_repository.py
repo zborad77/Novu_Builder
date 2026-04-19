@@ -1,4 +1,5 @@
 import json
+import structlog
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -6,7 +7,10 @@ from uuid import uuid4
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.case_workflow.transitions import TransitionError, apply_transition
 from app.models import AnalysisJob, AnalysisResult, Project
+
+logger = structlog.get_logger(__name__)
 
 
 ANALYSIS_JOB_STATUS_QUEUED = "queued"
@@ -633,7 +637,25 @@ class AnalysisRepository:
         )
         self.session.add(result)
 
-        project.status = "analysed"
+        # Transition project through the state machine.
+        # Target: quote_ready (simple path) — proposal_ready used when work_type.proposal_step=True.
+        # Guard: if the case was returned to draft while the worker ran, log and skip;
+        # the analysis result is still persisted so no work is lost.
+        try:
+            apply_transition(
+                project,
+                "quote_ready",
+                actor_user_id=None,   # system / worker — no human actor
+                reason="Analysis completed by worker",
+                session=self.session,
+            )
+        except TransitionError:
+            logger.warning(
+                "analysis.worker.status_transition_skipped",
+                project_id=project.id,
+                current_status=project.status,
+                reason="Case left 'analyzing' state before worker callback — status unchanged",
+            )
         project.property_type = result_values["object_type"] or project.property_type
         project.repair_scope = result_values["recommended_scope"] or project.repair_scope
         project.updated_at = timestamp
@@ -717,7 +739,25 @@ class AnalysisRepository:
         )
         self.session.add(result)
 
-        project.status = "analysed"
+        # Transition project through the state machine.
+        # Target: quote_ready (simple path) — proposal_ready used when work_type.proposal_step=True.
+        # Guard: if the case was returned to draft while the worker ran, log and skip;
+        # the analysis result is still persisted so no work is lost.
+        try:
+            apply_transition(
+                project,
+                "quote_ready",
+                actor_user_id=None,   # system / worker — no human actor
+                reason="Analysis completed by worker",
+                session=self.session,
+            )
+        except TransitionError:
+            logger.warning(
+                "analysis.worker.status_transition_skipped",
+                project_id=project.id,
+                current_status=project.status,
+                reason="Case left 'analyzing' state before worker callback — status unchanged",
+            )
         project.property_type = result_values["object_type"] or project.property_type
         project.repair_scope = result_values["recommended_scope"] or project.repair_scope
         project.updated_at = timestamp

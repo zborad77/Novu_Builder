@@ -47,6 +47,15 @@ níže jsou věci, které nelze automatizovat.
 - [ ] Business features (`cases`, `photos`…) nemají přímou závislost na `features/impersonation`.
 - [ ] `features/impersonation` konzumují jen `app/` (AppShell, guards, layouts) přes public API.
 
+## Work catalog tree
+
+- [ ] `WORK_TREE` není nikde `.filter()`, `.map()`, `.sort()` ani jinak transformován před předáním do komponenty — strom je vždy předán jako celek.
+- [ ] Komponenta přijímá `tree: StaticWorkTree`, ne `WorkTreeArea[]` — branded typ zajišťuje, že transformovaný výsledek nelze předat bez explicitního `as unknown as StaticWorkTree` castu (= viditelné porušení při review).
+- [ ] Žádný list se neskrývá podmínkou (`if (!allowed) return null` nebo podobně) — stav se projevuje výhradně jako vizuální overlay:
+  - `recommended` → badge / highlight
+  - `allowed` → aktivní tlačítko
+  - `not allowed` → disabled tlačítko (never hidden)
+
 ## Misc
 
 - [ ] Žádný nový interní barrel uvnitř feature bez jasného důvodu.

@@ -58,6 +58,7 @@ from app.schemas.work_catalog import (
     VisionDetectionCreate,
     VisionDetectionRead,
     WorkCategoryRead,
+    WorkTypePhaseBindingRead,
     WorkTypeParameterOptionRead,
     WorkTypeParameterRead,
     WorkTypeParameterSectionRead,
@@ -88,6 +89,11 @@ from app.services.tenant_work_type_resolution_service import (
     ResolvedParameterDefinition,
     ResolvedTenantWorkTypeConfiguration,
     TenantWorkTypeResolutionService,
+)
+from app.work_catalog.phase_bindings import (
+    get_phase_binding,
+    is_allowed_in_status,
+    is_recommended_in_status,
 )
 from app.work_catalog.cache import invalidate_pricing_resolution_cache, invalidate_tenant_effective_cache
 
@@ -493,6 +499,32 @@ def _category_read(category) -> WorkCategoryRead:
     )
 
 
+def _phase_binding_read(
+    work_type_code: str,
+    *,
+    case_status: str | None = None,
+) -> WorkTypePhaseBindingRead:
+    binding = get_phase_binding(work_type_code)
+    if binding is None:
+        return WorkTypePhaseBindingRead(visionDetectable=False, currentCaseStatus=case_status)
+    return WorkTypePhaseBindingRead(
+        allowedCaseStates=sorted(binding.allowed_in),
+        recommendedCaseStates=sorted(binding.recommended_in),
+        visionDetectable=binding.vision_detectable,
+        currentCaseStatus=case_status,
+        allowedInCurrentCaseState=(
+            is_allowed_in_status(work_type_code, case_status)
+            if case_status is not None
+            else None
+        ),
+        recommendedInCurrentCaseState=(
+            is_recommended_in_status(work_type_code, case_status)
+            if case_status is not None
+            else None
+        ),
+    )
+
+
 def _global_parameter_read(parameter) -> WorkTypeParameterRead:
     return WorkTypeParameterRead(
         parameterDefinitionId=parameter.id,
@@ -553,6 +585,22 @@ class WorkCatalogService:
 
     async def _get_work_type(self, work_type_code: str) -> WorkType | None:
         return await self.repository.get_work_type_by_code(work_type_code)
+
+    @staticmethod
+    def _assert_work_type_allowed_in_case_status(
+        *,
+        work_type_code: str,
+        case_status: str,
+        operation: str,
+    ) -> None:
+        if is_allowed_in_status(work_type_code, case_status):
+            return
+        binding = get_phase_binding(work_type_code)
+        allowed_states = sorted(binding.allowed_in) if binding is not None else []
+        raise CatalogValidationError(
+            f"Work type '{work_type_code}' cannot be {operation} while case is in status "
+            f"'{case_status}'. Allowed case states: {allowed_states}."
+        )
 
     @staticmethod
     def _observe_operation(
@@ -618,6 +666,7 @@ class WorkCatalogService:
             requiredParameterCount=sum(1 for parameter in parameters if parameter.is_required),
             supportsVision=work_type.default_analysis_profile is not None,
             supportsPricing=work_type.default_catalog_pricing_profile is not None,
+            phaseBinding=_phase_binding_read(work_type.code),
         )
 
     def _catalog_work_type_detail_read(self, work_type) -> CatalogWorkTypeDetailRead:
@@ -635,6 +684,7 @@ class WorkCatalogService:
             sortOrder=work_type.sort_order,
             supportsVision=work_type.default_analysis_profile is not None,
             supportsPricing=work_type.default_catalog_pricing_profile is not None,
+            phaseBinding=_phase_binding_read(work_type.code),
             analysisProfile=_analysis_profile_read(work_type.default_analysis_profile),
             catalogPricingProfile=_catalog_pricing_profile_read(work_type.default_catalog_pricing_profile),
             parameters=parameters,
@@ -724,10 +774,12 @@ class WorkCatalogService:
         self,
         *,
         project_id: str,
+        case_status: str,
         effective: EffectiveWorkTypeRead,
     ) -> ProjectWorkItemEffectiveConfigurationRead:
         return ProjectWorkItemEffectiveConfigurationRead(
             projectId=project_id,
+            caseStatus=case_status,
             workTypeCode=effective.code,
             effectiveWorkType=effective,
             requiredParameterCodes=sorted(
@@ -810,6 +862,8 @@ class WorkCatalogService:
     def _to_effective_read(
         self,
         resolved: ResolvedTenantWorkTypeConfiguration,
+        *,
+        case_status: str | None = None,
     ) -> EffectiveWorkTypeRead:
         work_type = resolved.work_type
         setting = resolved.tenant_setting
@@ -829,6 +883,7 @@ class WorkCatalogService:
             measurementKind=work_type.measurement_kind,
             workTypeVersion=work_type.catalog_version,
             settingVersion=resolved.setting_version,
+            phaseBinding=_phase_binding_read(work_type.code, case_status=case_status),
             analysisProfile=_analysis_profile_read(resolved.analysis_profile),
             catalogPricingProfile=_catalog_pricing_profile_read(resolved.catalog_pricing_profile),
             tenantPricingProfileId=resolved.tenant_pricing_profile_id,
@@ -1620,12 +1675,22 @@ class WorkCatalogService:
         started_at = perf_counter()
         outcome = "success"
         try:
-            await self.ensure_project_exists(project_id=project_id, organization_id=organization_id)
-            effective = await self.get_effective_work_type(organization_id, work_type_code)
+            project = await self.repository.get_project_in_org(project_id, organization_id)
+            if project is None:
+                raise WorkCatalogNotFoundError("Project was not found.")
+            resolved = await self.resolution_service.resolve_for_work_type(
+                organization_id=organization_id,
+                work_type_code=work_type_code,
+            )
+            effective = self._to_effective_read(resolved, case_status=project.status)
             return self._project_work_item_effective_configuration_read(
                 project_id=project_id,
+                case_status=project.status,
                 effective=effective,
             )
+        except LookupError as exc:
+            outcome = "not_found"
+            raise WorkCatalogNotFoundError(str(exc)) from exc
         except WorkCatalogNotFoundError:
             outcome = "not_found"
             raise
@@ -1698,6 +1763,9 @@ class WorkCatalogService:
         organization_id: str,
         values: list[ProjectWorkItemValueInput],
     ) -> ProjectWorkItemRead:
+        project = await self.repository.get_project_in_org(project_id, organization_id)
+        if project is None:
+            raise WorkCatalogNotFoundError("Project was not found.")
         work_item = await self.repository.get_project_work_item(
             project_id,
             project_work_item_id,
@@ -1705,6 +1773,11 @@ class WorkCatalogService:
         )
         if work_item is None:
             raise WorkCatalogNotFoundError("Project work item was not found.")
+        self._assert_work_type_allowed_in_case_status(
+            work_type_code=work_item.resolved_work_type_code,
+            case_status=project.status,
+            operation="updated",
+        )
         await self._validate_source_references(
             project_id=project_id,
             organization_id=organization_id,
@@ -1759,6 +1832,9 @@ class WorkCatalogService:
         confirmations: list[ProjectWorkItemValueConfirmationInput],
         confirmed_by_user_id: str | None,
     ) -> ProjectWorkItemRead:
+        project = await self.repository.get_project_in_org(project_id, organization_id)
+        if project is None:
+            raise WorkCatalogNotFoundError("Project was not found.")
         work_item = await self.repository.get_project_work_item(
             project_id,
             project_work_item_id,
@@ -1766,6 +1842,11 @@ class WorkCatalogService:
         )
         if work_item is None:
             raise WorkCatalogNotFoundError("Project work item was not found.")
+        self._assert_work_type_allowed_in_case_status(
+            work_type_code=work_item.resolved_work_type_code,
+            case_status=project.status,
+            operation="confirmed",
+        )
         work_type = await self._get_work_type(work_item.resolved_work_type_code)
         if work_type is None:
             raise WorkCatalogNotFoundError("Work type was not found.")
@@ -1852,6 +1933,11 @@ class WorkCatalogService:
             raise CatalogValidationError(
                 f"Work type '{resolved.work_type.code}' is disabled for this tenant."
             )
+        self._assert_work_type_allowed_in_case_status(
+            work_type_code=resolved.work_type.code,
+            case_status=project.status,
+            operation="created",
+        )
         work_type = resolved.work_type
         setting = resolved.tenant_setting
         item_sequence = await self.repository.get_next_item_sequence(project_id, work_type.id)
@@ -1911,6 +1997,9 @@ class WorkCatalogService:
         organization_id: str,
         values: list[ProjectWorkItemValueInput],
     ) -> ProjectWorkItemRead:
+        project = await self.repository.get_project_in_org(project_id, organization_id)
+        if project is None:
+            raise WorkCatalogNotFoundError("Project was not found.")
         work_item = await self.repository.get_project_work_item(
             project_id,
             project_work_item_id,
@@ -1918,6 +2007,11 @@ class WorkCatalogService:
         )
         if work_item is None:
             raise WorkCatalogNotFoundError("Project work item was not found.")
+        self._assert_work_type_allowed_in_case_status(
+            work_type_code=work_item.resolved_work_type_code,
+            case_status=project.status,
+            operation="replaced",
+        )
         await self._validate_source_references(
             project_id=project_id,
             organization_id=organization_id,
@@ -2080,6 +2174,11 @@ class WorkCatalogService:
         )
         if project_work_item is None:
             raise WorkCatalogNotFoundError("Project work item was not found.")
+        self._assert_work_type_allowed_in_case_status(
+            work_type_code=project_work_item.resolved_work_type_code,
+            case_status=project.status,
+            operation="annotated",
+        )
         if payload.referencePhotoId:
             photo = await self.repository.get_project_photo_in_project(
                 project_id,

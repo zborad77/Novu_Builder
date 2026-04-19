@@ -6,6 +6,7 @@ import structlog.contextvars
 from app.core.audit import bind_request_audit_actor
 from app.core.config import get_settings
 from app.db.session import get_db_session
+from app.case_workflow.case_actions import CaseActionService
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.export_repository import ExportRepository
 from app.repositories.final_proposal_repository import FinalProposalRepository
@@ -92,6 +93,13 @@ def get_project_service(session: AsyncSession = Depends(get_db_session)) -> Proj
         FinalProposalRepository(session),
         ExportService(ExportRepository(session)),
     )
+
+
+def get_case_action_service(
+    session: AsyncSession = Depends(get_db_session),
+    work_queue=Depends(get_job_queue),
+) -> CaseActionService:
+    return CaseActionService(ProjectRepository(session), work_queue=work_queue)
 
 
 def get_photo_service(

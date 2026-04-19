@@ -1,5 +1,7 @@
 from uuid import uuid4
 
+from app.models import Project
+
 from tests.test_work_catalog_core_subsystem import _ensure_tenant_setting
 
 
@@ -34,6 +36,8 @@ async def test_work_catalog_read_endpoints_expose_global_and_tenant_effective_su
     roof_repair_summary = next(item for item in work_types_body["items"] if item["code"] == "roof-repair")
     assert roof_repair_summary["supportsVision"] is True
     assert roof_repair_summary["supportsPricing"] is True
+    assert roof_repair_summary["phaseBinding"]["visionDetectable"] is True
+    assert roof_repair_summary["phaseBinding"]["recommendedCaseStates"] == ["analyzing", "proposal_ready"]
 
     work_type_detail_response = await app_client.get(
         "/api/v1/work-catalog/catalog/work-types/roof-repair",
@@ -43,6 +47,13 @@ async def test_work_catalog_read_endpoints_expose_global_and_tenant_effective_su
     work_type_detail = work_type_detail_response.json()
     assert work_type_detail["analysisProfile"]["code"].startswith("roof-repair-")
     assert work_type_detail["catalogPricingProfile"]["code"].startswith("roof-repair-")
+    assert work_type_detail["phaseBinding"]["allowedCaseStates"] == [
+        "analyzing",
+        "draft",
+        "intake",
+        "proposal_ready",
+        "quote_ready",
+    ]
 
     parameter_detail_response = await app_client.get(
         "/api/v1/work-catalog/catalog/work-types/roof-repair/parameters/work-area-sqm",
@@ -62,6 +73,8 @@ async def test_work_catalog_read_endpoints_expose_global_and_tenant_effective_su
     effective_detail = effective_detail_response.json()
     assert effective_detail["tenantSetting"] is not None
     assert effective_detail["tenantPricingProfileId"] == test_tenants["pricebook_a"]
+    assert effective_detail["phaseBinding"]["visionDetectable"] is True
+    assert effective_detail["phaseBinding"]["currentCaseStatus"] is None
 
 
 async def test_project_work_item_api_flow_returns_effective_configuration_and_operator_workflow(
@@ -86,8 +99,12 @@ async def test_project_work_item_api_flow_returns_effective_configuration_and_op
     )
     assert effective_config_response.status_code == 200, effective_config_response.text
     effective_config = effective_config_response.json()
+    assert effective_config["caseStatus"] == "draft"
     assert effective_config["effectiveWorkType"]["tenantSetting"] is not None
     assert effective_config["effectiveWorkType"]["tenantPricingProfileId"] == test_tenants["pricebook_a"]
+    assert effective_config["effectiveWorkType"]["phaseBinding"]["currentCaseStatus"] == "draft"
+    assert effective_config["effectiveWorkType"]["phaseBinding"]["allowedInCurrentCaseState"] is True
+    assert effective_config["effectiveWorkType"]["phaseBinding"]["recommendedInCurrentCaseState"] is False
     assert "work-area-sqm" in effective_config["requiredParameterCodes"]
     assert "work-area-sqm" in effective_config["vision"]["extractableParameterCodes"]
     assert effective_config["pricing"]["supported"] is True
@@ -165,3 +182,38 @@ async def test_project_work_item_api_flow_returns_effective_configuration_and_op
         headers=headers_b,
     )
     assert cross_tenant_config_response.status_code == 404
+
+
+async def test_work_item_api_blocks_disallowed_case_states(
+    app_client,
+    db_session,
+    test_tenants,
+    token_a,
+):
+    await _ensure_tenant_setting(db_session, test_tenants)
+    case_id = await _create_case(
+        app_client,
+        token_a,
+        title=f"Work Catalog State Guard {uuid4().hex[:8]}",
+    )
+    project = await db_session.get(Project, case_id)
+    assert project is not None
+    project.status = "sent"
+    await db_session.commit()
+
+    response = await app_client.post(
+        f"/api/v1/cases/{case_id}/work-items",
+        json={
+            "workTypeCode": "roof-repair",
+            "values": [
+                {"parameterCode": "work-area-sqm", "numberValue": 12.4},
+                {"parameterCode": "roof-covering-type", "optionValue": "bitumen-membrane"},
+                {"parameterCode": "damage-type", "optionValue": "membrane-split"},
+                {"parameterCode": "access-method", "optionValue": "roof-ladder"},
+            ],
+        },
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "cannot be created while case is in status 'sent'" in response.json()["detail"]

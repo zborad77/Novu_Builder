@@ -534,7 +534,7 @@ async def ensure_dev_seed(session: AsyncSession) -> None:
                 created_by_user_id="usr_1",
                 title="Fasada domu Novak",
                 description="Znecistena severni stena a lokalni praskliny kolem oken.",
-                status="analysed",
+                status="quote_ready",
                 property_type="facade",
                 repair_scope="local_repair",
                 location_lat=50.087,

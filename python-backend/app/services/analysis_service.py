@@ -1779,9 +1779,20 @@ class AnalysisService:
                         raw_output=analysis,
                         photo_count=len(photos),
                     )
+                    _resolved_wt_code = mapping["resolved_work_type_code"]
+                    if _resolved_wt_code:
+                        from app.work_catalog.phase_bindings import get_phase_binding
+                        _binding = get_phase_binding(_resolved_wt_code)
+                        if _binding is None or not _binding.vision_detectable:
+                            log.warning(
+                                "pipeline.non_vision_detectable_work_type",
+                                resolved_work_type_code=_resolved_wt_code,
+                                project_id=project_id,
+                            )
+                            _resolved_wt_code = None
                     analysis = {
                         **analysis,
-                        "resolvedWorkTypeCode": mapping["resolved_work_type_code"],
+                        "resolvedWorkTypeCode": _resolved_wt_code,
                         "analysisProfileCode": mapping["analysis_profile_code"],
                         "analysisProfileVersion": mapping["analysis_profile_version"],
                         "estimatedQuantity": mapping["analysis_result_fields"]["estimated_quantity"],

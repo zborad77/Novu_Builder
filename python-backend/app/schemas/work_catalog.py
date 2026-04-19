@@ -295,6 +295,15 @@ class WorkCategoryRead(BaseModel):
     catalogVersion: int
 
 
+class WorkTypePhaseBindingRead(BaseModel):
+    allowedCaseStates: list[str] = Field(default_factory=list)
+    recommendedCaseStates: list[str] = Field(default_factory=list)
+    visionDetectable: bool
+    currentCaseStatus: str | None = None
+    allowedInCurrentCaseState: bool | None = None
+    recommendedInCurrentCaseState: bool | None = None
+
+
 class CatalogCategoryListItemRead(WorkCategoryRead):
     activeWorkTypeCount: int = 0
     totalWorkTypeCount: int = 0
@@ -320,6 +329,7 @@ class CatalogWorkTypeListItemRead(BaseModel):
     requiredParameterCount: int
     supportsVision: bool
     supportsPricing: bool
+    phaseBinding: WorkTypePhaseBindingRead
 
 
 class CatalogWorkTypeListResponse(BaseModel):
@@ -340,6 +350,7 @@ class CatalogWorkTypeDetailRead(BaseModel):
     sortOrder: int
     supportsVision: bool
     supportsPricing: bool
+    phaseBinding: WorkTypePhaseBindingRead
     analysisProfile: AnalysisProfileRead | None = None
     catalogPricingProfile: CatalogPricingProfileRead | None = None
     parameters: list[WorkTypeParameterRead] = Field(default_factory=list)
@@ -359,6 +370,7 @@ class EffectiveWorkTypeRead(BaseModel):
     measurementKind: str
     workTypeVersion: int
     settingVersion: int | None = None
+    phaseBinding: WorkTypePhaseBindingRead
     analysisProfile: AnalysisProfileRead | None = None
     catalogPricingProfile: CatalogPricingProfileRead | None = None
     tenantPricingProfileId: str | None = None
@@ -426,6 +438,7 @@ class EffectivePricingConfigurationRead(BaseModel):
 
 class ProjectWorkItemEffectiveConfigurationRead(BaseModel):
     projectId: str
+    caseStatus: str
     workTypeCode: str
     effectiveWorkType: EffectiveWorkTypeRead
     requiredParameterCodes: list[str] = Field(default_factory=list)

@@ -50,33 +50,36 @@ class TestCaseStatusConstraints:
         )
 
     @pytest.mark.asyncio
-    async def test_archive_transitions_active_case(self, app_client, token_a):
-        """Archiving an active case returns 200 and sets status to 'archived'."""
-        case_id = await _create_fresh_case(app_client, token_a, "Archive Transition Test")
+    async def test_archive_from_draft_returns_409(self, app_client, token_a):
+        """Archive is only valid from 'sent'. Archiving a fresh draft must return 409."""
+        case_id = await _create_fresh_case(app_client, token_a, "Archive Guard Test")
 
         resp = await app_client.post(
             f"{_CASES_URL}/{case_id}/archive",
             headers={"Authorization": f"Bearer {token_a}"},
         )
-        assert resp.status_code == 200, f"Archive failed: {resp.text}"
-        assert resp.json()["status"] == "archived"
+        assert resp.status_code == 409, (
+            f"Expected 409 for archive from draft, got {resp.status_code}: {resp.text}"
+        )
 
     @pytest.mark.asyncio
-    async def test_archived_case_is_readable(self, app_client, token_a):
-        """An archived case can still be retrieved via GET — it is not deleted."""
-        case_id = await _create_fresh_case(app_client, token_a, "Archived Readable Test")
+    async def test_cancelled_case_is_readable(self, app_client, token_a):
+        """A cancelled case can still be retrieved via GET — terminal states are not deleted."""
+        case_id = await _create_fresh_case(app_client, token_a, "Cancelled Readable Test")
 
-        await app_client.post(
-            f"{_CASES_URL}/{case_id}/archive",
+        cancel_resp = await app_client.post(
+            f"{_CASES_URL}/{case_id}/cancel",
             headers={"Authorization": f"Bearer {token_a}"},
         )
+        assert cancel_resp.status_code == 200, f"Cancel failed: {cancel_resp.text}"
+        assert cancel_resp.json()["status"] == "cancelled"
 
         resp = await app_client.get(
             f"{_CASES_URL}/{case_id}",
             headers={"Authorization": f"Bearer {token_a}"},
         )
-        assert resp.status_code == 200, f"Archived case must still be readable, got {resp.status_code}"
-        assert resp.json()["status"] == "archived"
+        assert resp.status_code == 200, f"Cancelled case must still be readable, got {resp.status_code}"
+        assert resp.json()["status"] == "cancelled"
 
     @pytest.mark.asyncio
     async def test_final_proposal_rejected_without_enough_photos(self, app_client, token_a):

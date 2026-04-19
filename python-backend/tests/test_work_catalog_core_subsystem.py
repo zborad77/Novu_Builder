@@ -181,6 +181,15 @@ async def test_effective_work_type_resolution_applies_tenant_override_without_cl
     assert effective.tenantPricingProfileId == test_tenants["pricebook_a"]
     assert effective.analysisProfile is not None
     assert effective.catalogPricingProfile is not None
+    assert effective.phaseBinding.allowedCaseStates == [
+        "analyzing",
+        "draft",
+        "intake",
+        "proposal_ready",
+        "quote_ready",
+    ]
+    assert effective.phaseBinding.recommendedCaseStates == ["analyzing", "proposal_ready"]
+    assert effective.phaseBinding.visionDetectable is True
     assert {
         parameter.code
         for parameter in effective.parameters
@@ -820,10 +829,19 @@ async def test_catalog_read_models_expose_global_detail_without_tenant_override_
     )
 
     assert any(category.code == "roofing" for category in categories)
-    assert any(work_type.code == "roof-repair" for work_type in work_types)
+    roof_repair_summary = next(work_type for work_type in work_types if work_type.code == "roof-repair")
+    assert roof_repair_summary.phaseBinding.visionDetectable is True
+    assert roof_repair_summary.phaseBinding.recommendedCaseStates == ["analyzing", "proposal_ready"]
     assert detail.code == "roof-repair"
     assert detail.supportsVision is True
     assert detail.supportsPricing is True
+    assert detail.phaseBinding.allowedCaseStates == [
+        "analyzing",
+        "draft",
+        "intake",
+        "proposal_ready",
+        "quote_ready",
+    ]
     assert parameter_detail.parameter.code == "work-area-sqm"
     assert parameter_detail.supportsVisionPopulation is True
     assert parameter_detail.supportsPricingInput is True
@@ -844,9 +862,77 @@ async def test_project_effective_configuration_includes_vision_and_pricing_workf
     )
 
     assert configuration.workTypeCode == "roof-repair"
+    assert configuration.caseStatus == "draft"
     assert configuration.effectiveWorkType.tenantSetting is not None
     assert configuration.effectiveWorkType.tenantPricingProfileId == test_tenants["pricebook_a"]
+    assert configuration.effectiveWorkType.phaseBinding.currentCaseStatus == "draft"
+    assert configuration.effectiveWorkType.phaseBinding.allowedInCurrentCaseState is True
+    assert configuration.effectiveWorkType.phaseBinding.recommendedInCurrentCaseState is False
     assert "work-area-sqm" in configuration.requiredParameterCodes
     assert "work-area-sqm" in configuration.vision.extractableParameterCodes
     assert configuration.pricing.supported is True
     assert "work-area-sqm" in configuration.pricing.parameterInputCodes
+
+
+async def test_project_work_item_mutations_are_blocked_when_case_state_disallows_work_type(
+    db_session,
+    test_tenants,
+):
+    await _ensure_tenant_setting(db_session, test_tenants)
+    project_id = await _create_project(db_session, test_tenants)
+    service = WorkCatalogService(WorkCatalogRepository(db_session))
+
+    created = await service.create_project_work_item(
+        project_id=project_id,
+        organization_id=test_tenants["org_a"],
+        payload=ProjectWorkItemCreate(
+            workTypeCode="roof-repair",
+            values=[
+                ProjectWorkItemValueInput(parameterCode="work-area-sqm", numberValue=6.0),
+                ProjectWorkItemValueInput(parameterCode="roof-covering-type", optionValue="bitumen-membrane"),
+                ProjectWorkItemValueInput(parameterCode="damage-type", optionValue="membrane-split"),
+                ProjectWorkItemValueInput(parameterCode="access-method", optionValue="roof-ladder"),
+            ],
+        ),
+        created_by_user_id="usr_e2e_a1",
+    )
+
+    project = await db_session.get(Project, project_id)
+    assert project is not None
+    project.status = "sent"
+    await db_session.commit()
+
+    with pytest.raises(CatalogValidationError, match="cannot be updated while case is in status 'sent'"):
+        await service.update_project_work_item_values(
+            project_id=project_id,
+            project_work_item_id=created.id,
+            organization_id=test_tenants["org_a"],
+            values=[
+                ProjectWorkItemValueInput(parameterCode="work-area-sqm", numberValue=7.0),
+                ProjectWorkItemValueInput(parameterCode="roof-covering-type", optionValue="bitumen-membrane"),
+                ProjectWorkItemValueInput(parameterCode="damage-type", optionValue="membrane-split"),
+                ProjectWorkItemValueInput(parameterCode="access-method", optionValue="roof-ladder"),
+            ],
+        )
+
+    second_project_id = await _create_project(db_session, test_tenants)
+    second_project = await db_session.get(Project, second_project_id)
+    assert second_project is not None
+    second_project.status = "sent"
+    await db_session.commit()
+
+    with pytest.raises(CatalogValidationError, match="cannot be created while case is in status 'sent'"):
+        await service.create_project_work_item(
+            project_id=second_project_id,
+            organization_id=test_tenants["org_a"],
+            payload=ProjectWorkItemCreate(
+                workTypeCode="roof-repair",
+                values=[
+                    ProjectWorkItemValueInput(parameterCode="work-area-sqm", numberValue=4.0),
+                    ProjectWorkItemValueInput(parameterCode="roof-covering-type", optionValue="bitumen-membrane"),
+                    ProjectWorkItemValueInput(parameterCode="damage-type", optionValue="membrane-split"),
+                    ProjectWorkItemValueInput(parameterCode="access-method", optionValue="roof-ladder"),
+                ],
+            ),
+            created_by_user_id="usr_e2e_a1",
+        )
