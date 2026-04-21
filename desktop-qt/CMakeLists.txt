@@ -8,12 +8,14 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network WebSockets Concurrent)
 
 qt_standard_project_setup()
 
 qt_add_executable(NovuBuilder
     src/main.cpp
+    src/core/aidetectionworkitemcoordinator.cpp
+    src/core/aidetectionworkitemcoordinator.h
     src/mainwindow.cpp
     src/mainwindow.h
     src/views/loginview.cpp
@@ -40,6 +42,10 @@ qt_add_executable(NovuBuilder
     src/viewmodels/casedetailviewmodel.h
     src/services/apiservice.cpp
     src/services/apiservice.h
+    src/services/caseactivityservice.cpp
+    src/services/caseactivityservice.h
+    src/services/caseactivitystreamclient.cpp
+    src/services/caseactivitystreamclient.h
     src/services/sessionservice.cpp
     src/services/sessionservice.h
     src/dto/adminjobdto.h
@@ -62,8 +68,11 @@ qt_add_executable(NovuBuilder
 
 target_include_directories(NovuBuilder PRIVATE src)
 
-target_link_libraries(NovuBuilder PRIVATE Qt6::Widgets Qt6::Network)
+target_link_libraries(NovuBuilder PRIVATE Qt6::Widgets Qt6::Network Qt6::WebSockets Qt6::Concurrent)
 
 set_target_properties(NovuBuilder PROPERTIES
     WIN32_EXECUTABLE TRUE
 )
+
+enable_testing()
+add_subdirectory(tests)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <QByteArray>
 #include <QEvent>
 #include <QPixmap>
@@ -12,25 +14,31 @@
 #include "dto/imagedto.h"
 #include "dto/uploadimagedto.h"
 #include "widgets/imageoverlaywidget.h"
+#include "widgets/overlayshape.h"
+#include "widgets/viewerstate.h"
 
+class ApiService;
+class AiDetectionWorkItemCoordinator;
+class CaseDetailViewModel;
 class QLabel;
 class QLineEdit;
 class QHBoxLayout;
 class QListWidget;
+class QListWidgetItem;
 class QPlainTextEdit;
 class QPushButton;
 class QResizeEvent;
 class QScrollArea;
 class QTabWidget;
-class QTimer;
 class QIcon;
+class SessionService;
 
 class CaseDetailView : public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit CaseDetailView(QWidget *parent = nullptr);
+    explicit CaseDetailView(SessionService &session, QWidget *parent = nullptr);
     void setCase(const QString &caseId);
     void clearCase();
     void switchToPhotosTab();
@@ -47,6 +55,18 @@ signals:
     void sessionExpired();
 
 private:
+    enum class ViewModelAction
+    {
+        None,
+        LoadCase,
+        LoadImages,
+        SaveProposalDraft,
+        SetPrimaryImage,
+        SetAnalysisReferenceImage,
+        TriggerAnalysis,
+        ConfirmSelectionArea,
+    };
+
     enum class LocalImageState
     {
         PendingConversion,
@@ -76,6 +96,8 @@ private:
     void setSelectedImageById(const QString &imageId, bool autoPromoteToPrimary = true);
     void setImageHintMessage(const QString &message, bool isError = false);
     void applyCaseData(const CaseDto &caseDto);
+    void handleViewModelError(const QString &message);
+    void handleImagesLoaded(std::vector<ImageDto> images);
     void selectAdjacentImage(int step);
     void autoSetDisplayedImageAsPrimary();
     void selectLocalImages();
@@ -88,22 +110,27 @@ private:
     void createFinalProposal();
     void duplicateCase(const QString &mode);
     void sendCurrentCase();
-    void startImageStatusPolling();
-    void stopImageStatusPolling();
-    void pollImageStatuses();
     void triggerAnalysis();
     void confirmSelectionArea();
-    void startAnalysisPolling(const QString &jobId);
-    void stopAnalysisPolling();
-    void pollAnalysisStatus();
     void downloadExport(const QString &exportType);
     void exportAsZip();
-    [[nodiscard]] bool refreshImagesFromBackend(QString *errorMessage = nullptr);
+    void refreshImagesFromBackend(std::function<void()> onSuccess, std::function<void(const QString &)> onError = nullptr);
     void setPrimaryImagePreview(const QPixmap &pixmap);
     void setPrimaryImagePlaceholder(const QString &message);
     void updatePrimaryImagePreview();
     void showImagePreview(const ImageDto *image);
     [[nodiscard]] const ImageDto *selectedImage() const;
+    void refreshProposalWorkItems();
+    void rebuildOverlayShapes();
+    void refreshOverlayMarkersSidebar();
+    void refreshSelectionSummary();
+    void applyOverlayInteractionState();
+    void setHoveredOverlayMarker(const QString &overlayId);
+    void setSelectedOverlayMarker(const QString &overlayId); // single-select (no modifier)
+    void handleOverlayActivation(const QString &id, Qt::KeyboardModifiers mods);
+    void applyOverlayWorkItemMapping(const QString &summary,
+                                     const QStringList &mappedItems,
+                                     bool highlightsProposalItems);
     void resizeEvent(QResizeEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
@@ -147,9 +174,16 @@ private:
     QTabWidget *m_tabWidget = nullptr;
     QPushButton *m_runAnalysisButton = nullptr;
     ImageOverlayWidget *m_overlayWidget = nullptr;
-    QPushButton *m_overlayModeViewButton = nullptr;
-    QPushButton *m_overlayModeRectButton = nullptr;
-    QPushButton *m_overlayModePolyButton = nullptr;
+    QListWidget *m_overlayMarkersList = nullptr;
+    QLabel *m_selectionSummaryLabel = nullptr;
+    QLabel *m_overlayWorkItemMappingLabel = nullptr;
+    QListWidget *m_overlayMappedWorkItemsList = nullptr;
+    ViewerState m_overlayViewerState;
+    QVector<OverlayShape> m_overlayShapes;
+    QPushButton *m_overlayModeViewButton      = nullptr;
+    QPushButton *m_overlayModeBoxSelectButton = nullptr;
+    QPushButton *m_overlayModeRectButton      = nullptr;
+    QPushButton *m_overlayModePolyButton      = nullptr;
     QPushButton *m_overlayConfirmButton = nullptr;
     QLineEdit *m_overlayAreaEdit = nullptr;
     QLabel *m_errorLabel = nullptr;
@@ -159,7 +193,7 @@ private:
     QScrollArea *m_thumbnailScrollArea = nullptr;
     QWidget *m_thumbnailStripWidget = nullptr;
     QHBoxLayout *m_thumbnailStripLayout = nullptr;
-    QLabel *m_proposalWorkItemsList = nullptr;
+    QListWidget *m_proposalWorkItemsList = nullptr;
     QListWidget *m_proposalMaterialsList = nullptr;
     QLabel *m_pendingLocalImagesLabel = nullptr;
     QListWidget *m_pendingLocalImagesList = nullptr;
@@ -196,11 +230,12 @@ private:
     QString m_referenceSourcePage;
     QStringList m_pendingLocalImagePaths;
     std::vector<LocalPreparedImage> m_preparedLocalImages;
-    QTimer *m_imagePollingTimer = nullptr;
-    int m_remainingImagePollAttempts = 0;
-    QTimer *m_analysisPollingTimer = nullptr;
-    int m_remainingAnalysisPollAttempts = 0;
-    QString m_analysisJobId;
+    AiDetectionWorkItemCoordinator *m_detectionWorkItemCoordinator = nullptr;
+    CaseDetailViewModel *m_viewModel = nullptr;
+    ApiService *m_apiService = nullptr;
+    ViewModelAction m_pendingViewModelAction = ViewModelAction::None;
+    std::function<void()> m_pendingImageRefreshSuccess;
+    std::function<void(const QString &)> m_pendingImageRefreshError;
     QLabel *m_analysisJobStatusLabel = nullptr;
     QString m_source; // "mobile" | "desktop"
     bool m_isDirty = false;

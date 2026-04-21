@@ -1,11 +1,13 @@
-#include "casedetailview.h"
+﻿#include "casedetailview.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <memory>
 
 #include <QApplication>
 #include <QBuffer>
+#include <QHash>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleValidator>
@@ -32,6 +34,7 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
@@ -40,10 +43,11 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QTabWidget>
-#include <QTimer>
 #include <QVBoxLayout>
 
+#include "core/aidetectionworkitemcoordinator.h"
 #include "services/apiservice.h"
+#include "services/sessionservice.h"
 #include "viewmodels/casedetailviewmodel.h"
 
 class NoFocusRectDelegate : public QStyledItemDelegate
@@ -62,8 +66,6 @@ public:
 namespace {
 constexpr int kPreparedImageMaxEdge = 1600;
 constexpr int kPreparedImageQuality = 85;
-constexpr int kImagePollingIntervalMs = 1500;
-constexpr int kImagePollingAttemptLimit = 8;
 
 QString formatMaterialItem(const CaseDto::ProposalMaterialItem &item)
 {
@@ -496,11 +498,304 @@ QString overallReferenceTestStatus(
     }
     return "potrebuje kontrolu";
 }
+
+bool overlayShapeContainsId(const QVector<OverlayShape> &shapes, const QString &overlayId)
+{
+    if (overlayId.isEmpty()) {
+        return false;
+    }
+
+    return std::any_of(shapes.begin(), shapes.end(), [&overlayId](const OverlayShape &shape) {
+        return shape.id == overlayId;
+    });
 }
 
-CaseDetailView::CaseDetailView(QWidget *parent)
-    : QWidget(parent)
+// Returns IDs of shapes whose bounding box intersects normRect (normalized [0,1] coords),
+// in the order shapes appear in the vector. Pure — no side effects.
+//
+// Precision note: bounding-box intersection is a conservative approximation.
+// A concave polygon may produce a false positive when the selection rect only
+// clips its bounding box but not the actual polygon area. Known first UX edge
+// case to address when upgrading to QPainterPath::intersects(QPainterPath).
+QList<QString> boxSelectHitTest(const QVector<OverlayShape> &shapes, const QRectF &normRect)
 {
+    if (!normRect.isValid()) return {};
+    QList<QString> result;
+    for (const auto &shape : shapes) {
+        if (shape.id.isEmpty() || shape.points.size() < 3) continue;
+        auto it = shape.points.cbegin();
+        double minX = it->x(), maxX = it->x(), minY = it->y(), maxY = it->y();
+        for (++it; it != shape.points.cend(); ++it) {
+            minX = qMin(minX, it->x()); maxX = qMax(maxX, it->x());
+            minY = qMin(minY, it->y()); maxY = qMax(maxY, it->y());
+        }
+        if (normRect.intersects(QRectF(minX, minY, maxX - minX, maxY - minY)))
+            result.append(shape.id);
+    }
+    return result;
+}
+
+// Toggles `incoming` IDs against `current` selection.
+// - IDs present in both  → removed  (deselect)
+// - IDs in incoming only → appended (select)
+// - IDs in current only  → kept     (untouched)
+//
+// Ordering is intentional and defined:
+//   [surviving current items in original order] ++ [newly added items in incoming order]
+// Ctrl+box may therefore shift newly-added items to the end of the list.
+// This is not a bug — the sidebar and summary rebuild from selectedIds every time,
+// so no stale state accumulates. Anchor follows the last added item (or last remaining).
+// Both QSets are transient — built once before the loops, never stored.
+QList<QString> toggleManySelections(const QList<QString> &current,
+                                    const QList<QString> &incoming)
+{
+    const QSet<QString> currentSet(current.begin(),  current.end());
+    const QSet<QString> incomingSet(incoming.begin(), incoming.end());
+
+    QList<QString> result;
+    result.reserve(current.size() + incoming.size());
+
+    for (const QString &id : current) {
+        if (!incomingSet.contains(id))  // keep items not touched by the box
+            result.append(id);
+    }
+    for (const QString &id : incoming) {
+        if (!currentSet.contains(id))   // add items not already selected
+            result.append(id);
+    }
+    return result;
+}
+
+// ── Selection group summary ───────────────────────────────────────────────────
+
+struct SelectionGroup {
+    OverlayKind     kind;
+    QString         title;
+    QList<QString>  ids;    // in selectedIds order; only IDs present in overlayShapes
+};
+
+struct SelectionGroupSummary {
+    QList<SelectionGroup> groups;   // only non-empty groups, in fixed display order
+    int                   total = 0;
+};
+
+QString overlayKindLabel(OverlayKind kind)
+{
+    switch (kind) {
+    case OverlayKind::AiDetection:       return QString::fromUtf8("AI detekce");
+    case OverlayKind::ConfirmedWorkItem: return QString::fromUtf8("Potvrzen\u00e9 pracovn\u00ed kroky");
+    case OverlayKind::ManualMarker:      return QString::fromUtf8("Ru\u010dn\u00ed markery");
+    case OverlayKind::DraftSelection:    return QString::fromUtf8("Ru\u010dn\u00ed v\u00fdb\u011br");
+    }
+    return {};
+}
+
+// Pure function — no side effects. Derives group breakdown from selectedIds + overlayShapes.
+// IDs not present in overlayShapes are silently skipped.
+// Groups are returned in fixed display order; within each group, IDs follow selectedIds order.
+SelectionGroupSummary buildSelectionGroupSummary(const QList<QString> &selectedIds,
+                                                 const QVector<OverlayShape> &overlayShapes)
+{
+    // Transient lookup: shape id → kind. Built once, never stored.
+    QHash<QString, OverlayKind> kindOf;
+    kindOf.reserve(overlayShapes.size());
+    for (const auto &shape : overlayShapes)
+        if (!shape.id.isEmpty())
+            kindOf.insert(shape.id, shape.kind);
+
+    // Accumulate per-kind lists preserving selectedIds order.
+    QHash<OverlayKind, QList<QString>> byKind;
+    for (const QString &id : selectedIds) {
+        const auto it = kindOf.constFind(id);
+        if (it == kindOf.cend()) continue; // stale id — shape no longer in projection
+        byKind[it.value()].append(id);
+    }
+
+    SelectionGroupSummary summary;
+    constexpr OverlayKind kDisplayOrder[] = {
+        OverlayKind::AiDetection,
+        OverlayKind::ConfirmedWorkItem,
+        OverlayKind::ManualMarker,
+        OverlayKind::DraftSelection,
+    };
+    for (const OverlayKind kind : kDisplayOrder) {
+        const auto it = byKind.constFind(kind);
+        if (it == byKind.cend()) continue;
+        SelectionGroup group;
+        group.kind  = kind;
+        group.title = overlayKindLabel(kind);
+        group.ids   = it.value();
+        summary.total += group.ids.size();
+        summary.groups.append(std::move(group));
+    }
+    return summary;
+}
+
+void populateDetailList(QListWidget *list,
+                        const QStringList &items,
+                        const QString &placeholder)
+{
+    if (!list) {
+        return;
+    }
+
+    QSignalBlocker blocker(list);
+    list->clear();
+
+    if (items.isEmpty()) {
+        auto *placeholderItem = new QListWidgetItem(placeholder);
+        placeholderItem->setFlags(Qt::NoItemFlags);
+        list->addItem(placeholderItem);
+        return;
+    }
+
+    for (const auto &text : items) {
+        auto *item = new QListWidgetItem(text);
+        item->setData(Qt::UserRole, text);
+        list->addItem(item);
+    }
+}
+}
+
+CaseDetailView::CaseDetailView(SessionService &session, QWidget *parent)
+    : QWidget(parent)
+    , m_detectionWorkItemCoordinator(new AiDetectionWorkItemCoordinator(this))
+    , m_viewModel(new CaseDetailViewModel(session, this))
+    , m_apiService(new ApiService(session, this))
+{
+    connect(m_viewModel, &CaseDetailViewModel::sessionExpiredDetected, this, [this]() {
+        emit sessionExpired();
+    });
+    connect(m_apiService, &ApiService::sessionExpired, this, [this]() {
+        emit sessionExpired();
+    });
+    connect(m_viewModel, &CaseDetailViewModel::caseLoaded, this, [this](CaseDto caseDto) {
+        if (m_caseId != caseDto.id) {
+            return;
+        }
+
+        m_pendingViewModelAction = ViewModelAction::None;
+        m_errorLabel->hide();
+        applyCaseData(caseDto);
+        refreshImagesFromBackend(
+            [this, caseDto]() {
+                updateImagesPanel();
+                if (m_images.empty()) {
+                    setImageHintMessage("Case zatim nema zadne obrazky.");
+                } else {
+                    setImageHintMessage(
+                        QString("Nacteno %1 obrazku z backendu. Stav: %2.")
+                            .arg(m_images.size())
+                            .arg(summarizeServerImageStatuses(m_images)));
+                }
+                if (m_analysisJobStatusLabel && m_analysisJobStatusLabel->isVisible() && caseDto.hasAnalysis) {
+                    m_analysisJobStatusLabel->setText("Analyza dokoncena. Vysledky jsou k dispozici.");
+                }
+            },
+            [this](const QString &imageError) {
+                setImageHintMessage(imageError, true);
+            });
+    });
+    connect(m_viewModel, &CaseDetailViewModel::imagesLoaded,
+            this, &CaseDetailView::handleImagesLoaded);
+    connect(m_viewModel, &CaseDetailViewModel::proposalDraftSaved, this, [this](CaseDto updatedCase) {
+        m_pendingViewModelAction = ViewModelAction::None;
+        m_errorLabel->hide();
+        applyCaseData(updatedCase);
+        setImageHintMessage("Navrh nabidky byl ulozen na server a znovu nacten.");
+    });
+    connect(m_viewModel, &CaseDetailViewModel::analysisTriggered, this, [this](const QString &jobId) {
+        m_pendingViewModelAction = ViewModelAction::None;
+        if (jobId.isEmpty()) {
+            m_analysisJobStatusLabel->setText("Chyba: Nepodarilo se spustit analyzu.");
+            m_runAnalysisButton->setEnabled(true);
+            return;
+        }
+        m_analysisJobStatusLabel->setText("Analyza probiha... (cekam na vysledek)");
+        m_analysisJobStatusLabel->show();
+        m_viewModel->startAnalysisStatusMonitoring(m_caseId, jobId);
+    });
+    connect(m_viewModel, &CaseDetailViewModel::analysisSelectionConfirmed,
+            this, [this](CaseDto updatedCase) {
+                m_pendingViewModelAction = ViewModelAction::None;
+                applyCaseData(updatedCase);
+                setImageHintMessage("Oblast opravy byla ulozena.");
+                if (m_overlayWidget) {
+                    m_overlayWidget->clearSelection();
+                }
+                if (m_overlayConfirmButton) {
+                    m_overlayConfirmButton->setEnabled(true);
+                }
+            });
+    connect(m_viewModel, &CaseDetailViewModel::imageMonitoringUpdated, this,
+            [this](std::vector<ImageDto> images, bool hasPending) {
+                handleImagesLoaded(std::move(images));
+                if (hasPending) {
+                    setImageHintMessage(
+                        QString("Backend stale zpracovava fotky. Aktualni stav: %1.")
+                            .arg(summarizeServerImageStatuses(m_images)));
+                    return;
+                }
+
+                setImageHintMessage(
+                    QString("Zpracovani fotek je dokonceno. Stav: %1.")
+                        .arg(summarizeServerImageStatuses(m_images)));
+            });
+    connect(m_viewModel, &CaseDetailViewModel::imageMonitoringTimedOut, this, [this]() {
+        setImageHintMessage(
+            QString("Backend stale hlasi: %1. Detail muzes pozdeji znovu obnovit.")
+                .arg(summarizeServerImageStatuses(m_images)));
+    });
+    connect(m_viewModel, &CaseDetailViewModel::imageMonitoringFailed, this, [this](const QString &message) {
+        setImageHintMessage(message, true);
+    });
+    connect(m_viewModel, &CaseDetailViewModel::analysisMonitoringUpdated, this,
+            [this](const QString &status, int elapsedSeconds) {
+                if (status == "running") {
+                    m_analysisJobStatusLabel->setText(
+                        QString("Analyza probiha... (%1 s)").arg(elapsedSeconds));
+                } else if (status == "queued") {
+                    m_analysisJobStatusLabel->setText("Analyza ceka ve fronte...");
+                } else if (!status.isEmpty()) {
+                    m_analysisJobStatusLabel->setText(QString("Stav: %1").arg(status));
+                }
+            });
+    connect(m_viewModel, &CaseDetailViewModel::analysisMonitoringFinished, this,
+            [this](const QString &status) {
+                if (status == "completed") {
+                    m_analysisJobStatusLabel->setText("Analyza dokoncena. Nacitam vysledky...");
+                } else if (status == "failed") {
+                    m_analysisJobStatusLabel->setText("Analyza selhala. Zkontrolujte fotky a zkuste znovu.");
+                } else if (status == "canceled") {
+                    m_analysisJobStatusLabel->setText("Analyza byla zrusena.");
+                } else if (status == "dead_letter") {
+                    m_analysisJobStatusLabel->setText("Analyza skoncila chybou fronty. Zkuste ji spustit znovu.");
+                }
+                m_runAnalysisButton->setEnabled(true);
+            });
+    connect(m_viewModel, &CaseDetailViewModel::analysisMonitoringTimedOut, this, [this]() {
+        m_analysisJobStatusLabel->setText("Analyza trvala prilis dlouho - zkuste ji spustit znovu.");
+        m_runAnalysisButton->setEnabled(true);
+    });
+    connect(m_viewModel, &CaseDetailViewModel::analysisMonitoringFailed, this, [this](const QString &message) {
+        m_analysisJobStatusLabel->setText(QString("Cekam na server (%1)").arg(message));
+        m_runAnalysisButton->setEnabled(true);
+    });
+    connect(m_viewModel, &CaseDetailViewModel::primaryImageUpdated, this,
+            [this](std::vector<ImageDto> images) {
+                m_pendingViewModelAction = ViewModelAction::None;
+                m_images = std::move(images);
+                updateImagesPanel();
+            });
+    connect(m_viewModel, &CaseDetailViewModel::analysisReferenceUpdated, this,
+            [this](std::vector<ImageDto> images) {
+                m_pendingViewModelAction = ViewModelAction::None;
+                m_images = std::move(images);
+                updateImagesPanel();
+                setImageHintMessage("Referencni fotka pro analyzu byla zmenena.");
+            });
+    connect(m_viewModel, &CaseDetailViewModel::errorOccurred,
+            this, &CaseDetailView::handleViewModelError);
     auto *rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(0, 0, 0, 0);
 
@@ -510,7 +805,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     cardLayout->setContentsMargins(20, 16, 20, 20);
     cardLayout->setSpacing(10);
 
-    // ── Always-visible header ────────────────────────────────────────────────
+    // â”€â”€ Always-visible header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     m_errorLabel = new QLabel(card);
     m_errorLabel->setObjectName("errorLabel");
     m_errorLabel->setWordWrap(true);
@@ -527,7 +822,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     cardLayout->addWidget(m_titleLabel);
     cardLayout->addWidget(m_subtitleLabel);
 
-    // ── Read-only banner ──────────────────────────────────────────────────────
+    // â”€â”€ Read-only banner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     m_readOnlyBanner = new QLabel(
         QString::fromUtf8("Tato zak\u00e1zka je dokon\u010dena. Pro \u00fapravy klikn\u011bte na Editovat."),
         card);
@@ -544,7 +839,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
         setReadOnly(false);
     });
 
-    // ── Tab widget ────────────────────────────────────────────────────────────
+    // â”€â”€ Tab widget â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     m_tabWidget = new QTabWidget(card);
     m_tabWidget->setObjectName("detailTabs");
     m_tabWidget->setWhatsThis(QString::fromUtf8(
@@ -572,12 +867,12 @@ CaseDetailView::CaseDetailView(QWidget *parent)
         return pageLayout;
     };
 
-    // ════════════════════════════════════════════════════════════════════════
-    // TAB 1 — Přehled (Dashboard)
-    // ════════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // TAB 1 â€” PÅ™ehled (Dashboard)
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     auto *overviewLayout = makeScrollPage(m_tabWidget, "Prehled");
 
-    // ── Info strip ────────────────────────────────────────────────────────
+    // â”€â”€ Info strip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     auto *overviewCard = new QFrame();
     overviewCard->setObjectName("summaryCard");
     auto *overviewForm = new QFormLayout(overviewCard);
@@ -604,7 +899,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     overviewForm->addRow("Blokace", m_workflowBlockingReasonsValueLabel);
     overviewForm->addRow("Test", m_referenceTestContextLabel);
 
-    // ── Primary photo ─────────────────────────────────────────────────────
+    // â”€â”€ Primary photo â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     m_dashPhotoLabel = new QLabel();
     m_dashPhotoLabel->setObjectName("dashPhoto");
     m_dashPhotoLabel->setFixedHeight(280);
@@ -613,7 +908,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     m_dashPhotoLabel->setCursor(Qt::PointingHandCursor);
     m_dashPhotoLabel->installEventFilter(this);
 
-    // ── 2-column row: Analysis + Pricing ─────────────────────────────────
+    // â”€â”€ 2-column row: Analysis + Pricing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     auto *columnsWidget = new QWidget();
     auto *columnsLayout = new QHBoxLayout(columnsWidget);
     columnsLayout->setContentsMargins(0, 0, 0, 0);
@@ -680,7 +975,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     columnsLayout->addWidget(analysisCard, 1);
     columnsLayout->addWidget(pricingCard, 1);
 
-    // ── Technologický postup ──────────────────────────────────────────────
+    // â”€â”€ TechnologickÃ½ postup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     auto *workflowDashCard = new QFrame();
     workflowDashCard->setObjectName("detailCard");
     auto *workflowDashLayout = new QVBoxLayout(workflowDashCard);
@@ -697,7 +992,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     workflowDashLayout->addWidget(workflowDashTitle);
     workflowDashLayout->addWidget(m_dashWorkflowList);
 
-    // ── Akce ─────────────────────────────────────────────────────────────
+    // â”€â”€ Akce â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     auto *actionsCard = new QFrame();
     actionsCard->setObjectName("detailCard");
     auto *actionsRowLayout = new QHBoxLayout(actionsCard);
@@ -705,7 +1000,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     actionsRowLayout->setSpacing(10);
     m_dashRunAnalysisButton = new QPushButton(QString::fromUtf8("Spustit AI anal\u00fdzu"));
     m_dashRunAnalysisButton->setEnabled(false);
-    m_dashRunAnalysisButton->setWhatsThis(QString::fromUtf8("Odešle fotky na server a spust\u00ed AI anal\u00fdzu. Server automaticky zjist\u00ed plochu, doporu\u010d\u00ed materi\u00e1ly a postup pr\u00e1ce."));
+    m_dashRunAnalysisButton->setWhatsThis(QString::fromUtf8("OdeÅ¡le fotky na server a spust\u00ed AI anal\u00fdzu. Server automaticky zjist\u00ed plochu, doporu\u010d\u00ed materi\u00e1ly a postup pr\u00e1ce."));
     actionsRowLayout->addWidget(m_dashRunAnalysisButton);
     actionsRowLayout->addStretch();
 
@@ -714,18 +1009,62 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     overviewLayout->addWidget(columnsWidget);
     overviewLayout->addWidget(workflowDashCard);
     overviewLayout->addStretch();
-    actionsCard->hide(); // Spustit analýzu patří jen do záložky Analýza
+    actionsCard->hide(); // Spustit analÃ½zu patÅ™Ã­ jen do zÃ¡loÅ¾ky AnalÃ½za
 
-    // ════════════════════════════════════════════════════════════════════════
-    // TAB 2 — Fotky
-    // ════════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // TAB 2 â€” Fotky
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     auto *photosLayout = makeScrollPage(m_tabWidget, "Fotky");
 
     m_primaryImageLabel = new QLabel("Hlavni fotka pro analyzu: -");
     m_primaryImageLabel->setObjectName("primaryImageLabel");
     m_overlayWidget = new ImageOverlayWidget();
+    m_overlayWidget->bindViewerState(&m_overlayViewerState);
     m_overlayWidget->setMinimumHeight(400);
     m_overlayWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    auto *overlayMarkersTitle = new QLabel("Markery");
+    overlayMarkersTitle->setObjectName("subSectionTitle");
+    auto *overlayMarkersHint = new QLabel(
+        "Hover a vyber jsou sdilene mezi viewerem a seznamem.");
+    overlayMarkersHint->setObjectName("hintLabel");
+    overlayMarkersHint->setWordWrap(true);
+    m_overlayMarkersList = new QListWidget();
+    m_overlayMarkersList->setObjectName("detailList");
+    m_overlayMarkersList->setMinimumWidth(220);
+    m_overlayMarkersList->setMouseTracking(true);
+    m_overlayMarkersList->setFocusPolicy(Qt::NoFocus);
+    m_overlayMarkersList->setItemDelegate(new NoFocusRectDelegate(m_overlayMarkersList));
+    m_overlayMarkersList->viewport()->installEventFilter(this);
+    auto *overlayMappingTitle = new QLabel(QString::fromUtf8("AI -> práce"));
+    overlayMappingTitle->setObjectName("subSectionTitle");
+    m_overlayWorkItemMappingLabel = new QLabel(
+        QString::fromUtf8("Vyberte AI detekci pro zobrazení návazných pracovních kroků."));
+    m_overlayWorkItemMappingLabel->setObjectName("hintLabel");
+    m_overlayWorkItemMappingLabel->setWordWrap(true);
+    m_overlayMappedWorkItemsList = new QListWidget();
+    m_overlayMappedWorkItemsList->setObjectName("detailList");
+    m_overlayMappedWorkItemsList->setFocusPolicy(Qt::NoFocus);
+    m_overlayMappedWorkItemsList->setItemDelegate(new NoFocusRectDelegate(m_overlayMappedWorkItemsList));
+    m_overlayMappedWorkItemsList->setMaximumHeight(180);
+    m_selectionSummaryLabel = new QLabel();
+    m_selectionSummaryLabel->setObjectName("hintLabel");
+    m_selectionSummaryLabel->setWordWrap(true);
+    m_selectionSummaryLabel->setTextFormat(Qt::PlainText);
+    m_selectionSummaryLabel->hide(); // shown only when selectedIds is non-empty
+    auto *overlaySidebarLayout = new QVBoxLayout();
+    overlaySidebarLayout->setContentsMargins(0, 0, 0, 0);
+    overlaySidebarLayout->setSpacing(8);
+    overlaySidebarLayout->addWidget(overlayMarkersTitle);
+    overlaySidebarLayout->addWidget(overlayMarkersHint);
+    overlaySidebarLayout->addWidget(m_overlayMarkersList, 1);
+    overlaySidebarLayout->addWidget(m_selectionSummaryLabel);
+    overlaySidebarLayout->addWidget(overlayMappingTitle);
+    overlaySidebarLayout->addWidget(m_overlayWorkItemMappingLabel);
+    overlaySidebarLayout->addWidget(m_overlayMappedWorkItemsList);
+    auto *overlayContentRow = new QHBoxLayout();
+    overlayContentRow->setSpacing(12);
+    overlayContentRow->addWidget(m_overlayWidget, 1);
+    overlayContentRow->addLayout(overlaySidebarLayout);
     m_imageHintLabel = new QLabel("Nactete zakazku pro zobrazeni fotek.");
     m_imageHintLabel->setObjectName("hintLabel");
     m_imageHintLabel->setWordWrap(true);
@@ -737,7 +1076,12 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     m_overlayModeViewButton->setCheckable(true);
     m_overlayModeViewButton->setChecked(true);
     m_overlayModeViewButton->setObjectName("overlayModeBtn");
-    m_overlayModeViewButton->setWhatsThis(QString::fromUtf8("Prohlíže\u010dí re\u017eim \u2014 m\u016f\u017eete proch\u00e1zet fotky bez kreslen\u00ed oblasti."));
+    m_overlayModeViewButton->setWhatsThis(QString::fromUtf8("ProhlÃ­Å¾e\u010dÃ­ re\u017eim \u2014 m\u016f\u017eete proch\u00e1zet fotky bez kreslen\u00ed oblasti."));
+    m_overlayModeBoxSelectButton = new QPushButton(QString::fromUtf8("Vybrat"));
+    m_overlayModeBoxSelectButton->setCheckable(true);
+    m_overlayModeBoxSelectButton->setObjectName("overlayModeBtn");
+    m_overlayModeBoxSelectButton->setWhatsThis(
+        QString::fromUtf8("Re\u017eim v\u00fdb\u011bru \u2014 ta\u017een\u00edm obd\u00e9ln\u00edku vyberte AI detekce."));
     m_overlayModeRectButton = new QPushButton("Obdelnik");
     m_overlayModeRectButton->setCheckable(true);
     m_overlayModeRectButton->setObjectName("overlayModeBtn");
@@ -756,6 +1100,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     overlayControlsRow->setSpacing(8);
     overlayControlsRow->addWidget(overlayModeLabel);
     overlayControlsRow->addWidget(m_overlayModeViewButton);
+    overlayControlsRow->addWidget(m_overlayModeBoxSelectButton);
     overlayControlsRow->addWidget(m_overlayModeRectButton);
     overlayControlsRow->addWidget(m_overlayModePolyButton);
     overlayControlsRow->addStretch();
@@ -828,7 +1173,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     pcUploadActionsLayout->addStretch();
 
     photosLayout->addWidget(m_primaryImageLabel);
-    photosLayout->addWidget(m_overlayWidget);
+    photosLayout->addLayout(overlayContentRow);
     photosLayout->addLayout(overlayControlsRow);
     photosLayout->addWidget(m_imageHintLabel);
     photosLayout->addLayout(imageActionsLayout);
@@ -840,9 +1185,9 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     photosLayout->addLayout(pcUploadActionsLayout);
     photosLayout->addStretch();
 
-    // ════════════════════════════════════════════════════════════════════════
-    // TAB 3 — Analýza
-    // ════════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // TAB 3 â€” AnalÃ½za
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     auto *analysisLayout = makeScrollPage(m_tabWidget, QString::fromUtf8("Spustit anal\u00fdzu"));
 
     auto *runAnalysisCard = new QFrame();
@@ -871,9 +1216,9 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     analysisLayout->addWidget(runAnalysisCard);
     analysisLayout->addStretch();
 
-    // ════════════════════════════════════════════════════════════════════════
-    // TAB 4 — Nabídka
-    // ════════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // TAB 4 â€” NabÃ­dka
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     auto *offerLayout = makeScrollPage(m_tabWidget, "Nabidka");
 
     auto *proposalCard = new QFrame();
@@ -926,9 +1271,13 @@ CaseDetailView::CaseDetailView(QWidget *parent)
 
     auto *proposalWorkItemsTitle = new QLabel(QString::fromUtf8("Technologick\u00fd postup"), proposalCard);
     proposalWorkItemsTitle->setObjectName("subSectionTitle");
-    m_proposalWorkItemsList = new QLabel(proposalCard);
-    m_proposalWorkItemsList->setObjectName("hintLabel");
-    m_proposalWorkItemsList->setWordWrap(true);
+    m_proposalWorkItemsList = new QListWidget(proposalCard);
+    m_proposalWorkItemsList->setObjectName("detailList");
+    m_proposalWorkItemsList->setMaximumHeight(180);
+    m_proposalWorkItemsList->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_proposalWorkItemsList->setFocusPolicy(Qt::NoFocus);
+    m_proposalWorkItemsList->setSelectionMode(QAbstractItemView::MultiSelection);
+    m_proposalWorkItemsList->setItemDelegate(new NoFocusRectDelegate(m_proposalWorkItemsList));
 
     auto *proposalMaterialsTitle = new QLabel("Navrzene materialy", proposalCard);
     proposalMaterialsTitle->setObjectName("subSectionTitle");
@@ -994,7 +1343,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
 
             item->setText(formatMaterialItem(mat));
 
-            // Přepočítej celkové náklady na materiál
+            // PÅ™epoÄÃ­tej celkovÃ© nÃ¡klady na materiÃ¡l
             double total = 0.0;
             for (const auto &m : m_currentProposalMaterialItems) total += m.totalPrice;
             if (m_proposalMaterialCostEdit)
@@ -1039,9 +1388,9 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     offerLayout->addWidget(proposalCard);
     offerLayout->addStretch();
 
-    // ════════════════════════════════════════════════════════════════════════
-    // TAB 5 — Výstup zakázky
-    // ════════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // TAB 5 â€” VÃ½stup zakÃ¡zky
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     auto *sendLayout = makeScrollPage(m_tabWidget, QString::fromUtf8("V\u00fdstup zak\u00e1zky"));
 
     auto *sendCard = new QFrame();
@@ -1371,11 +1720,15 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     auto setOverlayMode = [this](ImageOverlayWidget::Mode mode) {
         m_overlayWidget->setMode(mode);
         m_overlayModeViewButton->setChecked(mode == ImageOverlayWidget::Mode::View);
+        m_overlayModeBoxSelectButton->setChecked(mode == ImageOverlayWidget::Mode::BoxSelect);
         m_overlayModeRectButton->setChecked(mode == ImageOverlayWidget::Mode::Rectangle);
         m_overlayModePolyButton->setChecked(mode == ImageOverlayWidget::Mode::Polygon);
     };
     connect(m_overlayModeViewButton, &QPushButton::clicked, this, [setOverlayMode]() {
         setOverlayMode(ImageOverlayWidget::Mode::View);
+    });
+    connect(m_overlayModeBoxSelectButton, &QPushButton::clicked, this, [setOverlayMode]() {
+        setOverlayMode(ImageOverlayWidget::Mode::BoxSelect);
     });
     connect(m_overlayModeRectButton, &QPushButton::clicked, this, [setOverlayMode]() {
         setOverlayMode(ImageOverlayWidget::Mode::Rectangle);
@@ -1383,21 +1736,79 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     connect(m_overlayModePolyButton, &QPushButton::clicked, this, [setOverlayMode]() {
         setOverlayMode(ImageOverlayWidget::Mode::Polygon);
     });
-    connect(m_overlayWidget, &ImageOverlayWidget::selectionChanged, this, [this]() {
+    connect(m_overlayWidget, &ImageOverlayWidget::boxSelectionCommitted, this,
+        [this](const QRectF &normRect, Qt::KeyboardModifiers mods) {
+            const QList<QString> hits = boxSelectHitTest(m_overlayShapes, normRect);
+
+            if (mods & Qt::ControlModifier) {
+                // Ctrl: toggle the hit IDs against the current selection.
+                // Empty hits = Ctrl+drag on empty space → selection unchanged, no anchor update.
+                if (hits.isEmpty()) {
+                    // Nothing to toggle — leave selectedIds and anchorId untouched.
+                } else {
+                    const QList<QString> next =
+                        toggleManySelections(m_overlayViewerState.selectedIds, hits);
+                    m_overlayViewerState.selectedIds = next;
+                    // Anchor: last hit that ended up ADDED (is in next); if all were removed,
+                    // fall back to next.last(); if nothing remains, clear.
+                    // Invariant: anchorId ∈ selectedIds ∪ {""}.
+                    const bool lastHitAdded = next.contains(hits.last());
+                    m_overlayViewerState.anchorId =
+                        next.isEmpty()  ? QString{}
+                        : lastHitAdded  ? hits.last()
+                                        : next.last();
+                }
+            } else {
+                // Plain drag: replace selection entirely.
+                // Empty hits = drag on empty space → clear selection and anchor explicitly.
+                if (hits.isEmpty()) {
+                    m_overlayViewerState.clearMarkerSelection();
+                } else {
+                    m_overlayViewerState.selectedIds = hits;
+                    m_overlayViewerState.anchorId    = hits.last();
+                }
+            }
+            assertSelectionInvariant(m_overlayViewerState);
+            applyOverlayInteractionState();
+        });
+    connect(m_overlayWidget, &ImageOverlayWidget::viewerStateChanged, this, [this]() {
         if (m_overlayConfirmButton) {
-            m_overlayConfirmButton->setEnabled(m_overlayWidget->hasSelection());
+            m_overlayConfirmButton->setEnabled(viewerStateHasSelection(m_overlayViewerState));
         }
+        rebuildOverlayShapes();
+        applyOverlayInteractionState();
     });
+    connect(m_overlayWidget, &ImageOverlayWidget::hoveredOverlayIdChanged, this, [this](const QString &overlayId) {
+        setHoveredOverlayMarker(overlayId);
+    });
+    connect(m_overlayWidget, &ImageOverlayWidget::overlayActivated, this,
+        [this](const QString &overlayId, Qt::KeyboardModifiers mods) {
+            handleOverlayActivation(overlayId, mods);
+        });
+    connect(m_overlayMarkersList, &QListWidget::itemEntered, this, [this](QListWidgetItem *item) {
+        if (!item) return;
+        setHoveredOverlayMarker(item->data(Qt::UserRole).toString());
+    });
+    connect(m_overlayMarkersList, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
+        if (!item) return;
+        handleOverlayActivation(item->data(Qt::UserRole).toString(),
+                                QApplication::keyboardModifiers());
+    });
+    connect(m_detectionWorkItemCoordinator, &AiDetectionWorkItemCoordinator::mappingChanged, this,
+        [this](const QList<QString> &overlayIds, const QString &summary,
+               const QStringList &mappedItems, bool highlightsProposalItems) {
+            // Guard: mapping must match current selection OR be a reset (empty list).
+            // Direct connection makes stale delivery impossible today; the check
+            // makes the invariant explicit and survives any future async refactor.
+            if (!overlayIds.isEmpty() && overlayIds != m_overlayViewerState.selectedIds)
+                return;
+            applyOverlayWorkItemMapping(summary, mappedItems, highlightsProposalItems);
+        });
     connect(m_overlayConfirmButton, &QPushButton::clicked, this, [this]() {
         confirmSelectionArea();
     });
     connect(m_runAnalysisButton, &QPushButton::clicked, this, [this]() {
         triggerAnalysis();
-    });
-    m_analysisPollingTimer = new QTimer(this);
-    m_analysisPollingTimer->setInterval(2000);
-    connect(m_analysisPollingTimer, &QTimer::timeout, this, [this]() {
-        pollAnalysisStatus();
     });
     connect(m_saveProposalButton, &QPushButton::clicked, this, [this]() {
         saveProposalDraft();
@@ -1414,13 +1825,14 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     connect(m_convertImagesButton, &QPushButton::clicked, this, [this]() {
         convertPendingLocalImages();
     });
-    m_imagePollingTimer = new QTimer(this);
-    m_imagePollingTimer->setInterval(kImagePollingIntervalMs);
-    connect(m_imagePollingTimer, &QTimer::timeout, this, [this]() {
-        pollImageStatuses();
-    });
 
-    // ── Dirty tracking (set up once; applyCaseData resets m_isDirty after) ──
+    refreshProposalWorkItems();
+    applyOverlayWorkItemMapping(
+        QString::fromUtf8("Vyberte AI detekci pro zobrazení návazných pracovních kroků."),
+        {},
+        false);
+
+    // â”€â”€ Dirty tracking (set up once; applyCaseData resets m_isDirty after) â”€â”€
     const auto markDirty = [this]() { m_isDirty = true; };
     connect(m_proposalSubjectEdit, &QLineEdit::textEdited, this, markDirty);
     connect(m_proposalSummaryEdit, &QPlainTextEdit::textChanged, this, markDirty);
@@ -1443,7 +1855,8 @@ void CaseDetailView::setCase(const QString &caseId)
     }
 
     if (!m_caseId.isEmpty() && m_caseId != caseId) {
-        stopImageStatusPolling();
+        m_viewModel->stopImageStatusMonitoring();
+        m_viewModel->stopAnalysisStatusMonitoring();
         m_selectedImageId.clear();
         m_pendingLocalImagePaths.clear();
         m_preparedLocalImages.clear();
@@ -1451,40 +1864,8 @@ void CaseDetailView::setCase(const QString &caseId)
     }
 
     m_caseId = caseId;
-    ApiService apiService;
-    CaseDetailViewModel viewModel;
-    const auto caseDto = viewModel.loadCase(caseId, apiService);
-
-    if (ApiService::sessionExpired()) {
-        emit sessionExpired();
-        return;
-    }
-
-    if (caseDto.id.isEmpty() && !viewModel.errorMessage().isEmpty()) {
-        m_errorLabel->setText(viewModel.errorMessage());
-        m_errorLabel->show();
-        return;
-    }
-
-    m_errorLabel->hide();
-    applyCaseData(caseDto);
-
-    QString imageErrorMessage;
-    if (!refreshImagesFromBackend(&imageErrorMessage)) {
-        setImageHintMessage(imageErrorMessage, true);
-        return;
-    }
-
-    updateImagesPanel();
-
-    if (m_images.empty()) {
-        setImageHintMessage("Case zatim nema zadne obrazky.");
-    } else {
-        setImageHintMessage(
-            QString("Nacteno %1 obrazku z backendu. Stav: %2.")
-                .arg(m_images.size())
-                .arg(summarizeServerImageStatuses(m_images)));
-    }
+    m_pendingViewModelAction = ViewModelAction::LoadCase;
+    m_viewModel->loadCase(caseId);
 }
 
 void CaseDetailView::applyCaseData(const CaseDto &caseDto)
@@ -1494,7 +1875,7 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
     m_source = caseDto.source.isEmpty() ? QStringLiteral("mobile") : caseDto.source;
     const bool isDesktopCase = (m_source == QStringLiteral("desktop"));
     if (m_tabWidget) {
-        m_tabWidget->setTabVisible(2, isDesktopCase); // Analýza tab only for PC cases
+        m_tabWidget->setTabVisible(2, isDesktopCase); // AnalÃ½za tab only for PC cases
     }
     if (m_dashRunAnalysisButton) {
         m_dashRunAnalysisButton->setVisible(isDesktopCase);
@@ -1518,7 +1899,7 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
     m_scopeValueLabel->setText(caseDto.repairScope.isEmpty() ? "-" : localizeRepairScope(caseDto.repairScope));
     m_areaValueLabel->setText(caseDto.areaLabel.isEmpty() ? "-" : caseDto.areaLabel);
 
-    // ── Dashboard widgets ─────────────────────────────────────────────────
+    // â”€â”€ Dashboard widgets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (m_dashObjTypeLabel) m_dashObjTypeLabel->setText(
         caseDto.analysisObjectType.isEmpty() ? "-" : localizeObjectType(caseDto.analysisObjectType));
     if (m_dashAreaLabel) {
@@ -1592,10 +1973,7 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
             : caseDto.finalProposalSummary);
     m_finalProposalTotalValueLabel->setText(
         caseDto.finalProposalTotalPriceLabel.isEmpty() ? "-" : caseDto.finalProposalTotalPriceLabel);
-    m_proposalWorkItemsList->setText(
-        caseDto.proposalWorkItems.isEmpty()
-            ? QString::fromUtf8("N\u00e1vrh praci se dopln\u00ed po zpracov\u00e1n\u00ed fotek.")
-            : caseDto.proposalWorkItems.join(QString::fromUtf8(" \u2022 ")));
+    refreshProposalWorkItems();
     m_proposalMaterialsList->clear();
     if (m_currentProposalMaterialItems.isEmpty()) {
         m_proposalMaterialsList->addItem(
@@ -1607,9 +1985,9 @@ void CaseDetailView::applyCaseData(const CaseDto &caseDto)
     }
 
     m_analysisId = caseDto.analysisId;
-    if (m_overlayWidget) {
-        m_overlayWidget->setAiPolygon(caseDto.analysisMaskPolygon);
-    }
+    m_detectionWorkItemCoordinator->setCaseData(m_currentCase);
+    rebuildOverlayShapes();
+    applyOverlayInteractionState();
 
     // Analysis / Findings
     if (m_analysisObjectTypeLabel) {
@@ -1744,7 +2122,8 @@ void CaseDetailView::setReadOnly(bool readOnly)
     for (auto *t : textEdits) t->setReadOnly(readOnly);
 
     const QList<QPushButton *> actionButtons = {
-        m_runAnalysisButton, m_overlayModeRectButton, m_overlayModePolyButton,
+        m_runAnalysisButton,
+        m_overlayModeBoxSelectButton, m_overlayModeRectButton, m_overlayModePolyButton,
         m_overlayConfirmButton, m_setPrimaryButton, m_setAnalysisReferenceButton,
         m_moveUpButton, m_moveDownButton, m_addImagesButton, m_convertImagesButton,
         m_saveProposalButton, m_createFinalProposalButton,
@@ -1771,7 +2150,7 @@ void CaseDetailView::navigateToField(const QString &fieldKey)
 {
     if (!m_tabWidget) return;
 
-    // Nabídka tab is always at index 3
+    // NabÃ­dka tab is always at index 3
     m_tabWidget->setCurrentIndex(3);
 
     QWidget *targetWidget = nullptr;
@@ -1798,8 +2177,9 @@ void CaseDetailView::navigateToField(const QString &fieldKey)
 
 void CaseDetailView::clearCase()
 {
-    stopImageStatusPolling();
-    stopAnalysisPolling();
+    m_viewModel->stopImageStatusMonitoring();
+    m_viewModel->stopAnalysisStatusMonitoring();
+    m_currentCase = {};
     setReadOnly(false);
     m_isDirty = false;
     m_source.clear();
@@ -1808,6 +2188,8 @@ void CaseDetailView::clearCase()
     if (m_dashRunAnalysisButton) m_dashRunAnalysisButton->setVisible(true);
     m_analysisId.clear();
     m_selectedImageId.clear();
+    m_overlayViewerState.hoveredMarkerId.clear();
+    m_overlayViewerState.clearMarkerSelection();
     m_images.clear();
     m_isReferenceDataset = false;
     m_expectedScope.clear();
@@ -1819,6 +2201,7 @@ void CaseDetailView::clearCase()
     m_referenceSourcePage.clear();
     m_pendingLocalImagePaths.clear();
     m_preparedLocalImages.clear();
+    m_overlayShapes.clear();
 
     if (m_errorLabel) {
         m_errorLabel->clear();
@@ -1851,10 +2234,7 @@ void CaseDetailView::clearCase()
     m_finalProposalSubjectValueLabel->setText("-");
     m_finalProposalSummaryValueLabel->setText("Po potvrzeni server vytvori finalni verzi a automaticky pripravi DOCX i PDF.");
     m_finalProposalTotalValueLabel->setText("-");
-    if (m_proposalWorkItemsList) {
-        m_proposalWorkItemsList->setText(
-            QString::fromUtf8("Navr\u017een\u00e9 kroky se objev\u00ed po serverov\u00e9m zpracov\u00e1n\u00ed fotek."));
-    }
+    refreshProposalWorkItems();
     m_currentProposalMaterialItems.clear();
     if (m_proposalMaterialsList) {
         m_proposalMaterialsList->clear();
@@ -1872,7 +2252,7 @@ void CaseDetailView::clearCase()
     if (m_quoteStandardValueLabel) { m_quoteStandardValueLabel->setText("-"); }
     if (m_quotePremiumValueLabel) { m_quotePremiumValueLabel->setText("-"); }
 
-    // ── Dashboard widget resets ───────────────────────────────────────────
+    // â”€â”€ Dashboard widget resets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (m_dashPhotoLabel) {
         m_dashPhotoLabel->clear();
         m_dashPhotoLabel->setText(QString::fromUtf8("Vyberte zak\u00e1zku pro zobrazen\u00ed hlavn\u00ed fotografie."));
@@ -1917,6 +2297,8 @@ void CaseDetailView::clearCase()
     setImageHintMessage("Po vyberu aktivni zakazky se sem nactou fotky a jejich metadata.");
     updateImagesPanel();
     updatePendingLocalImagesPanel();
+    applyOverlayInteractionState();
+    m_detectionWorkItemCoordinator->reset();
 }
 
 void CaseDetailView::saveProposalDraft()
@@ -1925,7 +2307,6 @@ void CaseDetailView::saveProposalDraft()
         return;
     }
 
-    ApiService apiService;
     ProposalDraftPatchDto payload{
         .subject = m_proposalSubjectEdit ? m_proposalSubjectEdit->text().trimmed() : QString(),
         .summary = m_proposalSummaryEdit ? m_proposalSummaryEdit->toPlainText().trimmed() : QString(),
@@ -1938,18 +2319,8 @@ void CaseDetailView::saveProposalDraft()
         .recommendedCompany = m_proposalCompanyEdit ? m_proposalCompanyEdit->text().trimmed() : QString(),
     };
 
-    QString errorMessage;
-    const auto updatedCase = apiService.updateCaseProposalDraft(m_caseId, payload, &errorMessage);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-    if (updatedCase.id.isEmpty()) {
-        m_errorLabel->setText(errorMessage.isEmpty() ? "Nepodarilo se ulozit navrh nabidky." : errorMessage);
-        m_errorLabel->show();
-        return;
-    }
-
-    m_errorLabel->hide();
-    applyCaseData(updatedCase);
-    setImageHintMessage("Navrh nabidky byl ulozen na server a znovu nacten.");
+    m_pendingViewModelAction = ViewModelAction::SaveProposalDraft;
+    m_viewModel->saveProposalDraft(m_caseId, payload);
 }
 
 void CaseDetailView::createFinalProposal()
@@ -1970,19 +2341,18 @@ void CaseDetailView::createFinalProposal()
         return;
     }
 
-    ApiService apiService;
-    QString errorMessage;
-    const auto updatedCase = apiService.createCaseFinalProposal(m_caseId, &errorMessage);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-    if (updatedCase.id.isEmpty()) {
-        m_errorLabel->setText(errorMessage.isEmpty() ? "Nepodarilo se vytvorit finalni verzi." : errorMessage);
-        m_errorLabel->show();
-        return;
-    }
-
-    m_errorLabel->hide();
-    applyCaseData(updatedCase);
-    setImageHintMessage("Finalni verze byla vytvorena. Server k ni pripravil DOCX i PDF.");
+    m_apiService->createCaseFinalProposal(
+        m_caseId,
+        [this](CaseDto updatedCase) {
+            m_errorLabel->hide();
+            applyCaseData(updatedCase);
+            setImageHintMessage("Finalni verze byla vytvorena. Server k ni pripravil DOCX i PDF.");
+        },
+        [this](const QString &errorMessage) {
+            m_errorLabel->setText(
+                errorMessage.isEmpty() ? "Nepodarilo se vytvorit finalni verzi." : errorMessage);
+            m_errorLabel->show();
+        });
 }
 
 void CaseDetailView::updateImagesPanel()
@@ -2018,7 +2388,6 @@ void CaseDetailView::updateImagesPanel()
         }
     }
 
-    ApiService apiService;
     for (const auto &image : m_images) {
         QStringList tooltipLines;
         tooltipLines << image.originalFilename;
@@ -2039,15 +2408,25 @@ void CaseDetailView::updateImagesPanel()
         thumbnailButton->setCursor(Qt::PointingHandCursor);
         thumbnailButton->setProperty("imageId", image.id);
 
-        QString previewErrorMessage;
-        const auto previewData = apiService.fetchImageData(image.previewUrl, &previewErrorMessage);
-        QPixmap previewPixmap;
-        if (!previewData.isEmpty() && previewPixmap.loadFromData(previewData)) {
-            thumbnailButton->setIcon(QIcon(previewPixmap.scaled(
-                QSize(120, 90),
-                Qt::KeepAspectRatio,
-                Qt::SmoothTransformation)));
-            thumbnailButton->setIconSize(QSize(120, 90));
+        if (!image.previewUrl.isEmpty()) {
+            QPointer<QPushButton> safeThumbnailButton(thumbnailButton);
+            m_apiService->fetchImageData(
+                image.previewUrl,
+                [safeThumbnailButton](QByteArray previewData) {
+                    if (!safeThumbnailButton) {
+                        return;
+                    }
+
+                    QPixmap previewPixmap;
+                    if (!previewData.isEmpty() && previewPixmap.loadFromData(previewData)) {
+                        safeThumbnailButton->setIcon(QIcon(previewPixmap.scaled(
+                            QSize(120, 90),
+                            Qt::KeepAspectRatio,
+                            Qt::SmoothTransformation)));
+                        safeThumbnailButton->setIconSize(QSize(120, 90));
+                    }
+                },
+                nullptr);
         }
 
         connect(thumbnailButton, &QPushButton::clicked, this, [this, imageId = image.id]() {
@@ -2206,6 +2585,72 @@ void CaseDetailView::setImageHintMessage(const QString &message, bool isError)
     m_imageHintLabel->setObjectName(isError ? "errorLabel" : "hintLabel");
     m_imageHintLabel->style()->unpolish(m_imageHintLabel);
     m_imageHintLabel->style()->polish(m_imageHintLabel);
+}
+
+void CaseDetailView::handleViewModelError(const QString &message)
+{
+    switch (m_pendingViewModelAction) {
+    case ViewModelAction::LoadCase:
+        m_errorLabel->setText(message);
+        m_errorLabel->show();
+        break;
+    case ViewModelAction::LoadImages:
+        if (m_pendingImageRefreshError) {
+            auto onError = std::move(m_pendingImageRefreshError);
+            m_pendingImageRefreshSuccess = nullptr;
+            onError(message);
+        } else {
+            setImageHintMessage(message, true);
+        }
+        break;
+    case ViewModelAction::SaveProposalDraft:
+        m_errorLabel->setText(
+            message.isEmpty() ? "Nepodarilo se ulozit navrh nabidky." : message);
+        m_errorLabel->show();
+        break;
+    case ViewModelAction::SetPrimaryImage:
+    case ViewModelAction::SetAnalysisReferenceImage:
+        setImageHintMessage(message, true);
+        break;
+    case ViewModelAction::TriggerAnalysis:
+        m_analysisJobStatusLabel->setText(
+            QString("Chyba: %1")
+                .arg(message.isEmpty() ? "Nepodarilo se spustit analyzu." : message));
+        m_runAnalysisButton->setEnabled(true);
+        break;
+    case ViewModelAction::ConfirmSelectionArea:
+        setImageHintMessage(
+            QString("Chyba pri ukladani oblasti: %1")
+                .arg(message.isEmpty() ? "Neznama chyba." : message),
+            true);
+        if (m_overlayConfirmButton) {
+            m_overlayConfirmButton->setEnabled(true);
+        }
+        break;
+    case ViewModelAction::None:
+        setImageHintMessage(message, true);
+        break;
+    }
+
+    m_pendingImageRefreshSuccess = nullptr;
+    m_pendingImageRefreshError = nullptr;
+    m_pendingViewModelAction = ViewModelAction::None;
+}
+
+void CaseDetailView::handleImagesLoaded(std::vector<ImageDto> images)
+{
+    m_pendingViewModelAction = ViewModelAction::None;
+    m_images = std::move(images);
+
+    if (m_pendingImageRefreshSuccess) {
+        auto onSuccess = std::move(m_pendingImageRefreshSuccess);
+        m_pendingImageRefreshError = nullptr;
+        onSuccess();
+        return;
+    }
+
+    m_pendingImageRefreshError = nullptr;
+    updateImagesPanel();
 }
 
 void CaseDetailView::selectAdjacentImage(int step)
@@ -2453,49 +2898,49 @@ void CaseDetailView::uploadPreparedLocalImages()
     setImageHintMessage(QString("Odesilam %1 fotek na server.").arg(uploadImages.size()));
     QApplication::processEvents();
 
-    ApiService apiService;
-    QString errorMessage;
-    if (!apiService.uploadCaseImages(m_caseId, uploadImages, &errorMessage)) {
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-        for (const size_t index : uploadIndexes) {
-            m_preparedLocalImages[index].state = LocalImageState::ReadyToUpload;
-            m_preparedLocalImages[index].errorMessage = errorMessage;
-        }
-        updatePendingLocalImagesPanel();
-        setImageHintMessage(errorMessage, true);
-        return;
-    }
+    m_apiService->uploadCaseImages(
+        m_caseId,
+        uploadImages,
+        [this, uploadIndexes, uploadCount = uploadImages.size()]() {
+            for (const size_t index : uploadIndexes) {
+                m_preparedLocalImages[index].state = LocalImageState::Uploaded;
+                m_preparedLocalImages[index].payload.clear();
+                m_preparedLocalImages[index].errorMessage.clear();
+            }
 
-    for (const size_t index : uploadIndexes) {
-        m_preparedLocalImages[index].state = LocalImageState::Uploaded;
-        m_preparedLocalImages[index].payload.clear();
-        m_preparedLocalImages[index].errorMessage.clear();
-    }
+            refreshImagesFromBackend(
+                [this, uploadCount]() {
+                    updateImagesPanel();
+                    updatePendingLocalImagesPanel();
+                    setCase(m_caseId);
 
-    QString refreshErrorMessage;
-    if (!refreshImagesFromBackend(&refreshErrorMessage)) {
-        setImageHintMessage(refreshErrorMessage, true);
-        return;
-    }
+                    if (hasPendingServerImageStatuses(m_images)) {
+                        m_viewModel->startImageStatusMonitoring(m_caseId);
+                        setImageHintMessage(
+                            QString("Na server bylo odeslano %1 fotek. Backend stale zpracovava: %2.")
+                                .arg(uploadCount)
+                                .arg(summarizeServerImageStatuses(m_images)));
+                        return;
+                    }
 
-    updateImagesPanel();
-    updatePendingLocalImagesPanel();
-    setCase(m_caseId);
-
-    if (hasPendingServerImageStatuses(m_images)) {
-        startImageStatusPolling();
-        setImageHintMessage(
-            QString("Na server bylo odeslano %1 fotek. Backend stale zpracovava: %2.")
-                .arg(uploadImages.size())
-                .arg(summarizeServerImageStatuses(m_images)));
-        return;
-    }
-
-    stopImageStatusPolling();
-    setImageHintMessage(
-        QString("Na server bylo odeslano %1 fotek. Backend hlasi: %2.")
-            .arg(uploadImages.size())
-            .arg(summarizeServerImageStatuses(m_images)));
+                    m_viewModel->stopImageStatusMonitoring();
+                    setImageHintMessage(
+                        QString("Na server bylo odeslano %1 fotek. Backend hlasi: %2.")
+                            .arg(uploadCount)
+                            .arg(summarizeServerImageStatuses(m_images)));
+                },
+                [this](const QString &refreshErrorMessage) {
+                    setImageHintMessage(refreshErrorMessage, true);
+                });
+        },
+        [this, uploadIndexes](const QString &errorMessage) {
+            for (const size_t index : uploadIndexes) {
+                m_preparedLocalImages[index].state = LocalImageState::ReadyToUpload;
+                m_preparedLocalImages[index].errorMessage = errorMessage;
+            }
+            updatePendingLocalImagesPanel();
+            setImageHintMessage(errorMessage, true);
+        });
 }
 
 void CaseDetailView::downloadExport(const QString &exportType)
@@ -2507,45 +2952,54 @@ void CaseDetailView::downloadExport(const QString &exportType)
     setImageHintMessage(QString("Pripravuji export: %1...").arg(exportType));
     QApplication::processEvents();
 
-    ApiService apiService;
-    QString errorMessage;
-    const auto exportResult = apiService.triggerExport(m_caseId, exportType, &errorMessage);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-    if (exportResult.downloadUrl.isEmpty()) {
-        setImageHintMessage(
-            errorMessage.isEmpty() ? "Export se nezdaril — backend nevratil download URL." : errorMessage,
-            true);
-        return;
-    }
+    m_apiService->triggerExport(
+        m_caseId,
+        exportType,
+        [this, exportType](ExportDto exportResult) {
+            if (exportResult.downloadUrl.isEmpty()) {
+                setImageHintMessage("Export se nezdaril - backend nevratil download URL.", true);
+                return;
+            }
 
-    const auto fileBytes = apiService.downloadExportFile(exportResult.downloadUrl, &errorMessage);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-    if (fileBytes.isEmpty()) {
-        setImageHintMessage(
-            errorMessage.isEmpty() ? "Stazeni souboru se nezdarilo." : errorMessage,
-            true);
-        return;
-    }
+            m_apiService->downloadExportFile(
+                exportResult.downloadUrl,
+                [this, exportType, exportResult](QByteArray fileBytes) {
+                    if (fileBytes.isEmpty()) {
+                        setImageHintMessage("Stazeni souboru se nezdarilo.", true);
+                        return;
+                    }
 
-    const QString tempDir =
-        QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/NovuBuilder";
-    QDir().mkpath(tempDir);
+                    const QString tempDir =
+                        QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/NovuBuilder";
+                    QDir().mkpath(tempDir);
 
-    const QString fileName = exportResult.fileName.isEmpty()
-        ? QString("%1-%2.bin").arg(m_caseId, exportType)
-        : exportResult.fileName;
-    const QString filePath = tempDir + "/" + fileName;
+                    const QString fileName = exportResult.fileName.isEmpty()
+                        ? QString("%1-%2.bin").arg(m_caseId, exportType)
+                        : exportResult.fileName;
+                    const QString filePath = tempDir + "/" + fileName;
 
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly)) {
-        setImageHintMessage("Nepodarilo se ulozit soubor do temp adresare.", true);
-        return;
-    }
-    file.write(fileBytes);
-    file.close();
+                    QFile file(filePath);
+                    if (!file.open(QIODevice::WriteOnly)) {
+                        setImageHintMessage("Nepodarilo se ulozit soubor do temp adresare.", true);
+                        return;
+                    }
+                    file.write(fileBytes);
+                    file.close();
 
-    QDesktopServices::openUrl(QUrl::fromLocalFile(filePath));
-    setImageHintMessage(QString("Export byl ulozen a otevren: %1").arg(fileName));
+                    QDesktopServices::openUrl(QUrl::fromLocalFile(filePath));
+                    setImageHintMessage(QString("Export byl ulozen a otevren: %1").arg(fileName));
+                },
+                [this](const QString &errorMessage) {
+                    setImageHintMessage(
+                        errorMessage.isEmpty() ? "Stazeni souboru se nezdarilo." : errorMessage,
+                        true);
+                });
+        },
+        [this](const QString &errorMessage) {
+            setImageHintMessage(
+                errorMessage.isEmpty() ? "Export se nezdaril - backend nevratil download URL." : errorMessage,
+                true);
+        });
 }
 
 void CaseDetailView::exportAsZip()
@@ -2554,7 +3008,6 @@ void CaseDetailView::exportAsZip()
         return;
     }
 
-    // Sanitize title for filename
     QString safeTitle = m_currentCase.title.isEmpty() ? m_caseId : m_currentCase.title;
     for (const QChar ch : {'\\', '/', ':', '*', '?', '"', '<', '>', '|'}) {
         safeTitle.replace(ch, '_');
@@ -2563,133 +3016,189 @@ void CaseDetailView::exportAsZip()
 
     const QString zipPath = QFileDialog::getSaveFileName(
         this,
-        QString::fromUtf8("Ulo\u017eit zak\u00e1zku jako ZIP"),
+        QString::fromUtf8("Uložit zakázku jako ZIP"),
         QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + "/" + defaultName,
-        QString::fromUtf8("ZIP archiv (*.zip)")
-    );
+        QString::fromUtf8("ZIP archiv (*.zip)"));
     if (zipPath.isEmpty()) {
         return;
     }
 
-    setImageHintMessage(QString::fromUtf8("P\u0159ipravuji ZIP export\u2026"));
+    setImageHintMessage(QString::fromUtf8("Připravuji ZIP export..."));
     QApplication::processEvents();
 
-    // Prepare temp working directory
-    const QString tempBase = QStandardPaths::writableLocation(QStandardPaths::TempLocation)
-        + "/NovuBuilder/export_" + m_caseId;
+    const QString tempBase =
+        QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/NovuBuilder/export_" + m_caseId;
     QDir(tempBase).removeRecursively();
     QDir().mkpath(tempBase + "/fotky");
 
-    ApiService apiService;
-    QString errorMessage;
-    int errors = 0;
-
-    // 1. Download DOCX (final proposal)
-    const auto exportResult = apiService.triggerExport(m_caseId, "proposal-docx", &errorMessage);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-    if (!exportResult.downloadUrl.isEmpty()) {
-        const auto docxBytes = apiService.downloadExportFile(exportResult.downloadUrl, &errorMessage);
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-        if (!docxBytes.isEmpty()) {
-            const QString docxName = exportResult.fileName.isEmpty()
-                ? QString("Nabidka_%1.docx").arg(safeTitle)
-                : exportResult.fileName;
-            QFile docxFile(tempBase + "/" + docxName);
-            if (docxFile.open(QIODevice::WriteOnly)) {
-                docxFile.write(docxBytes);
-                docxFile.close();
-            }
-        } else {
-            ++errors;
-        }
-    } else {
-        ++errors;
-    }
-
-    // 2. Download images (previews)
-    for (const auto &image : m_images) {
-        if (image.previewUrl.isEmpty()) { continue; }
-        const auto imgBytes = apiService.fetchImageData(image.previewUrl, &errorMessage);
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-        if (imgBytes.isEmpty()) { ++errors; continue; }
-        QString imgName = image.originalFilename.isEmpty()
-            ? image.id + ".jpg"
-            : image.originalFilename;
-        QFile imgFile(tempBase + "/fotky/" + imgName);
-        if (imgFile.open(QIODevice::WriteOnly)) {
-            imgFile.write(imgBytes);
-            imgFile.close();
-        }
-    }
-
-    // 3. Create JSON data file
-    QJsonObject json;
-    json["id"]           = m_currentCase.id;
-    json["title"]        = m_currentCase.title;
-    json["status"]       = m_currentCase.status;
-    json["addressLabel"] = m_currentCase.addressLabel;
-    json["description"]  = m_currentCase.description;
-    json["propertyType"] = m_currentCase.propertyType;
-    json["repairScope"]  = m_currentCase.repairScope;
-    json["createdBy"]    = m_currentCase.createdByName;
-    if (m_currentCase.hasAnalysis) {
-        QJsonObject analysis;
-        analysis["objectType"]       = m_currentCase.analysisObjectType;
-        analysis["surfaceCondition"] = m_currentCase.analysisSurfaceCondition;
-        analysis["recommendedScope"] = m_currentCase.analysisRecommendedScope;
-        analysis["estimatedAreaSqm"] = m_currentCase.analysisEstimatedAreaSqm;
-        analysis["durationDays"]     = m_currentCase.analysisDurationDays;
-        analysis["laborHours"]       = m_currentCase.analysisLaborHours;
-        json["analysis"] = analysis;
-    }
+    struct ZipExportContext
     {
-        QJsonObject proposal;
-        proposal["subject"]             = m_currentCase.proposalSubject;
-        proposal["summary"]             = m_currentCase.proposalSummary;
-        proposal["materialCost"]        = m_currentCase.proposalMaterialCostLabel;
-        proposal["laborCost"]           = m_currentCase.proposalLaborCostLabel;
-        proposal["transportCost"]       = m_currentCase.proposalTransportCostLabel;
-        proposal["totalPrice"]          = m_currentCase.proposalTotalPriceLabel;
-        proposal["recommendedSupplier"] = m_currentCase.proposalRecommendedSupplier;
-        json["proposal"] = proposal;
-    }
-    if (!m_currentCase.finalProposalStatus.isEmpty()) {
-        QJsonObject finalProposal;
-        finalProposal["status"]     = m_currentCase.finalProposalStatus;
-        finalProposal["subject"]    = m_currentCase.finalProposalSubject;
-        finalProposal["summary"]    = m_currentCase.finalProposalSummary;
-        finalProposal["totalPrice"] = m_currentCase.finalProposalTotalPriceLabel;
-        json["finalProposal"] = finalProposal;
-    }
-    QFile jsonFile(tempBase + "/zakazka.json");
-    if (jsonFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        jsonFile.write(QJsonDocument(json).toJson(QJsonDocument::Indented));
-        jsonFile.close();
-    }
+        QString tempBase;
+        QString zipPath;
+        QString safeTitle;
+        CaseDto caseData;
+        std::vector<ImageDto> images;
+        int errors = 0;
+        int nextImageIndex = 0;
+    };
 
-    // 4. Create ZIP via PowerShell Compress-Archive
-    QFile::remove(zipPath);
-    const QString psCmd = QString(
-        "Compress-Archive -Path '%1\\*' -DestinationPath '%2' -Force"
-    ).arg(QDir::toNativeSeparators(tempBase), QDir::toNativeSeparators(zipPath));
+    auto context = std::make_shared<ZipExportContext>(ZipExportContext{
+        .tempBase = tempBase,
+        .zipPath = zipPath,
+        .safeTitle = safeTitle,
+        .caseData = m_currentCase,
+        .images = m_images,
+    });
 
-    QProcess process;
-    process.start("powershell",
-        QStringList() << "-NoProfile" << "-NonInteractive" << "-Command" << psCmd);
-    process.waitForFinished(30000);
+    auto finalizeZip = std::make_shared<std::function<void()>>();
+    auto downloadNextImage = std::make_shared<std::function<void()>>();
 
-    QDir(tempBase).removeRecursively();
+    *finalizeZip = [this, context]() {
+        QJsonObject json;
+        json["id"] = context->caseData.id;
+        json["title"] = context->caseData.title;
+        json["status"] = context->caseData.status;
+        json["addressLabel"] = context->caseData.addressLabel;
+        json["description"] = context->caseData.description;
+        json["propertyType"] = context->caseData.propertyType;
+        json["repairScope"] = context->caseData.repairScope;
+        json["createdBy"] = context->caseData.createdByName;
+        if (context->caseData.hasAnalysis) {
+            QJsonObject analysis;
+            analysis["objectType"] = context->caseData.analysisObjectType;
+            analysis["surfaceCondition"] = context->caseData.analysisSurfaceCondition;
+            analysis["recommendedScope"] = context->caseData.analysisRecommendedScope;
+            analysis["estimatedAreaSqm"] = context->caseData.analysisEstimatedAreaSqm;
+            analysis["durationDays"] = context->caseData.analysisDurationDays;
+            analysis["laborHours"] = context->caseData.analysisLaborHours;
+            json["analysis"] = analysis;
+        }
+        {
+            QJsonObject proposal;
+            proposal["subject"] = context->caseData.proposalSubject;
+            proposal["summary"] = context->caseData.proposalSummary;
+            proposal["materialCost"] = context->caseData.proposalMaterialCostLabel;
+            proposal["laborCost"] = context->caseData.proposalLaborCostLabel;
+            proposal["transportCost"] = context->caseData.proposalTransportCostLabel;
+            proposal["totalPrice"] = context->caseData.proposalTotalPriceLabel;
+            proposal["recommendedSupplier"] = context->caseData.proposalRecommendedSupplier;
+            json["proposal"] = proposal;
+        }
+        if (!context->caseData.finalProposalStatus.isEmpty()) {
+            QJsonObject finalProposal;
+            finalProposal["status"] = context->caseData.finalProposalStatus;
+            finalProposal["subject"] = context->caseData.finalProposalSubject;
+            finalProposal["summary"] = context->caseData.finalProposalSummary;
+            finalProposal["totalPrice"] = context->caseData.finalProposalTotalPriceLabel;
+            json["finalProposal"] = finalProposal;
+        }
 
-    if (!QFile::exists(zipPath)) {
-        setImageHintMessage(QString::fromUtf8("ZIP se nepoda\u0159ilo vytvo\u0159it."), true);
-        return;
-    }
+        QFile jsonFile(context->tempBase + "/zakazka.json");
+        if (jsonFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            jsonFile.write(QJsonDocument(json).toJson(QJsonDocument::Indented));
+            jsonFile.close();
+        }
 
-    const QString resultMsg = errors > 0
-        ? QString::fromUtf8("ZIP ulo\u017een s %1 chybami: %2").arg(errors).arg(zipPath)
-        : QString::fromUtf8("ZIP ulo\u017een: %1").arg(zipPath);
-    setImageHintMessage(resultMsg, errors > 0);
-    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(zipPath).absolutePath()));
+        QFile::remove(context->zipPath);
+        const QString psCmd = QString(
+            "Compress-Archive -Path '%1\\*' -DestinationPath '%2' -Force")
+                                  .arg(QDir::toNativeSeparators(context->tempBase),
+                                       QDir::toNativeSeparators(context->zipPath));
+
+        QProcess process;
+        process.start(
+            "powershell",
+            QStringList() << "-NoProfile" << "-NonInteractive" << "-Command" << psCmd);
+        process.waitForFinished(30000);
+
+        QDir(context->tempBase).removeRecursively();
+
+        if (!QFile::exists(context->zipPath)) {
+            setImageHintMessage(QString::fromUtf8("ZIP se nepodařilo vytvořit."), true);
+            return;
+        }
+
+        const QString resultMsg = context->errors > 0
+            ? QString::fromUtf8("ZIP uložen s %1 chybami: %2").arg(context->errors).arg(context->zipPath)
+            : QString::fromUtf8("ZIP uložen: %1").arg(context->zipPath);
+        setImageHintMessage(resultMsg, context->errors > 0);
+        QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(context->zipPath).absolutePath()));
+    };
+
+    *downloadNextImage = [this, context, downloadNextImage, finalizeZip]() {
+        while (context->nextImageIndex < static_cast<int>(context->images.size())) {
+            const ImageDto image = context->images[context->nextImageIndex++];
+            if (image.previewUrl.isEmpty()) {
+                continue;
+            }
+
+            m_apiService->fetchImageData(
+                image.previewUrl,
+                [context, downloadNextImage, finalizeZip, image](QByteArray imgBytes) {
+                    if (imgBytes.isEmpty()) {
+                        ++context->errors;
+                    } else {
+                        QString imgName = image.originalFilename.isEmpty()
+                            ? image.id + ".jpg"
+                            : image.originalFilename;
+                        QFile imgFile(context->tempBase + "/fotky/" + imgName);
+                        if (imgFile.open(QIODevice::WriteOnly)) {
+                            imgFile.write(imgBytes);
+                            imgFile.close();
+                        } else {
+                            ++context->errors;
+                        }
+                    }
+                    (*downloadNextImage)();
+                },
+                [context, downloadNextImage](const QString &) {
+                    ++context->errors;
+                    (*downloadNextImage)();
+                });
+            return;
+        }
+
+        (*finalizeZip)();
+    };
+
+    m_apiService->triggerExport(
+        m_caseId,
+        "proposal-docx",
+        [this, context, downloadNextImage](ExportDto exportResult) {
+            if (exportResult.downloadUrl.isEmpty()) {
+                ++context->errors;
+                (*downloadNextImage)();
+                return;
+            }
+
+            m_apiService->downloadExportFile(
+                exportResult.downloadUrl,
+                [context, downloadNextImage, exportResult](QByteArray docxBytes) {
+                    if (docxBytes.isEmpty()) {
+                        ++context->errors;
+                    } else {
+                        const QString docxName = exportResult.fileName.isEmpty()
+                            ? QString("Nabidka_%1.docx").arg(context->safeTitle)
+                            : exportResult.fileName;
+                        QFile docxFile(context->tempBase + "/" + docxName);
+                        if (docxFile.open(QIODevice::WriteOnly)) {
+                            docxFile.write(docxBytes);
+                            docxFile.close();
+                        } else {
+                            ++context->errors;
+                        }
+                    }
+                    (*downloadNextImage)();
+                },
+                [context, downloadNextImage](const QString &) {
+                    ++context->errors;
+                    (*downloadNextImage)();
+                });
+        },
+        [context, downloadNextImage](const QString &) {
+            ++context->errors;
+            (*downloadNextImage)();
+        });
 }
 
 void CaseDetailView::setSelectedImageAsPrimary()
@@ -2699,23 +3208,8 @@ void CaseDetailView::setSelectedImageAsPrimary()
         return;
     }
 
-    ApiService apiService;
-    CaseDetailViewModel viewModel;
-    if (!viewModel.setPrimaryImage(m_caseId, image->id, apiService)) {
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-        setImageHintMessage(viewModel.imageErrorMessage(), true);
-        return;
-    }
-
-    const auto images = viewModel.loadCaseImages(m_caseId, apiService);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-    if (!viewModel.imageErrorMessage().isEmpty()) {
-        setImageHintMessage(viewModel.imageErrorMessage(), true);
-        return;
-    }
-
-    m_images = images;
-    updateImagesPanel();
+    m_pendingViewModelAction = ViewModelAction::SetPrimaryImage;
+    m_viewModel->setPrimaryImage(m_caseId, image->id);
 }
 
 void CaseDetailView::setSelectedImageAsAnalysisReference()
@@ -2725,24 +3219,8 @@ void CaseDetailView::setSelectedImageAsAnalysisReference()
         return;
     }
 
-    ApiService apiService;
-    CaseDetailViewModel viewModel;
-    if (!viewModel.setAnalysisReferenceImage(m_caseId, image->id, apiService)) {
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-        setImageHintMessage(viewModel.imageErrorMessage(), true);
-        return;
-    }
-
-    const auto images = viewModel.loadCaseImages(m_caseId, apiService);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-    if (!viewModel.imageErrorMessage().isEmpty()) {
-        setImageHintMessage(viewModel.imageErrorMessage(), true);
-        return;
-    }
-
-    m_images = images;
-    updateImagesPanel();
-    setImageHintMessage("Referencni fotka pro analyzu byla zmenena.");
+    m_pendingViewModelAction = ViewModelAction::SetAnalysisReferenceImage;
+    m_viewModel->setAnalysisReferenceImage(m_caseId, image->id);
 }
 
 void CaseDetailView::duplicateCase(const QString &mode)
@@ -2753,8 +3231,8 @@ void CaseDetailView::duplicateCase(const QString &mode)
 
     if (m_images.empty()) {
         QMessageBox msgBoxCopy(this);
-        msgBoxCopy.setWindowTitle(QString::fromUtf8("Vytvo\u0159it kop\u00edji bez fotek?"));
-        msgBoxCopy.setText(QString::fromUtf8("Aktu\u00e1ln\u00ed zak\u00e1zka zat\u00edm nem\u00e1 na\u010dten\u00e9 \u017e\u00e1dn\u00e9 fotky. Nov\u00e1 zak\u00e1zka bude tak\u00e9 bez fotek.\n\nPokra\u010dovat i tak?"));
+        msgBoxCopy.setWindowTitle(QString::fromUtf8("Vytvořit kopii bez fotek?"));
+        msgBoxCopy.setText(QString::fromUtf8("Aktuální zakázka zatím nemá načtené žádné fotky. Nová zakázka bude také bez fotek.\n\nPokračovat i tak?"));
         msgBoxCopy.setIcon(QMessageBox::Question);
         auto *btnAnoCopy = msgBoxCopy.addButton(QString::fromUtf8("Ano"), QMessageBox::YesRole);
         msgBoxCopy.addButton(QString::fromUtf8("Ne"), QMessageBox::NoRole);
@@ -2764,18 +3242,23 @@ void CaseDetailView::duplicateCase(const QString &mode)
         }
     }
 
-    ApiService apiService;
-    QString errorMessage;
-    const auto duplicatedCaseId = apiService.duplicateCase(m_caseId, mode, &errorMessage);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-    if (duplicatedCaseId.isEmpty()) {
-        m_errorLabel->setText(errorMessage.isEmpty() ? "Nepodarilo se vytvorit kopii zakazky." : errorMessage);
-        m_errorLabel->show();
-        return;
-    }
-
-    m_errorLabel->hide();
-    emit caseDuplicated(duplicatedCaseId);
+    m_apiService->duplicateCase(
+        m_caseId,
+        mode,
+        [this](const QString &duplicatedCaseId) {
+            if (duplicatedCaseId.isEmpty()) {
+                m_errorLabel->setText("Nepodarilo se vytvorit kopii zakazky.");
+                m_errorLabel->show();
+                return;
+            }
+            m_errorLabel->hide();
+            emit caseDuplicated(duplicatedCaseId);
+        },
+        [this](const QString &errorMessage) {
+            m_errorLabel->setText(
+                errorMessage.isEmpty() ? "Nepodarilo se vytvorit kopii zakazky." : errorMessage);
+            m_errorLabel->show();
+        });
 }
 
 void CaseDetailView::sendCurrentCase()
@@ -2785,9 +3268,9 @@ void CaseDetailView::sendCurrentCase()
     }
 
     QMessageBox msgBoxSend(this);
-    msgBoxSend.setWindowTitle(QString::fromUtf8("Odeslat zak\u00e1zku"));
-    msgBoxSend.setText(QString::fromUtf8("Zak\u00e1zka \"%1\" bude ozna\u010dena jako odeslan\u00e1 a p\u0159eunuta do historie.\n\nZ\u00e1kazn\u00edk obdr\u017e\u00ed PDF na sv\u016fj email. Pokra\u010dovat?")
-        .arg(m_titleLabel->text().isEmpty() ? QString::fromUtf8("Bez n\u00e1zvu") : m_titleLabel->text()));
+    msgBoxSend.setWindowTitle(QString::fromUtf8("Odeslat zakázku"));
+    msgBoxSend.setText(QString::fromUtf8("Zakázka \"%1\" bude označena jako odeslaná a přesunuta do historie.\n\nZákazník obdrží PDF na svůj email. Pokračovat?")
+        .arg(m_titleLabel->text().isEmpty() ? QString::fromUtf8("Bez názvu") : m_titleLabel->text()));
     msgBoxSend.setIcon(QMessageBox::Question);
     auto *btnAnoSend = msgBoxSend.addButton(QString::fromUtf8("Ano, odeslat"), QMessageBox::YesRole);
     msgBoxSend.addButton(QString::fromUtf8("Ne"), QMessageBox::NoRole);
@@ -2796,77 +3279,17 @@ void CaseDetailView::sendCurrentCase()
         return;
     }
 
-    ApiService apiService;
-    QString errorMessage;
-    if (!apiService.sendCase(m_caseId, &errorMessage)) {
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-        m_errorLabel->setText(errorMessage.isEmpty() ? "Nepodarilo se odeslat zakazku." : errorMessage);
-        m_errorLabel->show();
-        return;
-    }
-
-    m_errorLabel->hide();
-    emit caseSent(m_caseId);
-}
-
-void CaseDetailView::startImageStatusPolling()
-{
-    if (!m_imagePollingTimer || m_caseId.isEmpty()) {
-        return;
-    }
-
-    m_remainingImagePollAttempts = kImagePollingAttemptLimit;
-    if (!m_imagePollingTimer->isActive()) {
-        m_imagePollingTimer->start();
-    }
-}
-
-void CaseDetailView::stopImageStatusPolling()
-{
-    if (m_imagePollingTimer && m_imagePollingTimer->isActive()) {
-        m_imagePollingTimer->stop();
-    }
-    m_remainingImagePollAttempts = 0;
-}
-
-void CaseDetailView::pollImageStatuses()
-{
-    if (m_caseId.isEmpty()) {
-        stopImageStatusPolling();
-        return;
-    }
-
-    if (m_remainingImagePollAttempts <= 0) {
-        stopImageStatusPolling();
-        setImageHintMessage(
-            QString("Backend stale hlasi: %1. Detail muzes pozdeji znovu obnovit.")
-                .arg(summarizeServerImageStatuses(m_images)));
-        return;
-    }
-
-    --m_remainingImagePollAttempts;
-
-    QString errorMessage;
-    if (!refreshImagesFromBackend(&errorMessage)) {
-        stopImageStatusPolling();
-        setImageHintMessage(errorMessage, true);
-        return;
-    }
-
-    updateImagesPanel();
-    setCase(m_caseId);
-
-    if (hasPendingServerImageStatuses(m_images)) {
-        setImageHintMessage(
-            QString("Backend stale zpracovava fotky. Aktualni stav: %1.")
-                .arg(summarizeServerImageStatuses(m_images)));
-        return;
-    }
-
-    stopImageStatusPolling();
-    setImageHintMessage(
-        QString("Zpracovani fotek je dokonceno. Stav: %1.")
-            .arg(summarizeServerImageStatuses(m_images)));
+    m_apiService->sendCase(
+        m_caseId,
+        [this]() {
+            m_errorLabel->hide();
+            emit caseSent(m_caseId);
+        },
+        [this](const QString &errorMessage) {
+            m_errorLabel->setText(
+                errorMessage.isEmpty() ? "Nepodarilo se odeslat zakazku." : errorMessage);
+            m_errorLabel->show();
+        });
 }
 
 void CaseDetailView::triggerAnalysis()
@@ -2877,142 +3300,35 @@ void CaseDetailView::triggerAnalysis()
     m_analysisJobStatusLabel->setText("Spoustim analyzu...");
     m_analysisJobStatusLabel->show();
 
-    ApiService apiService;
-    QString errorMessage;
-    const auto jobId = apiService.triggerAnalysisJob(m_caseId, &errorMessage);
-
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-
-    if (jobId.isEmpty()) {
-        m_analysisJobStatusLabel->setText(
-            QString("Chyba: %1").arg(errorMessage.isEmpty() ? "Nepodarilo se spustit analyzu." : errorMessage));
-        m_runAnalysisButton->setEnabled(true);
-        return;
-    }
-
-    startAnalysisPolling(jobId);
+    m_pendingViewModelAction = ViewModelAction::TriggerAnalysis;
+    m_viewModel->triggerAnalysis(m_caseId);
 }
 
 void CaseDetailView::confirmSelectionArea()
 {
     if (m_caseId.isEmpty() || m_analysisId.isEmpty()) return;
-    if (!m_overlayWidget || !m_overlayWidget->hasSelection()) return;
+    if (!m_overlayWidget || !viewerStateHasSelection(m_overlayViewerState)) return;
 
-    const auto polygon = m_overlayWidget->selectionPolygon();
+    const auto polygon = viewerStateSelectionPolygon(m_overlayViewerState);
     bool areaOk = false;
     const double manualArea = m_overlayAreaEdit ? m_overlayAreaEdit->text().replace(',', '.').toDouble(&areaOk) : 0.0;
 
     if (m_overlayConfirmButton) m_overlayConfirmButton->setEnabled(false);
 
-    ApiService apiService;
-    QString errorMessage;
-    const bool ok = apiService.patchAnalysisSelection(
+    m_pendingViewModelAction = ViewModelAction::ConfirmSelectionArea;
+    m_viewModel->confirmSelectionArea(
         m_caseId,
         m_analysisId,
         polygon,
-        areaOk && manualArea > 0.0 ? manualArea : 0.0,
-        &errorMessage);
-
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-
-    if (!ok) {
-        setImageHintMessage(
-            QString("Chyba pri ukladani oblasti: %1")
-                .arg(errorMessage.isEmpty() ? "Neznama chyba." : errorMessage),
-            true);
-        if (m_overlayConfirmButton) m_overlayConfirmButton->setEnabled(true);
-        return;
-    }
-
-    setImageHintMessage("Oblast opravy byla ulozena.");
-    m_overlayWidget->clearSelection();
-    setCase(m_caseId); // znovu nacte data i s aktualizovanou plochou
+        areaOk && manualArea > 0.0 ? manualArea : 0.0);
 }
 
-void CaseDetailView::startAnalysisPolling(const QString &jobId)
+void CaseDetailView::refreshImagesFromBackend(std::function<void()> onSuccess, std::function<void(const QString &)> onError)
 {
-    constexpr int kAnalysisPollAttemptLimit = 90; // 90 × 2s = 3 minuty
-    m_analysisJobId = jobId;
-    m_remainingAnalysisPollAttempts = kAnalysisPollAttemptLimit;
-    m_analysisJobStatusLabel->setText("Analyza probiha... (cekam na vysledek)");
-    m_analysisJobStatusLabel->show();
-    if (!m_analysisPollingTimer->isActive()) {
-        m_analysisPollingTimer->start();
-    }
-}
-
-void CaseDetailView::stopAnalysisPolling()
-{
-    if (m_analysisPollingTimer && m_analysisPollingTimer->isActive()) {
-        m_analysisPollingTimer->stop();
-    }
-    m_remainingAnalysisPollAttempts = 0;
-    m_analysisJobId.clear();
-}
-
-void CaseDetailView::pollAnalysisStatus()
-{
-    if (m_analysisJobId.isEmpty() || m_caseId.isEmpty()) {
-        stopAnalysisPolling();
-        return;
-    }
-
-    if (m_remainingAnalysisPollAttempts <= 0) {
-        stopAnalysisPolling();
-        m_analysisJobStatusLabel->setText("Analyza trvala prilis dlouho — zkuste ji spustit znovu.");
-        m_runAnalysisButton->setEnabled(true);
-        return;
-    }
-
-    --m_remainingAnalysisPollAttempts;
-
-    ApiService apiService;
-    QString errorMessage;
-    const auto status = apiService.getAnalysisJobStatus(m_analysisJobId, &errorMessage);
-
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-
-    if (status == "completed") {
-        stopAnalysisPolling();
-        m_analysisJobStatusLabel->setText("Analyza dokoncena. Nacitam vysledky...");
-        setCase(m_caseId); // reload all — fills findings tab
-        m_analysisJobStatusLabel->setText("Analyza dokoncena. Vysledky jsou k dispozici.");
-        m_runAnalysisButton->setEnabled(true);
-    } else if (status == "failed") {
-        stopAnalysisPolling();
-        m_analysisJobStatusLabel->setText("Analyza selhala. Zkontrolujte fotky a zkuste znovu.");
-        m_runAnalysisButton->setEnabled(true);
-    } else if (status == "running") {
-        m_analysisJobStatusLabel->setText(
-            QString("Analyza probiha... (%1 s)")
-                .arg((90 - m_remainingAnalysisPollAttempts) * 2));
-    } else if (!status.isEmpty()) {
-        m_analysisJobStatusLabel->setText(QString("Stav: %1").arg(status));
-    } else if (!errorMessage.isEmpty()) {
-        // network hiccup — just keep trying
-        m_analysisJobStatusLabel->setText(
-            QString("Cekam na server (%1)").arg(errorMessage));
-    }
-}
-
-bool CaseDetailView::refreshImagesFromBackend(QString *errorMessage)
-{
-    CaseDetailViewModel viewModel;
-    ApiService apiService;
-    const auto images = viewModel.loadCaseImages(m_caseId, apiService);
-    if (!viewModel.imageErrorMessage().isEmpty()) {
-        if (errorMessage) {
-            *errorMessage = viewModel.imageErrorMessage();
-        }
-        return false;
-    }
-
-    if (errorMessage) {
-        errorMessage->clear();
-    }
-
-    m_images = images;
-    return true;
+    m_pendingImageRefreshSuccess = std::move(onSuccess);
+    m_pendingImageRefreshError = std::move(onError);
+    m_pendingViewModelAction = ViewModelAction::LoadImages;
+    m_viewModel->loadImages(m_caseId);
 }
 
 void CaseDetailView::setPrimaryImagePreview(const QPixmap &pixmap)
@@ -3042,7 +3358,7 @@ void CaseDetailView::setPrimaryImagePlaceholder(const QString &message)
 
 void CaseDetailView::updatePrimaryImagePreview()
 {
-    // ImageOverlayWidget handles its own scaling in paintEvent — nothing to do
+    // ImageOverlayWidget handles its own scaling in paintEvent â€” nothing to do
 }
 
 bool CaseDetailView::eventFilter(QObject *watched, QEvent *event)
@@ -3051,7 +3367,247 @@ bool CaseDetailView::eventFilter(QObject *watched, QEvent *event)
         switchToPhotosTab();
         return true;
     }
+    if (m_overlayMarkersList && watched == m_overlayMarkersList->viewport() && event->type() == QEvent::Leave) {
+        setHoveredOverlayMarker({});
+        return false;
+    }
     return QWidget::eventFilter(watched, event);
+}
+
+void CaseDetailView::rebuildOverlayShapes()
+{
+    QVector<OverlayShape> overlayShapes;
+
+    if (m_currentCase.analysisMaskPolygon.size() >= 3) {
+        OverlayShape analysisShape;
+        analysisShape.id          = "ai-mask";
+        analysisShape.label       = "AI detekce";
+        analysisShape.kind        = OverlayKind::AiDetection;
+        analysisShape.points      = m_currentCase.analysisMaskPolygon;
+        analysisShape.fillColor   = QColor(230, 120, 30, 55);
+        analysisShape.strokeColor = QColor(230, 120, 30, 200);
+        overlayShapes.append(analysisShape);
+    }
+
+    if (viewerStateHasSelection(m_overlayViewerState)) {
+        OverlayShape draftShape;
+        draftShape.id          = "draft-selection";
+        draftShape.label       = QString::fromUtf8("Ru\u010dn\u00ed v\u00fdb\u011br");
+        draftShape.kind        = OverlayKind::DraftSelection;
+        draftShape.points      = viewerStateSelectionPolygon(m_overlayViewerState);
+        draftShape.fillColor   = QColor(40, 110, 220, 60);
+        draftShape.strokeColor = QColor(40, 110, 220, 220);
+        overlayShapes.append(draftShape);
+    }
+
+    m_overlayShapes = overlayShapes;
+    // Pure computation: caller is responsible for applyOverlayInteractionState().
+}
+
+void CaseDetailView::refreshOverlayMarkersSidebar()
+{
+    if (!m_overlayMarkersList) {
+        return;
+    }
+
+    QSignalBlocker blocker(m_overlayMarkersList);
+    m_overlayMarkersList->clear();
+
+    if (m_overlayShapes.isEmpty()) {
+        auto *placeholderItem = new QListWidgetItem("Zatim zadne markery.");
+        placeholderItem->setFlags(Qt::NoItemFlags);
+        m_overlayMarkersList->addItem(placeholderItem);
+        return;
+    }
+
+    // Build transient set once — O(1) lookup in the hot loop below.
+    const QSet<QString> selectedSet(m_overlayViewerState.selectedIds.begin(),
+                                    m_overlayViewerState.selectedIds.end());
+
+    QListWidgetItem *anchorItem = nullptr;
+    for (const auto &shape : m_overlayShapes) {
+        auto *item = new QListWidgetItem(shape.label.isEmpty() ? shape.id : shape.label);
+        item->setData(Qt::UserRole, shape.id);
+        item->setToolTip(shape.id);
+
+        const bool isSelected = selectedSet.contains(shape.id);
+        const bool isAnchor   = (isSelected && shape.id == m_overlayViewerState.anchorId);
+        const bool isHovered  = (!isSelected && shape.id == m_overlayViewerState.hoveredMarkerId);
+
+        if (isAnchor) {
+            // Primary/anchor item: more opaque background + bold to distinguish from
+            // other selected items. No extra state — derived purely from anchorId.
+            item->setBackground(QColor(230, 120, 30, 140));
+            item->setForeground(QColor("#3a1f0a"));
+            QFont f = item->font();
+            f.setBold(true);
+            item->setFont(f);
+        } else if (isSelected) {
+            item->setBackground(QColor(230, 120, 30, 70));
+            item->setForeground(QColor("#4c2a14"));
+        } else if (isHovered) {
+            item->setBackground(QColor(40, 110, 220, 50));
+            item->setForeground(QColor("#173a74"));
+        }
+
+        m_overlayMarkersList->addItem(item);
+        if (isAnchor) anchorItem = item;
+    }
+    // Scroll to the anchor (primary) item; it is always a subset of selected.
+    if (anchorItem)
+        m_overlayMarkersList->setCurrentItem(anchorItem);
+}
+
+void CaseDetailView::refreshSelectionSummary()
+{
+    if (!m_selectionSummaryLabel) return;
+
+    if (m_overlayViewerState.selectedIds.isEmpty()) {
+        m_selectionSummaryLabel->hide();
+        return;
+    }
+
+    const SelectionGroupSummary s =
+        buildSelectionGroupSummary(m_overlayViewerState.selectedIds, m_overlayShapes);
+
+    if (s.total == 0) {
+        m_selectionSummaryLabel->hide();
+        return;
+    }
+
+    QString text = QString::fromUtf8("Vybr\u00e1no: %1").arg(s.total);
+    for (const SelectionGroup &g : s.groups)
+        text += QString::fromUtf8("\n\u2022 %1 (%2)").arg(g.title).arg(g.ids.size());
+
+    m_selectionSummaryLabel->setText(text);
+    m_selectionSummaryLabel->show();
+}
+
+void CaseDetailView::applyOverlayInteractionState()
+{
+    if (!overlayShapeContainsId(m_overlayShapes, m_overlayViewerState.hoveredMarkerId))
+        m_overlayViewerState.hoveredMarkerId.clear();
+
+    // Normalize selectedIds: remove any IDs that no longer exist in the shape list.
+    {
+        QList<QString> validIds;
+        validIds.reserve(m_overlayViewerState.selectedIds.size());
+        for (const QString &id : m_overlayViewerState.selectedIds) {
+            if (overlayShapeContainsId(m_overlayShapes, id))
+                validIds.append(id);
+        }
+        m_overlayViewerState.selectedIds = std::move(validIds);
+    }
+    if (!overlayShapeContainsId(m_overlayShapes, m_overlayViewerState.anchorId))
+        m_overlayViewerState.anchorId.clear();
+
+    // Safety-net after normalization — catches external mutations bypassing selection helpers.
+    assertSelectionInvariant(m_overlayViewerState);
+
+    if (m_overlayWidget) {
+        m_overlayWidget->setOverlayShapes(m_overlayShapes);
+        m_overlayWidget->refreshFromState();
+    }
+    refreshOverlayMarkersSidebar();
+    refreshSelectionSummary();
+    if (m_detectionWorkItemCoordinator) {
+        m_detectionWorkItemCoordinator->setSelectedOverlayIds(m_overlayViewerState.selectedIds);
+    }
+}
+
+void CaseDetailView::setHoveredOverlayMarker(const QString &overlayId)
+{
+    const QString normalizedId = overlayShapeContainsId(m_overlayShapes, overlayId) ? overlayId : QString();
+    if (m_overlayViewerState.hoveredMarkerId == normalizedId) {
+        return;
+    }
+
+    m_overlayViewerState.hoveredMarkerId = normalizedId;
+    applyOverlayInteractionState();
+}
+
+void CaseDetailView::setSelectedOverlayMarker(const QString &overlayId)
+{
+    const QString normalizedId = overlayShapeContainsId(m_overlayShapes, overlayId) ? overlayId : QString();
+    if (m_overlayViewerState.selectedIds.size() == 1
+        && m_overlayViewerState.selectedIds.first() == normalizedId) {
+        return;
+    }
+
+    if (normalizedId.isEmpty())
+        m_overlayViewerState.clearMarkerSelection();
+    else
+        m_overlayViewerState.setSingleSelection(normalizedId);
+    applyOverlayInteractionState();
+}
+
+void CaseDetailView::handleOverlayActivation(const QString &id, Qt::KeyboardModifiers mods)
+{
+    if (id.isEmpty()) return;
+
+    if (mods & Qt::ShiftModifier) {
+        m_overlayViewerState.rangeSelect(id, m_overlayShapes);
+    } else if (mods & Qt::ControlModifier) {
+        m_overlayViewerState.toggleSelection(id);
+    } else {
+        m_overlayViewerState.setSingleSelection(id);
+    }
+    // Early invariant check — fires before applyOverlayInteractionState normalization,
+    // so a broken helper is caught at the mutation site, not after the fix-up.
+    assertSelectionInvariant(m_overlayViewerState);
+    applyOverlayInteractionState();
+}
+
+void CaseDetailView::refreshProposalWorkItems()
+{
+    if (!m_proposalWorkItemsList) return;
+
+    m_proposalWorkItemsList->clear();
+    if (m_currentProposalWorkItems.isEmpty()) {
+        auto *placeholder = new QListWidgetItem(
+            QString::fromUtf8("Technologick\u00fd postup se dopln\u00ed po zpracov\u00e1n\u00ed fotek."));
+        placeholder->setFlags(Qt::NoItemFlags);
+        m_proposalWorkItemsList->addItem(placeholder);
+    } else {
+        for (const auto &step : m_currentProposalWorkItems)
+            m_proposalWorkItemsList->addItem(step);
+    }
+}
+
+// Called by the AiDetectionWorkItemCoordinator whenever the selected overlay
+// changes. Fills the "AI → práce" panel below the markers list.
+//
+// highlightsProposalItems = true  → mappedItems came from proposalWorkItems
+//                                   (already confirmed) — shown in green.
+// highlightsProposalItems = false → mappedItems are analysisWorkflowSteps
+//                                   (AI recommendations) — shown normally.
+void CaseDetailView::applyOverlayWorkItemMapping(const QString &summary,
+                                                  const QStringList &mappedItems,
+                                                  bool highlightsProposalItems)
+{
+    if (m_overlayWorkItemMappingLabel)
+        m_overlayWorkItemMappingLabel->setText(summary);
+
+    if (!m_overlayMappedWorkItemsList) return;
+
+    m_overlayMappedWorkItemsList->clear();
+
+    if (mappedItems.isEmpty()) {
+        auto *placeholder = new QListWidgetItem(
+            QString::fromUtf8("\u017d\u00e1dn\u00e9 pracovn\u00ed kroky."));
+        placeholder->setFlags(Qt::NoItemFlags);
+        m_overlayMappedWorkItemsList->addItem(placeholder);
+        return;
+    }
+
+    for (const auto &step : mappedItems) {
+        auto *item = new QListWidgetItem(step);
+        if (highlightsProposalItems) {
+            item->setForeground(QColor("#1e6b10"));
+            item->setBackground(QColor(40, 160, 40, 28));
+        }
+        m_overlayMappedWorkItemsList->addItem(item);
+    }
 }
 
 void CaseDetailView::showImagePreview(const ImageDto *image)
@@ -3062,22 +3618,37 @@ void CaseDetailView::showImagePreview(const ImageDto *image)
         return;
     }
 
+    const QString imageId = image->id;
+    const QString imageUrl = image->previewUrl;
     QString imageLabel = QString("Vychozi fotka pro analyzu: %1")
                              .arg(image->originalFilename.isEmpty() ? "-" : image->originalFilename);
     m_primaryImageLabel->setText(imageLabel);
 
-    ApiService apiService;
-    QString previewErrorMessage;
-    const auto previewData = apiService.fetchImageData(image->previewUrl, &previewErrorMessage);
-
-    QPixmap previewPixmap;
-    if (!previewData.isEmpty() && previewPixmap.loadFromData(previewData)) {
-        setPrimaryImagePreview(previewPixmap);
-    } else if (!previewErrorMessage.isEmpty()) {
-        setPrimaryImagePlaceholder(previewErrorMessage);
-    } else {
+    if (imageUrl.isEmpty()) {
         setPrimaryImagePlaceholder("Preview vybrane fotky neni k dispozici.");
+        return;
     }
+
+    m_apiService->fetchImageData(
+        imageUrl,
+        [this, imageId](QByteArray previewData) {
+            if (!imageId.isEmpty() && imageId != m_selectedImageId) {
+                return;
+            }
+
+            QPixmap previewPixmap;
+            if (!previewData.isEmpty() && previewPixmap.loadFromData(previewData)) {
+                setPrimaryImagePreview(previewPixmap);
+            } else {
+                setPrimaryImagePlaceholder("Preview vybrane fotky neni k dispozici.");
+            }
+        },
+        [this, imageId](const QString &previewErrorMessage) {
+            if (!imageId.isEmpty() && imageId != m_selectedImageId) {
+                return;
+            }
+            setPrimaryImagePlaceholder(previewErrorMessage);
+        });
 }
 
 const ImageDto *CaseDetailView::selectedImage() const
@@ -3098,3 +3669,4 @@ void CaseDetailView::resizeEvent(QResizeEvent *event)
     QWidget::resizeEvent(event);
     updatePrimaryImagePreview();
 }
+
