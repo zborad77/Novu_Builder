@@ -286,6 +286,14 @@ class AnalysisJob(Base):
             name="ck_analysis_jobs_status",
         ),
         Index(
+            "uq_analysis_jobs_active_project_job_type",
+            "project_id",
+            "job_type",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+            sqlite_where=text("status IN ('queued', 'running')"),
+        ),
+        Index(
             "idx_analysis_jobs_project_status_created_id",
             "project_id",
             "status",

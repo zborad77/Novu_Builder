@@ -5,9 +5,10 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.case_workflow.transitions import TransitionError, apply_transition
+from app.case_workflow.transitions import TransitionError, execute_transition
 from app.models import AnalysisJob, AnalysisResult, Project
 
 logger = structlog.get_logger(__name__)
@@ -75,6 +76,14 @@ class InvalidAnalysisResultPayloadError(ValueError):
 
 class AnalysisJobLeaseOwnershipError(RuntimeError):
     """Raised when a worker no longer owns the DB lease for a job."""
+
+
+class ActiveAnalysisJobConflict(RuntimeError):
+    """Raised when DB-level dedup detects an already-active job."""
+
+    def __init__(self, existing_job: AnalysisJob | None = None) -> None:
+        super().__init__("An active analysis job already exists.")
+        self.existing_job = existing_job
 
 
 def normalize_analysis_job_status(status: str) -> str:
@@ -528,7 +537,15 @@ class AnalysisRepository:
             created_at=timestamp,
         )
         self.session.add(job)
-        await self.session.commit()
+        try:
+            await self.session.commit()
+        except IntegrityError as exc:
+            await self.session.rollback()
+            existing = await self.get_active_job_for_project_by_type(
+                project.id,
+                job_type=job_type,
+            )
+            raise ActiveAnalysisJobConflict(existing) from exc
         await self.session.refresh(job)
         return job
 
@@ -642,7 +659,7 @@ class AnalysisRepository:
         # Guard: if the case was returned to draft while the worker ran, log and skip;
         # the analysis result is still persisted so no work is lost.
         try:
-            apply_transition(
+            await execute_transition(
                 project,
                 "quote_ready",
                 actor_user_id=None,   # system / worker — no human actor
@@ -744,7 +761,7 @@ class AnalysisRepository:
         # Guard: if the case was returned to draft while the worker ran, log and skip;
         # the analysis result is still persisted so no work is lost.
         try:
-            apply_transition(
+            await execute_transition(
                 project,
                 "quote_ready",
                 actor_user_id=None,   # system / worker — no human actor

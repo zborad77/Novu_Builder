@@ -6,7 +6,7 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
-#include "services/apiservice.h"
+#include "services/sessionservice.h"
 #include "viewmodels/caselistviewmodel.h"
 
 namespace {
@@ -14,9 +14,16 @@ constexpr auto kCompletedCaseStatus = "completed";
 constexpr auto kSentCaseStatus = "sent";
 }
 
-CaseListView::CaseListView(QWidget *parent)
+CaseListView::CaseListView(SessionService &session, QWidget *parent)
     : QWidget(parent)
+    , m_viewModel(new CaseListViewModel(session, this))
 {
+    connect(m_viewModel, &CaseListViewModel::casesLoaded,
+            this, &CaseListView::onCasesLoaded);
+    connect(m_viewModel, &CaseListViewModel::errorOccurred,
+            this, &CaseListView::onCaseLoadError);
+    connect(m_viewModel, &CaseListViewModel::sessionExpiredDetected,
+            this, &CaseListView::sessionExpired);
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(20, 20, 20, 20);
     layout->setSpacing(14);
@@ -170,45 +177,43 @@ bool CaseListView::currentCaseIsReferenceDataset() const
 
 void CaseListView::reloadCases(const QString &preferredCurrentCaseId, bool emitSignal)
 {
-    CaseListViewModel viewModel;
-    ApiService apiService;
-    const auto loadedCases = viewModel.loadCases(apiService);
+    m_pendingPreferredCaseId = preferredCurrentCaseId;
+    m_pendingEmitSignal = emitSignal;
+    m_viewModel->loadCases();
+}
 
-    if (ApiService::sessionExpired()) {
-        emit sessionExpired();
-        return;
-    }
-
-    if (loadedCases.empty() && !viewModel.errorMessage().isEmpty()) {
-        m_errorLabel->setText(viewModel.errorMessage());
-        m_errorLabel->show();
-        m_cases.clear();
-        m_currentCaseId.clear();
-        if (emitSignal) {
-            emit caseSelected(QString());
-        }
-        return;
-    }
-
+void CaseListView::onCasesLoaded(std::vector<CaseDto> cases)
+{
     m_errorLabel->hide();
-    m_cases = loadedCases;
+    m_cases = std::move(cases);
 
-    QString nextCurrentCaseId = preferredCurrentCaseId.isEmpty() ? m_currentCaseId : preferredCurrentCaseId;
-    const auto preferredIt = std::find_if(m_cases.begin(), m_cases.end(), [this, &nextCurrentCaseId](const CaseDto &caseDto) {
-        return caseDto.id == nextCurrentCaseId && isWorkCase(caseDto);
+    QString nextCurrentCaseId = m_pendingPreferredCaseId.isEmpty() ? m_currentCaseId : m_pendingPreferredCaseId;
+    const auto preferredIt = std::find_if(m_cases.begin(), m_cases.end(), [&](const CaseDto &c) {
+        return c.id == nextCurrentCaseId && isWorkCase(c);
     });
 
     if (preferredIt == m_cases.end()) {
-        const auto firstWorkIt = std::find_if(m_cases.begin(), m_cases.end(), [this](const CaseDto &caseDto) {
-            return isWorkCase(caseDto);
+        const auto firstWorkIt = std::find_if(m_cases.begin(), m_cases.end(), [this](const CaseDto &c) {
+            return isWorkCase(c);
         });
         nextCurrentCaseId = firstWorkIt != m_cases.end() ? firstWorkIt->id : QString();
     }
 
     m_currentCaseId = nextCurrentCaseId;
 
-    if (emitSignal) {
+    if (m_pendingEmitSignal) {
         emit caseSelected(m_currentCaseId);
+    }
+}
+
+void CaseListView::onCaseLoadError(const QString &message)
+{
+    m_errorLabel->setText(message);
+    m_errorLabel->show();
+    m_cases.clear();
+    m_currentCaseId.clear();
+    if (m_pendingEmitSignal) {
+        emit caseSelected(QString());
     }
 }
 

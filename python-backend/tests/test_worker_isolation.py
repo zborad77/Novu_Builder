@@ -173,6 +173,7 @@ class TestExecuteJobCrossTenantBlocked:
 
         with patch("app.services.analysis_service.WorkerAsyncSessionFactory") as mock_factory, \
              patch("app.services.analysis_service.run_project_analysis") as mock_analysis, \
+             patch.object(AnalysisService, "_dispatch_quote_recalculation_command", new=AsyncMock(return_value=None)), \
              patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo), \
              patch("app.services.analysis_service.PhotoRepository", return_value=mock_photo_repo):
 
@@ -306,15 +307,15 @@ class TestWorkerExplicitFail:
                 f"{name} has a default value — should be required"
 
     def test_routes_pass_org_id_to_execute_job(self):
-        """Both routes pass org_id explicitly to the job queue enqueue call (R-19)."""
+        """Both routes pass org_id explicitly to the transport dispatcher (R-19)."""
         from app.api.routes.analysis_jobs import create_analysis_job, retry_analysis_job
         src_create = inspect.getsource(create_analysis_job)
-        # R-19: org_id forwarded to enqueue_analysis_job, not BackgroundTasks
-        assert "enqueue_analysis_job" in src_create
+        # R-19: org_id forwarded through the explicit transport dispatcher.
+        assert "dispatch_analysis_job_transport" in src_create
         assert "organization_id=org_id" in src_create
 
         src_retry = inspect.getsource(retry_analysis_job)
-        assert "enqueue_analysis_job" in src_retry
+        assert "dispatch_analysis_job_transport" in src_retry
         assert "organization_id=org_id" in src_retry
 
     def test_routes_pass_org_id_to_retry_job(self):

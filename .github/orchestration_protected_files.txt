@@ -1,0 +1,8 @@
+python-backend/app/case_orchestration/quote_recalculation.py
+python-backend/app/case_orchestration/orchestration_dispatch_registry.py
+python-backend/app/case_orchestration/dispatch_guard.py
+python-backend/app/services/project_service.py
+python-backend/app/repositories/project_repository.py
+python-backend/app/worker/runner.py
+python-backend/app/worker/queue.py
+python-backend/app/worker/heavy_queue.py

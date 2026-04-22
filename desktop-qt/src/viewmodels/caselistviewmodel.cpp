@@ -1,19 +1,46 @@
 #include "caselistviewmodel.h"
 
 #include "services/apiservice.h"
+#include "services/sessionservice.h"
 
-std::vector<CaseDto> CaseListViewModel::loadCases(const ApiService &apiService)
+CaseListViewModel::CaseListViewModel(SessionService &session, QObject *parent)
+    : QObject(parent)
+    , m_api(new ApiService(session, this))
 {
-    auto cases = apiService.fetchCases(&m_errorMessage);
-    return cases;
+    connect(m_api, &ApiService::sessionExpired, this, [this]() {
+        emit sessionExpiredDetected();
+    });
 }
 
-QString CaseListViewModel::duplicateCase(const QString &caseId, const QString &mode, const ApiService &apiService)
+void CaseListViewModel::setLoading(bool v)
 {
-    return apiService.duplicateCase(caseId, mode, &m_errorMessage);
+    emit loadingChanged(v);
 }
 
-QString CaseListViewModel::errorMessage() const
+void CaseListViewModel::loadCases()
 {
-    return m_errorMessage;
+    setLoading(true);
+    m_api->fetchCases(
+        [this](std::vector<CaseDto> cases) {
+            setLoading(false);
+            emit casesLoaded(std::move(cases));
+        },
+        [this](const QString &err) {
+            setLoading(false);
+            emit errorOccurred(err);
+        });
+}
+
+void CaseListViewModel::duplicateCase(const QString &caseId, const QString &mode)
+{
+    setLoading(true);
+    m_api->duplicateCase(caseId, mode,
+        [this](const QString &newId) {
+            setLoading(false);
+            emit caseDuplicated(newId);
+        },
+        [this](const QString &err) {
+            setLoading(false);
+            emit errorOccurred(err);
+        });
 }

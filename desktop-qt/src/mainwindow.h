@@ -4,6 +4,7 @@
 
 #include "services/sessionservice.h"
 
+class ApiService;
 class QFrame;
 class QStackedWidget;
 class QLabel;
@@ -43,6 +44,7 @@ private:
     bool confirmNavigateAway();
 
     SessionService m_session;
+    ApiService *m_apiService = nullptr;
     QStackedWidget *m_stack = nullptr;
     LoginView *m_loginView = nullptr;
     CaseListView *m_caseListView = nullptr;

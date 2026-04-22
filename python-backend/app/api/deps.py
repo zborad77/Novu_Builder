@@ -6,6 +6,7 @@ import structlog.contextvars
 from app.core.audit import bind_request_audit_actor
 from app.core.config import get_settings
 from app.db.session import get_db_session
+from app.case_orchestration.quote_recalculation import QuoteRecalculationCommandService
 from app.case_workflow.case_actions import CaseActionService
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.export_repository import ExportRepository
@@ -100,6 +101,32 @@ def get_case_action_service(
     work_queue=Depends(get_job_queue),
 ) -> CaseActionService:
     return CaseActionService(ProjectRepository(session), work_queue=work_queue)
+
+
+def get_quote_recalculation_command_service(
+    session: AsyncSession = Depends(get_db_session),
+    redis=Depends(get_redis),
+    work_queue=Depends(get_job_queue),
+) -> QuoteRecalculationCommandService:
+    settings = get_settings()
+    analysis_service = AnalysisService(
+        repository=AnalysisRepository(session),
+        photo_repository=PhotoRepository(session),
+        work_catalog_repository=WorkCatalogRepository(session),
+        provider_key=settings.ai_analysis_provider,
+        redis=redis,
+    )
+    quote_variant_service = QuoteVariantService(
+        QuoteVariantRepository(session),
+        WorkCatalogRepository(session),
+        redis=redis,
+    )
+    return QuoteRecalculationCommandService(
+        ProjectRepository(session),
+        quote_variant_service,
+        analysis_service,
+        job_queue=work_queue,
+    )
 
 
 def get_photo_service(

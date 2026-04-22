@@ -1,11 +1,17 @@
 import base64
 import json
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import structlog
 from sqlalchemy import delete
 
 from app.models import Project, ProjectPhoto
+from app.repositories.analysis_repository import (
+    ANALYSIS_JOB_STATUS_QUEUED,
+    ANALYSIS_JOB_STATUS_RUNNING,
+    ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
+)
 from app.repositories.final_proposal_repository import FinalProposalRepository
 from app.repositories.proposal_draft_repository import ProposalDraftRepository
 from app.repositories.project_repository import ProjectRepository
@@ -18,6 +24,7 @@ from app.schemas.project import (
     ProjectWorkflowPhotoReadiness,
     ProjectWorkflowStatusSummary,
 )
+from app.services.analysis_service import build_ai_work_type_suggestion
 from app.services.export_service import ExportService
 from app.services.proposal_draft_service import (
     build_final_proposal_from_record,
@@ -30,6 +37,118 @@ from app.storage.backend import copy_storage_file, delete_storage_file
 logger = structlog.get_logger(__name__)
 
 MIN_READY_PHOTOS_FOR_FINAL_PROPOSAL = 3
+RECONCILIATION_REASON_MARKERS = ("reconciliation", "stall", "stuck")
+
+
+def _quote_snapshot_exists(project: Project) -> bool:
+    return bool(getattr(project, "quote_variants", None) or [])
+
+
+def _has_final_proposal(project: Project) -> bool:
+    return bool(getattr(project, "final_proposals", None) or [])
+
+
+def _has_export_artifact_record(project: Project) -> bool:
+    exports = getattr(project, "exports", None) or []
+    return any(getattr(export, "status", None) in {"pending", "generating", "completed"} for export in exports)
+
+
+def _has_active_analysis_job(project: Project) -> bool:
+    jobs = getattr(project, "analysis_jobs", None) or []
+    return any(
+        getattr(job, "status", None) in {ANALYSIS_JOB_STATUS_QUEUED, ANALYSIS_JOB_STATUS_RUNNING}
+        and getattr(job, "job_type", None) != ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION
+        for job in jobs
+    )
+
+
+def _latest_created_at(records: list[object]) -> datetime | None:
+    timestamps = [created_at for record in records if (created_at := getattr(record, "created_at", None)) is not None]
+    return max(timestamps) if timestamps else None
+
+
+def _latest_transition_to_status(project: Project, status: str):
+    history = getattr(project, "status_history", None) or []
+    matching = [entry for entry in history if getattr(entry, "to_status", None) == status]
+    if not matching:
+        return None
+    return max(
+        matching,
+        key=lambda entry: (
+            getattr(entry, "transitioned_at", None) or datetime.min.replace(tzinfo=UTC),
+            getattr(entry, "id", ""),
+        ),
+    )
+
+
+def _has_proposal_approved(project: Project) -> bool:
+    return _latest_transition_to_status(project, "proposal_approved") is not None
+
+
+def _has_explicit_reconciliation_reason(project: Project) -> bool:
+    history = getattr(project, "status_history", None) or []
+    for entry in reversed(history):
+        reason = (getattr(entry, "reason", None) or "").lower()
+        if any(marker in reason for marker in RECONCILIATION_REASON_MARKERS):
+            return True
+    return False
+
+
+def _quote_snapshot_is_fresh_enough(project: Project) -> bool:
+    quote_variants = getattr(project, "quote_variants", None) or []
+    analysis_results = getattr(project, "analysis_results", None) or []
+    latest_quote_snapshot_at = _latest_created_at(quote_variants)
+    latest_analysis_result_at = _latest_created_at(analysis_results)
+    if latest_quote_snapshot_at is None:
+        return False
+    if latest_analysis_result_at is None:
+        return True
+    return latest_quote_snapshot_at >= latest_analysis_result_at
+
+
+def assert_no_impossible_state(project: Project) -> None:
+    if project.status == "proposal_ready" and not _quote_snapshot_exists(project):
+        raise AssertionError(
+            f"Impossible state for case {project.id!r}: "
+            "status='proposal_ready' requires at least one quote snapshot."
+        )
+    if project.status == "proposal_ready" and not _quote_snapshot_is_fresh_enough(project):
+        raise AssertionError(
+            f"Impossible state for case {project.id!r}: "
+            "status='proposal_ready' requires the latest quote snapshot to be at least as recent "
+            "as the latest analysis result."
+        )
+    if project.status == "quote_ready" and not _has_final_proposal(project):
+        raise AssertionError(
+            f"Impossible state for case {project.id!r}: "
+            "status='quote_ready' requires a final proposal artifact."
+        )
+    if project.status == "sent" and (
+        not _has_final_proposal(project) or not _has_export_artifact_record(project)
+    ):
+        raise AssertionError(
+            f"Impossible state for case {project.id!r}: "
+            "status='sent' requires both final proposal and export artifact records."
+        )
+    # TODO(orchestration): temporary invariant only.
+    # `sent` is still bridged through legacy `quote_ready` history until the
+    # runtime contract is fully migrated to `proposal_approved`.
+    if project.status == "sent" and _latest_transition_to_status(project, "quote_ready") is None:
+        raise AssertionError(
+            f"Impossible state for case {project.id!r}: "
+            "status='sent' TEMP invariant: currently guarded by a prior quote_ready "
+            "transition in status history and must migrate to proposal_approved. "
+            f"proposal_approved_present={_has_proposal_approved(project)}"
+        )
+    if (
+        project.status == "analyzing"
+        and not _has_active_analysis_job(project)
+        and not _has_explicit_reconciliation_reason(project)
+    ):
+        raise AssertionError(
+            f"Impossible state for case {project.id!r}: "
+            "status='analyzing' requires an active analysis job or explicit reconciliation marker."
+        )
 
 
 def is_reference_dataset_project(project: Project) -> bool:
@@ -164,6 +283,7 @@ def _build_latest_analysis_dict(project: Project) -> dict | None:
         "laborHoursTotal": latest.labor_hours_total,
         "modelName": latest.model_name,
         "modelVersion": latest.model_version,
+        "aiWorkTypeSuggestion": build_ai_work_type_suggestion(latest).model_dump(mode="json"),
         "createdAt": latest.created_at.isoformat() if latest.created_at else None,
     }
 
@@ -189,6 +309,8 @@ def _parse_json(value: str | None):
 def build_project_detail(project: Project, *, actor_role: str = "manager") -> ProjectDetail:
     from app.case_workflow.transitions import get_available_transitions
     from app.services.photo_service import to_read_model
+
+    assert_no_impossible_state(project)
 
     active_photos = _active_project_photos(project)
     proposal_draft = build_project_proposal_draft(project, active_photos, proposal_record=project.proposal_draft)

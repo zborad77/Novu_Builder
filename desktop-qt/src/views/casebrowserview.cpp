@@ -10,6 +10,7 @@
 #include <QWidget>
 
 #include "services/apiservice.h"
+#include "services/sessionservice.h"
 
 namespace {
 
@@ -35,9 +36,13 @@ QString localizedCaseStatus(const QString &status)
 
 } // namespace
 
-CaseBrowserView::CaseBrowserView(QWidget *parent)
+CaseBrowserView::CaseBrowserView(SessionService &session, QWidget *parent)
     : QWidget(parent)
+    , m_apiService(new ApiService(session, this))
 {
+    connect(m_apiService, &ApiService::sessionExpired, this, [this]() {
+        emit sessionExpired();
+    });
     auto *rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(0, 0, 0, 0);
     rootLayout->setSpacing(0);
@@ -152,6 +157,7 @@ CaseBrowserView::CaseBrowserView(QWidget *parent)
 
 void CaseBrowserView::loadCases(Mode mode)
 {
+    m_currentMode = mode;
     m_statusLabel->hide();
 
     if (mode == Mode::WorkCases) {
@@ -164,33 +170,24 @@ void CaseBrowserView::loadCases(Mode mode)
             QString::fromUtf8("Dokon\u010den\u00e9 a odeslan\u00e9 zak\u00e1zky."));
     }
 
-    ApiService api;
-    QString errorMessage;
-    const auto allCases = api.fetchCases(&errorMessage);
-
-    if (ApiService::sessionExpired()) {
-        emit sessionExpired();
-        return;
-    }
-
-    if (allCases.empty() && !errorMessage.isEmpty()) {
-        m_statusLabel->setText(errorMessage);
-        m_statusLabel->show();
-        buildCards({}, mode);
-        return;
-    }
-
-    std::vector<CaseDto> filtered;
-    for (const auto &c : allCases) {
-        const bool isClosed = (c.status == "sent" || c.status == "completed");
-        if (mode == Mode::WorkCases && !isClosed) {
-            filtered.push_back(c);
-        } else if (mode == Mode::HistoryCases && isClosed) {
-            filtered.push_back(c);
-        }
-    }
-
-    buildCards(filtered, mode);
+    m_apiService->fetchCases(
+        [this](std::vector<CaseDto> allCases) {
+            std::vector<CaseDto> filtered;
+            for (const auto &c : allCases) {
+                const bool isClosed = (c.status == "sent" || c.status == "completed");
+                if (m_currentMode == Mode::WorkCases && !isClosed) {
+                    filtered.push_back(c);
+                } else if (m_currentMode == Mode::HistoryCases && isClosed) {
+                    filtered.push_back(c);
+                }
+            }
+            buildCards(filtered, m_currentMode);
+        },
+        [this](const QString &err) {
+            m_statusLabel->setText(err);
+            m_statusLabel->show();
+            buildCards({}, m_currentMode);
+        });
 }
 
 void CaseBrowserView::buildCards(const std::vector<CaseDto> &cases, Mode mode)

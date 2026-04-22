@@ -1,10 +1,17 @@
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy import select
 
 from app.case_workflow.case_actions import CaseActionService
-from app.models import AnalysisJob, Project, ProjectExport, ProjectFinalProposal
+from app.models import (
+    AnalysisJob,
+    Project,
+    ProjectExport,
+    ProjectFinalProposal,
+    ProjectStatusHistory,
+)
 from app.repositories.project_repository import ProjectRepository
 
 
@@ -23,6 +30,32 @@ async def _create_project(db_session, *, project_id: str, status: str) -> Projec
     db_session.add(project)
     await db_session.commit()
     return project
+
+
+async def _seed_status_history(
+    db_session,
+    *,
+    project_id: str,
+    statuses: list[str],
+) -> None:
+    base_time = datetime.now(UTC) - timedelta(minutes=len(statuses))
+    entries = []
+    previous_status = None
+    for index, status in enumerate(statuses):
+        entries.append(
+            ProjectStatusHistory(
+                id=f"psh_{project_id}_{index}",
+                project_id=project_id,
+                from_status=previous_status,
+                to_status=status,
+                transitioned_by_user_id=_USER_ID,
+                reason=f"seed history -> {status}",
+                transitioned_at=base_time + timedelta(minutes=index),
+            )
+        )
+        previous_status = status
+    db_session.add_all(entries)
+    await db_session.commit()
 
 
 def _service(db_session, *, work_queue=object()) -> CaseActionService:
@@ -109,6 +142,11 @@ async def test_approve_proposal_locks_pricing_snapshots(db_session):
 @pytest.mark.asyncio
 async def test_send_quote_creates_supported_export_and_enqueues_heavy_job(db_session):
     project = await _create_project(db_session, project_id="prj_transition_send", status="quote_ready")
+    await _seed_status_history(
+        db_session,
+        project_id=project.id,
+        statuses=["draft", "intake", "analyzing", "proposal_ready", "quote_ready"],
+    )
     db_session.add(
         ProjectFinalProposal(
             id="fp_transition_send",
@@ -155,6 +193,11 @@ async def test_send_quote_creates_supported_export_and_enqueues_heavy_job(db_ses
 @pytest.mark.asyncio
 async def test_complete_creates_case_zip_export_and_enqueues_heavy_job(db_session):
     project = await _create_project(db_session, project_id="prj_transition_complete", status="sent")
+    await _seed_status_history(
+        db_session,
+        project_id=project.id,
+        statuses=["draft", "intake", "analyzing", "proposal_ready", "quote_ready", "sent"],
+    )
 
     with patch(
         "app.case_workflow.action_effects.enqueue_heavy_job",

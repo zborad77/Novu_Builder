@@ -13,6 +13,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Fail on forbidden files
         shell: bash
@@ -42,3 +49,6 @@ jobs:
           fi
 
           echo "Secret-file guard passed."
+
+      - name: Enforce orchestration protected-file checklist
+        run: python scripts/check_orchestration_protected_changes.py

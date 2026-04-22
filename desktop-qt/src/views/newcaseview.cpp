@@ -20,6 +20,7 @@
 #include <QVBoxLayout>
 
 #include "services/apiservice.h"
+#include "services/sessionservice.h"
 
 namespace {
 constexpr int kThumbSize = 96;
@@ -49,9 +50,13 @@ UploadImageDto prepareImage(const QString &path)
 }
 } // namespace
 
-NewCaseView::NewCaseView(QWidget *parent)
+NewCaseView::NewCaseView(SessionService &session, QWidget *parent)
     : QWidget(parent)
+    , m_apiService(new ApiService(session, this))
 {
+    connect(m_apiService, &ApiService::sessionExpired, this, [this]() {
+        emit sessionExpired();
+    });
     auto *rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(0, 0, 0, 0);
     rootLayout->setSpacing(0);
@@ -191,6 +196,7 @@ NewCaseView::NewCaseView(QWidget *parent)
     overlayControlsRow->addStretch();
 
     m_overlayWidget = new ImageOverlayWidget();
+    m_overlayWidget->bindViewerState(&m_overlayViewerState);
     m_overlayWidget->setMinimumHeight(360);
     m_overlayWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     m_overlayWidget->setPlaceholder(QString::fromUtf8("Vyberte fotografie pro zobrazen\u00ed n\u00e1hledu."));
@@ -450,30 +456,6 @@ void NewCaseView::submit()
         m_statusLabel->show();
     }
 
-    ApiService api;
-    QString errorMsg;
-
-    // 1. Create case
-    const QString caseId = api.createCase(title, address, repairScope, description, &errorMsg);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-    if (caseId.isEmpty()) {
-        if (m_errorLabel) {
-            m_errorLabel->setText(errorMsg.isEmpty()
-                ? QString::fromUtf8("Nepoda\u0159ilo se vytvo\u0159it zak\u00e1zku.")
-                : errorMsg);
-            m_errorLabel->show();
-        }
-        if (m_statusLabel) m_statusLabel->hide();
-        if (m_submitButton) m_submitButton->setEnabled(true);
-        return;
-    }
-
-    // 2. Upload photos
-    if (m_statusLabel) {
-        m_statusLabel->setText(
-            QString::fromUtf8("Nahr\u00e1v\u00e1m %1 fotografii...").arg(m_preparedImages.size()));
-    }
-
     // Put primary photo first
     std::vector<UploadImageDto> orderedImages = m_preparedImages;
     if (m_primaryIndex > 0 && m_primaryIndex < static_cast<int>(orderedImages.size())) {
@@ -482,34 +464,50 @@ void NewCaseView::submit()
                     orderedImages.end());
     }
 
-    if (!api.uploadCaseImages(caseId, orderedImages, &errorMsg)) {
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-        if (m_errorLabel) {
-            m_errorLabel->setText(errorMsg.isEmpty()
-                ? QString::fromUtf8("Nepoda\u0159ilo se nahr\u00e1t fotografie.")
-                : errorMsg);
-            m_errorLabel->show();
-        }
-        if (m_statusLabel) m_statusLabel->hide();
-        if (m_submitButton) m_submitButton->setEnabled(true);
-        return;
-    }
-
-    // 3. Trigger analysis
-    if (m_statusLabel) {
-        m_statusLabel->setText(QString::fromUtf8("Spu\u0161t\u011bm anal\u00fdzu AI..."));
-    }
-
-    const QString jobId = api.triggerAnalysisJob(caseId, &errorMsg);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
-    // Analysis trigger failure is non-fatal — case was created and photos uploaded
-    if (jobId.isEmpty() && !errorMsg.isEmpty()) {
-        if (m_statusLabel) {
-            m_statusLabel->setText(
-                QString::fromUtf8("Zak\u00e1zka vytvo\u0159ena, anal\u00fdza se spust\u00ed automaticky."));
-        }
-    }
-
-    if (m_statusLabel) m_statusLabel->hide();
-    emit caseCreated(caseId);
+    // 1. Create case
+    m_apiService->createCase(title, address, repairScope, description,
+        [this, orderedImages](const QString &caseId) {
+            // 2. Upload photos
+            if (m_statusLabel) {
+                m_statusLabel->setText(
+                    QString::fromUtf8("Nahr\u00e1v\u00e1m %1 fotografii...").arg(orderedImages.size()));
+            }
+            m_apiService->uploadCaseImages(caseId, orderedImages,
+                [this, caseId]() {
+                    // 3. Trigger analysis (non-fatal if fails)
+                    if (m_statusLabel) {
+                        m_statusLabel->setText(QString::fromUtf8("Spu\u0161t\u011bm anal\u00fdzu AI..."));
+                    }
+                    m_apiService->triggerAnalysisJob(caseId,
+                        [this, caseId](const QString &) {
+                            if (m_statusLabel) m_statusLabel->hide();
+                            emit caseCreated(caseId);
+                        },
+                        [this, caseId](const QString &) {
+                            // Analysis trigger failure is non-fatal
+                            if (m_statusLabel) m_statusLabel->hide();
+                            emit caseCreated(caseId);
+                        });
+                },
+                [this](const QString &err) {
+                    if (m_errorLabel) {
+                        m_errorLabel->setText(err.isEmpty()
+                            ? QString::fromUtf8("Nepoda\u0159ilo se nahr\u00e1t fotografie.")
+                            : err);
+                        m_errorLabel->show();
+                    }
+                    if (m_statusLabel) m_statusLabel->hide();
+                    if (m_submitButton) m_submitButton->setEnabled(true);
+                });
+        },
+        [this](const QString &err) {
+            if (m_errorLabel) {
+                m_errorLabel->setText(err.isEmpty()
+                    ? QString::fromUtf8("Nepoda\u0159ilo se vytvo\u0159it zak\u00e1zku.")
+                    : err);
+                m_errorLabel->show();
+            }
+            if (m_statusLabel) m_statusLabel->hide();
+            if (m_submitButton) m_submitButton->setEnabled(true);
+        });
 }

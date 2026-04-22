@@ -10,6 +10,17 @@ class PolygonPoint(BaseModel):
     y: float
 
 
+class AiWorkTypeSuggestionRead(BaseModel):
+    workTypeCode: str | None = None
+    confidence: float = 0
+    isUsable: bool
+    objectType: str | None = None
+    recommendedScope: str | None = None
+    sourceAnalysisId: str
+    reason: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class AnalysisResultRead(BaseModel):
     id: str
     projectId: str
@@ -35,6 +46,7 @@ class AnalysisResultRead(BaseModel):
     laborHoursTotal: float | None = None
     modelName: str | None = None
     modelVersion: str | None = None
+    aiWorkTypeSuggestion: AiWorkTypeSuggestionRead | None = None
     createdAt: datetime | None = None
 
 

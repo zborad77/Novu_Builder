@@ -10,12 +10,14 @@ from app.repositories.analysis_repository import (
     ANALYSIS_JOB_STATUS_FAILED,
     ANALYSIS_JOB_STATUS_QUEUED,
     ANALYSIS_JOB_STATUS_RUNNING,
+    ActiveAnalysisJobConflict,
     AnalysisJobLeaseOwnershipError,
     InvalidAnalysisJobStatusError,
     InvalidAnalysisResultPayloadError,
     InvalidAnalysisJobStatusTransition,
     AnalysisRepository,
 )
+from app.models import AnalysisJob
 from app.services.analysis_service import AnalysisService
 from app.worker.queue import AnalysisJobTransportSnapshot
 
@@ -155,6 +157,38 @@ class TestAnalysisRepositoryStatusGuards:
 
 
 class TestAnalysisServiceFailureGuards:
+    @pytest.mark.asyncio
+    async def test_create_job_reuses_existing_job_when_db_dedup_guard_trips(self):
+        repository = AsyncMock()
+        project = _make_project()
+        project.organization_id = "org_1"
+        existing_job = _make_job(status=ANALYSIS_JOB_STATUS_QUEUED)
+        existing_job.id = "job_existing"
+
+        repository.get_active_job_for_project_by_type = AsyncMock(return_value=None)
+        repository.create_queued_job = AsyncMock(
+            side_effect=ActiveAnalysisJobConflict(existing_job)
+        )
+
+        service = AnalysisService(
+            repository=repository,
+            photo_repository=AsyncMock(),
+            provider_key="mock",
+        )
+
+        with (
+            patch.object(service, "_enforce_tenant_active_job_limit", new=AsyncMock()),
+            patch.object(service, "_enforce_daily_ai_quota", new=AsyncMock()),
+            patch.object(service, "_enforce_queue_precheck", new=AsyncMock()),
+        ):
+            result = await service.create_job(
+                project,
+                user_id="usr_1",
+            )
+
+        assert result.created_new is False
+        assert result.job is existing_job
+
     @pytest.mark.asyncio
     async def test_execute_job_missing_org_marks_job_failed_before_raising(self):
         service = AnalysisService(
@@ -505,3 +539,14 @@ class TestAnalysisServiceFailureGuards:
         assert result.id == "ana_1"
         repository.get_analysis_result_in_org.assert_awaited_once_with("ana_1", "org_1")
         repository.update_analysis_manual_selection.assert_awaited_once_with(stored, {"manualAreaSqm": 18.0})
+
+
+def test_analysis_job_model_has_active_job_unique_index():
+    index = next(
+        idx
+        for idx in AnalysisJob.__table__.indexes
+        if idx.name == "uq_analysis_jobs_active_project_job_type"
+    )
+
+    assert index.unique is True
+    assert [column.name for column in index.columns] == ["project_id", "job_type"]

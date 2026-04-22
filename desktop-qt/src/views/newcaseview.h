@@ -9,7 +9,9 @@
 
 #include "dto/uploadimagedto.h"
 #include "widgets/imageoverlaywidget.h"
+#include "widgets/viewerstate.h"
 
+class ApiService;
 class QComboBox;
 class QLabel;
 class QLineEdit;
@@ -17,13 +19,14 @@ class QHBoxLayout;
 class QPlainTextEdit;
 class QPushButton;
 class QScrollArea;
+class SessionService;
 
 class NewCaseView : public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit NewCaseView(QWidget *parent = nullptr);
+    explicit NewCaseView(SessionService &session, QWidget *parent = nullptr);
 
     void reset();
 
@@ -54,6 +57,7 @@ private:
 
     // Preview / overlay
     ImageOverlayWidget *m_overlayWidget = nullptr;
+    ViewerState m_overlayViewerState;
     QPushButton *m_overlayModeViewButton = nullptr;
     QPushButton *m_overlayModeRectButton = nullptr;
     QPushButton *m_overlayModePolyButton = nullptr;
@@ -65,6 +69,7 @@ private:
     QPushButton *m_submitButton = nullptr;
 
     // Data
+    ApiService *m_apiService = nullptr;
     QStringList m_photoPaths;
     int m_primaryIndex = 0;
     QList<QPushButton *> m_thumbnailButtons;

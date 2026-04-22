@@ -7,7 +7,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.case_workflow.transitions import TransitionError, apply_transition
+from app.case_workflow.transitions import TransitionError, execute_transition
 from app.models import AnalysisJob, AnalysisResult, MaterialCatalog, PricingProfile, Project, QuoteItem, QuoteVariant, SupplierMaterialPrice
 
 logger = structlog.get_logger(__name__)
@@ -170,7 +170,7 @@ class QuoteVariantRepository:
         # Guard: the project might have moved away from a quote-relevant status
         # (e.g. returned to draft) between the quote request and this callback.
         try:
-            apply_transition(
+            await execute_transition(
                 project,
                 "quote_ready",
                 actor_user_id=None,

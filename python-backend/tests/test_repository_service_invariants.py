@@ -566,6 +566,6 @@ async def test_get_project_lean_does_not_load_relations(db_session, test_tenants
     # the instance dict after a lean fetch.  SQLAlchemy marks unloaded
     # relationships as expired/deferred; they are absent from the loaded attrs.
     loaded_attrs = {key for key, _ in state.attrs.items() if not state.attrs[key].history.unchanged == ()}
-    for rel in ("photos", "client", "proposal_draft", "final_proposals",
-                "analysis_results", "quote_variants"):
+    for rel in ("photos", "client", "analysis_jobs", "proposal_draft", "exports",
+                "final_proposals", "status_history", "analysis_results", "quote_variants"):
         assert rel not in loaded_attrs, f"get_project_lean must not eagerly load '{rel}'"

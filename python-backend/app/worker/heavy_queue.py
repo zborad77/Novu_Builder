@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 
+from app.case_orchestration.dispatch_guard import assert_dispatch_allowed
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 from redis.asyncio import Redis
 
@@ -524,10 +525,12 @@ async def enqueue_heavy_job(
     organization_id: str | None = None,
     export_id: str | None = None,
     photo_id: str | None = None,
+    dispatch_name: str = "worker.enqueue_job",
     max_depth: int | None = None,
     max_global_queued: int | None = None,
     priority: str = _JOB_PRIORITY_STANDARD,
 ) -> None:
+    assert_dispatch_allowed(dispatch_name)
     payload = validate_heavy_job_payload(
         {
             "job_type": job_type,

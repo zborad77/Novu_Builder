@@ -15,6 +15,7 @@
 #include <QTimer>
 #include <QWhatsThis>
 
+#include "dto/loginresultdto.h"
 #include "services/apiservice.h"
 #include "views/adminpanelview.h"
 #include "views/casebrowserview.h"
@@ -26,6 +27,7 @@
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
+    , m_apiService(new ApiService(m_session, this))
 {
     setWindowTitle("NOVU Builder");
 
@@ -36,6 +38,7 @@ MainWindow::MainWindow(QWidget *parent)
         openServerSetupDialog(true);
     } else {
         ApiService::setGlobalBaseUrl(savedUrl);
+        m_session.refreshRealtimeConnection();
     }
 
     m_stack = new QStackedWidget(this);
@@ -59,46 +62,42 @@ void MainWindow::handleLoginRequested(const QString &email, const QString &passw
     m_loginView->clearError();
     m_loginView->setLoading(true);
 
-    ApiService api;
-    QString errorMessage;
-    const auto result = api.login(email, password, &errorMessage);
+    m_apiService->login(email, password,
+        [this](LoginResultDto result) {
+            if (!m_loginView) return;
+            m_loginView->setLoading(false);
 
-    m_loginView->setLoading(false);
+            m_session.setTokens(result.accessToken, result.refreshToken);
+            m_session.saveToSettings();
 
-    if (result.accessToken.isEmpty()) {
-        m_loginView->showError(errorMessage.isEmpty() ? "Prihlaseni se nezdarilo." : errorMessage);
-        return;
-    }
+            const bool isSuperAdmin = result.isSuperAdmin
+                || result.role == QLatin1String("superadmin");
 
-    m_session.setTokens(result.accessToken, result.refreshToken);
-    m_session.saveToSettings();
-    ApiService::setGlobalToken(result.accessToken);
+            if (m_serverButton) {
+                const bool isAdmin = isSuperAdmin
+                    || result.role == QLatin1String("company-admin");
+                m_serverButton->setVisible(isAdmin);
+            }
+            if (m_sidebarAdminButton) {
+                m_sidebarAdminButton->setVisible(isSuperAdmin);
+            }
 
-    const bool isSuperAdmin = result.isSuperAdmin
-        || result.role == QLatin1String("superadmin");
+            m_stack->setCurrentIndex(1);
+            switchToWorkspaceMode();
 
-    // Server button visible only for admins
-    if (m_serverButton) {
-        const bool isAdmin = isSuperAdmin
-            || result.role == QLatin1String("company-admin");
-        m_serverButton->setVisible(isAdmin);
-    }
-
-    // Admin panel button visible only for superadmin
-    if (m_sidebarAdminButton) {
-        m_sidebarAdminButton->setVisible(isSuperAdmin);
-    }
-
-    m_stack->setCurrentIndex(1);
-    switchToWorkspaceMode();
-
-    if (m_caseListView) {
-        m_caseListView->reloadCases(QString(), false);  // load list without auto-selecting
-    }
-    showWelcomeView();
-    statusBar()->showMessage(
-        QString("Prihlasen jako %1").arg(result.fullName.isEmpty() ? result.email : result.fullName),
-        5000);
+            if (m_caseListView) {
+                m_caseListView->reloadCases(QString(), false);
+            }
+            showWelcomeView();
+            statusBar()->showMessage(
+                QString("Prihlasen jako %1").arg(result.fullName.isEmpty() ? result.email : result.fullName),
+                5000);
+        },
+        [this](const QString &errorMessage) {
+            if (!m_loginView) return;
+            m_loginView->setLoading(false);
+            m_loginView->showError(errorMessage.isEmpty() ? "Prihlaseni se nezdarilo." : errorMessage);
+        });
 }
 
 QWidget *MainWindow::createWorkspaceShell()
@@ -213,7 +212,7 @@ QWidget *MainWindow::createWorkspaceShell()
     caseColumn->setObjectName("panelCard");
     auto *caseColumnLayout = new QVBoxLayout(caseColumn);
     caseColumnLayout->setContentsMargins(0, 0, 0, 0);
-    m_caseListView = new CaseListView(caseColumn);
+    m_caseListView = new CaseListView(m_session, caseColumn);
     caseColumnLayout->addWidget(m_caseListView);
 
     auto *detailColumn = new QWidget(content);
@@ -221,9 +220,9 @@ QWidget *MainWindow::createWorkspaceShell()
     detailColumnLayout->setContentsMargins(0, 0, 0, 0);
     detailColumnLayout->setSpacing(0);
     m_detailStack = new QStackedWidget(detailColumn);
-    m_caseDetailView = new CaseDetailView(m_detailStack);
-    m_newCaseView = new NewCaseView(m_detailStack);
-    m_caseBrowserView = new CaseBrowserView(m_detailStack);
+    m_caseDetailView = new CaseDetailView(m_session, m_detailStack);
+    m_newCaseView = new NewCaseView(m_session, m_detailStack);
+    m_caseBrowserView = new CaseBrowserView(m_session, m_detailStack);
     // Welcome screen (shown on startup before any case is selected)
     m_welcomeView = new QWidget(m_detailStack);
     auto *welcomeLayout = new QVBoxLayout(m_welcomeView);
@@ -281,7 +280,7 @@ QWidget *MainWindow::createWorkspaceShell()
         }
     )");
 
-    m_adminPanelView = new AdminPanelView(m_detailStack);
+    m_adminPanelView = new AdminPanelView(m_session, m_detailStack);
     connect(m_adminPanelView, &AdminPanelView::impersonationStarted,
             this, &MainWindow::startImpersonation);
 
@@ -445,6 +444,7 @@ QWidget *MainWindow::createWorkspaceShell()
             showCaseDetailView();
         });
         connect(m_newCaseView, &NewCaseView::sessionExpired, this, &MainWindow::handleSessionExpired);
+        connect(m_adminPanelView, &AdminPanelView::sessionExpired, this, &MainWindow::handleSessionExpired);
         connect(m_newCaseView, &NewCaseView::caseCreated, this, [this](const QString &caseId) {
             showCaseDetailView();
             if (m_caseListView) {
@@ -717,7 +717,6 @@ QWidget *MainWindow::createWorkspaceShell()
     connect(m_caseBrowserView, &CaseBrowserView::sessionExpired, this, &MainWindow::handleSessionExpired);
     connect(loginButton, &QPushButton::clicked, this, [this]() {
         m_session.clear();
-        ApiService::clearGlobalToken();
         if (m_loginView) {
             m_loginView->clearError();
         }
@@ -733,7 +732,6 @@ QWidget *MainWindow::createWorkspaceShell()
 void MainWindow::handleSessionExpired()
 {
     m_session.clear();
-    ApiService::clearSessionExpired();
     if (m_loginView) {
         m_loginView->clearError();
         m_loginView->showError("Relace vyprsela. Prihlas se prosim znovu.");
@@ -788,10 +786,10 @@ void MainWindow::startImpersonation(const QString &token, const QString &userFul
     (void)userId;
 
     // Save current admin token so we can restore it later
-    m_savedAdminToken = ApiService::globalToken();
+    m_savedAdminToken = m_session.token();
 
     // Apply the impersonation token for all subsequent API calls
-    ApiService::setGlobalToken(token);
+    m_session.setAccessToken(token);
 
     // Show the warning banner
     if (m_impersonationLabel) {
@@ -818,7 +816,7 @@ void MainWindow::stopImpersonation()
     if (m_savedAdminToken.isEmpty()) return;
 
     // Restore admin token
-    ApiService::setGlobalToken(m_savedAdminToken);
+    m_session.setAccessToken(m_savedAdminToken);
     m_savedAdminToken.clear();
 
     // Hide banner
@@ -948,12 +946,14 @@ void MainWindow::openServerSetupDialog(bool firstTime)
         if (!newUrl.isEmpty()) {
             settings.setValue("server/url", newUrl);
             ApiService::setGlobalBaseUrl(newUrl);
+            m_session.refreshRealtimeConnection();
             statusBar()->showMessage(
                 QString::fromUtf8("Server nastaven na: %1").arg(newUrl), 5000);
         }
     } else if (firstTime) {
         // User cancelled on first launch — use default
         ApiService::setGlobalBaseUrl(QString());
+        m_session.refreshRealtimeConnection();
         statusBar()->showMessage(
             QString::fromUtf8("Server neni nastaven. Prihlaseni zustane blokovane, dokud nezadate URL serveru."),
             6000);

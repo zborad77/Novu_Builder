@@ -9,7 +9,7 @@ from app.schemas.analysis import AnalysisJobCreateRequest, AnalysisTriggerRespon
 from app.schemas.auth import AuthUserRead
 from app.services.analysis_service import AnalysisService
 from app.services.project_service import ProjectService
-from app.worker.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
+from app.worker.queue import AnalysisJobQueueCapacityExceededError
 
 logger = structlog.get_logger(__name__)
 
@@ -51,14 +51,12 @@ async def create_analysis_job(
     job = create_result.job
     if job_queue is not None and create_result.created_new:
         try:
-            await enqueue_analysis_job(
-                job_queue,
-                job_id=job.id,
-                project_id=case_id,
+            await analysis_service.dispatch_analysis_job_transport(
+                job,
+                job_queue=job_queue,
                 organization_id=org_id,
                 is_superadmin_context=current_user.isSuperAdmin,
                 max_depth=settings.analysis_queue_max_depth,
-                max_global_queued=settings.effective_backpressure_max_queued_jobs,
             )
         except AnalysisJobQueueCapacityExceededError:
             await analysis_service.cancel_analysis_job(job.id, organization_id=org_id)
@@ -200,14 +198,12 @@ async def retry_analysis_job(
     )
     if job_queue is not None:
         try:
-            await enqueue_analysis_job(
-                job_queue,
-                job_id=new_job.id,
-                project_id=new_job.project_id,
+            await analysis_service.dispatch_analysis_job_transport(
+                new_job,
+                job_queue=job_queue,
                 organization_id=org_id,
                 is_superadmin_context=current_user.isSuperAdmin,
                 max_depth=settings.analysis_queue_max_depth,
-                max_global_queued=settings.effective_backpressure_max_queued_jobs,
             )
         except AnalysisJobQueueCapacityExceededError:
             await analysis_service.cancel_analysis_job(new_job.id, organization_id=org_id)

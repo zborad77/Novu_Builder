@@ -39,6 +39,7 @@ from app.repositories.analysis_repository import (
     ANALYSIS_JOB_STATUS_QUEUED,
     ANALYSIS_JOB_STATUS_RUNNING,
     AnalysisRepository,
+    ActiveAnalysisJobConflict,
     AnalysisJobLeaseOwnershipError,
     _normalize_utc_datetime,
     InvalidAnalysisResultPayloadError,
@@ -47,7 +48,7 @@ from app.repositories.analysis_repository import (
 )
 from app.repositories.photo_repository import PhotoRepository
 from app.repositories.work_catalog_repository import WorkCatalogRepository
-from app.schemas.analysis import AnalysisResultRead, parse_json_field
+from app.schemas.analysis import AiWorkTypeSuggestionRead, AnalysisResultRead, parse_json_field
 from app.services.analysis_profile_service import (
     AnalysisProfileResolutionError,
     AnalysisProfileService,
@@ -72,6 +73,7 @@ _MAX_RETRY_JITTER_SECONDS = 30
 _INPUT_PAYLOAD_LARGE_STRING_THRESHOLD = 2048
 _INPUT_PAYLOAD_SUMMARY_MAX_ITEMS = 12
 _INPUT_PAYLOAD_SUMMARY_MAX_STRING_LEN = 256
+_AI_WORK_TYPE_SUGGESTION_CONFIDENCE_THRESHOLD = 0.5
 
 
 def _optional_str_attr(obj: object, name: str) -> str | None:
@@ -89,6 +91,31 @@ def _optional_float_attr(obj: object, name: str) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _build_ai_work_type_suggestion_warnings(result: AnalysisResult) -> list[str]:
+    work_type_code = _optional_str_attr(result, "resolved_work_type_code")
+    confidence = _optional_float_attr(result, "area_confidence") or 0.0
+    if work_type_code and confidence <= _AI_WORK_TYPE_SUGGESTION_CONFIDENCE_THRESHOLD:
+        return ["LOW_CONFIDENCE"]
+    return []
+
+
+def build_ai_work_type_suggestion(result: AnalysisResult) -> AiWorkTypeSuggestionRead:
+    work_type_code = _optional_str_attr(result, "resolved_work_type_code")
+    confidence = _optional_float_attr(result, "area_confidence") or 0.0
+    is_usable = bool(work_type_code) and confidence > _AI_WORK_TYPE_SUGGESTION_CONFIDENCE_THRESHOLD
+
+    return AiWorkTypeSuggestionRead(
+        workTypeCode=work_type_code,
+        confidence=confidence,
+        isUsable=is_usable,
+        objectType=_optional_str_attr(result, "object_type"),
+        recommendedScope=_optional_str_attr(result, "recommended_scope"),
+        sourceAnalysisId=result.id,
+        reason=None if work_type_code else "NO_MATCH",
+        warnings=_build_ai_work_type_suggestion_warnings(result),
+    )
 
 
 @dataclass(frozen=True)
@@ -152,6 +179,7 @@ def to_read_model(result: AnalysisResult) -> AnalysisResultRead:
         laborHoursTotal=result.labor_hours_total,
         modelName=result.model_name,
         modelVersion=result.model_version,
+        aiWorkTypeSuggestion=build_ai_work_type_suggestion(result),
         createdAt=result.created_at,
     )
 
@@ -869,9 +897,28 @@ class AnalysisService:
             project_id=job.project_id,
             organization_id=organization_id,
             is_superadmin_context=is_superadmin_context,
+            dispatch_name="analysis.enqueue",
             max_depth=max_depth,
             max_global_queued=self._settings.effective_backpressure_max_queued_jobs,
             priority=analysis_job_priority_for_type(getattr(job, "job_type", None)),
+        )
+
+    async def dispatch_analysis_job_transport(
+        self,
+        job: AnalysisJob,
+        *,
+        job_queue,
+        organization_id: str | None,
+        is_superadmin_context: bool,
+        max_depth: int | None,
+    ) -> None:
+        """Centralize route/service transport dispatch behind one execution entrypoint."""
+        await self._fallback_enqueue_job(
+            job,
+            job_queue=job_queue,
+            organization_id=organization_id,
+            max_depth=max_depth,
+            is_superadmin_context=is_superadmin_context,
         )
 
     def _job_running_is_stale(self, job: AnalysisJob, *, now: datetime | None = None) -> bool:
@@ -907,6 +954,7 @@ class AnalysisService:
             project_id=job.project_id,
             organization_id=organization_id,
             is_superadmin_context=False,
+            dispatch_name="worker.enqueue_job",
             max_depth=self._settings.analysis_queue_max_depth,
             max_global_queued=self._settings.effective_backpressure_max_queued_jobs,
             priority=analysis_job_priority_for_type(getattr(job, "job_type", None)),
@@ -1099,18 +1147,77 @@ class AnalysisService:
             except AnalysisProfileResolutionError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        job = await self.repository.create_queued_job(
-            project,
-            user_id=user_id,
-            parent_job_id=parent_job_id,
-            retry_count=retry_count,
-            job_type=ANALYSIS_JOB_TYPE_MANUAL_TRIGGER,
-            requested_work_type_code=resolved_profile.work_type_code if resolved_profile else None,
-            analysis_profile_id=resolved_profile.analysis_profile.id if resolved_profile else None,
-            resolved_analysis_profile_code=resolved_profile.profile_code if resolved_profile else None,
-            resolved_analysis_profile_version=resolved_profile.profile_version if resolved_profile else None,
-        )
+        try:
+            job = await self.repository.create_queued_job(
+                project,
+                user_id=user_id,
+                parent_job_id=parent_job_id,
+                retry_count=retry_count,
+                job_type=ANALYSIS_JOB_TYPE_MANUAL_TRIGGER,
+                requested_work_type_code=resolved_profile.work_type_code if resolved_profile else None,
+                analysis_profile_id=resolved_profile.analysis_profile.id if resolved_profile else None,
+                resolved_analysis_profile_code=resolved_profile.profile_code if resolved_profile else None,
+                resolved_analysis_profile_version=resolved_profile.profile_version if resolved_profile else None,
+            )
+        except ActiveAnalysisJobConflict as exc:
+            if exc.existing_job is not None:
+                record_duplicate_prevented("active_job_exists_db_guard")
+                logger.info(
+                    "worker.job_already_active_db_guard",
+                    project_id=project.id,
+                    tenant_id=getattr(project, "organization_id", None),
+                    existing_job_id=exc.existing_job.id,
+                    status=exc.existing_job.status,
+                )
+                return AnalysisJobCreateResult(job=exc.existing_job, created_new=False)
+            raise
         return AnalysisJobCreateResult(job=job, created_new=True)
+
+    async def _dispatch_quote_recalculation_command(
+        self,
+        *,
+        project_id: str,
+        organization_id: str | None,
+        requested_by_user_id: str | None,
+        parent_job_id: str | None,
+        job_queue,
+        is_superadmin_context: bool,
+        session_factory=AsyncSessionFactory,
+    ) -> AnalysisJobCreateResult | None:
+        from app.case_orchestration.quote_recalculation import (
+            QuoteRecalculationCommandService,
+            RequestQuoteRecalculationCommand,
+        )
+        from app.repositories.project_repository import ProjectRepository
+        from app.repositories.quote_variant_repository import QuoteVariantRepository
+        from app.services.quote_variant_service import QuoteVariantService
+
+        async with session_factory() as session:
+            command_service = QuoteRecalculationCommandService(
+                ProjectRepository(session),
+                QuoteVariantService(
+                    QuoteVariantRepository(session),
+                    WorkCatalogRepository(session),
+                    redis=self._redis,
+                ),
+                AnalysisService(
+                    repository=AnalysisRepository(session),
+                    photo_repository=PhotoRepository(session),
+                    work_catalog_repository=WorkCatalogRepository(session),
+                    provider_key=self.provider_key,
+                    redis=self._redis,
+                ),
+                job_queue=job_queue,
+            )
+            return await command_service.handle(
+                RequestQuoteRecalculationCommand(
+                    case_id=project_id,
+                    organization_id=organization_id,
+                    requested_by_user_id=requested_by_user_id,
+                    is_superadmin_context=is_superadmin_context,
+                    parent_job_id=parent_job_id,
+                )
+            )
 
     async def enqueue_quote_recalculation_job(
         self,
@@ -1121,6 +1228,28 @@ class AnalysisService:
         parent_job_id: str | None,
         job_queue,
         is_superadmin_context: bool,
+        session_factory=AsyncSessionFactory,
+    ) -> AnalysisJobCreateResult:
+        command_result = await self._dispatch_quote_recalculation_command(
+            project_id=project_id,
+            organization_id=organization_id,
+            requested_by_user_id=requested_by_user_id,
+            parent_job_id=parent_job_id,
+            job_queue=job_queue,
+            is_superadmin_context=is_superadmin_context,
+            session_factory=session_factory,
+        )
+        if command_result is None:
+            raise HTTPException(status_code=404, detail="Case not found.")
+        return command_result
+
+    async def create_quote_recalculation_job_record(
+        self,
+        *,
+        project_id: str,
+        organization_id: str | None,
+        requested_by_user_id: str | None,
+        parent_job_id: str | None,
         session_factory=AsyncSessionFactory,
     ) -> AnalysisJobCreateResult:
         async with session_factory() as session:
@@ -1156,15 +1285,38 @@ class AnalysisService:
                 },
                 ensure_ascii=False,
             )
-            job = await repo.create_queued_job(
-                project,
-                user_id=requested_by_user_id,
-                parent_job_id=parent_job_id,
-                retry_count=0,
-                job_type=ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
-                input_payload=initial_payload,
-            )
+            try:
+                job = await repo.create_queued_job(
+                    project,
+                    user_id=requested_by_user_id,
+                    parent_job_id=parent_job_id,
+                    retry_count=0,
+                    job_type=ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
+                    input_payload=initial_payload,
+                )
+            except ActiveAnalysisJobConflict as exc:
+                if exc.existing_job is not None:
+                    record_duplicate_prevented("quote_recalculation_active_job_exists_db_guard")
+                    logger.info(
+                        "worker.quote_recalculation_job_already_active_db_guard",
+                        project_id=project_id,
+                        tenant_id=organization_id,
+                        existing_job_id=exc.existing_job.id,
+                        status=exc.existing_job.status,
+                    )
+                    return AnalysisJobCreateResult(job=exc.existing_job, created_new=False)
+                raise
+        return AnalysisJobCreateResult(job=job, created_new=True)
 
+    async def enqueue_existing_job_transport(
+        self,
+        job: AnalysisJob,
+        *,
+        project_id: str,
+        organization_id: str | None,
+        job_queue,
+        is_superadmin_context: bool,
+    ) -> AnalysisJobCreateResult:
         if job_queue is None:
             job.status = ANALYSIS_JOB_STATUS_FAILED
             job.error_message = "Quote recalculation queue is unavailable."
@@ -1188,6 +1340,7 @@ class AnalysisService:
                 project_id=project_id,
                 organization_id=organization_id,
                 is_superadmin_context=is_superadmin_context,
+                dispatch_name="quote.enqueue",
                 max_depth=settings.analysis_queue_max_depth,
                 max_global_queued=settings.effective_backpressure_max_queued_jobs,
                 priority=analysis_job_priority_for_type(job.job_type),
@@ -1878,7 +2031,7 @@ class AnalysisService:
             estimated_area=analysis.get("estimatedAreaSqm"),
         )
 
-        quote_job_result = await self.enqueue_quote_recalculation_job(
+        quote_job_result = await self._dispatch_quote_recalculation_command(
             project_id=project_id,
             organization_id=organization_id,
             requested_by_user_id=_optional_str_attr(job, "requested_by_user_id"),
@@ -1887,6 +2040,9 @@ class AnalysisService:
             is_superadmin_context=is_superadmin_context,
             session_factory=WorkerAsyncSessionFactory,
         )
+        if quote_job_result is None:
+            log.error("worker.quote_recalculation_case_not_found_after_analysis")
+            return AnalysisJobExecutionResult(disposition="completed", attempt_count=job_attempt_count)
         if quote_job_result.created_new:
             log.info(
                 "worker.quote_recalculation_job_enqueued",

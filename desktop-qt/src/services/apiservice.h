@@ -1,9 +1,11 @@
 #pragma once
 
 #include <QByteArray>
+#include <QObject>
 #include <QPointF>
 #include <QString>
 #include <QVector>
+#include <functional>
 #include <vector>
 
 #include "dto/adminjobdto.h"
@@ -18,113 +20,166 @@
 #include "dto/proposaldraftpatchdto.h"
 #include "dto/uploadimagedto.h"
 
+class QNetworkAccessManager;
+class QNetworkReply;
 class QNetworkRequest;
 class QUrl;
+class SessionService;
 
-class ApiService
+class ApiService : public QObject
 {
+    Q_OBJECT
 public:
-    explicit ApiService(QString baseUrl = {});
+    explicit ApiService(SessionService &session, QObject *parent = nullptr);
 
-    static void setGlobalToken(const QString &bearerToken);
-    static void clearGlobalToken();
-    [[nodiscard]] static QString globalToken();
-    [[nodiscard]] static bool sessionExpired();
-    static void clearSessionExpired();
-    static void markSessionExpired();
-
-    static void setGlobalBaseUrl(const QString &baseUrl);
+    // -- Global app config --
+    static void setGlobalBaseUrl(const QString &url);
     [[nodiscard]] static QString globalBaseUrl();
 
-    [[nodiscard]] LoginResultDto login(
-        const QString &email,
-        const QString &password,
-        QString *errorMessage = nullptr) const;
+    // -- Auth --
+    void login(const QString &email,
+               const QString &password,
+               std::function<void(LoginResultDto)> onSuccess,
+               std::function<void(QString)> onError = nullptr);
 
-    [[nodiscard]] QString baseUrl() const;
-    [[nodiscard]] std::vector<CaseDto> fetchCases(QString *errorMessage = nullptr) const;
-    [[nodiscard]] QString createCase(
-        const QString &title,
-        const QString &addressLabel,
-        const QString &repairScope,
-        const QString &description,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] QString duplicateCase(
-        const QString &caseId,
-        const QString &mode,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] bool sendCase(const QString &caseId, QString *errorMessage = nullptr) const;
-    [[nodiscard]] CaseDto fetchCaseDetail(const QString &caseId, QString *errorMessage = nullptr) const;
-    [[nodiscard]] CaseDto updateCaseProposalDraft(
-        const QString &caseId,
-        const ProposalDraftPatchDto &proposalDraft,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] CaseDto createCaseFinalProposal(const QString &caseId, QString *errorMessage = nullptr) const;
-    [[nodiscard]] std::vector<ImageDto> fetchCaseImages(const QString &caseId, QString *errorMessage = nullptr) const;
-    [[nodiscard]] std::vector<ImageDto> moveCaseImage(
-        const QString &caseId,
-        const QString &imageId,
-        const QString &direction,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] bool setCasePrimaryImage(
-        const QString &caseId,
-        const QString &imageId,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] bool setCaseAnalysisReferenceImage(
-        const QString &caseId,
-        const QString &imageId,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] bool uploadCaseImages(
-        const QString &caseId,
-        const std::vector<UploadImageDto> &images,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] QByteArray fetchImageData(const QString &imageUrl, QString *errorMessage = nullptr) const;
-    [[nodiscard]] QString triggerAnalysisJob(const QString &caseId, QString *errorMessage = nullptr) const;
-    [[nodiscard]] QString getAnalysisJobStatus(const QString &jobId, QString *errorMessage = nullptr) const;
-    [[nodiscard]] bool patchAnalysisSelection(
-        const QString &caseId,
-        const QString &analysisResultId,
-        const QVector<QPointF> &polygon,
-        double manualAreaSqm,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] ExportDto triggerExport(
-        const QString &caseId,
-        const QString &exportType,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] QByteArray downloadExportFile(
-        const QString &downloadUrl,
-        QString *errorMessage = nullptr) const;
+    // -- Cases --
+    void fetchCases(std::function<void(std::vector<CaseDto>)> onSuccess,
+                    std::function<void(QString)> onError = nullptr);
 
-    // ── Admin (superadmin only) ────────────────────────────────────────────
-    [[nodiscard]] std::vector<AdminUserDto> fetchAdminUsers(
-        const QString &orgId = {},
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] bool resetUserPassword(
-        const QString &userId,
-        const QString &newPassword,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] std::vector<AdminJobDto> fetchAdminJobs(
-        const QString &statusFilter = {},
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] QString fetchAdminLogs(
-        int lines = 200,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] std::vector<AuditLogDto> fetchAdminAudit(
-        const QString &orgId = {},
-        const QString &action = {},
-        int limit = 200,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] ImpersonateDto impersonateUser(
-        const QString &userId,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] std::vector<CompanyDto> fetchAdminCompanies(
-        QString *errorMessage = nullptr) const;
+    void fetchCaseDetail(const QString &caseId,
+                         std::function<void(CaseDto)> onSuccess,
+                         std::function<void(QString)> onError = nullptr);
+
+    void createCase(const QString &title,
+                    const QString &addressLabel,
+                    const QString &repairScope,
+                    const QString &description,
+                    std::function<void(QString /*newCaseId*/)> onSuccess,
+                    std::function<void(QString)> onError = nullptr);
+
+    void duplicateCase(const QString &caseId,
+                       const QString &mode,
+                       std::function<void(QString /*newCaseId*/)> onSuccess,
+                       std::function<void(QString)> onError = nullptr);
+
+    void sendCase(const QString &caseId,
+                  std::function<void()> onSuccess,
+                  std::function<void(QString)> onError = nullptr);
+
+    void updateCaseProposalDraft(const QString &caseId,
+                                  const ProposalDraftPatchDto &draft,
+                                  std::function<void(CaseDto)> onSuccess,
+                                  std::function<void(QString)> onError = nullptr);
+
+    void createCaseFinalProposal(const QString &caseId,
+                                  std::function<void(CaseDto)> onSuccess,
+                                  std::function<void(QString)> onError = nullptr);
+
+    // -- Images --
+    void fetchCaseImages(const QString &caseId,
+                         std::function<void(std::vector<ImageDto>)> onSuccess,
+                         std::function<void(QString)> onError = nullptr);
+
+    void moveCaseImage(const QString &caseId,
+                       const QString &imageId,
+                       const QString &direction,
+                       std::function<void(std::vector<ImageDto>)> onSuccess,
+                       std::function<void(QString)> onError = nullptr);
+
+    void setCasePrimaryImage(const QString &caseId,
+                              const QString &imageId,
+                              std::function<void()> onSuccess,
+                              std::function<void(QString)> onError = nullptr);
+
+    void setCaseAnalysisReferenceImage(const QString &caseId,
+                                        const QString &imageId,
+                                        std::function<void()> onSuccess,
+                                        std::function<void(QString)> onError = nullptr);
+
+    void uploadCaseImages(const QString &caseId,
+                          const std::vector<UploadImageDto> &images,
+                          std::function<void()> onSuccess,
+                          std::function<void(QString)> onError = nullptr);
+
+    void fetchImageData(const QString &imageUrl,
+                        std::function<void(QByteArray)> onSuccess,
+                        std::function<void(QString)> onError = nullptr);
+
+    // -- Analysis --
+    void triggerAnalysisJob(const QString &caseId,
+                            std::function<void(QString /*jobId*/)> onSuccess,
+                            std::function<void(QString)> onError = nullptr);
+
+    void getAnalysisJobStatus(const QString &jobId,
+                              std::function<void(QString /*status*/)> onSuccess,
+                              std::function<void(QString)> onError = nullptr);
+
+    void patchAnalysisSelection(const QString &caseId,
+                                 const QString &analysisResultId,
+                                 const QVector<QPointF> &polygon,
+                                 double manualAreaSqm,
+                                 std::function<void()> onSuccess,
+                                 std::function<void(QString)> onError = nullptr);
+
+    // -- Exports --
+    void triggerExport(const QString &caseId,
+                       const QString &exportType,
+                       std::function<void(ExportDto)> onSuccess,
+                       std::function<void(QString)> onError = nullptr);
+
+    void downloadExportFile(const QString &downloadUrl,
+                            std::function<void(QByteArray)> onSuccess,
+                            std::function<void(QString)> onError = nullptr);
+
+    // -- Admin --
+    void fetchAdminUsers(const QString &orgId,
+                         std::function<void(std::vector<AdminUserDto>)> onSuccess,
+                         std::function<void(QString)> onError = nullptr);
+
+    void resetUserPassword(const QString &userId,
+                           const QString &newPassword,
+                           std::function<void()> onSuccess,
+                           std::function<void(QString)> onError = nullptr);
+
+    void fetchAdminJobs(const QString &statusFilter,
+                        std::function<void(std::vector<AdminJobDto>)> onSuccess,
+                        std::function<void(QString)> onError = nullptr);
+
+    void fetchAdminLogs(int lines,
+                        std::function<void(QString)> onSuccess,
+                        std::function<void(QString)> onError = nullptr);
+
+    void fetchAdminAudit(const QString &orgId,
+                         const QString &action,
+                         int limit,
+                         std::function<void(std::vector<AuditLogDto>)> onSuccess,
+                         std::function<void(QString)> onError = nullptr);
+
+    void impersonateUser(const QString &userId,
+                         std::function<void(ImpersonateDto)> onSuccess,
+                         std::function<void(QString)> onError = nullptr);
+
+    void fetchAdminCompanies(std::function<void(std::vector<CompanyDto>)> onSuccess,
+                              std::function<void(QString)> onError = nullptr);
+
+signals:
+    void sessionExpired();
 
 private:
-    [[nodiscard]] QNetworkRequest makeAuthRequest(const QUrl &url) const;
+    // Attach timeout + finished handler to reply.
+    // callback(body, error): error is empty on success.
+    // When notifySessionExpiry=true (default), 401 emits sessionExpired() signal.
+    void watchReply(QNetworkReply *reply,
+                    int timeoutMs,
+                    std::function<void(QByteArray, QString)> callback,
+                    bool notifySessionExpiry = true);
 
-    QString m_baseUrl;
-    static QString s_bearerToken;
-    static bool s_sessionExpired;
+    [[nodiscard]] QNetworkRequest makeAuthRequest(const QUrl &url) const;
+    [[nodiscard]] QUrl urlFor(const QString &path) const;
+    [[nodiscard]] QUrl resolveAbsolute(const QString &urlOrPath) const;
+    [[nodiscard]] QString bearerToken() const;
+
+    QNetworkAccessManager *m_nam;
+    SessionService *m_session;
     static QString s_globalBaseUrl;
 };

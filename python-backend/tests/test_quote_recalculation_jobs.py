@@ -24,14 +24,14 @@ from app.worker.queue import dequeue_analysis_job
 from tests.test_r19_job_queue import FakeRedisQueue
 
 
-async def _create_project(db_session, test_tenants) -> Project:
+async def _create_project(db_session, test_tenants, *, status: str = "draft") -> Project:
     project = Project(
         id=f"prj_quote_{uuid4().hex[:8]}",
         organization_id=test_tenants["org_a"],
         created_by_user_id="usr_e2e_a1",
         title="Quote job test",
         description="",
-        status="draft",
+        status=status,
         source="mobile",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
@@ -68,7 +68,7 @@ async def _create_analysis_job(
 
 @pytest.mark.asyncio
 async def test_execute_analysis_job_enqueues_followup_quote_recalculation_job(db_session, test_tenants):
-    project = await _create_project(db_session, test_tenants)
+    project = await _create_project(db_session, test_tenants, status="analyzing")
     job = await _create_analysis_job(
         db_session,
         project,

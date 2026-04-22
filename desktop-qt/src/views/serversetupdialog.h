@@ -4,6 +4,7 @@
 
 class QLabel;
 class QLineEdit;
+class QNetworkAccessManager;
 class QPushButton;
 
 class ServerSetupDialog : public QDialog
@@ -23,4 +24,5 @@ private:
     QPushButton *m_testButton = nullptr;
     QPushButton *m_saveButton = nullptr;
     QLabel *m_statusLabel = nullptr;
+    QNetworkAccessManager *m_nam = nullptr;
 };

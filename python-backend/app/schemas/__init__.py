@@ -22,16 +22,30 @@ from app.schemas.photo import (
     ProjectPhotoRead,
     UploadedPhotoPayload,
 )
+from app.schemas.case_activity import (
+    CaseActivitySubscribeCommand,
+    CaseActivityUnsubscribeCommand,
+    ImageStatusChangedEvent,
+    JobCompletedEvent,
+    JobStatusChangedEvent,
+    validate_case_activity_command,
+    validate_case_activity_event,
+)
 
 __all__ = [
     "DeletePhotoResponse",
     "AnalysisReferencePhotoResponse",
+    "CaseActivitySubscribeCommand",
+    "CaseActivityUnsubscribeCommand",
     "PhotoListMeta",
     "PhotoListResponse",
     "PhotoUploadResponse",
     "PhotoVariant",
     "PhotoVariants",
     "PrimaryPhotoResponse",
+    "ImageStatusChangedEvent",
+    "JobCompletedEvent",
+    "JobStatusChangedEvent",
     "ProjectCreate",
     "ProjectDetail",
     "ProjectListResponse",
@@ -44,4 +58,6 @@ __all__ = [
     "ProposalDraftMaterial",
     "ProposalDraftWorkItem",
     "UploadedPhotoPayload",
+    "validate_case_activity_command",
+    "validate_case_activity_event",
 ]

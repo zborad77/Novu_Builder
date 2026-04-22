@@ -4,9 +4,11 @@
 #include <vector>
 #include "dto/casedto.h"
 
+class ApiService;
 class QLabel;
 class QScrollArea;
 class QVBoxLayout;
+class SessionService;
 
 class CaseBrowserView : public QWidget
 {
@@ -15,7 +17,7 @@ class CaseBrowserView : public QWidget
 public:
     enum class Mode { WorkCases, HistoryCases };
 
-    explicit CaseBrowserView(QWidget *parent = nullptr);
+    explicit CaseBrowserView(SessionService &session, QWidget *parent = nullptr);
     void loadCases(Mode mode);
 
 signals:
@@ -25,6 +27,8 @@ signals:
 private:
     void buildCards(const std::vector<CaseDto> &cases, Mode mode);
 
+    ApiService *m_apiService = nullptr;
+    Mode m_currentMode = Mode::WorkCases;
     QLabel *m_titleLabel = nullptr;
     QLabel *m_subtitleLabel = nullptr;
     QLabel *m_statusLabel = nullptr;

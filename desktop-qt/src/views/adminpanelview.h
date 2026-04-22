@@ -2,6 +2,7 @@
 
 #include <QWidget>
 
+class ApiService;
 class QTabWidget;
 class QTableWidget;
 class QTextEdit;
@@ -9,19 +10,21 @@ class QPushButton;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class SessionService;
 
 class AdminPanelView : public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit AdminPanelView(QWidget *parent = nullptr);
+    explicit AdminPanelView(SessionService &session, QWidget *parent = nullptr);
 
     void refresh();
 
 signals:
     void impersonationStarted(const QString &token, const QString &userFullName,
                               const QString &orgId, const QString &userId);
+    void sessionExpired();
 
 private:
     void buildUsersTab(QWidget *tab);
@@ -37,6 +40,7 @@ private:
     void onResetPassword();
     void onImpersonate();
 
+    ApiService *m_apiService = nullptr;
     QTabWidget *m_tabs = nullptr;
 
     // Users tab

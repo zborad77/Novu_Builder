@@ -877,6 +877,7 @@ class ExportService:
             job_type="export_generate",
             project_id=export.project_id,
             export_id=export.id,
+            dispatch_name="export.enqueue",
             max_depth=get_settings().heavy_queue_max_depth,
             max_global_queued=effective_backpressure_max_queued_jobs(get_settings()),
             priority=heavy_job_priority_for_type("export_generate"),

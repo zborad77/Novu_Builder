@@ -10,7 +10,6 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
-#include <QEventLoop>
 #include <QStyle>
 #include <QTimer>
 #include <QJsonDocument>
@@ -18,6 +17,7 @@
 
 ServerSetupDialog::ServerSetupDialog(const QString &currentUrl, QWidget *parent)
     : QDialog(parent)
+    , m_nam(new QNetworkAccessManager(this))
 {
     setWindowTitle(QString::fromUtf8("Nastaven\u00ed serveru \u2014 FotoNab\u00eddka Desktop"));
     setMinimumWidth(480);
@@ -194,40 +194,38 @@ void ServerSetupDialog::testConnection()
     }
     healthUrl += "/api/v1/health";
 
-    QNetworkAccessManager manager;
     QNetworkRequest request{QUrl{healthUrl}};
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    auto *reply = manager.get(request);
+    auto *reply = m_nam->get(request);
 
-    QEventLoop loop;
-    QTimer timer;
-    timer.setSingleShot(true);
-    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-    QObject::connect(&timer, &QTimer::timeout, &loop, [&]() {
+    auto *timer = new QTimer(reply);
+    timer->setSingleShot(true);
+    QObject::connect(timer, &QTimer::timeout, this, [reply]() {
         if (reply->isRunning()) reply->abort();
-        loop.quit();
     });
-    timer.start(6000);
-    loop.exec();
+    timer->start(6000);
 
-    const bool ok = reply->error() == QNetworkReply::NoError;
-    reply->deleteLater();
+    QObject::connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        const bool ok = reply->error() == QNetworkReply::NoError;
 
-    m_testButton->setEnabled(true);
-    m_testButton->setText(QString::fromUtf8("Otestovat p\u0159ipojen\u00ed"));
+        m_testButton->setEnabled(true);
+        m_testButton->setText(QString::fromUtf8("Otestovat p\u0159ipojen\u00ed"));
 
-    if (m_statusLabel) {
-        if (ok) {
-            m_statusLabel->setText(QString::fromUtf8("\u2705 Server je dostupn\u00fd a odpov\u00edd\u00e1."));
-            m_statusLabel->setProperty("ok", true);
-            if (m_saveButton) m_saveButton->setEnabled(true);
-        } else {
-            m_statusLabel->setText(QString::fromUtf8(
-                "\u274c Server neodpov\u00edd\u00e1. Zkontrolujte adresu a zda je server spu\u0161t\u011bn."));
-            m_statusLabel->setProperty("ok", false);
+        if (m_statusLabel) {
+            if (ok) {
+                m_statusLabel->setText(
+                    QString::fromUtf8("\u2705 Server je dostupn\u00fd a odpov\u00edd\u00e1."));
+                m_statusLabel->setProperty("ok", true);
+                if (m_saveButton) m_saveButton->setEnabled(true);
+            } else {
+                m_statusLabel->setText(QString::fromUtf8(
+                    "\u274c Server neodpov\u00edd\u00e1. Zkontrolujte adresu a zda je server spu\u0161t\u011bn."));
+                m_statusLabel->setProperty("ok", false);
+            }
+            m_statusLabel->show();
+            m_statusLabel->style()->unpolish(m_statusLabel);
+            m_statusLabel->style()->polish(m_statusLabel);
         }
-        m_statusLabel->show();
-        m_statusLabel->style()->unpolish(m_statusLabel);
-        m_statusLabel->style()->polish(m_statusLabel);
-    }
+    });
 }

@@ -856,7 +856,8 @@ class TestDuplicateEnqueueGuard:
         )
         request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
 
-        with patch("app.api.routes.analysis_jobs.enqueue_analysis_job", new=AsyncMock()) as enqueue_mock:
+        analysis_service.dispatch_analysis_job_transport = AsyncMock()
+        with patch.object(analysis_service, "dispatch_analysis_job_transport", new=analysis_service.dispatch_analysis_job_transport) as enqueue_mock:
             response = await create_analysis_job(
                 case_id="proj-1",
                 request=request,
@@ -897,17 +898,14 @@ class TestQueueOverflowGuards:
 
         with (
             patch("app.api.routes.analysis_jobs.get_settings") as get_settings,
-            patch(
-                "app.api.routes.analysis_jobs.enqueue_analysis_job",
-                new=AsyncMock(
-                    side_effect=AnalysisJobQueueCapacityExceededError(
-                        queued=1000,
-                        processing=0,
-                        max_depth=1000,
-                    )
-                ),
-            ),
         ):
+            analysis_service.dispatch_analysis_job_transport = AsyncMock(
+                side_effect=AnalysisJobQueueCapacityExceededError(
+                    queued=1000,
+                    processing=0,
+                    max_depth=1000,
+                )
+            )
             get_settings.return_value.analysis_queue_max_depth = 1000
             get_settings.return_value.effective_backpressure_max_queued_jobs = 2000
             with pytest.raises(HTTPException) as exc_info:
@@ -942,17 +940,14 @@ class TestQueueOverflowGuards:
 
         with (
             patch("app.api.routes.analysis_jobs.get_settings") as get_settings,
-            patch(
-                "app.api.routes.analysis_jobs.enqueue_analysis_job",
-                new=AsyncMock(
-                    side_effect=AnalysisJobQueueCapacityExceededError(
-                        queued=999,
-                        processing=1,
-                        max_depth=1000,
-                    )
-                ),
-            ),
         ):
+            analysis_service.dispatch_analysis_job_transport = AsyncMock(
+                side_effect=AnalysisJobQueueCapacityExceededError(
+                    queued=999,
+                    processing=1,
+                    max_depth=1000,
+                )
+            )
             get_settings.return_value.analysis_queue_max_depth = 1000
             get_settings.return_value.effective_backpressure_max_queued_jobs = 2000
             with pytest.raises(HTTPException) as exc_info:

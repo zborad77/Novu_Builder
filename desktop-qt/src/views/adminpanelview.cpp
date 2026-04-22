@@ -15,7 +15,13 @@
 #include <QTextEdit>
 #include <QVBoxLayout>
 
+#include "dto/adminjobdto.h"
+#include "dto/adminuserdto.h"
+#include "dto/auditlogdto.h"
+#include "dto/companydto.h"
+#include "dto/impersonatedto.h"
 #include "services/apiservice.h"
+#include "services/sessionservice.h"
 
 static const QString kStyleSheet = R"(
     QTabWidget::pane {
@@ -96,9 +102,14 @@ static const QString kStyleSheet = R"(
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-AdminPanelView::AdminPanelView(QWidget *parent)
+AdminPanelView::AdminPanelView(SessionService &session, QWidget *parent)
     : QWidget(parent)
+    , m_apiService(new ApiService(session, this))
 {
+    connect(m_apiService, &ApiService::sessionExpired, this, [this]() {
+        emit sessionExpired();
+    });
+
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(12);
@@ -204,45 +215,41 @@ void AdminPanelView::buildUsersTab(QWidget *tab)
 
 void AdminPanelView::loadUsers()
 {
-    ApiService api;
-    QString err;
     const QString orgId = m_orgFilter->currentData().toString();
-    const auto users = api.fetchAdminUsers(orgId, &err);
+    m_apiService->fetchAdminUsers(orgId,
+        [this, orgId](std::vector<AdminUserDto> users) {
+            m_orgFilter->blockSignals(true);
+            m_orgFilter->clear();
+            m_orgFilter->addItem(QString::fromUtf8("V\u0161echny firmy"), QString());
+            QStringList seenOrgs;
+            for (const auto &u : users) {
+                if (!u.orgId.isEmpty() && !seenOrgs.contains(u.orgId)) {
+                    seenOrgs.append(u.orgId);
+                    m_orgFilter->addItem(u.orgName.isEmpty() ? u.orgId : u.orgName, u.orgId);
+                }
+            }
+            const int idx = m_orgFilter->findData(orgId);
+            if (idx >= 0) m_orgFilter->setCurrentIndex(idx);
+            m_orgFilter->blockSignals(false);
 
-    if (!err.isEmpty()) {
-        QMessageBox::warning(this, QString::fromUtf8("Chyba"), err);
-        return;
-    }
-
-    const QString currentOrg = m_orgFilter->currentData().toString();
-    m_orgFilter->blockSignals(true);
-    m_orgFilter->clear();
-    m_orgFilter->addItem(QString::fromUtf8("V\u0161echny firmy"), QString());
-    QStringList seenOrgs;
-    for (const auto &u : users) {
-        if (!u.orgId.isEmpty() && !seenOrgs.contains(u.orgId)) {
-            seenOrgs.append(u.orgId);
-            m_orgFilter->addItem(u.orgName.isEmpty() ? u.orgId : u.orgName, u.orgId);
-        }
-    }
-    const int idx = m_orgFilter->findData(currentOrg);
-    if (idx >= 0) m_orgFilter->setCurrentIndex(idx);
-    m_orgFilter->blockSignals(false);
-
-    m_usersTable->setRowCount(0);
-    for (const auto &u : users) {
-        const int row = m_usersTable->rowCount();
-        m_usersTable->insertRow(row);
-        m_usersTable->setItem(row, 0, new QTableWidgetItem(u.id));
-        m_usersTable->setItem(row, 1, new QTableWidgetItem(u.fullName));
-        m_usersTable->setItem(row, 2, new QTableWidgetItem(u.email));
-        m_usersTable->setItem(row, 3, new QTableWidgetItem(u.role));
-        m_usersTable->setItem(row, 4, new QTableWidgetItem(u.orgName));
-        m_usersTable->setItem(row, 5, new QTableWidgetItem(u.isActive
-            ? QString::fromUtf8("\u2713") : QString::fromUtf8("\u2717")));
-        m_usersTable->setItem(row, 6, new QTableWidgetItem(u.isSuperAdmin
-            ? QString::fromUtf8("\u2713") : QString()));
-    }
+            m_usersTable->setRowCount(0);
+            for (const auto &u : users) {
+                const int row = m_usersTable->rowCount();
+                m_usersTable->insertRow(row);
+                m_usersTable->setItem(row, 0, new QTableWidgetItem(u.id));
+                m_usersTable->setItem(row, 1, new QTableWidgetItem(u.fullName));
+                m_usersTable->setItem(row, 2, new QTableWidgetItem(u.email));
+                m_usersTable->setItem(row, 3, new QTableWidgetItem(u.role));
+                m_usersTable->setItem(row, 4, new QTableWidgetItem(u.orgName));
+                m_usersTable->setItem(row, 5, new QTableWidgetItem(u.isActive
+                    ? QString::fromUtf8("\u2713") : QString::fromUtf8("\u2717")));
+                m_usersTable->setItem(row, 6, new QTableWidgetItem(u.isSuperAdmin
+                    ? QString::fromUtf8("\u2713") : QString()));
+            }
+        },
+        [this](const QString &err) {
+            QMessageBox::warning(this, QString::fromUtf8("Chyba"), err);
+        });
 }
 
 void AdminPanelView::onResetPassword()
@@ -299,15 +306,15 @@ void AdminPanelView::onResetPassword()
     const QString newPassword = pwEdit->text();
     dialog->deleteLater();
 
-    ApiService api;
-    QString err;
-    if (!api.resetUserPassword(userId, newPassword, &err)) {
-        QMessageBox::warning(this, QString::fromUtf8("Chyba"),
-            err.isEmpty() ? QString::fromUtf8("Reset hesla selhal.") : err);
-        return;
-    }
-    QMessageBox::information(this, QString::fromUtf8("Hotovo"),
-        QString::fromUtf8("Heslo pro %1 bylo \u00fasp\u011b\u0161n\u011b zm\u011bn\u011bno.").arg(userName));
+    m_apiService->resetUserPassword(userId, newPassword,
+        [this, userName]() {
+            QMessageBox::information(this, QString::fromUtf8("Hotovo"),
+                QString::fromUtf8("Heslo pro %1 bylo \u00fasp\u011b\u0161n\u011b zm\u011bn\u011bno.").arg(userName));
+        },
+        [this](const QString &err) {
+            QMessageBox::warning(this, QString::fromUtf8("Chyba"),
+                err.isEmpty() ? QString::fromUtf8("Reset hesla selhal.") : err);
+        });
 }
 
 void AdminPanelView::onImpersonate()
@@ -331,17 +338,14 @@ void AdminPanelView::onImpersonate()
 
     if (answer != QMessageBox::Yes) return;
 
-    ApiService api;
-    QString err;
-    const auto dto = api.impersonateUser(userId, &err);
-
-    if (dto.accessToken.isEmpty()) {
-        QMessageBox::warning(this, QString::fromUtf8("Chyba"),
-            err.isEmpty() ? QString::fromUtf8("Impersonace selhala.") : err);
-        return;
-    }
-
-    emit impersonationStarted(dto.accessToken, dto.userFullName, dto.orgId, dto.userId);
+    m_apiService->impersonateUser(userId,
+        [this](ImpersonateDto dto) {
+            emit impersonationStarted(dto.accessToken, dto.userFullName, dto.orgId, dto.userId);
+        },
+        [this](const QString &err) {
+            QMessageBox::warning(this, QString::fromUtf8("Chyba"),
+                err.isEmpty() ? QString::fromUtf8("Impersonace selhala.") : err);
+        });
 }
 
 // ── Jobs Tab ──────────────────────────────────────────────────────────────────
@@ -387,28 +391,28 @@ void AdminPanelView::buildJobsTab(QWidget *tab)
 
 void AdminPanelView::loadJobs()
 {
-    ApiService api;
-    QString err;
-    const auto jobs = api.fetchAdminJobs(m_jobStatusFilter->currentData().toString(), &err);
-
-    if (!err.isEmpty()) { QMessageBox::warning(this, QString::fromUtf8("Chyba"), err); return; }
-
-    m_jobsTable->setRowCount(0);
-    for (const auto &j : jobs) {
-        const int row = m_jobsTable->rowCount();
-        m_jobsTable->insertRow(row);
-        m_jobsTable->setItem(row, 0, new QTableWidgetItem(j.id.left(12) + "..."));
-        auto *statusItem = new QTableWidgetItem(j.status);
-        if (j.status == "running")   statusItem->setForeground(QColor("#2ecc71"));
-        else if (j.status == "failed") statusItem->setForeground(QColor("#e74c3c"));
-        else if (j.status == "pending") statusItem->setForeground(QColor("#e07b39"));
-        m_jobsTable->setItem(row, 1, statusItem);
-        m_jobsTable->setItem(row, 2, new QTableWidgetItem(j.caseTitle));
-        m_jobsTable->setItem(row, 3, new QTableWidgetItem(j.orgName));
-        m_jobsTable->setItem(row, 4, new QTableWidgetItem(j.jobType));
-        m_jobsTable->setItem(row, 5, new QTableWidgetItem(j.startedAt));
-        m_jobsTable->setItem(row, 6, new QTableWidgetItem(j.errorMessage));
-    }
+    m_apiService->fetchAdminJobs(m_jobStatusFilter->currentData().toString(),
+        [this](std::vector<AdminJobDto> jobs) {
+            m_jobsTable->setRowCount(0);
+            for (const auto &j : jobs) {
+                const int row = m_jobsTable->rowCount();
+                m_jobsTable->insertRow(row);
+                m_jobsTable->setItem(row, 0, new QTableWidgetItem(j.id.left(12) + "..."));
+                auto *statusItem = new QTableWidgetItem(j.status);
+                if (j.status == "running")   statusItem->setForeground(QColor("#2ecc71"));
+                else if (j.status == "failed") statusItem->setForeground(QColor("#e74c3c"));
+                else if (j.status == "pending") statusItem->setForeground(QColor("#e07b39"));
+                m_jobsTable->setItem(row, 1, statusItem);
+                m_jobsTable->setItem(row, 2, new QTableWidgetItem(j.caseTitle));
+                m_jobsTable->setItem(row, 3, new QTableWidgetItem(j.orgName));
+                m_jobsTable->setItem(row, 4, new QTableWidgetItem(j.jobType));
+                m_jobsTable->setItem(row, 5, new QTableWidgetItem(j.startedAt));
+                m_jobsTable->setItem(row, 6, new QTableWidgetItem(j.errorMessage));
+            }
+        },
+        [this](const QString &err) {
+            QMessageBox::warning(this, QString::fromUtf8("Chyba"), err);
+        });
 }
 
 // ── Companies Tab ─────────────────────────────────────────────────────────────
@@ -443,23 +447,23 @@ void AdminPanelView::buildCompaniesTab(QWidget *tab)
 
 void AdminPanelView::loadCompanies()
 {
-    ApiService api;
-    QString err;
-    const auto companies = api.fetchAdminCompanies(&err);
-
-    if (!err.isEmpty()) { QMessageBox::warning(this, QString::fromUtf8("Chyba"), err); return; }
-
-    m_companiesTable->setRowCount(0);
-    for (const auto &c : companies) {
-        const int row = m_companiesTable->rowCount();
-        m_companiesTable->insertRow(row);
-        m_companiesTable->setItem(row, 0, new QTableWidgetItem(c.id));
-        m_companiesTable->setItem(row, 1, new QTableWidgetItem(c.name));
-        m_companiesTable->setItem(row, 2, new QTableWidgetItem(c.ico));
-        m_companiesTable->setItem(row, 3, new QTableWidgetItem(c.email));
-        m_companiesTable->setItem(row, 4, new QTableWidgetItem(c.phone));
-        m_companiesTable->setItem(row, 5, new QTableWidgetItem(QString::number(c.userCount)));
-    }
+    m_apiService->fetchAdminCompanies(
+        [this](std::vector<CompanyDto> companies) {
+            m_companiesTable->setRowCount(0);
+            for (const auto &c : companies) {
+                const int row = m_companiesTable->rowCount();
+                m_companiesTable->insertRow(row);
+                m_companiesTable->setItem(row, 0, new QTableWidgetItem(c.id));
+                m_companiesTable->setItem(row, 1, new QTableWidgetItem(c.name));
+                m_companiesTable->setItem(row, 2, new QTableWidgetItem(c.ico));
+                m_companiesTable->setItem(row, 3, new QTableWidgetItem(c.email));
+                m_companiesTable->setItem(row, 4, new QTableWidgetItem(c.phone));
+                m_companiesTable->setItem(row, 5, new QTableWidgetItem(QString::number(c.userCount)));
+            }
+        },
+        [this](const QString &err) {
+            QMessageBox::warning(this, QString::fromUtf8("Chyba"), err);
+        });
 }
 
 // ── Audit Tab ─────────────────────────────────────────────────────────────────
@@ -504,51 +508,49 @@ void AdminPanelView::buildAuditTab(QWidget *tab)
 
 void AdminPanelView::loadAudit()
 {
-    ApiService api;
-    QString err;
     const QString orgId  = m_auditOrgFilter->currentData().toString();
     const QString action = m_auditActionFilter->text().trimmed();
-    const auto logs = api.fetchAdminAudit(orgId, action, 300, &err);
 
-    if (!err.isEmpty()) { QMessageBox::warning(this, QString::fromUtf8("Chyba"), err); return; }
-
-    // Refresh org filter from current users if empty
-    if (m_auditOrgFilter->count() <= 1) {
-        const auto companies = api.fetchAdminCompanies(nullptr);
-        for (const auto &c : companies) {
-            m_auditOrgFilter->addItem(c.name, c.id);
-        }
-    }
-
-    m_auditTable->setRowCount(0);
-    for (const auto &a : logs) {
-        const int row = m_auditTable->rowCount();
-        m_auditTable->insertRow(row);
-
-        // Format timestamp: show only date+time without TZ noise
-        QString ts = a.createdAt;
-        if (ts.length() > 19) ts = ts.left(19).replace('T', ' ');
-        m_auditTable->setItem(row, 0, new QTableWidgetItem(ts));
-
-        // If impersonated, mark it
-        QString userLabel = a.userEmail;
-        if (!a.impersonatedBy.isEmpty())
-            userLabel += QString::fromUtf8(" \u26a0\ufe0f");
-        m_auditTable->setItem(row, 1, new QTableWidgetItem(userLabel));
-        m_auditTable->setItem(row, 2, new QTableWidgetItem(a.action));
-        m_auditTable->setItem(row, 3, new QTableWidgetItem(a.resourceType));
-        m_auditTable->setItem(row, 4, new QTableWidgetItem(a.resourceId));
-        m_auditTable->setItem(row, 5, new QTableWidgetItem(a.orgId));
-        m_auditTable->setItem(row, 6, new QTableWidgetItem(a.ip));
-
-        // Color code impersonated rows
-        if (!a.impersonatedBy.isEmpty()) {
-            for (int col = 0; col < 7; ++col) {
-                if (auto *item = m_auditTable->item(row, col))
-                    item->setBackground(QColor("#fff3cd"));
+    m_apiService->fetchAdminAudit(orgId, action, 300,
+        [this](std::vector<AuditLogDto> logs) {
+            if (m_auditOrgFilter->count() <= 1) {
+                m_apiService->fetchAdminCompanies([this](std::vector<CompanyDto> companies) {
+                    for (const auto &c : companies) {
+                        m_auditOrgFilter->addItem(c.name, c.id);
+                    }
+                });
             }
-        }
-    }
+
+            m_auditTable->setRowCount(0);
+            for (const auto &a : logs) {
+                const int row = m_auditTable->rowCount();
+                m_auditTable->insertRow(row);
+
+                QString ts = a.createdAt;
+                if (ts.length() > 19) ts = ts.left(19).replace('T', ' ');
+                m_auditTable->setItem(row, 0, new QTableWidgetItem(ts));
+
+                QString userLabel = a.userEmail;
+                if (!a.impersonatedBy.isEmpty())
+                    userLabel += QString::fromUtf8(" \u26a0\ufe0f");
+                m_auditTable->setItem(row, 1, new QTableWidgetItem(userLabel));
+                m_auditTable->setItem(row, 2, new QTableWidgetItem(a.action));
+                m_auditTable->setItem(row, 3, new QTableWidgetItem(a.resourceType));
+                m_auditTable->setItem(row, 4, new QTableWidgetItem(a.resourceId));
+                m_auditTable->setItem(row, 5, new QTableWidgetItem(a.orgId));
+                m_auditTable->setItem(row, 6, new QTableWidgetItem(a.ip));
+
+                if (!a.impersonatedBy.isEmpty()) {
+                    for (int col = 0; col < 7; ++col) {
+                        if (auto *item = m_auditTable->item(row, col))
+                            item->setBackground(QColor("#fff3cd"));
+                    }
+                }
+            }
+        },
+        [this](const QString &err) {
+            QMessageBox::warning(this, QString::fromUtf8("Chyba"), err);
+        });
 }
 
 void AdminPanelView::refresh()

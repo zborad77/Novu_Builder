@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 Case workflow and work catalog expansion: explicit project status machine, status transition actions with audit trail, phase-bound work type availability, large catalog seed expansion, and case-aware work item picker flows in the web UI.
 
+### Desktop Activity Stream Contract
+
+- Added typed backend WebSocket event contract models for desktop case activity streaming: `job_status_changed`, `job_completed`, and `image_status_changed`
+- Added fail-fast validation rules for case activity event payload shape, root fields, and terminal-status invariants
+- Added `docs/case-activity-websocket-contract.md` as the source-of-truth payload reference for Sprint 2 transport work
+
+### Desktop Activity Stream Transport
+
+- Added backend `/api/v1/ws/case-activity` WebSocket route with query-token auth, fail-fast `subscribe` / `unsubscribe` command validation, tenant-scoped subscription checks, and snapshot-diff event streaming
+- Added backend regression coverage for case-activity websocket command validation, snapshot event mapping, and initial job snapshot delivery over the realtime route
+- Added desktop `CaseActivityStreamClient` based on `QWebSocket` with session-owned connection lifecycle, reconnect backoff, ping/pong heartbeat, and stale-socket detection
+- Swapped `CaseActivityService` to WS-first transport while preserving the existing raw event surface for `CaseDetailViewModel` and `CaseDetailView`
+- Kept polling inside `CaseActivityService` as a temporary fallback safety mode when the websocket is disconnected, stale, or unavailable
+
 ### Case Workflow And Status Machine
 
 - Added a dedicated backend `case_workflow` subsystem for valid transitions, action mapping, effects, and status guard logic

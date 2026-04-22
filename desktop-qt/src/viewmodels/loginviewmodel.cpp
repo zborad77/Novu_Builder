@@ -1,5 +1,10 @@
 #include "loginviewmodel.h"
 
+LoginViewModel::LoginViewModel(QObject *parent)
+    : QObject(parent)
+{
+}
+
 LoginDto LoginViewModel::initialState() const
 {
     return {

@@ -25,7 +25,11 @@ from typing import TYPE_CHECKING
 import structlog
 
 from app.case_workflow.effects import EffectContext, run_after_commit, run_before_commit
-from app.case_workflow.transitions import TransitionError, apply_transition
+from app.case_workflow.transitions import (
+    TransitionError,
+    plan_transition,
+    update_case_state,
+)
 from app.models import ProjectStatusHistory  # noqa: F401  (imported so ORM sees model)
 from app.repositories.project_repository import ProjectRepository
 from app.schemas.project import ProjectDetail
@@ -83,13 +87,13 @@ class CaseActionService:
         from_status = project.status
 
         try:
-            apply_transition(
+            transition = plan_transition(
                 project,
                 to_status,
                 actor_user_id=actor_user_id,
                 reason=reason,
-                session=self.repository.session,
             )
+            await update_case_state(project, transition, session=self.repository.session)
         except TransitionError as exc:
             raise CaseActionError(str(exc)) from exc
 

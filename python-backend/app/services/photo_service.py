@@ -378,6 +378,7 @@ class PhotoService:
                 project_id=project.id,
                 organization_id=project.organization_id,
                 photo_id=created_photo.id,
+                dispatch_name="worker.enqueue_job",
                 max_depth=settings.heavy_queue_max_depth,
                 max_global_queued=effective_backpressure_max_queued_jobs(settings),
             )

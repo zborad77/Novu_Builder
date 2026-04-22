@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_analysis_service, get_auth_redis, get_job_queue, require_admin_capability, require_superadmin
-from app.worker.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
+from app.worker.queue import AnalysisJobQueueCapacityExceededError
 from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.models.domain import AnalysisJob, AuditLog, Organization, Project, User
@@ -441,10 +441,9 @@ async def admin_retry_job(
     )
     if job_queue is not None:
         try:
-            await enqueue_analysis_job(
-                job_queue,
-                job_id=new_job.id,
-                project_id=new_job.project_id,
+            await analysis_service.dispatch_analysis_job_transport(
+                new_job,
+                job_queue=job_queue,
                 organization_id=None,
                 is_superadmin_context=True,
                 max_depth=settings.analysis_queue_max_depth,

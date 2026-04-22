@@ -107,8 +107,11 @@ class ProjectRepository:
             .options(
                 selectinload(Project.client),
                 selectinload(Project.photos),
+                selectinload(Project.analysis_jobs),
                 selectinload(Project.proposal_draft),
+                selectinload(Project.exports),
                 selectinload(Project.final_proposals),
+                selectinload(Project.status_history),
                 selectinload(Project.analysis_results),
                 selectinload(Project.quote_variants).selectinload(QuoteVariant.items),
             )

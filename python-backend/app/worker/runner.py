@@ -1554,6 +1554,7 @@ async def _reconcile_startup_analysis_jobs(runtime: WorkerRuntime) -> None:
                     project_id=job.project_id,
                     organization_id=organization_id,
                     is_superadmin_context=False,
+                    dispatch_name="worker.enqueue_job",
                     max_depth=runtime.settings.analysis_queue_max_depth,
                     max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
                     priority=analysis_job_priority_for_type(job.job_type),
@@ -1596,6 +1597,7 @@ async def _reconcile_startup_exports(runtime: WorkerRuntime) -> None:
                     job_type="export_generate",
                     project_id=export.project_id,
                     export_id=export.id,
+                    dispatch_name="worker.enqueue_job",
                     max_depth=runtime.settings.heavy_queue_max_depth,
                     max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
                     priority=heavy_job_priority_for_type("export_generate"),
@@ -1640,6 +1642,7 @@ async def _reconcile_startup_photos(runtime: WorkerRuntime) -> None:
                     project_id=photo.project_id,
                     organization_id=None,  # cross-tenant startup path
                     photo_id=photo.id,
+                    dispatch_name="worker.enqueue_job",
                     max_depth=runtime.settings.heavy_queue_max_depth,
                     max_global_queued=runtime.settings.effective_backpressure_max_queued_jobs,
                     priority=heavy_job_priority_for_type("photo_variant_processing"),
