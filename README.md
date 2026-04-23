@@ -257,3 +257,6 @@ This repository enforces orchestration safety through:
 - orchestration-release-gate in CI
 - protected core files review discipline
 - rehearsal scenarios for recovery-sensitive flows
+
+-xxx-
+-vvvv-
