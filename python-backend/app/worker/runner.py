@@ -86,7 +86,6 @@ from app.worker.heartbeat import (
     write_worker_heartbeat,
 )
 from app.worker.queue import (
-    AnalysisJobTransportSnapshot,
     AnalysisJobQueueCapacityExceededError,
     InvalidAnalysisJobPayloadError,
     LeasedAnalysisJob,
@@ -1726,7 +1725,8 @@ async def run(redis_url: str | None = None) -> None:
         runtime.redis = _build_worker_redis(settings, url)
         await asyncio.sleep(1)
 
-    import os as _os, socket as _socket
+    import os as _os
+    import socket as _socket
     logger.info(
         "worker.started",
         provider=settings.ai_analysis_provider,
