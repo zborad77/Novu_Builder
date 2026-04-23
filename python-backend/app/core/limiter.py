@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from typing import Any
 
 import structlog
 
@@ -74,7 +75,7 @@ except ModuleNotFoundError as exc:
                 return func
             return decorator
 
-    limiter = _NoopLimiter()
+    limiter: Any = _NoopLimiter()
 else:
     # Single shared limiter instance - registered on app.state in main.py.
     # key_func: per-org for authenticated requests, per-user for superadmins,

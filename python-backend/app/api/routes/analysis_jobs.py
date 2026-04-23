@@ -198,6 +198,8 @@ async def retry_analysis_job(
         is_superadmin_context=current_user.isSuperAdmin,
         job_queue=job_queue,
     )
+    if new_job is None:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
     if job_queue is not None:
         try:
             await enqueue_analysis_job(

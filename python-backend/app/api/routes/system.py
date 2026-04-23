@@ -319,7 +319,7 @@ async def _probe_runtime_state(client) -> str:
 
 async def _get_auth_protection_snapshot(request: Request) -> _AuthProtectionSnapshot:
     auth_store = getattr(request.app.state, "auth_token_store", None)
-    source = "authTokenStore"
+    source: str | None = "authTokenStore"
     if auth_store is None:
         auth_store = getattr(request.app.state, "job_queue", None)
         source = "jobQueueSharedStore" if auth_store is not None else None

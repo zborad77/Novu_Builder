@@ -17,15 +17,31 @@ from __future__ import annotations
 
 from collections import deque
 from threading import Lock
+from typing import Any, Callable
 
 import structlog
 
 logger = structlog.get_logger(__name__)
 
+generate_latest: Callable[..., bytes] | None
+Counter: Any
+Gauge: Any
+Histogram: Any
+
 try:
-    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+    from prometheus_client import (
+        CONTENT_TYPE_LATEST,
+        Counter as _PrometheusCounter,
+        Gauge as _PrometheusGauge,
+        Histogram as _PrometheusHistogram,
+        generate_latest as _prometheus_generate_latest,
+    )
 
     PROMETHEUS_CLIENT_AVAILABLE = True
+    generate_latest = _prometheus_generate_latest
+    Counter = _PrometheusCounter
+    Gauge = _PrometheusGauge
+    Histogram = _PrometheusHistogram
 except ModuleNotFoundError as exc:
     logger.warning(
         "metrics.disabled",
@@ -52,14 +68,18 @@ except ModuleNotFoundError as exc:
         def set(self, *args, **kwargs) -> None:
             return None
 
-    def Counter(*args, **kwargs):  # type: ignore[misc]
+    def _counter_factory(*args, **kwargs) -> Any:
         return _NoopMetric()
 
-    def Gauge(*args, **kwargs):  # type: ignore[misc]
+    def _gauge_factory(*args, **kwargs) -> Any:
         return _NoopMetric()
 
-    def Histogram(*args, **kwargs):  # type: ignore[misc]
+    def _histogram_factory(*args, **kwargs) -> Any:
         return _NoopMetric()
+
+    Counter = _counter_factory
+    Gauge = _gauge_factory
+    Histogram = _histogram_factory
 
 
 HTTP_REQUESTS_TOTAL = Counter(
@@ -326,7 +346,7 @@ WORK_CATALOG_VALIDATION_FAILURES_TOTAL = Counter(
     ["operation", "reason"],
 )
 
-_JOB_DURATION_WINDOW = deque(maxlen=200)
+_JOB_DURATION_WINDOW: deque[float] = deque(maxlen=200)
 _JOB_DURATION_LOCK = Lock()
 _JOB_OUTCOME_COUNTS: dict[str, int] = {"completed": 0, "failed": 0}
 _JOB_FAIL_RATE_CURRENT = 0.0

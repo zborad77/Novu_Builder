@@ -92,7 +92,10 @@ class CompanyService:
             .where(User.organization_id.in_(org_ids))
             .group_by(User.organization_id)
         )
-        counts = dict(count_result.all())
+        counts: dict[str, int] = {
+            organization_id: int(user_count)
+            for organization_id, user_count in count_result.all()
+        }
 
         return [_org_to_read(org, counts.get(org.id, 0)) for org in orgs], total
 

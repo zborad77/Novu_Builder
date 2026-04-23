@@ -442,7 +442,8 @@ class TokenRepository:
             delete(RevokedToken).where(RevokedToken.expires_at <= datetime.now(UTC))
         )
         await self.session.commit()
-        return result.rowcount or 0
+        rowcount = getattr(result, "rowcount", None)
+        return int(rowcount or 0)
 
     async def get_valid_password_reset_token(
         self,
@@ -527,7 +528,8 @@ class TokenRepository:
         )
         if commit:
             await self.session.commit()
-        return result.rowcount or 0
+        rowcount = getattr(result, "rowcount", None)
+        return int(rowcount or 0)
 
     async def claim_password_reset_token(
         self,
@@ -582,4 +584,5 @@ class TokenRepository:
         result = await self.session.execute(stmt)
         if commit:
             await self.session.commit()
-        return result.rowcount or 0
+        rowcount = getattr(result, "rowcount", None)
+        return int(rowcount or 0)

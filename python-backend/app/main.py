@@ -1,6 +1,7 @@
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any, cast
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,13 +59,16 @@ _CORS_ALLOW_HEADERS: tuple[str, ...] = (
     "X-Request-ID",
 )
 
+slowapi_rate_limit_exceeded_handler: Any
+SlowapiRateLimitExceeded: Any
+
 try:
-    from slowapi import _rate_limit_exceeded_handler
-    from slowapi.errors import RateLimitExceeded
+    from slowapi import _rate_limit_exceeded_handler as slowapi_rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded as SlowapiRateLimitExceeded
 except ModuleNotFoundError as exc:
     logger.warning("rate_limiter.handler_disabled", reason="slowapi_not_installed", error=str(exc))
-    _rate_limit_exceeded_handler = None
-    RateLimitExceeded = None
+    slowapi_rate_limit_exceeded_handler = None
+    SlowapiRateLimitExceeded = None
 
 
 def verify_runtime_dependency_guards(settings):
@@ -81,7 +85,7 @@ def verify_runtime_dependency_guards(settings):
         )
 
     if strict_environment and (
-        _rate_limit_exceeded_handler is None or RateLimitExceeded is None
+        slowapi_rate_limit_exceeded_handler is None or SlowapiRateLimitExceeded is None
     ):
         raise RuntimeError(
             startup_failure_message(
@@ -360,8 +364,11 @@ def create_app() -> FastAPI:
         logger.warning("security.csp.disabled", app_env=settings.app_env)
 
     app.state.limiter = limiter
-    if RateLimitExceeded is not None and _rate_limit_exceeded_handler is not None:
-        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    if SlowapiRateLimitExceeded is not None and slowapi_rate_limit_exceeded_handler is not None:
+        app.add_exception_handler(
+            SlowapiRateLimitExceeded,
+            cast(Any, slowapi_rate_limit_exceeded_handler),
+        )
 
     @app.exception_handler(SQLAlchemyPoolTimeoutError)
     async def db_pool_exhausted_handler(request: Request, exc: SQLAlchemyPoolTimeoutError) -> JSONResponse:

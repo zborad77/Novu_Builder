@@ -730,7 +730,7 @@ class Settings(BaseSettings):
                 f"in APP_ENV={self.app_env!r}. "
                 "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
             )
-        if _is_insecure_placeholder(self.metrics_auth_token):
+        if _is_insecure_placeholder(token):
             raise ValueError(
                 f"METRICS_AUTH_TOKEN contains an insecure placeholder value "
                 f"in APP_ENV={self.app_env!r}. Set a strong, unique token."

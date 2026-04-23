@@ -26,6 +26,7 @@ import structlog
 from app.case_workflow.transitions import can_transition
 
 if TYPE_CHECKING:
+    from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.models.domain import Project
@@ -50,7 +51,7 @@ class EffectContext:
     organization_id: str | None
     is_superadmin_context: bool
     session: "AsyncSession"
-    work_queue: object | None = None
+    work_queue: "Redis | None" = None
     state: dict[str, object] = field(default_factory=dict)
 
 

@@ -1,8 +1,8 @@
-import collections
 import json
+from collections import deque
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Deque
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -439,6 +439,8 @@ async def admin_retry_job(
         is_superadmin_context=True,
         job_queue=job_queue,
     )
+    if new_job is None:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
     if job_queue is not None:
         try:
             await enqueue_analysis_job(
@@ -496,6 +498,8 @@ async def admin_reprocess_dead_letter_job(
         )
     except AnalysisJobQueueCapacityExceededError:
         raise HTTPException(status_code=429, detail="Analysis queue is full. Please retry later.")
+    if job is None:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
 
     await write_audit_log(
         session,
@@ -532,10 +536,10 @@ async def get_recent_logs(
 
     # Efficient tail — read last N lines without loading whole file
     with log_path.open("rb") as f:
-        deque = collections.deque(maxlen=lines)
+        recent_lines: Deque[str] = deque(maxlen=lines)
         for line in f:
-            deque.append(line.decode("utf-8", errors="replace").rstrip())
-    return list(deque)
+            recent_lines.append(line.decode("utf-8", errors="replace").rstrip())
+    return list(recent_lines)
 
 
 # ── Audit Trail ────────────────────────────────────────────────────────────────

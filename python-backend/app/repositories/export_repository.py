@@ -142,4 +142,5 @@ class ExportRepository:
             delete(ProjectExport).where(ProjectExport.id.in_(export_ids))
         )
         await self.session.commit()
-        return result.rowcount or 0
+        rowcount = getattr(result, "rowcount", None)
+        return int(rowcount or 0)

@@ -11,8 +11,10 @@ from app.repositories.proposal_draft_repository import ProposalDraftRepository
 from app.repositories.project_repository import ProjectRepository
 from app.schemas.project import (
     ProjectCreate,
+    ProjectClient,
     ProjectDetail,
     ProjectDuplicateRequest,
+    ProjectLocation,
     ProjectSummary,
     TransitionRead,
     ProjectWorkflowPhotoReadiness,
@@ -219,19 +221,19 @@ def build_project_detail(project: Project, *, actor_role: str = "manager") -> Pr
         source=getattr(project, "source", "mobile") or "mobile",  # backward compatibility fallback — source absent in pre-migration records
         propertyType=project.property_type,
         repairScope=project.repair_scope,
-        location={
-            "lat": project.location_lat,
-            "lng": project.location_lng,
-            "addressLabel": project.address_label,
-        },
+        location=ProjectLocation(
+            lat=project.location_lat,
+            lng=project.location_lng,
+            addressLabel=project.address_label,
+        ),
         client=(
-            {
-                "id": project.client.id,
-                "fullName": project.client.full_name,
-                "companyName": project.client.company_name,
-                "email": project.client.email,
-                "phone": project.client.phone,
-            }
+            ProjectClient(
+                id=project.client.id,
+                fullName=project.client.full_name,
+                companyName=project.client.company_name,
+                email=project.client.email,
+                phone=project.client.phone,
+            )
             if project.client
             else None
         ),

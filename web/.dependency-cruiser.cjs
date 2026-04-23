@@ -26,9 +26,9 @@ module.exports = {
       severity: 'error',
       from: { path: '^src/features/([^/]+)/' },
       to: {
-        path: '^src/features/(?!\\1)[^/]+/',
+        path: '^src/features/(?!$1/)[^/]+/',
         // Allow importing the index.ts public API file
-        pathNot: '^src/features/[^/]+/index\\.ts$',
+        pathNot: '^src/features/[^/]+/index\\.(ts|tsx|js|jsx)$',
       },
     },
 
@@ -117,6 +117,9 @@ module.exports = {
   ],
 
   options: {
+    exclude: {
+      path: '^src/.*\\.(js|jsx)$',
+    },
     doNotFollow: {
       path: 'node_modules',
     },

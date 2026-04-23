@@ -70,4 +70,5 @@ class MarkerRepository:
         result = await self.session.execute(
             delete(Marker).where(Marker.id == marker_id)
         )
-        return result.rowcount > 0
+        rowcount = getattr(result, "rowcount", None)
+        return bool(rowcount and rowcount > 0)

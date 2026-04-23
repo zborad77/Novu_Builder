@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.deps import get_analysis_service, get_current_user, get_project_service, resolve_org_id
 from app.core.audit import log_cross_tenant_denied
 from app.schemas.auth import AuthUserRead
-from app.schemas.measurement import MeasurementRead, MeasurementUpsert
+from app.schemas.measurement import MeasurementPolygonPoint, MeasurementRead, MeasurementUpsert
 from app.services.analysis_service import AnalysisService
 from app.services.project_service import ProjectService
 
@@ -13,19 +13,23 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["measurements"])
 
 
-def _normalize_polygon(points) -> list[dict[str, float]] | None:
+def _normalize_polygon(points) -> list[MeasurementPolygonPoint] | None:
     if not points:
         return None
 
-    normalized: list[dict[str, float]] = []
+    normalized: list[MeasurementPolygonPoint] = []
     for point in points:
         if isinstance(point, dict):
-            normalized.append({"x": point.get("x"), "y": point.get("y")})
+            x = point.get("x")
+            y = point.get("y")
+        else:
+            x = getattr(point, "x", None)
+            y = getattr(point, "y", None)
+        if x is None or y is None:
             continue
+        normalized.append(MeasurementPolygonPoint(x=float(x), y=float(y)))
 
-        normalized.append({"x": getattr(point, "x", None), "y": getattr(point, "y", None)})
-
-    return normalized
+    return normalized or None
 
 
 def _to_measurement(result) -> MeasurementRead:
