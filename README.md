@@ -237,13 +237,23 @@ dokud zadny takovy klient neexistuje, endpointy `/forgot-password` a `/reset-pas
 POST /api/v1/auth/change-password aktuálně ověřuje staré heslo přes `AuthService.login()`.
 
 Důsledek:
+
 - při ověření se zbytečně generují access/refresh tokeny
 - tokeny nejsou použity ani vráceny
 - není to bezpečnostní problém, ale architektonicky nečisté
 
 Plán do budoucna:
+
 - přidat do `AuthService` metodu např. `verify_password(user_id, plain_password) -> bool`
 - použít ji místo `login()` v change-password endpointu
 - oddělit ověřování hesla od generování tokenů
 
 Priorita: nízká (neblokuje funkčnost ani bezpečnost)
+
+## Orchestration governance
+
+This repository enforces orchestration safety through:
+
+- orchestration-release-gate in CI
+- protected core files review discipline
+- rehearsal scenarios for recovery-sensitive flows
