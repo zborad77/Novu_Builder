@@ -133,7 +133,7 @@ class TokenRepository:
                 ttl,
                 self._build_revoked_cache_payload(ttl_seconds=ttl),
             )
-        except Exception as exc:
+        except Exception:
             observe_cache_operation(
                 namespace=_REVOKED_TOKEN_CACHE_NAMESPACE,
                 operation="set",

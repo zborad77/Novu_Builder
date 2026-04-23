@@ -1,5 +1,3 @@
-import secrets
-from datetime import timedelta
 from typing import Annotated, NoReturn
 
 import structlog
@@ -14,11 +12,9 @@ from app.core.account_limiter import (
 )
 from app.core.audit import SecurityAuditWriteError
 from app.core.config import get_settings
-from app.core.email import send_password_reset_email
 from app.core.limiter import limiter
 from app.core.metrics import AUTH_FAILURES_TOTAL, metric_labels, normalize_tenant_metric_label
 from app.core.security import enforce_password_strength
-from app.models import PasswordResetToken
 from app.repositories.token_repository import TokenStateBackendUnavailableError
 from app.schemas.auth import (
     AuthSessionListResponse,

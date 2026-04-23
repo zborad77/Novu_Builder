@@ -463,7 +463,7 @@ async def create_vision_detection(
     current_user: AuthUserRead = Depends(get_current_user),
     service: WorkCatalogService = Depends(get_work_catalog_service),
 ):
-    org_id = _required_org_id(current_user)
+    org_id = require_org_id(current_user)
     try:
         detection = await service.create_vision_detection(
             project_id=case_id,

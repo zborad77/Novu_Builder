@@ -58,7 +58,6 @@ def _rate_limit_key(request) -> str:
 
 try:
     from slowapi import Limiter
-    from slowapi.util import get_remote_address
 except ModuleNotFoundError as exc:
     if _is_strict_environment():
         raise RuntimeError(

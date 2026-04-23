@@ -4,12 +4,12 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
 
-_logger = logging.getLogger(__name__)
-
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.analysis_provider_capabilities import validate_selected_analysis_provider
+
+_logger = logging.getLogger(__name__)
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]

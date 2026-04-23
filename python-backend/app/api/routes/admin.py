@@ -29,7 +29,7 @@ from app.schemas.company import (
 from app.core.limiter import limiter
 from app.core.sql_like import LIKE_ESCAPE_CHAR, build_contains_ilike_pattern
 from app.core.security import enforce_password_strength
-from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit
+from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit, write_audit_log
 from app.repositories.token_repository import SessionTokenRevocation, TokenRepository
 from app.services.analysis_service import AnalysisService, to_job_read
 from app.services.company_service import CompanyService

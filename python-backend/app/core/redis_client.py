@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import logging
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from redis.asyncio import Redis
