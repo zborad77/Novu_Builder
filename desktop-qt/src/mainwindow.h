@@ -2,7 +2,7 @@
 
 #include <QMainWindow>
 
-#include "services/sessionservice.h"
+#include "state/sessionstate.h"
 
 class QFrame;
 class QStackedWidget;
@@ -42,7 +42,7 @@ private:
     void setSidebarActiveSection(QPushButton *activeButton);
     bool confirmNavigateAway();
 
-    SessionService m_session;
+    SessionState m_session;
     QStackedWidget *m_stack = nullptr;
     LoginView *m_loginView = nullptr;
     CaseListView *m_caseListView = nullptr;

@@ -2,7 +2,7 @@
 
 #include <QString>
 
-class SessionService
+class SessionState
 {
 public:
     void setTokens(const QString &accessToken, const QString &refreshToken);

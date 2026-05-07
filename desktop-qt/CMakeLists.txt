@@ -44,8 +44,8 @@ qt_add_executable(NovuBuilder
     src/viewmodels/casedetailviewmodel.h
     src/services/apiservice.cpp
     src/services/apiservice.h
-    src/services/sessionservice.cpp
-    src/services/sessionservice.h
+    src/state/sessionstate.cpp
+    src/state/sessionstate.h
     src/models/adminjobdto.h
     src/models/adminuserdto.h
     src/models/auditlogdto.h

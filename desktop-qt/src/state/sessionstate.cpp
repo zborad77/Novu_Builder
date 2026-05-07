@@ -1,29 +1,29 @@
-#include "sessionservice.h"
+#include "sessionstate.h"
 
 #include <QSettings>
 
-void SessionService::setTokens(const QString &accessToken, const QString &refreshToken)
+void SessionState::setTokens(const QString &accessToken, const QString &refreshToken)
 {
     m_accessToken = accessToken;
     m_refreshToken = refreshToken;
 }
 
-QString SessionService::token() const
+QString SessionState::token() const
 {
     return m_accessToken;
 }
 
-QString SessionService::refreshToken() const
+QString SessionState::refreshToken() const
 {
     return m_refreshToken;
 }
 
-bool SessionService::isLoggedIn() const
+bool SessionState::isLoggedIn() const
 {
     return !m_accessToken.isEmpty();
 }
 
-void SessionService::clear()
+void SessionState::clear()
 {
     m_accessToken.clear();
     m_refreshToken.clear();
@@ -32,14 +32,14 @@ void SessionService::clear()
     settings.remove("session/refreshToken");
 }
 
-void SessionService::saveToSettings() const
+void SessionState::saveToSettings() const
 {
     QSettings settings("NOVU", "NovuBuilder");
     settings.setValue("session/accessToken", m_accessToken);
     settings.setValue("session/refreshToken", m_refreshToken);
 }
 
-void SessionService::loadFromSettings()
+void SessionState::loadFromSettings()
 {
     QSettings settings("NOVU", "NovuBuilder");
     m_accessToken = settings.value("session/accessToken").toString();
