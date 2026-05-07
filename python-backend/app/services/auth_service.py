@@ -174,7 +174,7 @@ class AuthService:
         return normalized if normalized is not None else 0
 
     @classmethod
-    def invalidate_user_token_state(cls, user: User | object, *, now: datetime | None = None) -> int:
+    def invalidate_user_token_state(cls, user: User, *, now: datetime | None = None) -> int:
         invalidated_at = cls._normalize_datetime(now or datetime.now(UTC)).replace(microsecond=0)
         user.tokens_valid_after = invalidated_at
         next_version = cls._user_token_version(user) + 1

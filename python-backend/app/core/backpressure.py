@@ -40,7 +40,7 @@ def _counter_value(value: object) -> int:
     if isinstance(value, Mock):
         return 0
     try:
-        return max(0, int(value))
+        return max(0, int(value))  # type: ignore[call-overload]
     except (TypeError, ValueError):
         return 0
 

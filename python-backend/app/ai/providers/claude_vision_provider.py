@@ -203,6 +203,8 @@ class ClaudeVisionProvider:
                 )
                 await asyncio.sleep(delay)
 
+        if response is None:
+            raise RuntimeError("Vision API returned no response after all retry attempts.")
         # Najdi text blok (přeskočí thinking bloky)
         result_text = ""
         for block in response.content:

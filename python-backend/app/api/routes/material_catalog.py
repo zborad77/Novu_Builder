@@ -22,7 +22,7 @@ async def list_material_catalog(
     # Tenant-scoped routes must resolve the effective org context centrally;
     # do not read current_user.organizationId directly in handlers.
     org_id = resolve_org_id(current_user)
-    items = await service.list_material_catalog(organization_id=org_id, search=search, include_inactive=includeInactive)
+    items = await service.list_material_catalog(organization_id=org_id, search=search, include_inactive=includeInactive)  # type: ignore[arg-type]
     return {"items": [item.model_dump() for item in items], "total": len(items)}
 
 
@@ -35,7 +35,7 @@ async def list_supplier_prices(
     service: MaterialCatalogService = Depends(get_material_catalog_service),
 ):
     org_id = resolve_org_id(current_user)
-    items = await service.list_supplier_prices(material_id, org_id)
+    items = await service.list_supplier_prices(material_id, org_id)  # type: ignore[arg-type]
     if items is None:
         raise HTTPException(status_code=404, detail="Material not found.")
     return {"items": [item.model_dump() for item in items], "total": len(items)}
@@ -51,7 +51,7 @@ async def patch_material(
     org_id = resolve_org_id(current_user)
     updated = await service.update_material(
         material_id,
-        org_id,
+        org_id,  # type: ignore[arg-type]
         default_unit_price=payload.defaultUnitPrice,
         default_supplier_id=payload.defaultSupplierId,
         notes=payload.notes.strip() if isinstance(payload.notes, str) else None,

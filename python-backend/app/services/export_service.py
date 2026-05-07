@@ -572,7 +572,7 @@ def _build_docx_bytes(case_detail: ProjectDetail) -> bytes:
 
     core_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <dc:title>{escape(case_detail.finalProposal.subject or case_detail.title or "Nabidka")}</dc:title>
+  <dc:title>{escape((case_detail.finalProposal.subject if case_detail.finalProposal else None) or case_detail.title or "Nabidka")}</dc:title>
   <dc:creator>NOVU Builder</dc:creator>
   <cp:lastModifiedBy>NOVU Builder</cp:lastModifiedBy>
   <dcterms:created xsi:type="dcterms:W3CDTF">{core_created}</dcterms:created>
@@ -650,7 +650,7 @@ def _build_proposal_docx_bytes(case_detail: ProjectDetail) -> bytes:
 
     core_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <dc:title>{escape(case_detail.proposalDraft.subject or case_detail.title or "Pracovni navrh nabidky")}</dc:title>
+  <dc:title>{escape((case_detail.proposalDraft.subject if case_detail.proposalDraft else None) or case_detail.title or "Pracovni navrh nabidky")}</dc:title>
   <dc:creator>NOVU Builder</dc:creator>
   <cp:lastModifiedBy>NOVU Builder</cp:lastModifiedBy>
   <dcterms:created xsi:type="dcterms:W3CDTF">{core_created}</dcterms:created>
@@ -1302,6 +1302,7 @@ class ExportService:
         for export in expired_exports:
             if export.storage_key:
                 await delete_storage_file(relative_storage_key=export.storage_key)
+            expires_at_utc = _as_utc(export.expires_at)
             logger.info(
                 "export.cleanup.deleted",
                 org_id=export.organization_id,
@@ -1309,7 +1310,7 @@ class ExportService:
                 action="delete_expired_export",
                 export_id=export.export_id,
                 project_id=export.project_id,
-                expires_at=_as_utc(export.expires_at).isoformat(),
+                expires_at=expires_at_utc.isoformat() if expires_at_utc is not None else None,
             )
             export_ids.append(export.export_id)
 

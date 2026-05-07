@@ -202,13 +202,11 @@ def _lease_datetime_from_ms(value: int) -> datetime:
 def _job_duration_seconds(job: AnalysisJob) -> float | None:
     if not job.started_at or not job.finished_at:
         return None
-    return round(
-        (
-            _normalize_utc_datetime(job.finished_at)
-            - _normalize_utc_datetime(job.started_at)
-        ).total_seconds(),
-        1,
-    )
+    finished = _normalize_utc_datetime(job.finished_at)
+    started = _normalize_utc_datetime(job.started_at)
+    if finished is None or started is None:
+        return None
+    return round((finished - started).total_seconds(), 1)
 
 
 def _job_attempt_count(job: AnalysisJob) -> int:

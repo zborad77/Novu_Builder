@@ -134,6 +134,8 @@ def _decode_envelope(raw: object) -> tuple[str, Any] | None:
     ttl_seconds = meta.get("ttlSeconds")
     if not isinstance(tag, str) or not tag.strip():
         return None
+    if ttl_seconds is None:
+        return None
     try:
         if int(ttl_seconds) <= 0:
             return None

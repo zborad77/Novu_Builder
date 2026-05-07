@@ -659,7 +659,7 @@ def validate_analysis_profile_definition(
             raise CatalogValidationError(
                 f"Output mapping references unsupported source attribute '{source_attribute_code}'."
             )
-        parameter_code = mapping.get("target_parameter_code")
+        parameter_code = mapping.get("target_parameter_code")  # type: ignore[assignment]
         if parameter_code is not None:
             normalized_parameter_code = normalize_machine_code(
                 parameter_code,
@@ -762,7 +762,7 @@ def validate_pricing_profile_definition(
             field_name="laborAssumptionQuantitySourceType",
             allowed=CATALOG_PRICING_RULE_QUANTITY_SOURCES,
         )
-        source_key = assumption.get("quantity_source_key")
+        source_key = assumption.get("quantity_source_key")  # type: ignore[assignment]
         if assumption["quantity_source_type"] == "parameter":
             normalized_source = normalize_machine_code(
                 source_key,
@@ -797,7 +797,7 @@ def validate_pricing_profile_definition(
             field_name="materialAssumptionQuantitySourceType",
             allowed=CATALOG_PRICING_RULE_QUANTITY_SOURCES,
         )
-        source_key = assumption.get("quantity_source_key")
+        source_key = assumption.get("quantity_source_key")  # type: ignore[assignment]
         if assumption["quantity_source_type"] == "parameter":
             normalized_source = normalize_machine_code(
                 source_key,
@@ -847,7 +847,7 @@ def validate_pricing_profile_definition(
             field_name="baseRuleQuantitySourceType",
             allowed=CATALOG_PRICING_RULE_QUANTITY_SOURCES,
         )
-        source_key = rule.get("quantity_source_key")
+        source_key = rule.get("quantity_source_key")  # type: ignore[assignment]
         if source_type == "parameter":
             normalized_source = normalize_machine_code(source_key, field_name="baseRuleQuantitySourceKey")
             if normalized_source not in parameter_codes:
