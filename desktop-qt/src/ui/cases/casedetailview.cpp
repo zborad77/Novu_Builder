@@ -2938,7 +2938,9 @@ void CaseDetailView::startAnalysisPolling(const QString &jobId)
     constexpr int kAnalysisPollAttemptLimit = 90; // 90 × 2s = 3 minuty
     m_analysisJobId = jobId;
     m_remainingAnalysisPollAttempts = kAnalysisPollAttemptLimit;
-    m_analysisJobStatusLabel->setText("Analyza probiha... (cekam na vysledek)");
+    m_analysisJobStatusLabel->setText(
+        "Analyzuji fotografie...\n"
+        "Muze to trvat 30-180 sekund. Muzete pokracovat v jine praci.");
     m_analysisJobStatusLabel->show();
     if (!m_analysisPollingTimer->isActive()) {
         m_analysisPollingTimer->start();
@@ -2987,9 +2989,9 @@ void CaseDetailView::pollAnalysisStatus()
         m_analysisJobStatusLabel->setText("Analyza selhala. Zkontrolujte fotky a zkuste znovu.");
         m_runAnalysisButton->setEnabled(true);
     } else if (status == "running") {
+        const int elapsed = (90 - m_remainingAnalysisPollAttempts) * 2;
         m_analysisJobStatusLabel->setText(
-            QString("Analyza probiha... (%1 s)")
-                .arg((90 - m_remainingAnalysisPollAttempts) * 2));
+            QString("Analyza probiha... (%1 s)\nMuzete pokracovat v jine praci.").arg(elapsed));
     } else if (!status.isEmpty()) {
         m_analysisJobStatusLabel->setText(QString("Stav: %1").arg(status));
     } else if (!errorMessage.isEmpty()) {

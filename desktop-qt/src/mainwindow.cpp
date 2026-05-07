@@ -21,6 +21,7 @@
 #include "ui/cases/casebrowserview.h"
 #include "ui/cases/casedetailview.h"
 #include "ui/cases/caselistview.h"
+#include "ui/dashboard/dashboardview.h"
 #include "ui/auth/loginview.h"
 #include "ui/cases/newcaseview.h"
 #include "ui/auth/serversetupdialog.h"
@@ -225,62 +226,7 @@ QWidget *MainWindow::createWorkspaceShell()
     m_caseDetailView = new CaseDetailView(m_detailStack);
     m_newCaseView = new NewCaseView(m_detailStack);
     m_caseBrowserView = new CaseBrowserView(m_detailStack);
-    // Welcome screen (shown on startup before any case is selected)
-    m_welcomeView = new QWidget(m_detailStack);
-    auto *welcomeLayout = new QVBoxLayout(m_welcomeView);
-    welcomeLayout->setContentsMargins(32, 32, 32, 32);
-    welcomeLayout->setSpacing(20);
-    welcomeLayout->addStretch();
-
-    auto makeWelcomeCard = [](QWidget *parent, const QString &title, const QString &hint) -> QFrame * {
-        auto *card = new QFrame(parent);
-        card->setObjectName("welcomeCard");
-        auto *cardLayout = new QVBoxLayout(card);
-        cardLayout->setContentsMargins(24, 20, 24, 20);
-        cardLayout->setSpacing(8);
-        auto *titleLabel = new QLabel(title, card);
-        titleLabel->setObjectName("welcomeCardTitle");
-        auto *hintLabel = new QLabel(hint, card);
-        hintLabel->setObjectName("welcomeCardHint");
-        hintLabel->setWordWrap(true);
-        cardLayout->addWidget(titleLabel);
-        cardLayout->addWidget(hintLabel);
-        return card;
-    };
-
-    auto *openServerCard = makeWelcomeCard(m_welcomeView,
-        QString::fromUtf8("Otev\u0159\u00edt zak\u00e1zky ze serveru"),
-        QString::fromUtf8("Na\u010d\u00edst aktu\u00e1ln\u00ed seznam zak\u00e1zek a aktualizovat frontu."));
-    auto *openServerButton = new QPushButton(
-        QString::fromUtf8("Na\u010d\u00edst zak\u00e1zky"), openServerCard);
-    openServerButton->setFixedWidth(160);
-    openServerButton->setWhatsThis(QString::fromUtf8("Na\u010dte frontu zak\u00e1zek ze serveru a aktualizuje seznam Rozpracovan\u00fdch zak\u00e1zek."));
-    static_cast<QVBoxLayout*>(openServerCard->layout())->addWidget(openServerButton);
-
-    auto *pickCard = makeWelcomeCard(m_welcomeView,
-        QString::fromUtf8("Zvolte si zak\u00e1zku z lev\u00e9ho side baru"),
-        QString::fromUtf8("Klikn\u011bte na Projekt nebo Rozpracovan\u00e9 zak\u00e1zky \u2014 vyberte zak\u00e1zku z p\u0159ehledu a za\u010dn\u011bte pracovat."));
-
-    welcomeLayout->addWidget(openServerCard);
-    welcomeLayout->addWidget(pickCard);
-    welcomeLayout->addStretch();
-
-    m_welcomeView->setStyleSheet(R"(
-        QFrame#welcomeCard {
-            background: #fffaf2;
-            border: 1px solid #eadcc8;
-            border-radius: 16px;
-        }
-        QLabel#welcomeCardTitle {
-            font-size: 17px;
-            font-weight: 700;
-            color: #1f2933;
-        }
-        QLabel#welcomeCardHint {
-            color: #607080;
-            font-size: 13px;
-        }
-    )");
+    m_dashboardView = new DashboardView(m_detailStack);
 
     m_adminPanelView = new AdminPanelView(m_detailStack);
     connect(m_adminPanelView, &AdminPanelView::impersonationStarted,
@@ -289,7 +235,7 @@ QWidget *MainWindow::createWorkspaceShell()
     m_detailStack->addWidget(m_caseDetailView);   // index 0
     m_detailStack->addWidget(m_newCaseView);       // index 1
     m_detailStack->addWidget(m_caseBrowserView);   // index 2
-    m_detailStack->addWidget(m_welcomeView);       // index 3
+    m_detailStack->addWidget(m_dashboardView);     // index 3
     m_detailStack->addWidget(m_adminPanelView);    // index 4
     m_detailStack->setCurrentIndex(3);
     detailColumnLayout->addWidget(m_detailStack, 1);
@@ -471,7 +417,7 @@ QWidget *MainWindow::createWorkspaceShell()
             if (m_caseDetailView) m_caseDetailView->navigateToField(optionKey);
         });
 
-        connect(openServerButton, &QPushButton::clicked, this, [this]() {
+        connect(m_dashboardView, &DashboardView::loadCasesRequested, this, [this]() {
             m_caseListSection = QString::fromUtf8("Rozpracovan\u00e9 zak\u00e1zky");
             if (m_caseListView) m_caseListView->reloadCases(QString(), false);
             if (m_caseColumn) m_caseColumn->hide();
@@ -482,6 +428,11 @@ QWidget *MainWindow::createWorkspaceShell()
             if (m_workspaceSubtitleLabel)
                 m_workspaceSubtitleLabel->setText(QString::fromUtf8("Zak\u00e1zky, na kter\u00fdch se pracuje."));
             setSidebarActiveSection(m_sidebarWorkCasesButton);
+        });
+        connect(m_dashboardView, &DashboardView::newCaseRequested, this, [this]() {
+            if (!confirmNavigateAway()) return;
+            showNewCaseView();
+            setSidebarActiveSection(m_sidebarNewCaseButton);
         });
 
         // On startup show welcome instead of empty case detail
