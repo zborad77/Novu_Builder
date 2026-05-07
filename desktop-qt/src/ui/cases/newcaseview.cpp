@@ -19,7 +19,9 @@
 #include <QSizePolicy>
 #include <QVBoxLayout>
 
-#include "services/apiservice.h"
+#include "network/analysisapi.h"
+#include "network/casesapi.h"
+#include "network/imagesapi.h"
 
 namespace {
 constexpr int kThumbSize = 96;
@@ -450,12 +452,14 @@ void NewCaseView::submit()
         m_statusLabel->show();
     }
 
-    ApiService api;
+    CasesApi casesApi;
+    ImagesApi imagesApi;
+    AnalysisApi analysisApi;
     QString errorMsg;
 
     // 1. Create case
-    const QString caseId = api.createCase(title, address, repairScope, description, &errorMsg);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    const QString caseId = casesApi.createCase(title, address, repairScope, description, &errorMsg);
+    if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
     if (caseId.isEmpty()) {
         if (m_errorLabel) {
             m_errorLabel->setText(errorMsg.isEmpty()
@@ -482,8 +486,8 @@ void NewCaseView::submit()
                     orderedImages.end());
     }
 
-    if (!api.uploadCaseImages(caseId, orderedImages, &errorMsg)) {
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    if (!imagesApi.uploadCaseImages(caseId, orderedImages, &errorMsg)) {
+        if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
         if (m_errorLabel) {
             m_errorLabel->setText(errorMsg.isEmpty()
                 ? QString::fromUtf8("Nepoda\u0159ilo se nahr\u00e1t fotografie.")
@@ -500,8 +504,8 @@ void NewCaseView::submit()
         m_statusLabel->setText(QString::fromUtf8("Spu\u0161t\u011bm anal\u00fdzu AI..."));
     }
 
-    const QString jobId = api.triggerAnalysisJob(caseId, &errorMsg);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    const QString jobId = analysisApi.triggerAnalysisJob(caseId, &errorMsg);
+    if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
     // Analysis trigger failure is non-fatal — case was created and photos uploaded
     if (jobId.isEmpty() && !errorMsg.isEmpty()) {
         if (m_statusLabel) {

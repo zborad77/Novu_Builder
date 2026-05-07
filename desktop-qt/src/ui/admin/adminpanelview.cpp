@@ -15,7 +15,7 @@
 #include <QTextEdit>
 #include <QVBoxLayout>
 
-#include "services/apiservice.h"
+#include "network/adminapi.h"
 
 static const QString kStyleSheet = R"(
     QTabWidget::pane {
@@ -204,7 +204,7 @@ void AdminPanelView::buildUsersTab(QWidget *tab)
 
 void AdminPanelView::loadUsers()
 {
-    ApiService api;
+    AdminApi api;
     QString err;
     const QString orgId = m_orgFilter->currentData().toString();
     const auto users = api.fetchAdminUsers(orgId, &err);
@@ -299,7 +299,7 @@ void AdminPanelView::onResetPassword()
     const QString newPassword = pwEdit->text();
     dialog->deleteLater();
 
-    ApiService api;
+    AdminApi api;
     QString err;
     if (!api.resetUserPassword(userId, newPassword, &err)) {
         QMessageBox::warning(this, QString::fromUtf8("Chyba"),
@@ -331,7 +331,7 @@ void AdminPanelView::onImpersonate()
 
     if (answer != QMessageBox::Yes) return;
 
-    ApiService api;
+    AdminApi api;
     QString err;
     const auto dto = api.impersonateUser(userId, &err);
 
@@ -387,7 +387,7 @@ void AdminPanelView::buildJobsTab(QWidget *tab)
 
 void AdminPanelView::loadJobs()
 {
-    ApiService api;
+    AdminApi api;
     QString err;
     const auto jobs = api.fetchAdminJobs(m_jobStatusFilter->currentData().toString(), &err);
 
@@ -443,7 +443,7 @@ void AdminPanelView::buildCompaniesTab(QWidget *tab)
 
 void AdminPanelView::loadCompanies()
 {
-    ApiService api;
+    AdminApi api;
     QString err;
     const auto companies = api.fetchAdminCompanies(&err);
 
@@ -504,7 +504,7 @@ void AdminPanelView::buildAuditTab(QWidget *tab)
 
 void AdminPanelView::loadAudit()
 {
-    ApiService api;
+    AdminApi api;
     QString err;
     const QString orgId  = m_auditOrgFilter->currentData().toString();
     const QString action = m_auditActionFilter->text().trimmed();

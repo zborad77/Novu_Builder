@@ -43,7 +43,10 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
-#include "services/apiservice.h"
+#include "network/analysisapi.h"
+#include "network/casesapi.h"
+#include "network/exportsapi.h"
+#include "network/imagesapi.h"
 #include "viewmodels/casedetailviewmodel.h"
 
 class NoFocusRectDelegate : public QStyledItemDelegate
@@ -1451,11 +1454,11 @@ void CaseDetailView::setCase(const QString &caseId)
     }
 
     m_caseId = caseId;
-    ApiService apiService;
+    CasesApi casesApi;
     CaseDetailViewModel viewModel;
-    const auto caseDto = viewModel.loadCase(caseId, apiService);
+    const auto caseDto = viewModel.loadCase(caseId, casesApi);
 
-    if (ApiService::sessionExpired()) {
+    if (ApiClient::sessionExpired()) {
         emit sessionExpired();
         return;
     }
@@ -1925,7 +1928,7 @@ void CaseDetailView::saveProposalDraft()
         return;
     }
 
-    ApiService apiService;
+    CasesApi casesApi;
     ProposalDraftPatchDto payload{
         .subject = m_proposalSubjectEdit ? m_proposalSubjectEdit->text().trimmed() : QString(),
         .summary = m_proposalSummaryEdit ? m_proposalSummaryEdit->toPlainText().trimmed() : QString(),
@@ -1939,8 +1942,8 @@ void CaseDetailView::saveProposalDraft()
     };
 
     QString errorMessage;
-    const auto updatedCase = apiService.updateCaseProposalDraft(m_caseId, payload, &errorMessage);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    const auto updatedCase = casesApi.updateCaseProposalDraft(m_caseId, payload, &errorMessage);
+    if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
     if (updatedCase.id.isEmpty()) {
         m_errorLabel->setText(errorMessage.isEmpty() ? "Nepodarilo se ulozit navrh nabidky." : errorMessage);
         m_errorLabel->show();
@@ -1970,10 +1973,10 @@ void CaseDetailView::createFinalProposal()
         return;
     }
 
-    ApiService apiService;
+    CasesApi casesApi;
     QString errorMessage;
-    const auto updatedCase = apiService.createCaseFinalProposal(m_caseId, &errorMessage);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    const auto updatedCase = casesApi.createCaseFinalProposal(m_caseId, &errorMessage);
+    if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
     if (updatedCase.id.isEmpty()) {
         m_errorLabel->setText(errorMessage.isEmpty() ? "Nepodarilo se vytvorit finalni verzi." : errorMessage);
         m_errorLabel->show();
@@ -2018,7 +2021,7 @@ void CaseDetailView::updateImagesPanel()
         }
     }
 
-    ApiService apiService;
+    ImagesApi imagesApi;
     for (const auto &image : m_images) {
         QStringList tooltipLines;
         tooltipLines << image.originalFilename;
@@ -2040,7 +2043,7 @@ void CaseDetailView::updateImagesPanel()
         thumbnailButton->setProperty("imageId", image.id);
 
         QString previewErrorMessage;
-        const auto previewData = apiService.fetchImageData(image.previewUrl, &previewErrorMessage);
+        const auto previewData = imagesApi.fetchImageData(image.previewUrl, &previewErrorMessage);
         QPixmap previewPixmap;
         if (!previewData.isEmpty() && previewPixmap.loadFromData(previewData)) {
             thumbnailButton->setIcon(QIcon(previewPixmap.scaled(
@@ -2453,10 +2456,10 @@ void CaseDetailView::uploadPreparedLocalImages()
     setImageHintMessage(QString("Odesilam %1 fotek na server.").arg(uploadImages.size()));
     QApplication::processEvents();
 
-    ApiService apiService;
+    ImagesApi imagesApi;
     QString errorMessage;
-    if (!apiService.uploadCaseImages(m_caseId, uploadImages, &errorMessage)) {
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    if (!imagesApi.uploadCaseImages(m_caseId, uploadImages, &errorMessage)) {
+        if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
         for (const size_t index : uploadIndexes) {
             m_preparedLocalImages[index].state = LocalImageState::ReadyToUpload;
             m_preparedLocalImages[index].errorMessage = errorMessage;
@@ -2507,10 +2510,10 @@ void CaseDetailView::downloadExport(const QString &exportType)
     setImageHintMessage(QString("Pripravuji export: %1...").arg(exportType));
     QApplication::processEvents();
 
-    ApiService apiService;
+    ExportsApi exportsApi;
     QString errorMessage;
-    const auto exportResult = apiService.triggerExport(m_caseId, exportType, &errorMessage);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    const auto exportResult = exportsApi.triggerExport(m_caseId, exportType, &errorMessage);
+    if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
     if (exportResult.downloadUrl.isEmpty()) {
         setImageHintMessage(
             errorMessage.isEmpty() ? "Export se nezdaril — backend nevratil download URL." : errorMessage,
@@ -2518,8 +2521,8 @@ void CaseDetailView::downloadExport(const QString &exportType)
         return;
     }
 
-    const auto fileBytes = apiService.downloadExportFile(exportResult.downloadUrl, &errorMessage);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    const auto fileBytes = exportsApi.downloadExportFile(exportResult.downloadUrl, &errorMessage);
+    if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
     if (fileBytes.isEmpty()) {
         setImageHintMessage(
             errorMessage.isEmpty() ? "Stazeni souboru se nezdarilo." : errorMessage,
@@ -2580,16 +2583,17 @@ void CaseDetailView::exportAsZip()
     QDir(tempBase).removeRecursively();
     QDir().mkpath(tempBase + "/fotky");
 
-    ApiService apiService;
+    ExportsApi exportsApi;
+    ImagesApi imagesApi;
     QString errorMessage;
     int errors = 0;
 
     // 1. Download DOCX (final proposal)
-    const auto exportResult = apiService.triggerExport(m_caseId, "proposal-docx", &errorMessage);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    const auto exportResult = exportsApi.triggerExport(m_caseId, "proposal-docx", &errorMessage);
+    if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
     if (!exportResult.downloadUrl.isEmpty()) {
-        const auto docxBytes = apiService.downloadExportFile(exportResult.downloadUrl, &errorMessage);
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+        const auto docxBytes = exportsApi.downloadExportFile(exportResult.downloadUrl, &errorMessage);
+        if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
         if (!docxBytes.isEmpty()) {
             const QString docxName = exportResult.fileName.isEmpty()
                 ? QString("Nabidka_%1.docx").arg(safeTitle)
@@ -2609,8 +2613,8 @@ void CaseDetailView::exportAsZip()
     // 2. Download images (previews)
     for (const auto &image : m_images) {
         if (image.previewUrl.isEmpty()) { continue; }
-        const auto imgBytes = apiService.fetchImageData(image.previewUrl, &errorMessage);
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+        const auto imgBytes = imagesApi.fetchImageData(image.previewUrl, &errorMessage);
+        if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
         if (imgBytes.isEmpty()) { ++errors; continue; }
         QString imgName = image.originalFilename.isEmpty()
             ? image.id + ".jpg"
@@ -2699,16 +2703,16 @@ void CaseDetailView::setSelectedImageAsPrimary()
         return;
     }
 
-    ApiService apiService;
+    ImagesApi imagesApi;
     CaseDetailViewModel viewModel;
-    if (!viewModel.setPrimaryImage(m_caseId, image->id, apiService)) {
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    if (!viewModel.setPrimaryImage(m_caseId, image->id, imagesApi)) {
+        if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
         setImageHintMessage(viewModel.imageErrorMessage(), true);
         return;
     }
 
-    const auto images = viewModel.loadCaseImages(m_caseId, apiService);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    const auto images = viewModel.loadCaseImages(m_caseId, imagesApi);
+    if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
     if (!viewModel.imageErrorMessage().isEmpty()) {
         setImageHintMessage(viewModel.imageErrorMessage(), true);
         return;
@@ -2725,16 +2729,16 @@ void CaseDetailView::setSelectedImageAsAnalysisReference()
         return;
     }
 
-    ApiService apiService;
+    ImagesApi imagesApi;
     CaseDetailViewModel viewModel;
-    if (!viewModel.setAnalysisReferenceImage(m_caseId, image->id, apiService)) {
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    if (!viewModel.setAnalysisReferenceImage(m_caseId, image->id, imagesApi)) {
+        if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
         setImageHintMessage(viewModel.imageErrorMessage(), true);
         return;
     }
 
-    const auto images = viewModel.loadCaseImages(m_caseId, apiService);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    const auto images = viewModel.loadCaseImages(m_caseId, imagesApi);
+    if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
     if (!viewModel.imageErrorMessage().isEmpty()) {
         setImageHintMessage(viewModel.imageErrorMessage(), true);
         return;
@@ -2764,10 +2768,10 @@ void CaseDetailView::duplicateCase(const QString &mode)
         }
     }
 
-    ApiService apiService;
+    CasesApi casesApi;
     QString errorMessage;
-    const auto duplicatedCaseId = apiService.duplicateCase(m_caseId, mode, &errorMessage);
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    const auto duplicatedCaseId = casesApi.duplicateCase(m_caseId, mode, &errorMessage);
+    if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
     if (duplicatedCaseId.isEmpty()) {
         m_errorLabel->setText(errorMessage.isEmpty() ? "Nepodarilo se vytvorit kopii zakazky." : errorMessage);
         m_errorLabel->show();
@@ -2796,10 +2800,10 @@ void CaseDetailView::sendCurrentCase()
         return;
     }
 
-    ApiService apiService;
+    CasesApi casesApi;
     QString errorMessage;
-    if (!apiService.sendCase(m_caseId, &errorMessage)) {
-        if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    if (!casesApi.sendCase(m_caseId, &errorMessage)) {
+        if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
         m_errorLabel->setText(errorMessage.isEmpty() ? "Nepodarilo se odeslat zakazku." : errorMessage);
         m_errorLabel->show();
         return;
@@ -2877,11 +2881,11 @@ void CaseDetailView::triggerAnalysis()
     m_analysisJobStatusLabel->setText("Spoustim analyzu...");
     m_analysisJobStatusLabel->show();
 
-    ApiService apiService;
+    AnalysisApi analysisApi;
     QString errorMessage;
-    const auto jobId = apiService.triggerAnalysisJob(m_caseId, &errorMessage);
+    const auto jobId = analysisApi.triggerAnalysisJob(m_caseId, &errorMessage);
 
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
 
     if (jobId.isEmpty()) {
         m_analysisJobStatusLabel->setText(
@@ -2904,16 +2908,16 @@ void CaseDetailView::confirmSelectionArea()
 
     if (m_overlayConfirmButton) m_overlayConfirmButton->setEnabled(false);
 
-    ApiService apiService;
+    AnalysisApi analysisApi;
     QString errorMessage;
-    const bool ok = apiService.patchAnalysisSelection(
+    const bool ok = analysisApi.patchAnalysisSelection(
         m_caseId,
         m_analysisId,
         polygon,
         areaOk && manualArea > 0.0 ? manualArea : 0.0,
         &errorMessage);
 
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
 
     if (!ok) {
         setImageHintMessage(
@@ -2966,11 +2970,11 @@ void CaseDetailView::pollAnalysisStatus()
 
     --m_remainingAnalysisPollAttempts;
 
-    ApiService apiService;
+    AnalysisApi analysisApi;
     QString errorMessage;
-    const auto status = apiService.getAnalysisJobStatus(m_analysisJobId, &errorMessage);
+    const auto status = analysisApi.getAnalysisJobStatus(m_analysisJobId, &errorMessage);
 
-    if (ApiService::sessionExpired()) { emit sessionExpired(); return; }
+    if (ApiClient::sessionExpired()) { emit sessionExpired(); return; }
 
     if (status == "completed") {
         stopAnalysisPolling();
@@ -2998,8 +3002,8 @@ void CaseDetailView::pollAnalysisStatus()
 bool CaseDetailView::refreshImagesFromBackend(QString *errorMessage)
 {
     CaseDetailViewModel viewModel;
-    ApiService apiService;
-    const auto images = viewModel.loadCaseImages(m_caseId, apiService);
+    ImagesApi imagesApi;
+    const auto images = viewModel.loadCaseImages(m_caseId, imagesApi);
     if (!viewModel.imageErrorMessage().isEmpty()) {
         if (errorMessage) {
             *errorMessage = viewModel.imageErrorMessage();
@@ -3066,9 +3070,9 @@ void CaseDetailView::showImagePreview(const ImageDto *image)
                              .arg(image->originalFilename.isEmpty() ? "-" : image->originalFilename);
     m_primaryImageLabel->setText(imageLabel);
 
-    ApiService apiService;
+    ImagesApi imagesApi;
     QString previewErrorMessage;
-    const auto previewData = apiService.fetchImageData(image->previewUrl, &previewErrorMessage);
+    const auto previewData = imagesApi.fetchImageData(image->previewUrl, &previewErrorMessage);
 
     QPixmap previewPixmap;
     if (!previewData.isEmpty() && previewPixmap.loadFromData(previewData)) {

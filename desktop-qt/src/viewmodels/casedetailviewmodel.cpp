@@ -1,25 +1,26 @@
 #include "casedetailviewmodel.h"
 
-#include "services/apiservice.h"
+#include "network/casesapi.h"
+#include "network/imagesapi.h"
 
-CaseDto CaseDetailViewModel::loadCase(const QString &caseId, const ApiService &apiService)
+CaseDto CaseDetailViewModel::loadCase(const QString &caseId, const CasesApi &casesApi)
 {
-    return apiService.fetchCaseDetail(caseId, &m_errorMessage);
+    return casesApi.fetchCaseDetail(caseId, &m_errorMessage);
 }
 
-std::vector<ImageDto> CaseDetailViewModel::loadCaseImages(const QString &caseId, const ApiService &apiService)
+std::vector<ImageDto> CaseDetailViewModel::loadCaseImages(const QString &caseId, const ImagesApi &imagesApi)
 {
-    return apiService.fetchCaseImages(caseId, &m_imageErrorMessage);
+    return imagesApi.fetchCaseImages(caseId, &m_imageErrorMessage);
 }
 
-bool CaseDetailViewModel::setPrimaryImage(const QString &caseId, const QString &imageId, const ApiService &apiService)
+bool CaseDetailViewModel::setPrimaryImage(const QString &caseId, const QString &imageId, const ImagesApi &imagesApi)
 {
-    return apiService.setCasePrimaryImage(caseId, imageId, &m_imageErrorMessage);
+    return imagesApi.setCasePrimaryImage(caseId, imageId, &m_imageErrorMessage);
 }
 
-bool CaseDetailViewModel::setAnalysisReferenceImage(const QString &caseId, const QString &imageId, const ApiService &apiService)
+bool CaseDetailViewModel::setAnalysisReferenceImage(const QString &caseId, const QString &imageId, const ImagesApi &imagesApi)
 {
-    return apiService.setCaseAnalysisReferenceImage(caseId, imageId, &m_imageErrorMessage);
+    return imagesApi.setCaseAnalysisReferenceImage(caseId, imageId, &m_imageErrorMessage);
 }
 
 QString CaseDetailViewModel::errorMessage() const

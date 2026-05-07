@@ -48,6 +48,14 @@ qt_add_executable(NovuBuilder
     src/network/authapi.h
     src/network/casesapi.cpp
     src/network/casesapi.h
+    src/network/imagesapi.cpp
+    src/network/imagesapi.h
+    src/network/analysisapi.cpp
+    src/network/analysisapi.h
+    src/network/exportsapi.cpp
+    src/network/exportsapi.h
+    src/network/adminapi.cpp
+    src/network/adminapi.h
     src/services/apiservice.cpp
     src/services/apiservice.h
     src/state/sessionstate.cpp
