@@ -5,13 +5,13 @@
 
 #include "models/casedto.h"
 
-class ApiService;
+#include "network/casesapi.h"
 
 class CaseListViewModel
 {
 public:
-    [[nodiscard]] std::vector<CaseDto> loadCases(const ApiService &apiService);
-    [[nodiscard]] QString duplicateCase(const QString &caseId, const QString &mode, const ApiService &apiService);
+    [[nodiscard]] std::vector<CaseDto> loadCases(const CasesApi &apiService);
+    [[nodiscard]] QString duplicateCase(const QString &caseId, const QString &mode, const CasesApi &apiService);
     [[nodiscard]] QString errorMessage() const;
 
 private:

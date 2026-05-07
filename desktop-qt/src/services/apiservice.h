@@ -12,34 +12,14 @@
 #include "models/auditlogdto.h"
 #include "models/companydto.h"
 #include "models/impersonatedto.h"
-#include "models/casedto.h"
 #include "models/exportdto.h"
 #include "models/imagedto.h"
-#include "models/proposaldraftpatchdto.h"
 #include "models/uploadimagedto.h"
 
 class ApiService : public ApiClient
 {
 public:
     using ApiClient::ApiClient;
-    [[nodiscard]] std::vector<CaseDto> fetchCases(QString *errorMessage = nullptr) const;
-    [[nodiscard]] QString createCase(
-        const QString &title,
-        const QString &addressLabel,
-        const QString &repairScope,
-        const QString &description,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] QString duplicateCase(
-        const QString &caseId,
-        const QString &mode,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] bool sendCase(const QString &caseId, QString *errorMessage = nullptr) const;
-    [[nodiscard]] CaseDto fetchCaseDetail(const QString &caseId, QString *errorMessage = nullptr) const;
-    [[nodiscard]] CaseDto updateCaseProposalDraft(
-        const QString &caseId,
-        const ProposalDraftPatchDto &proposalDraft,
-        QString *errorMessage = nullptr) const;
-    [[nodiscard]] CaseDto createCaseFinalProposal(const QString &caseId, QString *errorMessage = nullptr) const;
     [[nodiscard]] std::vector<ImageDto> fetchCaseImages(const QString &caseId, QString *errorMessage = nullptr) const;
     [[nodiscard]] std::vector<ImageDto> moveCaseImage(
         const QString &caseId,

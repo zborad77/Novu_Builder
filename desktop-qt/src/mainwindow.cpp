@@ -1,4 +1,4 @@
-#include "mainwindow.h"
+﻿#include "mainwindow.h"
 
 #include <QFrame>
 #include <QHBoxLayout>
@@ -15,7 +15,6 @@
 #include <QTimer>
 #include <QWhatsThis>
 
-#include "services/apiservice.h"
 #include "network/authapi.h"
 #include "ui/admin/adminpanelview.h"
 #include "ui/cases/casebrowserview.h"

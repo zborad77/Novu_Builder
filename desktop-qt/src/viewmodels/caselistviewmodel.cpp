@@ -1,14 +1,14 @@
-#include "caselistviewmodel.h"
+﻿#include "caselistviewmodel.h"
 
-#include "services/apiservice.h"
+#include "network/casesapi.h"
 
-std::vector<CaseDto> CaseListViewModel::loadCases(const ApiService &apiService)
+std::vector<CaseDto> CaseListViewModel::loadCases(const CasesApi &apiService)
 {
     auto cases = apiService.fetchCases(&m_errorMessage);
     return cases;
 }
 
-QString CaseListViewModel::duplicateCase(const QString &caseId, const QString &mode, const ApiService &apiService)
+QString CaseListViewModel::duplicateCase(const QString &caseId, const QString &mode, const CasesApi &apiService)
 {
     return apiService.duplicateCase(caseId, mode, &m_errorMessage);
 }

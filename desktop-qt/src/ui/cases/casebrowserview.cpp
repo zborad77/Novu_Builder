@@ -1,4 +1,4 @@
-#include "casebrowserview.h"
+﻿#include "casebrowserview.h"
 
 #include <QFrame>
 #include <QHBoxLayout>
@@ -9,7 +9,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
-#include "services/apiservice.h"
+#include "network/casesapi.h"
 
 namespace {
 
@@ -164,11 +164,11 @@ void CaseBrowserView::loadCases(Mode mode)
             QString::fromUtf8("Dokon\u010den\u00e9 a odeslan\u00e9 zak\u00e1zky."));
     }
 
-    ApiService api;
+    CasesApi api;
     QString errorMessage;
     const auto allCases = api.fetchCases(&errorMessage);
 
-    if (ApiService::sessionExpired()) {
+    if (CasesApi::sessionExpired()) {
         emit sessionExpired();
         return;
     }

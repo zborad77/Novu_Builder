@@ -1,4 +1,4 @@
-#include "caselistview.h"
+﻿#include "caselistview.h"
 
 #include <algorithm>
 
@@ -6,7 +6,7 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
-#include "services/apiservice.h"
+#include "network/casesapi.h"
 #include "viewmodels/caselistviewmodel.h"
 
 namespace {
@@ -171,10 +171,10 @@ bool CaseListView::currentCaseIsReferenceDataset() const
 void CaseListView::reloadCases(const QString &preferredCurrentCaseId, bool emitSignal)
 {
     CaseListViewModel viewModel;
-    ApiService apiService;
+    CasesApi apiService;
     const auto loadedCases = viewModel.loadCases(apiService);
 
-    if (ApiService::sessionExpired()) {
+    if (CasesApi::sessionExpired()) {
         emit sessionExpired();
         return;
     }
