@@ -164,3 +164,25 @@ jobs:
 
       - name: Business flow (create case → analysis → verify)
         run: python scripts/test-business-flow.py --url http://127.0.0.1:8000
+
+  # ── Release gate ─────────────────────────────────────────────────────────────
+  # Single required status check for branch protection.
+  # Aggregates lint + web-lint + test — fails if any dependency failed or was
+  # skipped. Always runs so GitHub always receives a conclusive status.
+  orchestration-release-gate:
+    needs: [lint, web-lint, test]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Gate — all required checks passed
+        run: |
+          if [[ "${{ needs.lint.result }}"     != "success" ||
+                "${{ needs.web-lint.result }}" != "success" ||
+                "${{ needs.test.result }}"     != "success" ]]; then
+            echo "orchestration-release-gate: FAILED"
+            echo "  lint:     ${{ needs.lint.result }}"
+            echo "  web-lint: ${{ needs.web-lint.result }}"
+            echo "  test:     ${{ needs.test.result }}"
+            exit 1
+          fi
+          echo "orchestration-release-gate: PASSED"
