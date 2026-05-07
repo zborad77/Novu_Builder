@@ -15,6 +15,7 @@
 #include <QTimer>
 #include <QWhatsThis>
 
+#include "core/config.h"
 #include "network/authapi.h"
 #include "ui/admin/adminpanelview.h"
 #include "ui/cases/casebrowserview.h"
@@ -27,11 +28,11 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    setWindowTitle("NOVU Builder");
+    setWindowTitle(Config::AppName);
 
     // Load server URL from settings; prompt setup on first launch
-    QSettings settings("NOVU", "NovuBuilder");
-    const QString savedUrl = settings.value("server/url").toString();
+    QSettings settings(Config::SettingsOrg, Config::SettingsApp);
+    const QString savedUrl = settings.value(Config::KeyServerUrl).toString();
     if (savedUrl.isEmpty()) {
         openServerSetupDialog(true);
     } else {
@@ -116,7 +117,7 @@ QWidget *MainWindow::createWorkspaceShell()
     sidebarLayout->setContentsMargins(18, 18, 18, 18);
     sidebarLayout->setSpacing(12);
 
-    auto *brand = new QLabel("NOVU", sidebar);
+    auto *brand = new QLabel(Config::BrandLabel, sidebar);
     brand->setObjectName("brandLabel");
     sidebarLayout->addWidget(brand);
 
@@ -164,7 +165,7 @@ QWidget *MainWindow::createWorkspaceShell()
     titleColumn->addWidget(m_workspaceTitleLabel);
     titleColumn->addWidget(m_workspaceSubtitleLabel);
 
-    auto *statusChip = new QLabel("Desktop v1", header);
+    auto *statusChip = new QLabel(QString("Desktop v%1").arg(Config::AppVersion), header);
     statusChip->setObjectName("statusChip");
 
     auto *whatsThisButton = new QPushButton("?", header);
@@ -935,8 +936,8 @@ bool MainWindow::confirmNavigateAway()
 
 void MainWindow::openServerSetupDialog(bool firstTime)
 {
-    QSettings settings("NOVU", "NovuBuilder");
-    const QString currentUrl = settings.value("server/url").toString();
+    QSettings settings(Config::SettingsOrg, Config::SettingsApp);
+    const QString currentUrl = settings.value(Config::KeyServerUrl).toString();
 
     ServerSetupDialog dlg(currentUrl, this);
     if (firstTime) {
@@ -946,7 +947,7 @@ void MainWindow::openServerSetupDialog(bool firstTime)
     if (dlg.exec() == QDialog::Accepted) {
         const QString newUrl = dlg.serverUrl();
         if (!newUrl.isEmpty()) {
-            settings.setValue("server/url", newUrl);
+            settings.setValue(Config::KeyServerUrl, newUrl);
             ApiClient::setGlobalBaseUrl(newUrl);
             statusBar()->showMessage(
                 QString::fromUtf8("Server nastaven na: %1").arg(newUrl), 5000);

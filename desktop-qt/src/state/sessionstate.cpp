@@ -2,6 +2,8 @@
 
 #include <QSettings>
 
+#include "core/config.h"
+
 void SessionState::setTokens(const QString &accessToken, const QString &refreshToken)
 {
     m_accessToken = accessToken;
@@ -27,21 +29,21 @@ void SessionState::clear()
 {
     m_accessToken.clear();
     m_refreshToken.clear();
-    QSettings settings("NOVU", "NovuBuilder");
-    settings.remove("session/accessToken");
-    settings.remove("session/refreshToken");
+    QSettings settings(Config::SettingsOrg, Config::SettingsApp);
+    settings.remove(Config::KeySessionAccessToken);
+    settings.remove(Config::KeySessionRefreshToken);
 }
 
 void SessionState::saveToSettings() const
 {
-    QSettings settings("NOVU", "NovuBuilder");
-    settings.setValue("session/accessToken", m_accessToken);
-    settings.setValue("session/refreshToken", m_refreshToken);
+    QSettings settings(Config::SettingsOrg, Config::SettingsApp);
+    settings.setValue(Config::KeySessionAccessToken, m_accessToken);
+    settings.setValue(Config::KeySessionRefreshToken, m_refreshToken);
 }
 
 void SessionState::loadFromSettings()
 {
-    QSettings settings("NOVU", "NovuBuilder");
-    m_accessToken = settings.value("session/accessToken").toString();
-    m_refreshToken = settings.value("session/refreshToken").toString();
+    QSettings settings(Config::SettingsOrg, Config::SettingsApp);
+    m_accessToken = settings.value(Config::KeySessionAccessToken).toString();
+    m_refreshToken = settings.value(Config::KeySessionRefreshToken).toString();
 }
