@@ -46,7 +46,10 @@ def upgrade() -> None:
 
     # Replace the old constraint (created in 20260326_0016) that only allowed
     # the legacy status set ('draft','analysed','quoted','sent','archived').
+    # Drop first, then remap legacy values, then create new constraint.
     op.drop_constraint("ck_projects_status", "projects", type_="check")
+    op.execute("UPDATE projects SET status = 'quote_ready'    WHERE status = 'quoted'")
+    op.execute("UPDATE projects SET status = 'proposal_ready' WHERE status = 'analysed'")
     op.create_check_constraint(
         "ck_projects_status",
         "projects",
@@ -54,7 +57,7 @@ def upgrade() -> None:
         "'draft','intake','analyzing','proposal_ready',"
         "'quote_ready','sent','archived','cancelled')",
     )
-    op.create_index("idx_projects_org_status", "projects", ["organization_id", "status"])
+    op.create_index("idx_projects_org_status", "projects", ["organization_id", "status"], if_not_exists=True)
 
     # ------------------------------------------------------------------
     # project_status_history — immutable audit trail

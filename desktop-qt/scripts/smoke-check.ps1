@@ -5,7 +5,8 @@ $buildDir = Join-Path $projectDir "build\Desktop_Qt_6_10_2_MSVC2022_64bit-Debug"
 $logDir = Join-Path $buildDir "automation-logs"
 $statusJson = Join-Path $logDir "build-debug-status.json"
 $reportJson = Join-Path $logDir "smoke-check-status.json"
-$backendHealthUrl = "http://127.0.0.1:8000/api/v1/health"
+$backendBase = if ($env:NOVU_API_BASE_URL) { $env:NOVU_API_BASE_URL.TrimEnd("/") } else { "http://127.0.0.1:8000" }
+$backendHealthUrl = "$backendBase/api/v1/health"
 $exePath = Join-Path $buildDir "NovuBuilder.exe"
 
 function Resolve-StaleBuildStatus {
