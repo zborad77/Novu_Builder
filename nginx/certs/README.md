@@ -7,7 +7,22 @@ cert.pem   — TLS certifikát (full-chain pro produkci)
 key.pem    — privátní klíč
 ```
 
-## Produkce (Let's Encrypt / Certbot)
+Oba soubory jsou v `.gitignore` — nikdy je necommituj.
+
+## Interní pilot (self-signed)
+
+```bash
+# Pouze localhost
+./scripts/generate-pilot-cert.sh
+
+# + přístup přes LAN IP (např. z Qt klienta na jiném stroji)
+./scripts/generate-pilot-cert.sh 192.168.1.50
+```
+
+Skript vygeneruje certifikát se správnými SAN rozšířeními (vyžadováno Chrome 58+,
+Firefox, Edge — CN-only cert prohlížeče odmítají).
+
+## Produkce (Let's Encrypt)
 
 ```bash
 certbot certonly --standalone -d yourdomain.com
@@ -15,17 +30,3 @@ cp /etc/letsencrypt/live/yourdomain.com/fullchain.pem nginx/certs/cert.pem
 cp /etc/letsencrypt/live/yourdomain.com/privkey.pem   nginx/certs/key.pem
 chmod 600 nginx/certs/key.pem
 ```
-
-## Self-signed (lokální testování / staging)
-
-```bash
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-  -keyout nginx/certs/key.pem \
-  -out    nginx/certs/cert.pem \
-  -subj "/CN=localhost"
-```
-
-## Důležité
-
-- `key.pem` NESMÍ být commitován do git (`nginx/certs/*.pem` je v `.gitignore`)
-- Obnov certifikát před expirací (Let's Encrypt: 90 dní)
