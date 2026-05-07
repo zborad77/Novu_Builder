@@ -6,7 +6,7 @@ $logDir = Join-Path $buildDir "automation-logs"
 $statusJson = Join-Path $logDir "build-debug-status.json"
 $reportJson = Join-Path $logDir "smoke-check-status.json"
 $backendHealthUrl = "http://127.0.0.1:8000/api/v1/health"
-$exePath = Join-Path $buildDir "FotoNabidkaDesktop.exe"
+$exePath = Join-Path $buildDir "NovuBuilder.exe"
 
 function Resolve-StaleBuildStatus {
     param(

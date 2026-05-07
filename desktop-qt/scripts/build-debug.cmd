@@ -6,7 +6,7 @@ for %%I in ("%~dp0..") do set "PROJECT_DIR=%%~fI"
 set "BUILD_DIR=%PROJECT_DIR%\build\Desktop_Qt_6_10_2_MSVC2022_64bit-Debug"
 set "VSDEVCMD=C:\Program Files\Microsoft Visual Studio\18\Professional\Common7\Tools\VsDevCmd.bat"
 set "CMAKE_EXE=C:\Qt\Tools\CMake_64\bin\cmake.exe"
-set "TARGET=FotoNabidkaDesktop"
+set "TARGET=NovuBuilder"
 
 if not exist "%VSDEVCMD%" (
     echo VS developer shell was not found:

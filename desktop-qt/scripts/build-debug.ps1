@@ -5,7 +5,7 @@ $buildDir = Join-Path $projectDir "build\Desktop_Qt_6_10_2_MSVC2022_64bit-Debug"
 $logDir = Join-Path $buildDir "automation-logs"
 $vsDevCmd = "C:\Program Files\Microsoft Visual Studio\18\Professional\Common7\Tools\VsDevCmd.bat"
 $cmakeExe = "C:\Qt\Tools\CMake_64\bin\cmake.exe"
-$target = "FotoNabidkaDesktop"
+$target = "NovuBuilder"
 $timeoutSeconds = 900
 
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -94,7 +94,7 @@ function Write-BuildStatus {
         [string]$Message
     )
 
-    $exePath = Join-Path $buildDir "FotoNabidkaDesktop.exe"
+    $exePath = Join-Path $buildDir "NovuBuilder.exe"
     $exeInfo = $null
     if (Test-Path $exePath) {
         $file = Get-Item $exePath
