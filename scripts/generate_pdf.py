@@ -51,7 +51,13 @@ def inline_markup(text: str) -> str:
     return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
 
 
-def markdown_to_html(markdown_text: str, title: str) -> str:
+def markdown_to_html(
+    markdown_text: str,
+    title: str,
+    cover_title: str | None = None,
+    cover_subtitle: str | None = None,
+    cover_meta: list[tuple[str, str]] | None = None,
+) -> str:
     lines = markdown_text.splitlines()
     blocks: list[str] = []
     paragraph_buffer: list[str] = []
@@ -133,6 +139,20 @@ def markdown_to_html(markdown_text: str, title: str) -> str:
     flush_list()
 
     body = "\n".join(blocks)
+    cover_title_text = cover_title or "Projektová brožura"
+    cover_subtitle_text = cover_subtitle or (
+        "Technicky přesný přehled aktuálního stavu, provozní připravenosti "
+        "a cílového směru systému pro B2B, investiční a enterprise partnery."
+    )
+    cover_meta_items = cover_meta or [
+        ("Dokument:", "10. dubna 2026"),
+        ("Stav:", "controlled pilot / near-production"),
+        ("Určení:", "B2B klienti, investoři, enterprise partneři"),
+    ]
+    cover_meta_html = "\n".join(
+        f"        <div><strong>{html.escape(label)}</strong> {html.escape(value)}</div>"
+        for label, value in cover_meta_items
+    )
 
     return f"""<!doctype html>
 <html lang="cs">
@@ -289,12 +309,10 @@ def markdown_to_html(markdown_text: str, title: str) -> str:
   <main class="doc">
     <section class="cover">
       <div class="cover-eyebrow">NOVU Builder</div>
-      <div class="cover-title">Projektová brožura</div>
-      <div class="cover-subtitle">Technicky přesný přehled aktuálního stavu, provozní připravenosti a cílového směru systému pro B2B, investiční a enterprise partnery.</div>
+      <div class="cover-title">{html.escape(cover_title_text)}</div>
+      <div class="cover-subtitle">{html.escape(cover_subtitle_text)}</div>
       <div class="cover-meta">
-        <div><strong>Dokument:</strong> 10. dubna 2026</div>
-        <div><strong>Stav:</strong> controlled pilot / near-production</div>
-        <div><strong>Určení:</strong> B2B klienti, investoři, enterprise partneři</div>
+{cover_meta_html}
       </div>
     </section>
     <section class="content">
@@ -340,6 +358,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--title", default="NOVU Builder")
+    parser.add_argument("--cover-title")
+    parser.add_argument("--cover-subtitle")
+    parser.add_argument("--cover-date")
+    parser.add_argument("--cover-status")
+    parser.add_argument("--cover-audience")
     return parser.parse_args()
 
 
@@ -348,7 +371,20 @@ def main() -> None:
     source_path = args.input.resolve()
     output_path = args.output.resolve()
     markdown_text = source_path.read_text(encoding="utf-8")
-    html_text = markdown_to_html(markdown_text, title=args.title)
+    cover_meta = None
+    if args.cover_date or args.cover_status or args.cover_audience:
+        cover_meta = [
+            ("Dokument:", args.cover_date or "10. dubna 2026"),
+            ("Stav:", args.cover_status or "controlled pilot / near-production"),
+            ("Určení:", args.cover_audience or "B2B klienti, investoři, enterprise partneři"),
+        ]
+    html_text = markdown_to_html(
+        markdown_text,
+        title=args.title,
+        cover_title=args.cover_title,
+        cover_subtitle=args.cover_subtitle,
+        cover_meta=cover_meta,
+    )
 
     temp_dir = output_path.parent / ".pdf-build"
     temp_dir.mkdir(parents=True, exist_ok=True)
