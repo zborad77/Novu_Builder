@@ -34,8 +34,6 @@ qt_add_executable(NovuBuilder
     src/ui/admin/adminpanelview.h
     src/ui/widgets/imageoverlaywidget.cpp
     src/ui/widgets/imageoverlaywidget.h
-    src/viewmodels/loginviewmodel.cpp
-    src/viewmodels/loginviewmodel.h
     src/viewmodels/dashboardviewmodel.cpp
     src/viewmodels/dashboardviewmodel.h
     src/viewmodels/caselistviewmodel.cpp
@@ -69,7 +67,6 @@ qt_add_executable(NovuBuilder
     src/models/exportdto.h
     src/models/imagedto.h
     src/models/impersonatedto.h
-    src/models/logindto.h
     src/models/loginresultdto.h
     src/models/proposaldraftpatchdto.h
     src/models/uploadimagedto.h
