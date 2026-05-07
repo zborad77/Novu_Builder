@@ -6,6 +6,7 @@
 #include <QVector>
 #include <vector>
 
+#include "network/apiclient.h"
 #include "models/adminjobdto.h"
 #include "models/adminuserdto.h"
 #include "models/auditlogdto.h"
@@ -14,34 +15,13 @@
 #include "models/casedto.h"
 #include "models/exportdto.h"
 #include "models/imagedto.h"
-#include "models/loginresultdto.h"
 #include "models/proposaldraftpatchdto.h"
 #include "models/uploadimagedto.h"
 
-class QNetworkRequest;
-class QUrl;
-
-class ApiService
+class ApiService : public ApiClient
 {
 public:
-    explicit ApiService(QString baseUrl = {});
-
-    static void setGlobalToken(const QString &bearerToken);
-    static void clearGlobalToken();
-    [[nodiscard]] static QString globalToken();
-    [[nodiscard]] static bool sessionExpired();
-    static void clearSessionExpired();
-    static void markSessionExpired();
-
-    static void setGlobalBaseUrl(const QString &baseUrl);
-    [[nodiscard]] static QString globalBaseUrl();
-
-    [[nodiscard]] LoginResultDto login(
-        const QString &email,
-        const QString &password,
-        QString *errorMessage = nullptr) const;
-
-    [[nodiscard]] QString baseUrl() const;
+    using ApiClient::ApiClient;
     [[nodiscard]] std::vector<CaseDto> fetchCases(QString *errorMessage = nullptr) const;
     [[nodiscard]] QString createCase(
         const QString &title,
@@ -120,11 +100,4 @@ public:
     [[nodiscard]] std::vector<CompanyDto> fetchAdminCompanies(
         QString *errorMessage = nullptr) const;
 
-private:
-    [[nodiscard]] QNetworkRequest makeAuthRequest(const QUrl &url) const;
-
-    QString m_baseUrl;
-    static QString s_bearerToken;
-    static bool s_sessionExpired;
-    static QString s_globalBaseUrl;
 };

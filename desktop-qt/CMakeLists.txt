@@ -42,6 +42,10 @@ qt_add_executable(NovuBuilder
     src/viewmodels/caselistviewmodel.h
     src/viewmodels/casedetailviewmodel.cpp
     src/viewmodels/casedetailviewmodel.h
+    src/network/apiclient.cpp
+    src/network/apiclient.h
+    src/network/authapi.cpp
+    src/network/authapi.h
     src/services/apiservice.cpp
     src/services/apiservice.h
     src/state/sessionstate.cpp

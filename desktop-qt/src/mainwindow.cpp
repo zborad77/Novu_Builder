@@ -16,6 +16,7 @@
 #include <QWhatsThis>
 
 #include "services/apiservice.h"
+#include "network/authapi.h"
 #include "ui/admin/adminpanelview.h"
 #include "ui/cases/casebrowserview.h"
 #include "ui/cases/casedetailview.h"
@@ -35,7 +36,7 @@ MainWindow::MainWindow(QWidget *parent)
     if (savedUrl.isEmpty()) {
         openServerSetupDialog(true);
     } else {
-        ApiService::setGlobalBaseUrl(savedUrl);
+        ApiClient::setGlobalBaseUrl(savedUrl);
     }
 
     m_stack = new QStackedWidget(this);
@@ -59,7 +60,7 @@ void MainWindow::handleLoginRequested(const QString &email, const QString &passw
     m_loginView->clearError();
     m_loginView->setLoading(true);
 
-    ApiService api;
+    AuthApi api;
     QString errorMessage;
     const auto result = api.login(email, password, &errorMessage);
 
@@ -72,7 +73,7 @@ void MainWindow::handleLoginRequested(const QString &email, const QString &passw
 
     m_session.setTokens(result.accessToken, result.refreshToken);
     m_session.saveToSettings();
-    ApiService::setGlobalToken(result.accessToken);
+    ApiClient::setGlobalToken(result.accessToken);
 
     const bool isSuperAdmin = result.isSuperAdmin
         || result.role == QLatin1String("superadmin");
@@ -717,7 +718,7 @@ QWidget *MainWindow::createWorkspaceShell()
     connect(m_caseBrowserView, &CaseBrowserView::sessionExpired, this, &MainWindow::handleSessionExpired);
     connect(loginButton, &QPushButton::clicked, this, [this]() {
         m_session.clear();
-        ApiService::clearGlobalToken();
+        ApiClient::clearGlobalToken();
         if (m_loginView) {
             m_loginView->clearError();
         }
@@ -733,7 +734,7 @@ QWidget *MainWindow::createWorkspaceShell()
 void MainWindow::handleSessionExpired()
 {
     m_session.clear();
-    ApiService::clearSessionExpired();
+    ApiClient::clearSessionExpired();
     if (m_loginView) {
         m_loginView->clearError();
         m_loginView->showError("Relace vyprsela. Prihlas se prosim znovu.");
@@ -788,10 +789,10 @@ void MainWindow::startImpersonation(const QString &token, const QString &userFul
     (void)userId;
 
     // Save current admin token so we can restore it later
-    m_savedAdminToken = ApiService::globalToken();
+    m_savedAdminToken = ApiClient::globalToken();
 
     // Apply the impersonation token for all subsequent API calls
-    ApiService::setGlobalToken(token);
+    ApiClient::setGlobalToken(token);
 
     // Show the warning banner
     if (m_impersonationLabel) {
@@ -818,7 +819,7 @@ void MainWindow::stopImpersonation()
     if (m_savedAdminToken.isEmpty()) return;
 
     // Restore admin token
-    ApiService::setGlobalToken(m_savedAdminToken);
+    ApiClient::setGlobalToken(m_savedAdminToken);
     m_savedAdminToken.clear();
 
     // Hide banner
@@ -947,13 +948,13 @@ void MainWindow::openServerSetupDialog(bool firstTime)
         const QString newUrl = dlg.serverUrl();
         if (!newUrl.isEmpty()) {
             settings.setValue("server/url", newUrl);
-            ApiService::setGlobalBaseUrl(newUrl);
+            ApiClient::setGlobalBaseUrl(newUrl);
             statusBar()->showMessage(
                 QString::fromUtf8("Server nastaven na: %1").arg(newUrl), 5000);
         }
     } else if (firstTime) {
         // User cancelled on first launch — use default
-        ApiService::setGlobalBaseUrl(QString());
+        ApiClient::setGlobalBaseUrl(QString());
         statusBar()->showMessage(
             QString::fromUtf8("Server neni nastaven. Prihlaseni zustane blokovane, dokud nezadate URL serveru."),
             6000);

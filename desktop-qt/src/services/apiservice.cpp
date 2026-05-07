@@ -1,6 +1,5 @@
 #include "apiservice.h"
 
-#include <QEventLoop>
 #include <QHttpMultiPart>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -8,129 +7,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
-#include <QTimer>
 #include <QUrl>
-
-QString ApiService::s_bearerToken;
-bool ApiService::s_sessionExpired = false;
-QString ApiService::s_globalBaseUrl;
-
-void ApiService::setGlobalToken(const QString &bearerToken)
-{
-    s_bearerToken = bearerToken;
-    s_sessionExpired = false;
-}
-
-void ApiService::clearGlobalToken()
-{
-    s_bearerToken.clear();
-}
-
-QString ApiService::globalToken()
-{
-    return s_bearerToken;
-}
-
-bool ApiService::sessionExpired()
-{
-    return s_sessionExpired;
-}
-
-void ApiService::clearSessionExpired()
-{
-    s_sessionExpired = false;
-}
-
-void ApiService::markSessionExpired()
-{
-    s_sessionExpired = true;
-    s_bearerToken.clear();
-}
-
-QNetworkRequest ApiService::makeAuthRequest(const QUrl &url) const
-{
-    QNetworkRequest request(url);
-    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    if (!s_bearerToken.isEmpty()) {
-        request.setRawHeader("Authorization", QByteArray("Bearer ") + s_bearerToken.toUtf8());
-    }
-    return request;
-}
-
-LoginResultDto ApiService::login(const QString &email, const QString &password, QString *errorMessage) const
-{
-    if (errorMessage) {
-        errorMessage->clear();
-    }
-    if (m_baseUrl.trimmed().isEmpty()) {
-        if (errorMessage) {
-            *errorMessage = QString::fromUtf8("Server neni nastaven. Nejdrive nastavte URL firemniho NOVU serveru.");
-        }
-        return {};
-    }
-
-    QJsonObject body;
-    body["email"] = email;
-    body["password"] = password;
-
-    QNetworkAccessManager manager;
-    QNetworkRequest request(QUrl(m_baseUrl + "/auth/login"));
-    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-
-    auto *reply = manager.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
-
-    QEventLoop loop;
-    QTimer timeoutTimer;
-    timeoutTimer.setSingleShot(true);
-    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-    QObject::connect(&timeoutTimer, &QTimer::timeout, &loop, [&]() {
-        if (reply->isRunning()) {
-            reply->abort();
-        }
-        loop.quit();
-    });
-    timeoutTimer.start(8000);
-    loop.exec();
-
-    const auto httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    if (httpStatus == 0) {
-        reply->deleteLater();
-        if (errorMessage) {
-            *errorMessage = "Backend neni dostupny. Zkontroluj zda bezi server.";
-        }
-        return {};
-    }
-    const auto responseData = reply->readAll();
-    reply->deleteLater();
-
-    const auto doc = QJsonDocument::fromJson(responseData);
-    if (!doc.isObject()) {
-        if (errorMessage) {
-            *errorMessage = "Neplatna odpoved serveru.";
-        }
-        return {};
-    }
-
-    if (httpStatus != 200) {
-        if (errorMessage) {
-            const auto detail = doc.object().value("detail").toString();
-            *errorMessage = detail.isEmpty() ? "Prihlaseni se nezdarilo." : detail;
-        }
-        return {};
-    }
-
-    const auto root = doc.object();
-    const auto user = root.value("user").toObject();
-    return LoginResultDto{
-        .accessToken = root.value("accessToken").toString(),
-        .refreshToken = root.value("refreshToken").toString(),
-        .userId = user.value("id").toString(),
-        .email = user.value("email").toString(),
-        .fullName = user.value("fullName").toString(),
-        .role = user.value("role").toString(),
-        .isSuperAdmin = user.value("isSuperAdmin").toBool(),
-    };
-}
 
 namespace {
 QUrl resolveApiUrl(const QString &baseUrl, const QString &resourcePath)
@@ -428,100 +305,7 @@ std::vector<ImageDto> parseImageListResponse(const QByteArray &payload, QString 
     return result;
 }
 
-// ---------------------------------------------------------------------------
-// Network reply helper — centralizes timeout, HTTP status, and 401 handling.
-// Returns the raw body on success; sets *errorMessage and returns {} on error.
-// Sets ApiService::s_sessionExpired=true and clears the token on HTTP 401.
-// ---------------------------------------------------------------------------
-QByteArray waitForReply(QNetworkReply *reply, int timeoutMs, QString *errorMessage)
-{
-    QEventLoop loop;
-    QTimer timer;
-    timer.setSingleShot(true);
-    bool timedOut = false;
-
-    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-    QObject::connect(&timer, &QTimer::timeout, &loop, [&]() {
-        timedOut = true;
-        if (reply->isRunning()) {
-            reply->abort();
-        }
-        loop.quit();
-    });
-
-    timer.start(timeoutMs);
-    loop.exec();
-
-    const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-
-    if (timedOut || reply->error() == QNetworkReply::OperationCanceledError) {
-        reply->deleteLater();
-        if (errorMessage) {
-            *errorMessage = "Timeout — server neodpovida. Zkontroluj zda bezi backend.";
-        }
-        return {};
-    }
-
-    if (httpStatus == 401) {
-        reply->deleteLater();
-        ApiService::markSessionExpired();
-        if (errorMessage) {
-            *errorMessage = "Relace vyprsela. Prihlaste se znovu.";
-        }
-        return {};
-    }
-
-    if (reply->error() != QNetworkReply::NoError && httpStatus == 0) {
-        const auto errStr = reply->errorString();
-        reply->deleteLater();
-        if (errorMessage) {
-            *errorMessage = QString("Sit'ova chyba: %1").arg(errStr);
-        }
-        return {};
-    }
-
-    const QByteArray body = reply->readAll();
-    reply->deleteLater();
-
-    if (httpStatus >= 400) {
-        if (errorMessage) {
-            const auto doc = QJsonDocument::fromJson(body);
-            const auto detail = doc.isObject() ? doc.object().value("detail").toString() : QString();
-            *errorMessage = detail.isEmpty()
-                ? QString("Chyba serveru (%1).").arg(httpStatus)
-                : detail;
-        }
-        return {};
-    }
-
-    return body;
-}
-
 } // namespace
-
-void ApiService::setGlobalBaseUrl(const QString &baseUrl)
-{
-    QString normalized = baseUrl.trimmed();
-    while (normalized.endsWith('/')) {
-        normalized.chop(1);
-    }
-    s_globalBaseUrl = normalized;
-}
-
-QString ApiService::globalBaseUrl()
-{
-    return s_globalBaseUrl;
-}
-
-ApiService::ApiService(QString baseUrl)
-    : m_baseUrl(baseUrl.isEmpty() ? globalBaseUrl() : std::move(baseUrl))
-{
-}
-
-QString ApiService::baseUrl() const
-{
-    return m_baseUrl;
-}
 
 std::vector<CaseDto> ApiService::fetchCases(QString *errorMessage) const
 {
@@ -610,7 +394,7 @@ QString ApiService::createCase(
                                QJsonDocument(body).toJson(QJsonDocument::Compact));
     const auto payload = waitForReply(reply, 10000, errorMessage);
     if (payload.isNull()) return {};
-    if (ApiService::sessionExpired()) return {};
+    if (sessionExpired()) return {};
 
     const auto doc = QJsonDocument::fromJson(payload);
     return doc.object().value("id").toString();
@@ -812,8 +596,9 @@ bool ApiService::uploadCaseImages(const QString &caseId, const std::vector<Uploa
 
     QNetworkAccessManager manager;
     QNetworkRequest request(QUrl(m_baseUrl + "/cases/" + caseId + "/images"));
-    if (!s_bearerToken.isEmpty()) {
-        request.setRawHeader("Authorization", QByteArray("Bearer ") + s_bearerToken.toUtf8());
+    const auto token = globalToken();
+    if (!token.isEmpty()) {
+        request.setRawHeader("Authorization", QByteArray("Bearer ") + token.toUtf8());
     }
 
     auto *multiPart = new QHttpMultiPart(QHttpMultiPart::FormDataType);
@@ -895,8 +680,9 @@ QByteArray ApiService::downloadExportFile(const QString &downloadUrl, QString *e
 
     QNetworkAccessManager manager;
     QNetworkRequest request(resolveApiUrl(m_baseUrl, downloadUrl));
-    if (!s_bearerToken.isEmpty()) {
-        request.setRawHeader("Authorization", QByteArray("Bearer ") + s_bearerToken.toUtf8());
+    const auto token = globalToken();
+    if (!token.isEmpty()) {
+        request.setRawHeader("Authorization", QByteArray("Bearer ") + token.toUtf8());
     }
     auto *reply = manager.get(request);
 
@@ -965,7 +751,7 @@ bool ApiService::patchAnalysisSelection(
     auto *reply = manager.sendCustomRequest(makeAuthRequest(url), "PATCH", body);
     const auto response = waitForReply(reply, 8000, errorMessage);
     if (response.isNull()) return false;
-    if (ApiService::sessionExpired()) return false;
+    if (sessionExpired()) return false;
 
     const auto obj = QJsonDocument::fromJson(response).object();
     return obj.value("status").toString() == "ok";
@@ -986,8 +772,9 @@ QByteArray ApiService::fetchImageData(const QString &imageUrl, QString *errorMes
 
     QNetworkAccessManager manager;
     QNetworkRequest request(resolveApiUrl(m_baseUrl, imageUrl));
-    if (!s_bearerToken.isEmpty()) {
-        request.setRawHeader("Authorization", QByteArray("Bearer ") + s_bearerToken.toUtf8());
+    const auto token = globalToken();
+    if (!token.isEmpty()) {
+        request.setRawHeader("Authorization", QByteArray("Bearer ") + token.toUtf8());
     }
 
     auto *reply = manager.get(request);
