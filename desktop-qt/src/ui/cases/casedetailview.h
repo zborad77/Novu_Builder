@@ -11,7 +11,7 @@
 #include "models/casedto.h"
 #include "models/imagedto.h"
 #include "models/uploadimagedto.h"
-#include "widgets/imageoverlaywidget.h"
+#include "ui/widgets/imageoverlaywidget.h"
 
 class QLabel;
 class QLineEdit;

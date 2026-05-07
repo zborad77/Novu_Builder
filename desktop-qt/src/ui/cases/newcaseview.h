@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "models/uploadimagedto.h"
-#include "widgets/imageoverlaywidget.h"
+#include "ui/widgets/imageoverlaywidget.h"
 
 class QComboBox;
 class QLabel;

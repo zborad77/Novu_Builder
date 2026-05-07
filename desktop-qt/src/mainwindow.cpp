@@ -16,13 +16,13 @@
 #include <QWhatsThis>
 
 #include "services/apiservice.h"
-#include "views/adminpanelview.h"
-#include "views/casebrowserview.h"
-#include "views/casedetailview.h"
-#include "views/caselistview.h"
-#include "views/loginview.h"
-#include "views/newcaseview.h"
-#include "views/serversetupdialog.h"
+#include "ui/admin/adminpanelview.h"
+#include "ui/cases/casebrowserview.h"
+#include "ui/cases/casedetailview.h"
+#include "ui/cases/caselistview.h"
+#include "ui/auth/loginview.h"
+#include "ui/cases/newcaseview.h"
+#include "ui/auth/serversetupdialog.h"
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)

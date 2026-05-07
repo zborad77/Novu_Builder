@@ -16,20 +16,24 @@ qt_add_executable(NovuBuilder
     src/main.cpp
     src/mainwindow.cpp
     src/mainwindow.h
-    src/views/loginview.cpp
-    src/views/loginview.h
-    src/views/dashboardview.cpp
-    src/views/dashboardview.h
-    src/views/caselistview.cpp
-    src/views/caselistview.h
-    src/views/casedetailview.cpp
-    src/views/casedetailview.h
-    src/views/newcaseview.cpp
-    src/views/newcaseview.h
-    src/views/casebrowserview.cpp
-    src/views/casebrowserview.h
-    src/views/adminpanelview.cpp
-    src/views/adminpanelview.h
+    src/ui/auth/loginview.cpp
+    src/ui/auth/loginview.h
+    src/ui/auth/serversetupdialog.cpp
+    src/ui/auth/serversetupdialog.h
+    src/ui/dashboard/dashboardview.cpp
+    src/ui/dashboard/dashboardview.h
+    src/ui/cases/caselistview.cpp
+    src/ui/cases/caselistview.h
+    src/ui/cases/casedetailview.cpp
+    src/ui/cases/casedetailview.h
+    src/ui/cases/newcaseview.cpp
+    src/ui/cases/newcaseview.h
+    src/ui/cases/casebrowserview.cpp
+    src/ui/cases/casebrowserview.h
+    src/ui/admin/adminpanelview.cpp
+    src/ui/admin/adminpanelview.h
+    src/ui/widgets/imageoverlaywidget.cpp
+    src/ui/widgets/imageoverlaywidget.h
     src/viewmodels/loginviewmodel.cpp
     src/viewmodels/loginviewmodel.h
     src/viewmodels/dashboardviewmodel.cpp
@@ -54,10 +58,6 @@ qt_add_executable(NovuBuilder
     src/models/loginresultdto.h
     src/models/proposaldraftpatchdto.h
     src/models/uploadimagedto.h
-    src/widgets/imageoverlaywidget.cpp
-    src/widgets/imageoverlaywidget.h
-    src/views/serversetupdialog.cpp
-    src/views/serversetupdialog.h
 )
 
 target_include_directories(NovuBuilder PRIVATE src)
