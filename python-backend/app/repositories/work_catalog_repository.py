@@ -117,10 +117,12 @@ class WorkCatalogRepository:
         organization_id: str,
     ) -> ProjectPhoto | None:
         result = await self.session.execute(
-            select(ProjectPhoto).where(
+            select(ProjectPhoto)
+            .join(Project, Project.id == ProjectPhoto.project_id)
+            .where(
                 ProjectPhoto.id == photo_id,
                 ProjectPhoto.project_id == project_id,
-                ProjectPhoto.organization_id == organization_id,
+                Project.organization_id == organization_id,
             )
         )
         return result.scalar_one_or_none()

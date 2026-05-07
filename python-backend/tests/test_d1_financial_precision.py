@@ -173,3 +173,71 @@ class TestProposalDraftPatchAcceptance:
             headers={"Authorization": f"Bearer {token_b}"},
         )
         assert resp.status_code == 404
+
+
+# ── PR 3: MaterialCatalog Decimal precision ────────────────────────────────────
+
+class TestMaterialCatalogDecimalPrecision:
+    """Regression: update_material must store Decimal(str(price)), not raw float.
+
+    Decimal(0.1) captures the float's binary imprecision (55-digit representation).
+    Decimal(str(0.1)) == Decimal("0.1") is exact.
+    The repository fix changes `material.default_unit_price = price` (float) to
+    `material.default_unit_price = Decimal(str(price))` so the ORM attribute gets
+    an exact Decimal, not a float approximation.
+    """
+
+    def test_decimal_str_conversion_is_exact(self):
+        """Decimal(str(x)) == Decimal('x') for values with finite decimal representations."""
+        from decimal import Decimal
+        assert Decimal(str(10.3)) == Decimal("10.3")
+        assert Decimal(str(0.1)) == Decimal("0.1")
+        assert Decimal(str(99.99)) == Decimal("99.99")
+
+    def test_decimal_float_direct_is_imprecise(self):
+        """Decimal(float) captures binary imprecision — must NOT be used for prices."""
+        from decimal import Decimal
+        # These assertions confirm the raw float path introduces error:
+        assert Decimal(10.3) != Decimal("10.3")
+        assert Decimal(0.1) != Decimal("0.1")
+
+    @pytest.mark.asyncio
+    async def test_update_material_stores_exact_decimal(self, db_session, test_tenants):
+        """Repository round-trip: float 10.3 must come back as Decimal('10.3')."""
+        from decimal import Decimal
+        from app.repositories.material_catalog_repository import MaterialCatalogRepository
+
+        repo = MaterialCatalogRepository(db_session)
+        material = await repo.get_material_in_org("mat_e2e_a1", test_tenants["org_a"])
+        assert material is not None, "Seed material mat_e2e_a1 must exist"
+
+        updated = await repo.update_material(
+            material,
+            default_unit_price=10.3,
+            default_supplier_id=None,
+            notes=None,
+        )
+
+        assert updated.default_unit_price == Decimal("10.3"), (
+            f"Expected Decimal('10.3'), got {updated.default_unit_price!r} "
+            f"(likely float precision error from Decimal(float) path)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_material_cross_tenant_isolation(self, db_session, test_tenants):
+        """Updating org_a material does not affect org_b material (sanity check)."""
+        from decimal import Decimal
+        from app.repositories.material_catalog_repository import MaterialCatalogRepository
+
+        repo = MaterialCatalogRepository(db_session)
+        mat_b = await repo.get_material_in_org("mat_e2e_b1", test_tenants["org_b"])
+        assert mat_b is not None
+        price_before = mat_b.default_unit_price
+
+        mat_a = await repo.get_material_in_org("mat_e2e_a1", test_tenants["org_a"])
+        assert mat_a is not None
+        await repo.update_material(mat_a, default_unit_price=55.0, default_supplier_id=None, notes=None)
+
+        mat_b_after = await repo.get_material_in_org("mat_e2e_b1", test_tenants["org_b"])
+        assert mat_b_after is not None
+        assert mat_b_after.default_unit_price == price_before

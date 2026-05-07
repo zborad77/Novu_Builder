@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -48,7 +50,7 @@ class MaterialCatalogRepository:
             .where(SupplierMaterialPrice.material_catalog_id == material_id)
             .order_by(SupplierMaterialPrice.unit_price.asc(), Supplier.name.asc())
         )
-        return list(result.all())
+        return list(result.all())  # type: ignore[arg-type]
 
     async def get_supplier_name(self, supplier_id: str | None) -> str | None:
         if not supplier_id:
@@ -57,7 +59,7 @@ class MaterialCatalogRepository:
         return supplier.name if supplier else None
 
     async def update_material(self, material: MaterialCatalog, *, default_unit_price: float, default_supplier_id: str | None, notes: str | None) -> MaterialCatalog:
-        material.default_unit_price = default_unit_price
+        material.default_unit_price = Decimal(str(default_unit_price))
         material.default_supplier_id = default_supplier_id
         material.notes = notes
         await self.session.commit()
