@@ -256,62 +256,55 @@ std::vector<CaseDto> CasesApi::fetchCases(QString *errorMessage) const
         errorMessage->clear();
     }
 
-    QNetworkAccessManager manager;
-    auto *reply = manager.get(makeAuthRequest(QUrl(m_baseUrl + "/cases")));
-    const auto payload = waitForReply(reply, 5000, errorMessage);
-    if (payload.isNull()) {
-        return {};
-    }
-
-    const auto document = QJsonDocument::fromJson(payload);
-    if (!document.isObject()) {
-        if (errorMessage) {
-            *errorMessage = "Backend vratil neplatnou odpoved pro seznam cases.";
-        }
-        return {};
-    }
-
-    const auto rootObject = document.object();
-    const auto items = rootObject.value("items").toArray();
-
     std::vector<CaseDto> result;
-    result.reserve(static_cast<size_t>(items.size()));
-    for (const auto &itemValue : items) {
-        const auto itemObject = itemValue.toObject();
-        result.push_back(
-            {
-                .id = itemObject.value("id").toString(),
-                .title = itemObject.value("title").toString(),
-                .status = itemObject.value("status").toString(),
-                .isReferenceDataset = itemObject.value("isReferenceDataset").toBool(),
-                .addressLabel = itemObject.value("addressLabel").toString(),
-                .createdByName = itemObject.value("createdByName").toString(),
-                .description = {},
-                .propertyType = itemObject.value("propertyType").toString(),
-                .repairScope = itemObject.value("repairScope").toString(),
-                .areaLabel = itemObject.value("estimatedAreaSqm").isDouble()
-                    ? QString::number(itemObject.value("estimatedAreaSqm").toDouble(), 'f', 1) + " m2"
-                    : QString(),
-                .proposalStatus = {},
-                .proposalSubject = {},
-                .proposalSummary = {},
-                .proposalMaterialCostLabel = {},
-                .proposalLaborCostLabel = {},
-                .proposalAmortizationLabel = {},
-                .proposalMarginLabel = {},
-                .proposalTotalPriceLabel = {},
-                .proposalRecommendedSupplier = {},
-                .proposalRecommendedCompany = {},
-                .proposalWorkItems = {},
-                .proposalMaterials = {},
-                .finalProposalStatus = {},
-                .finalProposalDraftVersionLabel = {},
-                .finalProposalSubject = {},
-                .finalProposalSummary = {},
-                .finalProposalTotalPriceLabel = {}
+    QNetworkAccessManager manager;
+    QString cursor;
+
+    do {
+        QString url = m_baseUrl + "/cases";
+        if (!cursor.isEmpty()) {
+            url += "?cursor=" + QString::fromUtf8(QUrl::toPercentEncoding(cursor));
+        }
+        auto *reply = manager.get(makeAuthRequest(QUrl(url)));
+        const auto payload = waitForReply(reply, 5000, errorMessage);
+        if (payload.isNull()) {
+            return {};
+        }
+
+        const auto document = QJsonDocument::fromJson(payload);
+        if (!document.isObject()) {
+            if (errorMessage) {
+                *errorMessage = "Backend vratil neplatnou odpoved pro seznam cases.";
             }
-        );
-    }
+            return {};
+        }
+
+        const auto rootObject = document.object();
+        const auto items = rootObject.value("items").toArray();
+
+        result.reserve(result.size() + static_cast<size_t>(items.size()));
+        for (const auto &itemValue : items) {
+            const auto itemObject = itemValue.toObject();
+            result.push_back(
+                {
+                    .id = itemObject.value("id").toString(),
+                    .title = itemObject.value("title").toString(),
+                    .status = itemObject.value("status").toString(),
+                    .isReferenceDataset = itemObject.value("isReferenceDataset").toBool(),
+                    .addressLabel = itemObject.value("addressLabel").toString(),
+                    .createdByName = itemObject.value("createdByName").toString(),
+                    .description = {},
+                    .propertyType = itemObject.value("propertyType").toString(),
+                    .repairScope = itemObject.value("repairScope").toString(),
+                    .areaLabel = itemObject.value("estimatedAreaSqm").isDouble()
+                        ? QString::number(itemObject.value("estimatedAreaSqm").toDouble(), 'f', 1) + " m2"
+                        : QString(),
+                }
+            );
+        }
+
+        cursor = rootObject.value("nextCursor").toString();
+    } while (!cursor.isEmpty());
 
     return result;
 }
