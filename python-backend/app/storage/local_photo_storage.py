@@ -90,7 +90,7 @@ def resize_image_bytes(content: bytes, max_edge: int) -> bytes:
     """
     try:
         from PIL import Image
-        img = Image.open(BytesIO(content))
+        img: Image.Image = Image.open(BytesIO(content))
         img_format = img.format or "JPEG"
         img.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
         output = BytesIO()
@@ -112,7 +112,7 @@ def get_image_dimensions(content: bytes) -> tuple[int | None, int | None]:
     """Return (width, height) from image bytes, or (None, None) on failure."""
     try:
         from PIL import Image
-        img = Image.open(BytesIO(content))
+        img: Image.Image = Image.open(BytesIO(content))
         return img.size  # (width, height)
     except Exception:
         return None, None

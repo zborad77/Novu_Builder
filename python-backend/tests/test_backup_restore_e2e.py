@@ -546,15 +546,17 @@ class Env:
         return e
 
     def _bash(self) -> str:
-        found = shutil.which("bash")
-        if found:
-            return found
+        # Prefer Git Bash over WSL bash: Git Bash uses /<drive>/ paths which match
+        # _bash_path(); WSL uses /mnt/<drive>/ and has different environment semantics.
         for candidate in (
             r"C:\Program Files\Git\bin\bash.exe",
             r"C:\Program Files\Git\usr\bin\bash.exe",
         ):
             if Path(candidate).exists():
                 return candidate
+        found = shutil.which("bash")
+        if found:
+            return found
         raise FileNotFoundError("bash executable not found for backup/restore E2E test")
 
     def _require_working_bash(self) -> str:
@@ -573,7 +575,14 @@ class Env:
     def _bash_path(self, path: Path) -> str:
         resolved = path.resolve().as_posix()
         if len(resolved) >= 3 and resolved[1:3] == ":/":
-            return f"/{resolved[0].lower()}{resolved[2:]}"
+            drive = resolved[0].lower()
+            rest = resolved[2:]
+            bash = self._bash()
+            # WSL (C:\Windows\system32\bash.EXE) mounts drives at /mnt/<drive>/
+            # Git Bash / MSYS2 mounts drives at /<drive>/
+            if "system32" in bash.lower():
+                return f"/mnt/{drive}{rest}"
+            return f"/{drive}{rest}"
         return resolved
 
     def _write_bash_env(self) -> Path:
@@ -589,7 +598,7 @@ class Env:
     def run_backup(self, **env: str) -> subprocess.CompletedProcess:
         bash = self._require_working_bash()
         return subprocess.run(
-            [bash, str(BACKUP_SH)],
+            [bash, self._bash_path(BACKUP_SH)],
             capture_output=True, text=True,
             env=self._base_env(**env),
             cwd=str(REPO_ROOT),
@@ -604,7 +613,7 @@ class Env:
         **env: str,
     ) -> subprocess.CompletedProcess:
         bash = self._require_working_bash()
-        cmd = [bash, str(RESTORE_SH), str(dump), "--yes"]
+        cmd = [bash, self._bash_path(RESTORE_SH), self._bash_path(dump), "--yes"]
         if skip_verify:
             cmd.append("--skip-verify")
         e = self._base_env(**env)

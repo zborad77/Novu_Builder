@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import logging
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from redis.asyncio import Redis
@@ -149,7 +149,7 @@ def build_redis_client_from_settings(
     return build_redis_client(
         redis_url or settings.redis_url,
         socket_connect_timeout=settings.redis_socket_connect_timeout,
-        socket_timeout=resolved_socket_timeout,
+        socket_timeout=resolved_socket_timeout,  # type: ignore[arg-type]
         health_check_interval=settings.redis_health_check_interval,
         retry_attempts=settings.redis_retry_attempts,
         retry_backoff_base=settings.redis_retry_backoff_base,
@@ -347,7 +347,7 @@ class FailoverRedisClient:
             candidate_index = (failed_index + offset) % self.candidate_count
             candidate = self._clients[candidate_index]
             try:
-                await candidate.ping()
+                await candidate.ping()  # type: ignore[misc]
             except Exception as candidate_exc:
                 if not self._is_transport_error(candidate_exc):
                     continue

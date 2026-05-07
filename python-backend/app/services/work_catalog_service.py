@@ -51,7 +51,6 @@ from app.schemas.work_catalog import (
     ProjectWorkItemValueInput,
     ProjectWorkItemValueRead,
     TenantWorkTypeExtraParameterRead,
-    TenantWorkTypeExtraParameterUpsert,
     TenantWorkTypeParameterOverrideRead,
     TenantWorkTypeSettingRead,
     TenantWorkTypeSettingWithParametersUpsert,
@@ -64,17 +63,11 @@ from app.schemas.work_catalog import (
     WorkTypeParameterSectionRead,
 )
 from app.work_catalog.domain import (
-    CATALOG_PRICING_STRATEGIES,
-    MATERIAL_PRICING_SOURCES,
-    PROJECT_WORK_ITEM_CONFIRMATION_STATUSES,
-    PROJECT_WORK_ITEM_SOURCE_TYPES,
     PROJECT_WORK_ITEM_STATUSES,
-    PROJECT_WORK_ITEM_VALUE_CONFIRMATION_STATUSES,
     TENANT_PARAMETER_OVERRIDE_STATUSES,
     TENANT_WORK_TYPE_SETTING_STATUSES,
     VISION_DETECTION_STATUSES,
     WORK_TYPE_PARAMETER_DATA_TYPES,
-    WORK_TYPE_STATES,
     CatalogValidationError,
     coerce_parameter_value,
     normalize_enum,
@@ -866,7 +859,6 @@ class WorkCatalogService:
         case_status: str | None = None,
     ) -> EffectiveWorkTypeRead:
         work_type = resolved.work_type
-        setting = resolved.tenant_setting
         category = work_type.category
         parameter_reads = [_resolved_parameter_read(parameter) for parameter in resolved.parameters]
 

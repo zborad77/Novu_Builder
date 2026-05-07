@@ -2,8 +2,13 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from starlette.requests import Request as StarletteRequest
 
 from app.api.routes.admin import get_audit_log
+
+
+def _mock_request() -> StarletteRequest:
+    return StarletteRequest({"type": "http", "method": "GET", "path": "/", "headers": []})
 from app.models import MaterialCatalog, PricingProfile, Project, ProjectPhoto, Supplier
 from app.models.domain import AuditLog
 from app.repositories.photo_repository import PhotoRepository
@@ -279,6 +284,7 @@ async def test_admin_audit_search_treats_like_metacharacters_as_literals(
     await db_session.commit()
 
     rows = await get_audit_log(
+        request=_mock_request(),
         org_id="org_e2e_a",
         action=action_filter,
         user_id=None,

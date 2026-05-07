@@ -180,7 +180,7 @@ class MockVisionProvider:
                 },
             ]
 
-        total_hours = sum(step["estimatedHours"] for step in workflow_steps)
+        total_hours = sum(step["estimatedHours"] for step in workflow_steps)  # type: ignore[misc]
         estimated_total_days = round(total_hours / 8, 1)
         catalog_attributes: dict[str, dict] = {}
         for rule in extraction_rules:

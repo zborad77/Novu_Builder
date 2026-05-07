@@ -133,7 +133,7 @@ class TokenRepository:
                 ttl,
                 self._build_revoked_cache_payload(ttl_seconds=ttl),
             )
-        except Exception as exc:
+        except Exception:
             observe_cache_operation(
                 namespace=_REVOKED_TOKEN_CACHE_NAMESPACE,
                 operation="set",
@@ -442,7 +442,8 @@ class TokenRepository:
             delete(RevokedToken).where(RevokedToken.expires_at <= datetime.now(UTC))
         )
         await self.session.commit()
-        return result.rowcount or 0
+        rowcount = getattr(result, "rowcount", None)
+        return int(rowcount or 0)
 
     async def get_valid_password_reset_token(
         self,
@@ -527,7 +528,8 @@ class TokenRepository:
         )
         if commit:
             await self.session.commit()
-        return result.rowcount or 0
+        rowcount = getattr(result, "rowcount", None)
+        return int(rowcount or 0)
 
     async def claim_password_reset_token(
         self,
@@ -582,4 +584,5 @@ class TokenRepository:
         result = await self.session.execute(stmt)
         if commit:
             await self.session.commit()
-        return result.rowcount or 0
+        rowcount = getattr(result, "rowcount", None)
+        return int(rowcount or 0)

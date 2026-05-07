@@ -439,62 +439,62 @@ class PricingProfileService:
                 }
             )
 
-        for rule in sorted(profile.adjustment_rules or [], key=lambda row: (row.sort_order, row.code)):
+        for adj_rule in sorted(profile.adjustment_rules or [], key=lambda row: (row.sort_order, row.code)):
             value = self._resolve_source_value(
-                source_type=rule.condition_source_type,
-                source_key=rule.condition_source_key,
+                source_type=adj_rule.condition_source_type,
+                source_key=adj_rule.condition_source_key,
                 work_item=work_item,
                 values_by_code=values_by_code,
             )
-            if not self._condition_matches(rule=rule, value=value):
+            if not self._condition_matches(rule=adj_rule, value=value):
                 continue
 
-            if rule.target_scope == "base_rule":
+            if adj_rule.target_scope == "base_rule":
                 target_total = sum(
                     line["total_price"]
                     for line in lines
-                    if line["catalog_pricing_rule_code"] == rule.target_base_rule_code
+                    if line["catalog_pricing_rule_code"] == adj_rule.target_base_rule_code
                 )
-                target_line_type = rule.target_line_type or next(
+                target_line_type = adj_rule.target_line_type or next(
                     (
                         line["item_type"]
                         for line in lines
-                        if line["catalog_pricing_rule_code"] == rule.target_base_rule_code
+                        if line["catalog_pricing_rule_code"] == adj_rule.target_base_rule_code
                     ),
                     "other",
                 )
             else:
                 scoped_lines = lines
-                if rule.target_line_type:
-                    scoped_lines = [line for line in lines if line["item_type"] == rule.target_line_type]
+                if adj_rule.target_line_type:
+                    scoped_lines = [line for line in lines if line["item_type"] == adj_rule.target_line_type]
                 target_total = sum(line["total_price"] for line in scoped_lines)
-                target_line_type = rule.target_line_type or "other"
+                target_line_type = adj_rule.target_line_type or "other"
 
-            if rule.operation == "multiply":
+            if adj_rule.operation == "multiply":
                 if target_total <= 0:
                     continue
-                adjustment_amount = round(target_total * (float(rule.adjustment_value) - 1) + 1e-9, 2)
+                adjustment_amount = round(target_total * (float(adj_rule.adjustment_value) - 1) + 1e-9, 2)
             else:
-                adjustment_amount = round(float(rule.adjustment_value) + 1e-9, 2)
+                adjustment_amount = round(float(adj_rule.adjustment_value) + 1e-9, 2)
             if adjustment_amount == 0:
                 continue
             lines.append(
                 {
                     "item_type": target_line_type,
-                    "name": rule.label,
-                    "description": rule.description,
+                    "name": adj_rule.label,
+                    "description": adj_rule.description,
                     "quantity": 1.0,
                     "unit": "job",
                     "unit_price": adjustment_amount,
                     "total_price": adjustment_amount,
-                    "catalog_pricing_rule_code": rule.code,
+                    "catalog_pricing_rule_code": adj_rule.code,
                     "project_work_item_id": work_item.id,
                     "work_type_code": work_item.resolved_work_type_code,
                     "catalog_pricing_profile_id": profile.id,
                     "resolved_catalog_pricing_profile_code": profile.code,
                     "resolved_catalog_pricing_profile_version": profile.profile_version,
                     "price_source": "catalog_formula_adjustment",
-                    "sort_order": rule.sort_order + 500,
+                    "sort_order": adj_rule.sort_order + 500,
                 }
             )
 
@@ -562,7 +562,7 @@ class PricingProfileService:
         other_cost = round(sum(item["total_price"] for item in aggregated_items if item["item_type"] == "other") + 1e-9, 2)
         subtotal = round(labor_cost + material_cost + other_cost + 1e-9, 2)
 
-        variants_config = [
+        variants_config: list[dict[str, Any]] = [
             {"type": "economy", "margin": float(pricing_profile.margin_economy_pct)},
             {"type": "standard", "margin": float(pricing_profile.margin_standard_pct)},
             {"type": "premium", "margin": float(pricing_profile.margin_premium_pct)},

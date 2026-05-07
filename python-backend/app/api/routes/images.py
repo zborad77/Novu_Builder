@@ -1,6 +1,7 @@
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
 from fastapi.responses import RedirectResponse
+from typing import cast
 
 from app.api.deps import get_current_user, get_photo_service, get_project_service, resolve_org_id
 from app.core.audit import log_cross_tenant_denied
@@ -12,9 +13,11 @@ from app.schemas.photo import (
     AnalysisReferencePhotoResponse,
     DeletePhotoResponse,
     PhotoListResponse,
+    PhotoListMeta,
     PhotoMoveRequest,
     PhotoUploadResponse,
     PrimaryPhotoResponse,
+    UploadedPhotoPayload,
 )
 from app.services.photo_service import PhotoService
 from app.services.project_service import ProjectService
@@ -76,7 +79,7 @@ async def list_case_images(
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
     items, meta = await photo_service.list_photos(case_id)
-    return PhotoListResponse(items=items, meta=meta)
+    return PhotoListResponse(items=items, meta=PhotoListMeta.model_validate(meta))
 
 
 @router.post("/cases/{case_id}/images", response_model=PhotoUploadResponse, status_code=status.HTTP_201_CREATED)
@@ -112,7 +115,13 @@ async def upload_case_images(
             raise HTTPException(status_code=400, detail="files field is required.")
         for index, file in enumerate(upload_files):
             try:
-                uploaded.append(await photo_service.create_multipart_photo(project, file, is_primary=is_primary and index == 0))
+                uploaded.append(
+                    await photo_service.create_multipart_photo(
+                        project,
+                        cast(UploadFile, file),
+                        is_primary=is_primary and index == 0,
+                    )
+                )
             except UploadValidationError as exc:
                 reason_code = _upload_error_reason(exc)
                 status_code = _upload_error_status_code(exc)
@@ -138,13 +147,13 @@ async def upload_case_images(
 
     return PhotoUploadResponse(
         uploaded=[
-            {
-                "id": photo.id,
-                "storageKey": photo.storageKey,
-                "isPrimary": photo.isPrimary,
-                "processingStatus": photo.processingStatus,
-                "variants": photo.variants,
-            }
+            UploadedPhotoPayload(
+                id=photo.id,
+                storageKey=photo.storageKey,
+                isPrimary=photo.isPrimary,
+                processingStatus=photo.processingStatus,
+                variants=photo.variants,
+            )
             for photo in uploaded
         ]
     )
@@ -249,7 +258,7 @@ async def move_case_image(
         raise HTTPException(status_code=404, detail="Image not found.")
 
     items, meta = moved
-    return PhotoListResponse(items=items, meta=meta)
+    return PhotoListResponse(items=items, meta=PhotoListMeta.model_validate(meta))
 
 
 @router.delete("/cases/{case_id}/images/{image_id}", response_model=DeletePhotoResponse)

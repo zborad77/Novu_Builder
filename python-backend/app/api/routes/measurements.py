@@ -1,10 +1,12 @@
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.deps import get_analysis_service, get_current_user, get_project_service, resolve_org_id
 from app.core.audit import log_cross_tenant_denied
+from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.schemas.auth import AuthUserRead
-from app.schemas.measurement import MeasurementRead, MeasurementUpsert
+from app.schemas.measurement import MeasurementPolygonPoint, MeasurementRead, MeasurementUpsert
 from app.services.analysis_service import AnalysisService
 from app.services.project_service import ProjectService
 
@@ -13,19 +15,23 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["measurements"])
 
 
-def _normalize_polygon(points) -> list[dict[str, float]] | None:
+def _normalize_polygon(points) -> list[MeasurementPolygonPoint] | None:
     if not points:
         return None
 
-    normalized: list[dict[str, float]] = []
+    normalized: list[MeasurementPolygonPoint] = []
     for point in points:
         if isinstance(point, dict):
-            normalized.append({"x": point.get("x"), "y": point.get("y")})
+            x = point.get("x")
+            y = point.get("y")
+        else:
+            x = getattr(point, "x", None)
+            y = getattr(point, "y", None)
+        if x is None or y is None:
             continue
+        normalized.append(MeasurementPolygonPoint(x=float(x), y=float(y)))
 
-        normalized.append({"x": getattr(point, "x", None), "y": getattr(point, "y", None)})
-
-    return normalized
+    return normalized or None
 
 
 def _to_measurement(result) -> MeasurementRead:
@@ -44,7 +50,9 @@ def _to_measurement(result) -> MeasurementRead:
 
 
 @router.post("/cases/{case_id}/measurements", response_model=MeasurementRead, status_code=status.HTTP_201_CREATED)
+@limiter.limit(get_settings().rate_limit_marker_write)
 async def create_or_update_measurement(
+    request: Request,
     case_id: str,
     payload: MeasurementUpsert,
     current_user: AuthUserRead = Depends(get_current_user),
@@ -65,7 +73,9 @@ async def create_or_update_measurement(
 
 
 @router.patch("/measurements/{measurement_id}", response_model=MeasurementRead)
+@limiter.limit(get_settings().rate_limit_marker_write)
 async def patch_measurement(
+    request: Request,
     measurement_id: str,
     payload: MeasurementUpsert,
     current_user: AuthUserRead = Depends(get_current_user),
@@ -96,7 +106,9 @@ async def patch_measurement(
 
 
 @router.post("/measurements/{measurement_id}/confirm", response_model=MeasurementRead)
+@limiter.limit(get_settings().rate_limit_marker_write)
 async def confirm_measurement(
+    request: Request,
     measurement_id: str,
     current_user: AuthUserRead = Depends(get_current_user),
     analysis_service: AnalysisService = Depends(get_analysis_service),

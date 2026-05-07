@@ -33,7 +33,7 @@ from app.core.backpressure import (
     analysis_job_priority_for_type,
     heavy_job_priority_for_type,
 )
-from app.core.config import get_settings, startup_failure_message
+from app.core.config import Settings, get_settings, startup_failure_message
 from app.core.logging import configure_logging
 from app.core.metrics import (
     PROMETHEUS_CLIENT_AVAILABLE,
@@ -41,7 +41,7 @@ from app.core.metrics import (
     record_reaper_requeues,
     render_metrics_text,
 )
-from app.core.redis_client import build_queue_redis_client_from_settings
+from app.core.redis_client import FailoverRedisClient, build_queue_redis_client_from_settings
 from app.db.session import WorkerAsyncSessionFactory
 from app.repositories.analysis_repository import (
     ANALYSIS_JOB_STATUS_QUEUED,
@@ -86,7 +86,6 @@ from app.worker.heartbeat import (
     write_worker_heartbeat,
 )
 from app.worker.queue import (
-    AnalysisJobTransportSnapshot,
     AnalysisJobQueueCapacityExceededError,
     InvalidAnalysisJobPayloadError,
     LeasedAnalysisJob,
@@ -268,9 +267,9 @@ class HeavyWorkerJobSpec:
 
 @dataclass
 class WorkerRuntime:
-    settings: object
+    settings: Settings
     redis_url: str
-    redis: object
+    redis: FailoverRedisClient
     worker_instance_id: str
     heartbeat_key: str
     job_executor: "WorkerJobExecutor"
@@ -1726,7 +1725,8 @@ async def run(redis_url: str | None = None) -> None:
         runtime.redis = _build_worker_redis(settings, url)
         await asyncio.sleep(1)
 
-    import os as _os, socket as _socket
+    import os as _os
+    import socket as _socket
     logger.info(
         "worker.started",
         provider=settings.ai_analysis_provider,

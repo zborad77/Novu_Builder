@@ -2286,8 +2286,8 @@ def _validate_catalog_seed() -> None:
         output_mappings_by_profile_id.setdefault(row["analysis_profile_id"], []).append(row)
 
     for profile in _ANALYSIS_PROFILES:
-        work_type_id = work_type_id_by_profile_id.get(profile["id"])
-        if work_type_id is None:
+        analysis_profile_work_type_id = work_type_id_by_profile_id.get(profile["id"])
+        if analysis_profile_work_type_id is None:
             raise AssertionError(
                 f"Analysis profile {profile['id']!r} is not assigned to any seeded work type."
             )
@@ -2306,8 +2306,8 @@ def _validate_catalog_seed() -> None:
             output_mappings=output_mappings_by_profile_id.get(profile["id"], []),
             fallback_mode=profile["fallback_mode"],
             fallback_instructions=profile.get("fallback_instructions"),
-            parameter_codes=parameter_codes_by_work_type.get(work_type_id, set()),
-            extractable_parameter_codes=extractable_parameter_codes_by_work_type.get(work_type_id, set()),
+            parameter_codes=parameter_codes_by_work_type.get(analysis_profile_work_type_id, set()),
+            extractable_parameter_codes=extractable_parameter_codes_by_work_type.get(analysis_profile_work_type_id, set()),
         )
 
     # Phase-binding coverage — every seeded work type must have an entry in
@@ -2337,8 +2337,8 @@ def _validate_catalog_seed() -> None:
         material_assumptions_by_profile_id.setdefault(row["catalog_pricing_profile_id"], []).append(row)
 
     for profile in _CATALOG_PRICING_PROFILES:
-        work_type_id = pricing_work_type_id_by_profile_id.get(profile["id"])
-        if work_type_id is None:
+        pricing_profile_work_type_id = pricing_work_type_id_by_profile_id.get(profile["id"])
+        if pricing_profile_work_type_id is None:
             raise AssertionError(
                 f"Catalog pricing profile {profile['id']!r} is not assigned to any seeded work type."
             )
@@ -2357,7 +2357,7 @@ def _validate_catalog_seed() -> None:
             adjustment_rules=adjustment_rules_by_profile_id.get(profile["id"], []),
             labor_assumptions=labor_assumptions_by_profile_id.get(profile["id"], []),
             material_assumptions=material_assumptions_by_profile_id.get(profile["id"], []),
-            parameter_codes=parameter_codes_by_work_type.get(work_type_id, set()),
+            parameter_codes=parameter_codes_by_work_type.get(pricing_profile_work_type_id, set()),
         )
 
 

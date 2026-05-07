@@ -4,12 +4,12 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
 
-_logger = logging.getLogger(__name__)
-
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.analysis_provider_capabilities import validate_selected_analysis_provider
+
+_logger = logging.getLogger(__name__)
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -730,7 +730,7 @@ class Settings(BaseSettings):
                 f"in APP_ENV={self.app_env!r}. "
                 "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
             )
-        if _is_insecure_placeholder(self.metrics_auth_token):
+        if _is_insecure_placeholder(token):
             raise ValueError(
                 f"METRICS_AUTH_TOKEN contains an insecure placeholder value "
                 f"in APP_ENV={self.app_env!r}. Set a strong, unique token."

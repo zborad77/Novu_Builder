@@ -29,10 +29,7 @@ from app.core.metrics import (
     HEAVY_QUEUE_LENGTH,
     JOBS_QUEUED,
     JOBS_RUNNING,
-    JOB_FAIL_RATE,
     JOB_STUCK_MAX_AGE_SECONDS,
-    JOB_DURATION_SECONDS_AVG,
-    JOB_DURATION_SECONDS_P95,
     PROMETHEUS_CLIENT_AVAILABLE,
     PROMETHEUS_TEXT_CONTENT_TYPE,
     PROCESSING_JOBS,
@@ -322,7 +319,7 @@ async def _probe_runtime_state(client) -> str:
 
 async def _get_auth_protection_snapshot(request: Request) -> _AuthProtectionSnapshot:
     auth_store = getattr(request.app.state, "auth_token_store", None)
-    source = "authTokenStore"
+    source: str | None = "authTokenStore"
     if auth_store is None:
         auth_store = getattr(request.app.state, "job_queue", None)
         source = "jobQueueSharedStore" if auth_store is not None else None

@@ -424,23 +424,23 @@ class AnalysisProfileService:
                 "sourceObjectCode": raw_attribute.get("sourceObjectCode", rule.source_object_code),
             }
 
-        for rule in (profile.validation_rules or []):
-            if rule.rule_type == "min_photos":
-                minimum = int(rule.min_number_value or 0)
+        for validation_rule in (profile.validation_rules or []):
+            if validation_rule.rule_type == "min_photos":
+                minimum = int(validation_rule.min_number_value or 0)
                 if photo_count < minimum:
-                    warnings.append(rule.message)
+                    warnings.append(validation_rule.message)
                 continue
-            attribute_payload = normalized_attributes.get(rule.target_attribute_code or "")
-            if rule.rule_type == "required_attribute" and attribute_payload is None:
-                raise CatalogValidationError(rule.message)
-            if rule.rule_type == "numeric_range" and attribute_payload is not None:
+            attribute_payload = normalized_attributes.get(validation_rule.target_attribute_code or "")
+            if validation_rule.rule_type == "required_attribute" and attribute_payload is None:
+                raise CatalogValidationError(validation_rule.message)
+            if validation_rule.rule_type == "numeric_range" and attribute_payload is not None:
                 numeric_value = attribute_payload.get("value")
                 if numeric_value is not None:
                     validate_number_bounds(
                         Decimal(str(numeric_value)),
-                        field_name=rule.target_attribute_code or "attribute",
-                        min_value=rule.min_number_value,
-                        max_value=rule.max_number_value,
+                        field_name=validation_rule.target_attribute_code or "attribute",
+                        min_value=validation_rule.min_number_value,
+                        max_value=validation_rule.max_number_value,
                     )
 
         for threshold in (profile.confidence_thresholds or []):
@@ -509,7 +509,7 @@ class AnalysisProfileService:
                 project_work_item_fields[mapping.target_field] = source_value
             elif mapping.target_entity == "project_work_item_value" and mapping.target_parameter_code:
                 parameter = parameter_by_code[mapping.target_parameter_code]
-                value_input = {
+                value_input: dict[str, Any] = {
                     "parameterCode": mapping.target_parameter_code,
                     "textValue": None,
                     "numberValue": None,

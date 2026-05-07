@@ -295,3 +295,136 @@ async def test_quote_variant_service_uses_catalog_pricing_engine_for_runtime_wor
         "mobilization",
     }
     assert {item.workTypeCode for item in variants[0].items} == {"painting"}
+
+
+async def _make_roof_repair_work_item(
+    db_session, test_tenants, *, severity: str
+) -> tuple[str, str]:
+    """Return (project_id, work_item_id) for a roof-repair work item.
+
+    Removes any stale TenantWorkTypeSetting left by contaminating tests before
+    creating the work item so the default catalog profile is used.
+    """
+    stale = await db_session.execute(
+        select(TenantWorkTypeSetting).where(
+            TenantWorkTypeSetting.organization_id == test_tenants["org_a"],
+            TenantWorkTypeSetting.work_type_id == "wt_roof_repair",
+        )
+    )
+    stale_setting = stale.scalar_one_or_none()
+    if stale_setting is not None:
+        await db_session.delete(stale_setting)
+        await db_session.commit()
+
+    project = await _ensure_project(db_session, test_tenants)
+    work_catalog_service = WorkCatalogService(WorkCatalogRepository(db_session))
+    item = await work_catalog_service.create_project_work_item(
+        project_id=project.id,
+        organization_id=test_tenants["org_a"],
+        payload=ProjectWorkItemCreate(
+            workTypeCode="roof-repair",
+            measuredQuantity=10.0,
+            values=[
+                ProjectWorkItemValueInput(parameterCode="work-area-sqm", numberValue=10.0),
+                ProjectWorkItemValueInput(parameterCode="roof-covering-type", optionValue="bitumen-membrane"),
+                ProjectWorkItemValueInput(parameterCode="damage-type", optionValue="membrane-split"),
+                ProjectWorkItemValueInput(parameterCode="severity-band", optionValue=severity),
+                ProjectWorkItemValueInput(parameterCode="access-method", optionValue="roof-ladder"),
+                ProjectWorkItemValueInput(parameterCode="repair-zones-count", numberValue=1),
+            ],
+        ),
+        created_by_user_id="usr_e2e_a1",
+    )
+    return project.id, item.id
+
+
+async def test_adjustment_rules_fire_for_major_severity(db_session, test_tenants):
+    """Major severity triggers both labor and material adjustment rules.
+
+    Regression: the adjustment_rules loop used the variable name `rule` which was
+    first bound to CatalogPricingProfileBaseRule instances in the preceding loop.
+    After the rename to `adj_rule` the loop body correctly accesses adj_rule.condition_*
+    and adj_rule.target_* — both exclusive to AdjustmentRule.
+    """
+    await _ensure_global_catalog_seed(db_session)
+    project_id, work_item_id = await _make_roof_repair_work_item(db_session, test_tenants, severity="major")
+
+    repo = WorkCatalogRepository(db_session)
+    stored = await repo.get_project_work_item(project_id, work_item_id, organization_id=test_tenants["org_a"])
+    assert stored is not None
+
+    service = PricingProfileService(repo)
+    resolved = await service.resolve_for_snapshot(
+        organization_id=test_tenants["org_a"],
+        work_type_code=stored.resolved_work_type_code,
+        catalog_pricing_profile_id=stored.catalog_pricing_profile_id,
+        tenant_pricing_profile_id=stored.tenant_pricing_profile_id,
+    )
+    priced = service.calculate_project_work_item(work_item=stored, resolved=resolved)
+
+    rule_codes = {line["catalog_pricing_rule_code"] for line in priced["line_items"]}
+    assert "severity-band-major-labor" in rule_codes, "Major labor surcharge must fire for severity=major"
+    assert "severity-band-major-material" in rule_codes, "Major material surcharge must fire for severity=major"
+    assert "severity-band-moderate" not in rule_codes, "Moderate surcharge must not fire for severity=major"
+
+
+async def test_adjustment_rules_absent_for_minor_severity(db_session, test_tenants):
+    """Minor severity produces no severity adjustment lines."""
+    await _ensure_global_catalog_seed(db_session)
+    project_id, work_item_id = await _make_roof_repair_work_item(db_session, test_tenants, severity="minor")
+
+    repo = WorkCatalogRepository(db_session)
+    stored = await repo.get_project_work_item(project_id, work_item_id, organization_id=test_tenants["org_a"])
+    assert stored is not None
+
+    service = PricingProfileService(repo)
+    resolved = await service.resolve_for_snapshot(
+        organization_id=test_tenants["org_a"],
+        work_type_code=stored.resolved_work_type_code,
+        catalog_pricing_profile_id=stored.catalog_pricing_profile_id,
+        tenant_pricing_profile_id=stored.tenant_pricing_profile_id,
+    )
+    priced = service.calculate_project_work_item(work_item=stored, resolved=resolved)
+
+    rule_codes = {line["catalog_pricing_rule_code"] for line in priced["line_items"]}
+    assert "severity-band-moderate" not in rule_codes
+    assert "severity-band-major-labor" not in rule_codes
+    assert "severity-band-major-material" not in rule_codes
+
+
+async def test_build_quote_variants_produces_three_margin_tiers(db_session, test_tenants):
+    """build_quote_variants returns economy/standard/premium with strictly ordered totals.
+
+    Regression: variants_config was typed as list[dict[str, str | float]] but mypy
+    saw the values as 'object', causing arg-type errors on float(config["margin"]).
+    Annotating variants_config as list[dict[str, Any]] resolves this without changing
+    runtime behaviour.
+    """
+    await _ensure_global_catalog_seed(db_session)
+    project_id, work_item_id = await _make_roof_repair_work_item(db_session, test_tenants, severity="moderate")
+
+    repo = WorkCatalogRepository(db_session)
+    stored = await repo.get_project_work_item(project_id, work_item_id, organization_id=test_tenants["org_a"])
+    assert stored is not None
+
+    service = PricingProfileService(repo)
+    resolved = await service.resolve_for_snapshot(
+        organization_id=test_tenants["org_a"],
+        work_type_code=stored.resolved_work_type_code,
+        catalog_pricing_profile_id=stored.catalog_pricing_profile_id,
+        tenant_pricing_profile_id=stored.tenant_pricing_profile_id,
+    )
+    work_item_result = service.calculate_project_work_item(work_item=stored, resolved=resolved)
+
+    variants, summary = service.build_quote_variants(
+        work_item_results=[work_item_result],
+        pricing_profile=resolved.tenant_pricing_profile,
+    )
+
+    assert len(variants) == 3
+    types = {v["variant_type"] for v in variants}
+    assert types == {"economy", "standard", "premium"}
+    by_type = {v["variant_type"]: v for v in variants}
+    assert by_type["economy"]["total_inc_vat"] < by_type["standard"]["total_inc_vat"]
+    assert by_type["standard"]["total_inc_vat"] < by_type["premium"]["total_inc_vat"]
+    assert all(v["total_inc_vat"] > 0 for v in variants)

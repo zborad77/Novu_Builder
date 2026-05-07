@@ -1,6 +1,7 @@
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,13 +59,16 @@ _CORS_ALLOW_HEADERS: tuple[str, ...] = (
     "X-Request-ID",
 )
 
+_rate_limit_exceeded_handler: Any
+RateLimitExceeded: Any
+
 try:
     from slowapi import _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
 except ModuleNotFoundError as exc:
     logger.warning("rate_limiter.handler_disabled", reason="slowapi_not_installed", error=str(exc))
-    _rate_limit_exceeded_handler = None
-    RateLimitExceeded = None
+    _rate_limit_exceeded_handler = None  # type: ignore[assignment]
+    RateLimitExceeded = None  # type: ignore[misc,assignment]
 
 
 def verify_runtime_dependency_guards(settings):
@@ -361,7 +365,10 @@ def create_app() -> FastAPI:
 
     app.state.limiter = limiter
     if RateLimitExceeded is not None and _rate_limit_exceeded_handler is not None:
-        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+        app.add_exception_handler(
+            RateLimitExceeded,
+            _rate_limit_exceeded_handler,  # type: ignore[arg-type]
+        )
 
     @app.exception_handler(SQLAlchemyPoolTimeoutError)
     async def db_pool_exhausted_handler(request: Request, exc: SQLAlchemyPoolTimeoutError) -> JSONResponse:

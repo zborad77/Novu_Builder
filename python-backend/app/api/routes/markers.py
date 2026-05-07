@@ -104,17 +104,20 @@ async def list_markers(
             raise HTTPException(status_code=404, detail="Case not found.")
         items = await repo.list_by_case(case_id)
     else:
+        resolved_image_id = image_id
+        if resolved_image_id is None:
+            raise HTTPException(status_code=400, detail="Provide case_id or image_id query parameter.")
         # image_id path: verify the photo's project belongs to this org
-        photo = await photo_service.get_photo_by_id_in_org(image_id, organization_id=org_id)
+        photo = await photo_service.get_photo_by_id_in_org(resolved_image_id, organization_id=org_id)
         if not photo:
             if not current_user.isSuperAdmin:
                 log_cross_tenant_denied(
                     logger,
-                    resource="markers_by_image", resource_id=image_id,
+                    resource="markers_by_image", resource_id=resolved_image_id,
                     user_id=current_user.id, org_id=current_user.organizationId,
                 )
             raise HTTPException(status_code=404, detail="Image not found.")
-        items = await repo.list_by_image(image_id)
+        items = await repo.list_by_image(resolved_image_id)
 
     return MarkerListResponse(items=[_to_marker_read(m) for m in items])
 

@@ -13,7 +13,7 @@ from app.core.backpressure import (
 from app.core.config import get_settings
 from app.models import Project, ProjectPhoto
 from app.repositories.photo_repository import PhotoRepository
-from app.schemas.photo import ProjectPhotoRead
+from app.schemas.photo import PhotoVariant, PhotoVariants, ProjectPhotoRead
 from app.storage.backend import (
     delete_storage_file,
     generate_presigned_url,
@@ -103,29 +103,29 @@ def to_read_model(photo: ProjectPhoto) -> ProjectPhotoRead:
         isAnalysisReference=photo.is_analysis_reference,
         sortOrder=photo.sort_order,
         url=original_url,
-        variants={
-            "original": {
-                "storageKey": photo.storage_key,
-                "fileSize": photo.file_size,
-                "width": photo.width,
-                "height": photo.height,
-                "url": original_url,
-            },
-            "preview": {
-                "storageKey": photo.preview_storage_key,
-                "fileSize": photo.preview_file_size,
-                "width": photo.preview_width,
-                "height": photo.preview_height,
-                "url": preview_url,
-            },
-            "aiInput": {
-                "storageKey": photo.ai_input_storage_key,
-                "fileSize": photo.ai_input_file_size,
-                "width": photo.ai_input_width,
-                "height": photo.ai_input_height,
-                "url": ai_input_url,
-            },
-        },
+        variants=PhotoVariants(
+            original=PhotoVariant(
+                storageKey=photo.storage_key,
+                fileSize=photo.file_size,
+                width=photo.width,
+                height=photo.height,
+                url=original_url,
+            ),
+            preview=PhotoVariant(
+                storageKey=photo.preview_storage_key,
+                fileSize=photo.preview_file_size,
+                width=photo.preview_width,
+                height=photo.preview_height,
+                url=preview_url,
+            ),
+            aiInput=PhotoVariant(
+                storageKey=photo.ai_input_storage_key,
+                fileSize=photo.ai_input_file_size,
+                width=photo.ai_input_width,
+                height=photo.ai_input_height,
+                url=ai_input_url,
+            ),
+        ),
     )
 
 

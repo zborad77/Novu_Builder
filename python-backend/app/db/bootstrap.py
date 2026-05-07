@@ -39,8 +39,6 @@ from app.models import (
     QuoteVariant,
     Supplier,
     SupplierMaterialPrice,
-    TenantWorkTypeExtraParameter,
-    TenantWorkTypeExtraParameterOption,
     TenantWorkTypeParameterOverride,
     TenantWorkTypeSetting,
     User,

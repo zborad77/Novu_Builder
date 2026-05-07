@@ -956,6 +956,9 @@ async def get_expired_analysis_job_leases(
         if not all((raw_payload, worker_id, leased_at_ms, lease_timeout_ms, expires_at_ms)):
             continue
 
+        # all() guard above ensures none of these are None or empty.
+        assert raw_payload is not None and worker_id is not None
+        assert leased_at_ms is not None and lease_timeout_ms is not None and expires_at_ms is not None
         expired.append(
             LeasedAnalysisJob(
                 token=token,

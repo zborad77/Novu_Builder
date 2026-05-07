@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 
 from app.models import AnalysisJob, QuoteItem, QuoteVariant
 from app.repositories.quote_variant_repository import QuoteVariantRepository
@@ -55,17 +56,21 @@ def to_item_read(item: QuoteItem) -> QuoteItemRead:
         itemType=item.item_type,
         name=item.name,
         description=item.description,
-        quantity=item.quantity,
+        quantity=float(item.quantity),
         unit=item.unit,
-        unitPrice=item.unit_price,
-        totalPrice=item.total_price,
+        unitPrice=float(item.unit_price),
+        totalPrice=float(item.total_price),
         materialCatalogId=item.material_catalog_id,
         supplierId=item.supplier_id,
         priceSource=item.price_source,
         isManualOverride=item.is_manual_override,
-        aiSuggestedUnitPrice=item.ai_suggested_unit_price,
-        supplierReferenceUnitPrice=item.supplier_reference_unit_price,
-        companyDefaultUnitPrice=item.company_default_unit_price,
+        aiSuggestedUnitPrice=float(item.ai_suggested_unit_price) if item.ai_suggested_unit_price is not None else None,
+        supplierReferenceUnitPrice=(
+            float(item.supplier_reference_unit_price) if item.supplier_reference_unit_price is not None else None
+        ),
+        companyDefaultUnitPrice=(
+            float(item.company_default_unit_price) if item.company_default_unit_price is not None else None
+        ),
         sortOrder=item.sort_order,
         createdAt=item.created_at,
         updatedAt=item.updated_at,
@@ -82,13 +87,13 @@ def to_variant_read(variant: QuoteVariant) -> QuoteVariantRead:
         currency=getattr(variant, "currency", None),
         vatPct=float(variant.vat_pct) if getattr(variant, "vat_pct", None) is not None else None,
         variantType=variant.variant_type,
-        laborCost=variant.labor_cost,
-        materialCost=variant.material_cost,
-        otherCost=variant.other_cost,
-        marginPct=variant.margin_pct,
-        totalExVat=variant.total_ex_vat,
-        vatAmount=variant.vat_amount,
-        totalIncVat=variant.total_inc_vat,
+        laborCost=float(variant.labor_cost),
+        materialCost=float(variant.material_cost),
+        otherCost=float(variant.other_cost),
+        marginPct=float(variant.margin_pct),
+        totalExVat=float(variant.total_ex_vat),
+        vatAmount=float(variant.vat_amount),
+        totalIncVat=float(variant.total_inc_vat),
         createdAt=variant.created_at,
         updatedAt=variant.updated_at,
         items=[to_item_read(item) for item in items],
@@ -258,7 +263,7 @@ class QuoteVariantService:
         ]
         matched_materials = await self.repository.list_materials_by_names(project.organization_id, material_names)
 
-        material_line_base = []
+        material_line_base: list[dict[str, Any]] = []
         for material in matched_materials:
             raw_quantity = float(effective_area_sqm) * float(material.norm_per_sqm)
             quantity = round_measure(raw_quantity)
@@ -297,13 +302,13 @@ class QuoteVariantService:
         base_material = round_currency(sum(item["total_price"] for item in material_line_base))
         base_other = 3500.0
 
-        variants_config = [
-            {"type": "economy", "labor_factor": 1.0, "material_factor": 1.0, "other_factor": 1.0, "margin": pricing_profile.margin_economy_pct},
-            {"type": "standard", "labor_factor": 1.12, "material_factor": 1.28, "other_factor": 1.08, "margin": pricing_profile.margin_standard_pct},
-            {"type": "premium", "labor_factor": 1.22, "material_factor": 1.6, "other_factor": 1.18, "margin": pricing_profile.margin_premium_pct},
+        variants_config: list[dict[str, float | str]] = [
+            {"type": "economy", "labor_factor": 1.0, "material_factor": 1.0, "other_factor": 1.0, "margin": float(pricing_profile.margin_economy_pct)},
+            {"type": "standard", "labor_factor": 1.12, "material_factor": 1.28, "other_factor": 1.08, "margin": float(pricing_profile.margin_standard_pct)},
+            {"type": "premium", "labor_factor": 1.22, "material_factor": 1.6, "other_factor": 1.18, "margin": float(pricing_profile.margin_premium_pct)},
         ]
 
-        variants_payload = []
+        fallback_variants_payload: list[dict[str, Any]] = []
         for index, config in enumerate(variants_config, start=1):
             labor_cost = round_currency(base_labor * float(config["labor_factor"]))
             material_cost = round_currency(base_material * float(config["material_factor"]))
@@ -314,7 +319,7 @@ class QuoteVariantService:
             total_inc_vat = round_currency(total_ex_vat + vat_amount)
             variant_id = self.repository.build_id("qv")
 
-            items = [
+            items: list[dict[str, Any]] = [
                 {
                     "id": self.repository.build_id("qi"),
                     "item_type": "labor",
@@ -376,7 +381,7 @@ class QuoteVariantService:
                     },
                 )
 
-            variants_payload.append(
+            fallback_variants_payload.append(
                 {
                     "id": variant_id,
                     "variant_type": config["type"],
@@ -395,7 +400,7 @@ class QuoteVariantService:
             project=project,
             analysis=analysis,
             pricing_profile=pricing_profile,
-            variants_payload=variants_payload,
+            variants_payload=fallback_variants_payload,
         )
         return QuoteVariantRecalculationResult(
             variants=[to_variant_read(variant) for variant in created],
