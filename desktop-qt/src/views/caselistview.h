@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <vector>
 
 #include <QWidget>
 
-#include "dto/casedto.h"
+#include "models/casedto.h"
 
 class QLabel;
 class QPushButton;

@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <vector>
-#include "dto/casedto.h"
+#include "models/casedto.h"
 
 class QLabel;
 class QScrollArea;

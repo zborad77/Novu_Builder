@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <vector>
 
-#include "dto/casedto.h"
-#include "dto/imagedto.h"
+#include "models/casedto.h"
+#include "models/imagedto.h"
 
 class ApiService;
 

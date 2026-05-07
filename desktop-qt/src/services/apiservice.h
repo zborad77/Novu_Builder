@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 #include <QPointF>
@@ -6,17 +6,17 @@
 #include <QVector>
 #include <vector>
 
-#include "dto/adminjobdto.h"
-#include "dto/adminuserdto.h"
-#include "dto/auditlogdto.h"
-#include "dto/companydto.h"
-#include "dto/impersonatedto.h"
-#include "dto/casedto.h"
-#include "dto/exportdto.h"
-#include "dto/imagedto.h"
-#include "dto/loginresultdto.h"
-#include "dto/proposaldraftpatchdto.h"
-#include "dto/uploadimagedto.h"
+#include "models/adminjobdto.h"
+#include "models/adminuserdto.h"
+#include "models/auditlogdto.h"
+#include "models/companydto.h"
+#include "models/impersonatedto.h"
+#include "models/casedto.h"
+#include "models/exportdto.h"
+#include "models/imagedto.h"
+#include "models/loginresultdto.h"
+#include "models/proposaldraftpatchdto.h"
+#include "models/uploadimagedto.h"
 
 class QNetworkRequest;
 class QUrl;

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 #include <QEvent>
@@ -8,9 +8,9 @@
 #include <QWidget>
 #include <vector>
 
-#include "dto/casedto.h"
-#include "dto/imagedto.h"
-#include "dto/uploadimagedto.h"
+#include "models/casedto.h"
+#include "models/imagedto.h"
+#include "models/uploadimagedto.h"
 #include "widgets/imageoverlaywidget.h"
 
 class QLabel;

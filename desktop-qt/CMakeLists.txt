@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+﻿cmake_minimum_required(VERSION 3.21)
 
 project(NovuBuilder VERSION 0.1.0 LANGUAGES CXX)
 
@@ -42,18 +42,18 @@ qt_add_executable(NovuBuilder
     src/services/apiservice.h
     src/services/sessionservice.cpp
     src/services/sessionservice.h
-    src/dto/adminjobdto.h
-    src/dto/adminuserdto.h
-    src/dto/auditlogdto.h
-    src/dto/casedto.h
-    src/dto/companydto.h
-    src/dto/exportdto.h
-    src/dto/imagedto.h
-    src/dto/impersonatedto.h
-    src/dto/logindto.h
-    src/dto/loginresultdto.h
-    src/dto/proposaldraftpatchdto.h
-    src/dto/uploadimagedto.h
+    src/models/adminjobdto.h
+    src/models/adminuserdto.h
+    src/models/auditlogdto.h
+    src/models/casedto.h
+    src/models/companydto.h
+    src/models/exportdto.h
+    src/models/imagedto.h
+    src/models/impersonatedto.h
+    src/models/logindto.h
+    src/models/loginresultdto.h
+    src/models/proposaldraftpatchdto.h
+    src/models/uploadimagedto.h
     src/widgets/imageoverlaywidget.cpp
     src/widgets/imageoverlaywidget.h
     src/views/serversetupdialog.cpp

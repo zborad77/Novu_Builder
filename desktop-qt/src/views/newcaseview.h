@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 #include <QPixmap>
@@ -7,7 +7,7 @@
 #include <QWidget>
 #include <vector>
 
-#include "dto/uploadimagedto.h"
+#include "models/uploadimagedto.h"
 #include "widgets/imageoverlaywidget.h"
 
 class QComboBox;
