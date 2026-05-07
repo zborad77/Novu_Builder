@@ -2,6 +2,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request as StarletteRequest
+
+
+def _mock_request() -> StarletteRequest:
+    return StarletteRequest({"type": "http", "method": "POST", "path": "/", "headers": []})
 
 
 def _make_project(project_id: str = "prj_A", org_id: str = "org_A"):
@@ -106,6 +111,7 @@ class TestMeasurementLeanGuards:
 
         with pytest.raises(HTTPException) as exc_info:
             await create_or_update_measurement(
+                request=_mock_request(),
                 case_id="prj_missing",
                 payload=MeasurementUpsert(),
                 current_user=mock_user,
@@ -145,6 +151,7 @@ class TestMeasurementLeanGuards:
         mock_analysis_service.update_manual_selection = AsyncMock(return_value=updated)
 
         response = await create_or_update_measurement(
+            request=_mock_request(),
             case_id="prj_A",
             payload=MeasurementUpsert(manualAreaSqm=15.0),
             current_user=mock_user,

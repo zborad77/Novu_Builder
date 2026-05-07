@@ -16,6 +16,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request as StarletteRequest
+
+
+def _mock_request() -> StarletteRequest:
+    """Minimal Starlette Request for direct handler calls (bypasses slowapi key lookup)."""
+    return StarletteRequest({"type": "http", "method": "GET", "path": "/", "headers": []})
 
 import app.api.routes.admin as admin_module
 from app.api.deps import ADMIN_CAPABILITIES, require_admin_capability, require_superadmin
@@ -174,7 +180,7 @@ class TestListUsersOrgFilter:
         mock_service = MagicMock()
         mock_service.list_users = AsyncMock(return_value=([], 0))
 
-        result = await list_users(org_id="org-abc", limit=100, offset=0, service=mock_service, _=MagicMock())
+        result = await list_users(request=_mock_request(), org_id="org-abc", limit=100, offset=0, service=mock_service, _=MagicMock())
 
         mock_service.list_users.assert_called_once_with(
             organization_id="org-abc",
@@ -191,7 +197,7 @@ class TestListUsersOrgFilter:
         mock_service = MagicMock()
         mock_service.list_users = AsyncMock(return_value=([], 0))
 
-        result = await list_users(org_id=None, limit=100, offset=25, service=mock_service, _=MagicMock())
+        result = await list_users(request=_mock_request(), org_id=None, limit=100, offset=25, service=mock_service, _=MagicMock())
 
         mock_service.list_users.assert_called_once_with(
             organization_id=None,

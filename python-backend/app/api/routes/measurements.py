@@ -1,8 +1,10 @@
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.deps import get_analysis_service, get_current_user, get_project_service, resolve_org_id
 from app.core.audit import log_cross_tenant_denied
+from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.schemas.auth import AuthUserRead
 from app.schemas.measurement import MeasurementPolygonPoint, MeasurementRead, MeasurementUpsert
 from app.services.analysis_service import AnalysisService
@@ -48,7 +50,9 @@ def _to_measurement(result) -> MeasurementRead:
 
 
 @router.post("/cases/{case_id}/measurements", response_model=MeasurementRead, status_code=status.HTTP_201_CREATED)
+@limiter.limit(get_settings().rate_limit_marker_write)
 async def create_or_update_measurement(
+    request: Request,
     case_id: str,
     payload: MeasurementUpsert,
     current_user: AuthUserRead = Depends(get_current_user),
@@ -69,7 +73,9 @@ async def create_or_update_measurement(
 
 
 @router.patch("/measurements/{measurement_id}", response_model=MeasurementRead)
+@limiter.limit(get_settings().rate_limit_marker_write)
 async def patch_measurement(
+    request: Request,
     measurement_id: str,
     payload: MeasurementUpsert,
     current_user: AuthUserRead = Depends(get_current_user),
@@ -100,7 +106,9 @@ async def patch_measurement(
 
 
 @router.post("/measurements/{measurement_id}/confirm", response_model=MeasurementRead)
+@limiter.limit(get_settings().rate_limit_marker_write)
 async def confirm_measurement(
+    request: Request,
     measurement_id: str,
     current_user: AuthUserRead = Depends(get_current_user),
     analysis_service: AnalysisService = Depends(get_analysis_service),

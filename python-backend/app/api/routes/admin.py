@@ -49,7 +49,9 @@ def get_company_service(session: AsyncSession = Depends(get_db_session)) -> Comp
 # ── Companies ──────────────────────────────────────────────────────────────────
 
 @router.get("/companies", response_model=CompanyListResponse)
+@limiter.limit(get_settings().rate_limit_admin)
 async def list_companies(
+    request: Request,
     limit: int = Query(default=100, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     service: CompanyService = Depends(get_company_service),
@@ -87,7 +89,9 @@ async def create_company(
 
 
 @router.get("/companies/{company_id}", response_model=CompanyRead)
+@limiter.limit(get_settings().rate_limit_admin)
 async def get_company(
+    request: Request,
     company_id: str,
     service: CompanyService = Depends(get_company_service),
     _: AuthUserRead = Depends(require_superadmin),
@@ -123,7 +127,9 @@ async def patch_company(
 # ── Users ──────────────────────────────────────────────────────────────────────
 
 @router.get("/users", response_model=AdminUserListResponse)
+@limiter.limit(get_settings().rate_limit_admin)
 async def list_users(
+    request: Request,
     org_id: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
@@ -174,7 +180,9 @@ async def create_user(
 
 
 @router.get("/users/{user_id}", response_model=AdminUserRead)
+@limiter.limit(get_settings().rate_limit_admin)
 async def get_user(
+    request: Request,
     user_id: str,
     service: CompanyService = Depends(get_company_service),
     _: AuthUserRead = Depends(require_superadmin),
@@ -370,7 +378,9 @@ def _sanitize_admin_job(job_dict: dict) -> dict:
 
 
 @router.get("/jobs", response_model=list[dict])
+@limiter.limit(get_settings().rate_limit_admin)
 async def list_all_jobs(
+    request: Request,
     job_status: str | None = Query(default=None, alias="status"),
     org_id: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
@@ -400,7 +410,9 @@ async def list_all_jobs(
 
 
 @router.get("/jobs/{job_id}", response_model=dict)
+@limiter.limit(get_settings().rate_limit_admin)
 async def get_admin_job(
+    request: Request,
     job_id: str,
     session: AsyncSession = Depends(get_db_session),
     _: AuthUserRead = Depends(require_admin_capability("admin:jobs")),
@@ -520,7 +532,9 @@ async def admin_reprocess_dead_letter_job(
 # ── Logs ───────────────────────────────────────────────────────────────────────
 
 @router.get("/logs", response_model=list[str])
+@limiter.limit(get_settings().rate_limit_admin)
 async def get_recent_logs(
+    request: Request,
     lines: int = Query(default=200, ge=10, le=2000),
     _: AuthUserRead = Depends(require_superadmin),
 ) -> list[str]:
@@ -545,7 +559,9 @@ async def get_recent_logs(
 # ── Audit Trail ────────────────────────────────────────────────────────────────
 
 @router.get("/audit", response_model=list[dict])
+@limiter.limit(get_settings().rate_limit_admin)
 async def get_audit_log(
+    request: Request,
     org_id: str | None = Query(default=None),
     action: str | None = Query(default=None),
     user_id: str | None = Query(default=None),
