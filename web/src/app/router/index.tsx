@@ -14,6 +14,7 @@ import { AppShell } from 'app/layouts/AppShell'
 import { AuthLayout } from 'app/layouts/AuthLayout'
 import { CaseLayout } from 'app/layouts/CaseLayout'
 import { AdminAuditPage } from 'pages/AdminAuditPage'
+import { ArchiveViewerPage } from 'pages/ArchiveViewerPage'
 import { AdminCompaniesPage } from 'pages/AdminCompaniesPage'
 import { AdminCompanyDetailPage } from 'pages/AdminCompanyDetailPage'
 import { AdminJobsPage } from 'pages/AdminJobsPage'
@@ -187,6 +188,12 @@ const caseTimelineRoute = createRoute({
   component: CaseTimelinePage,
 })
 
+const archiveViewerRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: 'archive-viewer',
+  component: ArchiveViewerPage,
+})
+
 const catalogWorkTypesRoute = createRoute({
   getParentRoute: () => orgRoute,
   path: 'catalog/work-types',
@@ -261,6 +268,7 @@ const routeTree = rootRoute.addChildren([
   appRoute.addChildren([
     orgRoute.addChildren([
       casesRoute,
+      archiveViewerRoute,
       caseLayoutRoute.addChildren([
         caseOverviewRoute,
         casePhotosRoute,

@@ -346,6 +346,53 @@ WORK_CATALOG_VALIDATION_FAILURES_TOTAL = Counter(
     ["operation", "reason"],
 )
 
+# ---------------------------------------------------------------------------
+# SSE / Outbox observability
+# ---------------------------------------------------------------------------
+
+OUTBOX_PUBLISH_LAG_SECONDS = Histogram(
+    "novu_outbox_publish_lag_seconds",
+    "Seconds between outbox_events.created_at and the moment the publisher marks it published",
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
+)
+
+OUTBOX_EVENTS_PUBLISHED_TOTAL = Counter(
+    "novu_outbox_events_published_total",
+    "Total outbox events delivered to Redis by event_type",
+    ["event_type"],
+)
+
+OUTBOX_PUBLISHER_BATCH_SIZE = Histogram(
+    "novu_outbox_publisher_batch_size",
+    "Number of outbox events processed per publisher iteration",
+    buckets=[1, 2, 5, 10, 25, 50, 100],
+)
+
+SSE_CONNECTIONS_ACTIVE = Gauge(
+    "novu_sse_connections_active",
+    "Number of currently open SSE connections by aggregate type",
+    ["aggregate_type"],
+)
+
+SSE_RECONNECTS_TOTAL = Counter(
+    "novu_sse_reconnects_total",
+    "Total SSE reconnects (connection arrived with Last-Event-ID) by aggregate type",
+    ["aggregate_type"],
+)
+
+SSE_REPLAY_EVENTS_TOTAL = Counter(
+    "novu_sse_replay_events_total",
+    "Total events replayed from the outbox on SSE reconnect by aggregate type",
+    ["aggregate_type"],
+)
+
+QUOTE_RECALCULATION_DURATION_SECONDS = Histogram(
+    "novu_quote_recalculation_duration_seconds",
+    "Proposal recompute (quote recalculation job) wall-clock duration in seconds by outcome",
+    ["outcome"],
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0],
+)
+
 _JOB_DURATION_WINDOW: deque[float] = deque(maxlen=200)
 _JOB_DURATION_LOCK = Lock()
 _JOB_OUTCOME_COUNTS: dict[str, int] = {"completed": 0, "failed": 0}
@@ -551,6 +598,59 @@ PROMETHEUS_TEXT_CONTENT_TYPE = CONTENT_TYPE_LATEST
 
 def metric_label_names(metric) -> tuple[str, ...]:
     return tuple(str(label_name) for label_name in (getattr(metric, "_labelnames", ()) or ()))
+
+
+def observe_outbox_batch(
+    *,
+    rows: list,
+    now_utc: "datetime | None" = None,
+) -> None:
+    """Record a single outbox publisher iteration.
+
+    `rows` — the batch just published (each must have `.event_type` and `.created_at`).
+    `now_utc` — override for the current UTC time (test injection).
+    """
+    from datetime import datetime, timezone  # noqa: PLC0415
+    _now = now_utc or datetime.now(timezone.utc)
+    OUTBOX_PUBLISHER_BATCH_SIZE.observe(len(rows))
+    for row in rows:
+        event_type = getattr(row, "event_type", "unknown") or "unknown"
+        metric_labels(OUTBOX_EVENTS_PUBLISHED_TOTAL, event_type=event_type).inc()
+        created_at = getattr(row, "created_at", None)
+        if created_at is not None:
+            try:
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                lag = (_now - created_at).total_seconds()
+                OUTBOX_PUBLISH_LAG_SECONDS.observe(max(0.0, lag))
+            except Exception:
+                pass
+
+
+def observe_sse_connection(aggregate_type: str, *, entering: bool) -> None:
+    """Increment or decrement the active SSE connection gauge."""
+    agg = (aggregate_type or "unknown").lower()
+    g = metric_labels(SSE_CONNECTIONS_ACTIVE, aggregate_type=agg)
+    if entering:
+        g.inc()
+    else:
+        g.dec()
+
+
+def observe_sse_reconnect(aggregate_type: str, *, replayed: int = 0) -> None:
+    """Record a reconnect event and the number of events replayed."""
+    agg = (aggregate_type or "unknown").lower()
+    metric_labels(SSE_RECONNECTS_TOTAL, aggregate_type=agg).inc()
+    if replayed > 0:
+        metric_labels(SSE_REPLAY_EVENTS_TOTAL, aggregate_type=agg).inc(replayed)
+
+
+def observe_quote_recalculation(*, outcome: str, duration_seconds: float) -> None:
+    """Record a completed proposal recompute with its wall-clock duration."""
+    norm = (outcome or "unknown").lower()
+    metric_labels(QUOTE_RECALCULATION_DURATION_SECONDS, outcome=norm).observe(
+        max(0.0, float(duration_seconds))
+    )
 
 
 def metric_labels(metric, /, **label_values):

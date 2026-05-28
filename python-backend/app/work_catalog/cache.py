@@ -47,6 +47,10 @@ def global_parameter_schema_key(work_type_code: str, parameter_code: str) -> str
     return f"{_prefix()}:global:parameter:{work_type_code}:{parameter_code}"
 
 
+def global_grouped_catalog_key() -> str:
+    return f"{_prefix()}:global:grouped"
+
+
 def effective_work_type_list_key(organization_id: str) -> str:
     return f"{_prefix()}:effective:list:{organization_id}"
 

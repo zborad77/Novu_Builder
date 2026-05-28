@@ -1,0 +1,143 @@
+#Requires -Version 5.1
+# Build the root .env.production file that docker compose needs for ${VAR} substitution.
+#
+# Merges (in priority order — first source wins):
+#   1. python-backend\.env.production   (secrets already filled in)
+#   2. root .env                         (POSTGRES_PASSWORD, REDIS_PASSWORD, WORKER_METRICS_*)
+#   3. python-backend\.env.production.example  (safe defaults for everything else)
+#
+# Writes: root .env.production
+# Then run: docker compose --env-file .env.production up -d
+#
+# Usage:
+#   .\scripts\Build-ComposeEnv.ps1              # preview (dry run)
+#   .\scripts\Build-ComposeEnv.ps1 -Write       # write root .env.production
+
+param(
+    [switch]$Write
+)
+
+$ErrorActionPreference = "Stop"
+$rootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+
+$sources = @(
+    (Join-Path $rootDir "python-backend\.env.production"),
+    (Join-Path $rootDir ".env"),
+    (Join-Path $rootDir "python-backend\.env.production.example")
+)
+
+foreach ($s in $sources) {
+    if (-not (Test-Path $s)) {
+        Write-Error "Required source not found: $s"
+        exit 1
+    }
+}
+
+function Read-EnvFile {
+    param([string]$Path)
+    $vars = [ordered]@{}
+    foreach ($line in (Get-Content $Path -Encoding UTF8)) {
+        $trimmed = $line.Trim()
+        if ($trimmed -match '^#' -or $trimmed -eq '') { continue }
+        if ($trimmed -match '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            $key = $matches[1]
+            $val = $matches[2]
+            if (-not $vars.Contains($key)) {
+                $vars[$key] = $val
+            }
+        }
+    }
+    return $vars
+}
+
+# Load all three sources
+$appVars  = Read-EnvFile $sources[0]
+$infraVars = Read-EnvFile $sources[1]
+$defaults = Read-EnvFile $sources[2]
+
+# Merge: app > infra > defaults
+$merged = [ordered]@{}
+foreach ($kv in $defaults.GetEnumerator()) { $merged[$kv.Key] = $kv.Value }
+foreach ($kv in $infraVars.GetEnumerator()) { $merged[$kv.Key] = $kv.Value }
+foreach ($kv in $appVars.GetEnumerator()) { $merged[$kv.Key] = $kv.Value }
+
+# All variables referenced in docker-compose.yml
+$composeVars = @(
+    'AI_ANALYSIS_PROVIDER','ANALYSIS_JOBS_PER_TENANT_LIMIT','ANALYSIS_JOB_MAX_ATTEMPTS',
+    'ANALYSIS_QUEUE_MAX_DEPTH','ANALYSIS_RETRY_BACKOFF_BASE_SECONDS','ANALYSIS_RETRY_BACKOFF_MAX_SECONDS',
+    'ANTHROPIC_API_KEY','APP_BASE_URL','CORS_ALLOWED_ORIGINS','DB_MAX_OVERFLOW','DB_POOL_RECYCLE',
+    'DB_POOL_SIZE','DB_POOL_TIMEOUT','EXPORT_TTL_DAYS','HEAVY_QUEUE_MAX_DEPTH','HSTS_MAX_AGE',
+    'JWT_ACCESS_TOKEN_EXPIRE_MINUTES','JWT_REFRESH_TOKEN_EXPIRE_DAYS','JWT_SECRET',
+    'METRICS_AUTH_ENABLED','METRICS_AUTH_TOKEN','MINIO_ROOT_USER','MINIO_ROOT_PASSWORD','POSTGRES_PASSWORD',
+    'RATE_LIMIT_ADMIN','RATE_LIMIT_ADMIN_SENSITIVE','RATE_LIMIT_ADMIN_WRITE',
+    'RATE_LIMIT_ANALYSIS_JOBS','RATE_LIMIT_LOGIN','RATE_LIMIT_UPLOAD',
+    'READINESS_PROCESSING_GRACE_SECONDS','REDIS_FAILOVER_URLS','REDIS_HEALTH_CHECK_INTERVAL',
+    'REDIS_PASSWORD','REDIS_RETRY_ATTEMPTS','REDIS_RETRY_BACKOFF_BASE','REDIS_RETRY_BACKOFF_CAP',
+    'REDIS_SOCKET_CONNECT_TIMEOUT','REDIS_SOCKET_TIMEOUT','REQUIRE_HTTPS',
+    'S3_BUCKET','S3_REGION','S3_ENDPOINT_URL','S3_ACCESS_KEY_ID','S3_SECRET_ACCESS_KEY',
+    'SENTRY_DSN','SENTRY_PROFILES_SAMPLE_RATE','SENTRY_TRACES_SAMPLE_RATE',
+    'STORAGE_AUTHORITATIVE','STORAGE_BACKEND','STORAGE_SIGNED_URL_TTL_SECONDS',
+    'WORKER_CONCURRENCY','WORKER_DB_POOL_SIZE','WORKER_DB_POOL_TIMEOUT',
+    'WORKER_HEAVY_CONCURRENCY','WORKER_HEAVY_JOB_LEASE_TIMEOUT_SECONDS','WORKER_HEAVY_JOB_REAP_INTERVAL_SECONDS',
+    'WORKER_INSTANCE_COUNT','WORKER_JOB_LEASE_TIMEOUT_SECONDS','WORKER_JOB_REAP_INTERVAL_SECONDS',
+    'WORKER_METRICS_ENABLED','WORKER_METRICS_HOST','WORKER_METRICS_PORT'
+)
+
+# Also needed by db/redis services but not compose ${VAR} refs
+$extraRequired = @('S3_BUCKET','S3_REGION','S3_ENDPOINT_URL','S3_ACCESS_KEY_ID','S3_SECRET_ACCESS_KEY',
+                   'S3_CDN_BASE_URL','S3_CONNECT_TIMEOUT_SECONDS','S3_READ_TIMEOUT_SECONDS')
+
+Write-Host ""
+Write-Host "=== Compose variable coverage ==="
+$needsAttention = @()
+foreach ($v in $composeVars) {
+    $val = $merged[$v]
+    if ($null -eq $val -or $val -eq '') {
+        Write-Host "  MISSING  $v"
+        $needsAttention += $v
+    } elseif ($val -match 'CHANGE_ME|REPLACE_WITH') {
+        Write-Host "  CHANGE   $v = $val"
+        $needsAttention += $v
+    } else {
+        Write-Host "  ok       $v"
+    }
+}
+
+if ($needsAttention.Count -eq 0) {
+    Write-Host ""
+    Write-Host "All compose variables are set."
+} else {
+    Write-Host ""
+    Write-Host "Variables needing manual attention: $($needsAttention.Count)"
+    foreach ($v in $needsAttention) { Write-Host "  - $v" }
+}
+
+if (-not $Write) {
+    Write-Host ""
+    Write-Host "Dry run complete. To write root .env.production, rerun with -Write."
+    exit 0
+}
+
+# Write root .env.production
+$outPath = Join-Path $rootDir ".env.production"
+
+$lines = @()
+$lines += "# Generated by Build-ComposeEnv.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
+$lines += "# Sources: python-backend\.env.production > root .env > .env.production.example"
+$lines += "# Use: docker compose --env-file .env.production up -d"
+$lines += ""
+
+foreach ($kv in $merged.GetEnumerator()) {
+    $lines += "$($kv.Key)=$($kv.Value)"
+}
+
+$lines | Set-Content -Path $outPath -Encoding UTF8
+Write-Host ""
+Write-Host "Written: $outPath  ($($merged.Count) variables)"
+Write-Host ""
+
+if ($needsAttention.Count -gt 0) {
+    Write-Host "Edit $outPath and fix the $($needsAttention.Count) variable(s) above before running docker compose."
+} else {
+    Write-Host "Next: docker compose --env-file .env.production up -d"
+}

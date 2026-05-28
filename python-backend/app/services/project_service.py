@@ -5,7 +5,7 @@ from uuid import uuid4
 import structlog
 from sqlalchemy import delete
 
-from app.models import Project, ProjectPhoto
+from app.models import Project, ProjectPhoto, PricingProfile
 from app.repositories.final_proposal_repository import FinalProposalRepository
 from app.repositories.proposal_draft_repository import ProposalDraftRepository
 from app.repositories.project_repository import ProjectRepository
@@ -494,13 +494,24 @@ class ProjectService:
             raise
         return await self.repository.get_project(duplicated_project.id)
 
-    async def update_proposal_draft(self, project_id: str, payload: dict, *, organization_id: str | None = None) -> ProjectDetail | None:
+    async def update_proposal_draft(
+        self,
+        project_id: str,
+        payload: dict,
+        *,
+        organization_id: str | None = None,
+        expected_version: int | None = None,
+    ) -> ProjectDetail | None:
         project = await self.repository.get_project(project_id, organization_id=organization_id)
         if not project:
             return None
 
         normalized_payload = normalize_proposal_patch_payload(payload)
-        updated_draft = await self.proposal_draft_repository.upsert_for_project(project.id, normalized_payload)
+        updated_draft = await self.proposal_draft_repository.upsert_for_project(
+            project.id,
+            normalized_payload,
+            expected_version=expected_version,
+        )
         project.proposal_draft = updated_draft
         return build_project_detail(project)
 
@@ -524,11 +535,90 @@ class ProjectService:
             raise ValueError("Final proposal requires a primary ready photo.")
         if not any(photo.is_analysis_reference for photo in ready_photos):
             raise ValueError("Final proposal requires an analysis reference photo in ready state.")
-        snapshot_payload = build_final_proposal_snapshot_payload(proposal_draft)
+        latest_result = max(
+            project.analysis_results,
+            key=lambda r: (r.created_at, r.id),
+            default=None,
+        ) if project.analysis_results else None
+
+        # Snapshot the input versions that produced this proposal so it can be
+        # audited, replayed, or diffed against future proposals.
+        latest_variant = (
+            max(project.quote_variants, key=lambda v: (v.created_at, v.id))
+            if project.quote_variants else None
+        )
+        rep_item = latest_variant.items[0] if latest_variant and latest_variant.items else None
+        pricing_profile: PricingProfile | None = None
+        if latest_variant and latest_variant.pricing_profile_id:
+            pricing_profile = await self.repository.session.get(
+                PricingProfile, latest_variant.pricing_profile_id
+            )
+        input_versions: dict = {
+            "analysisProfileCode": latest_result.resolved_analysis_profile_code if latest_result else None,
+            "analysisProfileVersion": latest_result.resolved_analysis_profile_version if latest_result else None,
+            "catalogPricingProfileCode": rep_item.resolved_catalog_pricing_profile_code if rep_item else None,
+            "catalogPricingProfileVersion": rep_item.resolved_catalog_pricing_profile_version if rep_item else None,
+            "pricingProfileId": latest_variant.pricing_profile_id if latest_variant else None,
+            "pricingProfileSnapshot": {
+                "hourlyRate": float(pricing_profile.hourly_rate),
+                "dailyRate": float(pricing_profile.daily_rate),
+                "laborHoursPerSqm": float(pricing_profile.labor_hours_per_sqm),
+                "marginEconomyPct": float(pricing_profile.margin_economy_pct),
+                "marginStandardPct": float(pricing_profile.margin_standard_pct),
+                "marginPremiumPct": float(pricing_profile.margin_premium_pct),
+                "vatPct": float(pricing_profile.vat_pct),
+                "currency": pricing_profile.currency,
+            } if pricing_profile else None,
+        }
+
+        snapshot_payload = build_final_proposal_snapshot_payload(
+            proposal_draft,
+            analysis_result_id=latest_result.id if latest_result else None,
+            input_versions=input_versions,
+        )
         created_snapshot = await self.final_proposal_repository.create_for_project(project_id=project.id, payload=snapshot_payload)
         project.final_proposals = [*(project.final_proposals or []), created_snapshot]
         detail = build_project_detail(project)
-        await self.export_service.create_final_proposal_exports(case_detail=detail)
+
+        # Snapshot the timeline up to this moment for the immutable archive.
+        # Events emitted after finalization (e.g. export.completed) are intentionally excluded.
+        from sqlalchemy import select as _sa_select  # noqa: PLC0415
+        from app.models.offer_processing import OutboxEvent  # noqa: PLC0415
+        from app.core.events import AGGREGATE_CASE  # noqa: PLC0415
+        _ARCHIVE_EVENT_TYPES = frozenset({
+            "analysis.started", "analysis.completed", "measurement.confirmed",
+            "proposal.recalculate.started", "proposal.ready", "quote.ready",
+        })
+        _rows = (await self.repository.session.execute(
+            _sa_select(OutboxEvent)
+            .where(
+                OutboxEvent.aggregate_type == AGGREGATE_CASE,
+                OutboxEvent.aggregate_id == project.id,
+                OutboxEvent.event_type.in_(_ARCHIVE_EVENT_TYPES),
+            )
+            .order_by(OutboxEvent.seq.asc())
+            .limit(200)
+        )).scalars().all()
+        timeline_snapshot: list[dict] = [
+            {
+                "eventType": "case.created",
+                "occurredAt": project.created_at.isoformat() if project.created_at else None,
+                "payload": {},
+            }
+        ] + [
+            {
+                "seq": row.seq,
+                "eventType": row.event_type,
+                "occurredAt": row.created_at.isoformat() if row.created_at else None,
+                "payload": row.payload,
+            }
+            for row in _rows
+        ]
+
+        await self.export_service.create_final_proposal_exports(
+            case_detail=detail,
+            timeline_events=timeline_snapshot,
+        )
         return detail
 
     async def update_project(self, project_id: str, payload: dict, *, organization_id: str | None = None) -> ProjectDetail | None:

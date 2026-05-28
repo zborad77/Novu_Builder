@@ -150,6 +150,16 @@ class WorkCatalogRepository:
         )
         return result.scalars().all()
 
+    async def list_work_types_for_grouped(self) -> Sequence[tuple[WorkType, str]]:
+        """Return (WorkType, category_code) tuples for all active work types, ordered for display."""
+        result = await self.session.execute(
+            select(WorkType, WorkCategory.code.label("category_code"))
+            .join(WorkCategory, WorkCategory.id == WorkType.category_id)
+            .where(WorkType.is_active.is_(True), WorkType.state == "active")
+            .order_by(WorkCategory.sort_order.asc(), WorkType.sort_order.asc(), WorkType.code.asc())
+        )
+        return result.all()
+
     async def list_work_types(self) -> Sequence[WorkType]:
         result = await self.session.execute(
             self._work_type_detail_query().order_by(WorkType.sort_order.asc(), WorkType.code.asc())

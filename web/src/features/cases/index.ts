@@ -1,4 +1,4 @@
-export { useCaseDetail } from './api/caseQueries'
+export { useCaseDetail, usePhotos, useCaseTimeline } from './api/caseQueries'
 export { ACTION_CONFIG } from './api/caseActionsApi'
 export { CASE_KEYS } from './api/caseQueries'
 export { useCaseActions } from './hooks/useCaseActions'
@@ -6,4 +6,4 @@ export { CaseWorkspaceProvider, useCaseWorkspace } from './hooks/useCaseWorkspac
 export { CaseWorkflowActions } from './containers/CaseWorkflowActions'
 export { CasePhaseIndicator } from './components/CasePhaseIndicator'
 export { CaseStatusBadge } from './components/CaseStatusBadge'
-export type { CaseDetail, CaseSummary, CaseStatus, AvailableTransition } from './types/case.types'
+export type { CaseDetail, CaseSummary, CaseStatus, AvailableTransition, FinalProposal, ProposalInputVersions } from './types/case.types'

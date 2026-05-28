@@ -121,7 +121,7 @@ export function AppShell() {
 
               <div className="text-right">
                 <p className="text-sm font-semibold text-slate-900">
-                  {effectiveActor?.name ?? 'Guest'}
+                  {effectiveActor?.fullName ?? 'Guest'}
                 </p>
                 <p className="text-xs text-slate-500">
                   {effectiveActor?.email ?? 'No active session'}

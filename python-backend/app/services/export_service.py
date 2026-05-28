@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import unicodedata
 from datetime import UTC, datetime, timedelta
@@ -8,7 +9,7 @@ from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 from xml.sax.saxutils import escape
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 import structlog
 
@@ -802,6 +803,79 @@ async def _build_case_zip_bytes(case_detail: ProjectDetail) -> bytes:
     return buffer.getvalue()
 
 
+_ARCHIVE_SCHEMA_VERSION = 1
+_ARCHIVE_GENERATOR_VERSION = "novu-builder-1"
+
+
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _build_proposal_archive_zip(
+    case_detail: ProjectDetail,
+    timeline_events: list[dict],
+) -> bytes:
+    """Build an immutable archive ZIP for a finalized proposal.
+
+    Contents:
+      proposal_snapshot.json  — full proposal record including inputVersions
+      timeline.json           — ordered outbox events up to finalization
+      pricing_snapshot.json   — extracted pricing rates for easy machine consumption
+      manifest.json           — sha256 hashes of all other files + metadata
+    """
+    file_bytes: dict[str, bytes] = {}
+
+    if case_detail.finalProposal is not None:
+        proposal_data = {
+            "archiveSchemaVersion": _ARCHIVE_SCHEMA_VERSION,
+            **case_detail.finalProposal.model_dump(mode="json"),
+        }
+        file_bytes["proposal_snapshot.json"] = json.dumps(
+            proposal_data, ensure_ascii=False, indent=2
+        ).encode()
+
+        pricing_snap = (case_detail.finalProposal.inputVersions or {}).get("pricingProfileSnapshot")
+        if pricing_snap:
+            pricing_data = {"archiveSchemaVersion": _ARCHIVE_SCHEMA_VERSION, **pricing_snap}
+            file_bytes["pricing_snapshot.json"] = json.dumps(
+                pricing_data, ensure_ascii=False, indent=2
+            ).encode()
+
+    timeline_envelope = {
+        "archiveSchemaVersion": _ARCHIVE_SCHEMA_VERSION,
+        "events": timeline_events,
+    }
+    file_bytes["timeline.json"] = json.dumps(
+        timeline_envelope, ensure_ascii=False, indent=2
+    ).encode()
+
+    manifest = {
+        "archiveSchemaVersion": _ARCHIVE_SCHEMA_VERSION,
+        "generatorVersion": _ARCHIVE_GENERATOR_VERSION,
+        "generatedAt": datetime.now(UTC).isoformat(),
+        "files": {name: f"sha256:{_sha256_hex(data)}" for name, data in file_bytes.items()},
+    }
+    manifest_bytes = json.dumps(manifest, ensure_ascii=False, indent=2).encode()
+
+    # ZIP epoch timestamp — all entries use a fixed date so the archive is
+    # byte-identical for the same logical inputs regardless of wall-clock time.
+    _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
+
+    def _zip_entry(name: str, data: bytes) -> tuple[ZipInfo, bytes]:
+        info = ZipInfo(filename=name, date_time=_ZIP_EPOCH)
+        info.compress_type = ZIP_DEFLATED
+        return info, data
+
+    buffer = BytesIO()
+    with ZipFile(buffer, "w") as archive:
+        for name, data in sorted(file_bytes.items()):
+            info, payload = _zip_entry(name, data)
+            archive.writestr(info, payload)
+        info, payload = _zip_entry("manifest.json", manifest_bytes)
+        archive.writestr(info, payload)
+    return buffer.getvalue()
+
+
 class ExportService:
     def __init__(self, repository: ExportRepository, *, work_queue=None):
         self.repository = repository
@@ -1216,11 +1290,55 @@ class ExportService:
             )
             raise HTTPException(status_code=503, detail="Export queue is unavailable.")
 
-    async def create_final_proposal_exports(self, *, case_detail: ProjectDetail) -> list[ExportRead]:
-        return [
+    async def create_proposal_archive_export(
+        self,
+        *,
+        case_detail: ProjectDetail,
+        timeline_events: list[dict],
+    ) -> ExportRead:
+        if case_detail.finalProposal is None:
+            raise ValueError("Final proposal is required for archive export.")
+        export_id = f"exp_{uuid4().hex[:8]}"
+        now = datetime.now(UTC)
+        base_name = sanitize_filename(case_detail.finalProposal.subject or case_detail.title or "nabidka")
+        file_name = f"{base_name}_archiv.zip"
+        storage_key = (Path("exports") / case_detail.id / f"{export_id}-{file_name}").as_posix()
+        content = _build_proposal_archive_zip(case_detail, timeline_events)
+        return await self._create_storage_backed_export(
+            export_id=export_id,
+            project_id=case_detail.id,
+            export_type="proposal-archive-zip",
+            file_name=file_name,
+            storage_key=storage_key,
+            content=content,
+            now=now,
+        )
+
+    async def create_final_proposal_exports(
+        self,
+        *,
+        case_detail: ProjectDetail,
+        timeline_events: list[dict] | None = None,
+    ) -> list[ExportRead]:
+        results: list[ExportRead] = [
             await self.create_quote_docx_export(case_detail=case_detail),
             await self.create_quote_pdf_export(case_detail=case_detail),
         ]
+        try:
+            results.append(
+                await self.create_proposal_archive_export(
+                    case_detail=case_detail,
+                    timeline_events=timeline_events or [],
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "export.proposal_archive_failed",
+                project_id=case_detail.id,
+                error=str(exc),
+                exc_info=True,
+            )
+        return results
 
     async def create_case_zip_export(self, *, case_detail: ProjectDetail) -> ExportRead:
         export_id = f"exp_{uuid4().hex[:8]}"

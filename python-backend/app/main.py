@@ -12,6 +12,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyPoolTimeoutError
 import structlog
 
 from app.api.router import api_router
+from app.core.api_versioning import ApiVersioningMiddleware
 from app.core.audit import AuditMiddleware
 from app.core.config import get_settings, startup_failure_message
 from app.core.limiter import limiter
@@ -57,6 +58,7 @@ _CORS_ALLOW_HEADERS: tuple[str, ...] = (
     "Authorization",
     "Content-Type",
     "X-Request-ID",
+    "X-Client-Version",
 )
 
 _rate_limit_exceeded_handler: Any
@@ -390,6 +392,7 @@ def create_app() -> FastAPI:
     if settings.require_https:
         app.add_middleware(HTTPSRedirectMiddleware)
 
+    app.add_middleware(ApiVersioningMiddleware)
     app.add_middleware(AuditMiddleware)
     # Keep the browser-facing CORS profile explicit and minimal.
     # Extend these allowlists only when a real client method/header is required.

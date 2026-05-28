@@ -160,6 +160,23 @@ async def patch_analysis_selection(
     analysis_result = await analysis_service.get_analysis_result_by_id(result_id, organization_id=org_id)
     if not analysis_result or analysis_result.projectId != case_id:
         raise HTTPException(status_code=404, detail="Analysis result not found.")
+    # Reject if a newer analysis result exists for this case — the caller is
+    # operating against a stale overlay.  The client must re-read the latest
+    # result before committing a selection.
+    latest = await analysis_service.get_latest_result(case_id)
+    if latest and latest.id != result_id:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "ANALYSIS_STALE", "latest_id": latest.id},
+        )
+    # Reject once the proposal has been finalized — selection changes would
+    # silently diverge from the committed pricing snapshot.
+    _SELECTION_LOCKED = frozenset({"proposal_ready", "quote_ready", "sent", "archived", "cancelled"})
+    if project.status in _SELECTION_LOCKED:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "CASE_FINALIZED", "status": project.status},
+        )
     changes: dict = {}
     if "polygon" in body:
         changes["selectedRepairPolygon"] = body["polygon"]

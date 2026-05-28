@@ -1163,6 +1163,36 @@ class AnalysisService:
                 input_payload=initial_payload,
             )
 
+            # Write proposal.recalculate.started outbox event in the same txn
+            # as the job row so replay always delivers it.
+            from app.offer_processing.outbox import build_case_activity_event  # noqa: PLC0415
+            from app.core.events import EVENT_PROPOSAL_RECALCULATE_STARTED  # noqa: PLC0415
+            _recalc_evt = build_case_activity_event(
+                event_type=EVENT_PROPOSAL_RECALCULATE_STARTED,
+                project_id=project_id,
+                organization_id=organization_id or project.organization_id,
+                payload={"status": "recalculating", "job_id": job.id},
+            )
+            session.add(_recalc_evt)
+            _recalc_evt_id: str = _recalc_evt.id
+
+        # Live Redis publish — best-effort; outbox handles durable replay.
+        if self._redis is not None:
+            from app.core.events import AGGREGATE_CASE, build_live_message  # noqa: PLC0415
+            try:
+                await self._redis.publish(
+                    f"case:events:{project_id}",
+                    build_live_message(
+                        event_id=_recalc_evt_id,
+                        event_type=EVENT_PROPOSAL_RECALCULATE_STARTED,
+                        aggregate_type=AGGREGATE_CASE,
+                        aggregate_id=project_id,
+                        payload={"status": "recalculating", "job_id": job.id},
+                    ),
+                )
+            except Exception:
+                logger.warning("quote_recalculation.live_publish_failed", project_id=project_id)
+
         if job_queue is None:
             job.status = ANALYSIS_JOB_STATUS_FAILED
             job.error_message = "Quote recalculation queue is unavailable."
@@ -1204,6 +1234,43 @@ class AnalysisService:
                 reason="queue_capacity_reached",
             )
         return AnalysisJobCreateResult(job=job, created_new=True)
+
+    async def _transition_to_proposal_ready(
+        self,
+        project_id: str,
+        *,
+        log=None,
+    ) -> None:
+        """Transition the project analyzing → proposal_ready after quote recalculation.
+
+        Swallows CaseActionError so the already-committed job is not retroactively
+        failed; logs a warning instead (e.g. project already advanced or cancelled).
+        Other exceptions are logged as errors — they indicate unexpected state.
+        """
+        from app.case_workflow.case_actions import CaseActionError, CaseActionService
+        from app.repositories.project_repository import ProjectRepository
+
+        _log = log or logger.bind(project_id=project_id)
+        try:
+            async with WorkerAsyncSessionFactory() as session:
+                await CaseActionService(ProjectRepository(session)).worker_proposal_ready(
+                    project_id,
+                    reason="Quote recalculation completed.",
+                )
+            _log.info("worker.case_transitioned_to_proposal_ready", project_id=project_id)
+        except CaseActionError as exc:
+            _log.warning(
+                "worker.case_proposal_ready_skipped",
+                project_id=project_id,
+                reason=str(exc),
+            )
+        except Exception as exc:
+            _log.error(
+                "worker.case_proposal_ready_failed",
+                project_id=project_id,
+                error=str(exc),
+                exc_info=True,
+            )
 
     async def _execute_quote_recalculation_job(
         self,
@@ -1380,6 +1447,12 @@ class AnalysisService:
                 return AnalysisJobExecutionResult(disposition="skipped")
 
             if failure_message is not None:
+                _fail_duration = _job_duration_seconds(job)
+                from app.core.metrics import observe_quote_recalculation  # noqa: PLC0415
+                observe_quote_recalculation(
+                    outcome="failed",
+                    duration_seconds=_fail_duration if _fail_duration is not None else 0.0,
+                )
                 try:
                     return await self._handle_attempt_failure(
                         repo,
@@ -1414,6 +1487,11 @@ class AnalysisService:
             tenant_id=organization_id,
             is_superadmin_context=is_superadmin_context,
         )
+        from app.core.metrics import observe_quote_recalculation  # noqa: PLC0415
+        observe_quote_recalculation(
+            outcome="completed",
+            duration_seconds=duration if duration is not None else 0.0,
+        )
         log.info(
             "worker.quote_recalculation_finished",
             status="completed",
@@ -1421,6 +1499,29 @@ class AnalysisService:
             variant_count=result.variant_count,
             source=result.source,
         )
+
+        # Live Redis publish — best-effort; outbox handles durable replay.
+        # proposal_event_id is None when the transition was skipped (project had
+        # already moved away from analyzing before the variants committed).
+        if result.proposal_event_id and self._redis is not None:
+            from app.core.events import AGGREGATE_CASE, EVENT_PROPOSAL_READY, build_live_message  # noqa: PLC0415
+            try:
+                await self._redis.publish(
+                    f"case:events:{project_id}",
+                    build_live_message(
+                        event_id=result.proposal_event_id,
+                        event_type=EVENT_PROPOSAL_READY,
+                        aggregate_type=AGGREGATE_CASE,
+                        aggregate_id=project_id,
+                        payload={"status": "proposal_ready"},
+                    ),
+                )
+            except Exception:
+                log.exception(
+                    "worker.quote_recalculation_live_publish_failed",
+                    project_id=project_id,
+                )
+
         return AnalysisJobExecutionResult(
             disposition="completed",
             attempt_count=_job_attempt_count(job),
@@ -1823,7 +1924,7 @@ class AnalysisService:
                     )
 
             try:
-                await repo.complete_job_with_result(job, project, analysis)
+                _, _saved_result = await repo.complete_job_with_result(job, project, analysis)
             except InvalidAnalysisJobStatusTransition:
                 log.warning("worker.job_complete_rejected", job_id=job_id, current_status=job.status)
                 return AnalysisJobExecutionResult(disposition="skipped")
@@ -1875,6 +1976,58 @@ class AnalysisService:
             object_type=analysis.get("objectType"),
             estimated_area=analysis.get("estimatedAreaSqm"),
         )
+
+        # Emit analysis.completed — detections are now durable; frontend refreshes
+        # latestAnalysis and rebuilds overlay shapes.
+        # Payload carries analysis_result_id + reference_photo_id so the viewer can
+        # do a precise optimistic update before the full refetch returns.
+        # Best-effort: a separate micro-transaction after the result commit.
+        _emit_org = organization_id or getattr(project, "organization_id", None)
+        _analysis_completed_eid: str | None = None
+        _ac_payload = {
+            "status": "analysis_completed",
+            "analysis_result_id": _saved_result.id,
+            "reference_photo_id": _saved_result.reference_photo_id,
+        }
+        if _emit_org:
+            from app.core.events import (  # noqa: PLC0415
+                AGGREGATE_CASE,
+                EVENT_ANALYSIS_COMPLETED,
+                build_live_message as _blm,
+            )
+            from app.offer_processing.outbox import build_case_activity_event  # noqa: PLC0415
+            try:
+                async with WorkerAsyncSessionFactory() as _out:
+                    _ac_evt = build_case_activity_event(
+                        event_type=EVENT_ANALYSIS_COMPLETED,
+                        project_id=project_id,
+                        organization_id=_emit_org,
+                        payload=_ac_payload,
+                    )
+                    _out.add(_ac_evt)
+                    await _out.commit()
+                    _analysis_completed_eid = _ac_evt.id
+            except Exception:
+                log.warning(
+                    "worker.analysis_completed_outbox_failed", project_id=project_id
+                )
+            if _analysis_completed_eid and self._redis is not None:
+                try:
+                    await self._redis.publish(
+                        f"case:events:{project_id}",
+                        _blm(
+                            event_id=_analysis_completed_eid,
+                            event_type=EVENT_ANALYSIS_COMPLETED,
+                            aggregate_type=AGGREGATE_CASE,
+                            aggregate_id=project_id,
+                            payload=_ac_payload,
+                        ),
+                    )
+                except Exception:
+                    log.warning(
+                        "worker.analysis_completed_live_publish_failed",
+                        project_id=project_id,
+                    )
 
         quote_job_result = await self.enqueue_quote_recalculation_job(
             project_id=project_id,

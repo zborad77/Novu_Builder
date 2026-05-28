@@ -33,6 +33,9 @@ export const paths = {
   settingsProfile: '/settings/profile',
   settingsSuppliers: '/settings/suppliers',
 
+  // Tools
+  archiveViewer: '/archive-viewer',
+
   // Admin
   adminCompanies: '/admin/companies',
   adminCompanyDetail: (companyId: string) => `/admin/companies/${companyId}` as const,

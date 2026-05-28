@@ -32,6 +32,39 @@ export interface CaseSummary {
   createdByName: string | null
 }
 
+import type { AnalysisResult } from 'shared/types/photo.types'
+
+export interface ProposalPricingSnapshot {
+  hourlyRate: number
+  dailyRate: number
+  laborHoursPerSqm: number
+  marginEconomyPct: number
+  marginStandardPct: number
+  marginPremiumPct: number
+  vatPct: number
+  currency: string
+}
+
+export interface ProposalInputVersions {
+  analysisProfileCode: string | null
+  analysisProfileVersion: number | null
+  catalogPricingProfileCode: string | null
+  catalogPricingProfileVersion: number | null
+  pricingProfileId: string | null
+  pricingProfileSnapshot: ProposalPricingSnapshot | null
+}
+
+export interface FinalProposal {
+  id: string
+  status: string
+  draftVersion: number
+  currency: string
+  totalPrice: number | null
+  analysisResultId: string | null
+  inputVersions: ProposalInputVersions | null
+  createdAt: string | null
+}
+
 export interface CaseDetail {
   id: string
   title: string
@@ -43,7 +76,8 @@ export interface CaseDetail {
   location: CaseLocation
   availableTransitions: AvailableTransition[]
   photos: unknown[]
-  latestAnalysis: Record<string, unknown> | null
+  latestAnalysis: AnalysisResult | null
+  finalProposal: FinalProposal | null
   createdAt: string | null
   updatedAt: string | null
 }

@@ -24,6 +24,7 @@ class FinalProposalRepository:
         final_proposal = ProjectFinalProposal(
             id=f"fnp_{uuid4().hex[:10]}",
             project_id=project_id,
+            analysis_result_id=payload.get("analysisResultId"),
             draft_version=int(payload.get("draftVersion", 1)),
             status=str(payload.get("status", "ready_for_export")),
             currency=str(payload.get("currency", "CZK")),

@@ -15,6 +15,7 @@ from app.core.tenant_timing import (
 from app.schemas.auth import AuthUserRead
 from app.schemas.work_catalog import (
     CatalogCategoryListResponse,
+    CatalogGroupedResponse,
     CatalogWorkTypeDetailRead,
     CatalogWorkTypeListResponse,
     EffectiveWorkTypeListResponse,
@@ -44,6 +45,7 @@ from app.work_catalog.cache import (
     effective_work_type_list_key,
     global_catalog_cache_scope,
     global_categories_key,
+    global_grouped_catalog_key,
     global_parameter_schema_key,
     global_work_type_detail_key,
     global_work_type_list_key,
@@ -102,6 +104,30 @@ async def list_catalog_categories(
 
     items = await service.list_categories()
     response = CatalogCategoryListResponse(items=items, total=len(items))
+    await set_cached(
+        redis,
+        cache_key,
+        response.model_dump(mode="json"),
+        GLOBAL_CATALOG_TTL_SECONDS,
+        tag=cache_tag,
+    )
+    return response
+
+
+@router.get("/work-catalog/catalog/grouped", response_model=CatalogGroupedResponse)
+@limiter.limit(get_settings().rate_limit_read_list)
+async def list_catalog_grouped(
+    request: Request,
+    service: WorkCatalogService = Depends(get_work_catalog_service),
+    redis=Depends(get_redis),
+):
+    cache_key = global_grouped_catalog_key()
+    cache_tag = await get_cache_tag(redis, global_catalog_cache_scope())
+    cached = await get_cached(redis, cache_key, tag=cache_tag)
+    if cached is not None:
+        return CatalogGroupedResponse.model_validate(cached)
+
+    response = await service.list_grouped_catalog()
     await set_cached(
         redis,
         cache_key,

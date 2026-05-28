@@ -14,6 +14,10 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["measurements"])
 
+# Statuses at which selection changes are no longer allowed.  Once a proposal
+# is finalized the selection is a pricing artefact and must not diverge silently.
+_SELECTION_LOCKED = frozenset({"proposal_ready", "quote_ready", "sent", "archived", "cancelled"})
+
 
 def _normalize_polygon(points) -> list[MeasurementPolygonPoint] | None:
     if not points:
@@ -92,6 +96,18 @@ async def patch_measurement(
                 user_id=current_user.id, org_id=current_user.organizationId,
             )
         raise HTTPException(status_code=404, detail="Measurement not found.")
+    latest = await analysis_service.get_latest_result(existing.projectId)
+    if latest and latest.id != measurement_id:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "ANALYSIS_STALE", "latest_id": latest.id},
+        )
+    _proj = await project_service.get_project_lean(existing.projectId, organization_id=org_id)
+    if _proj and _proj.status in _SELECTION_LOCKED:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "CASE_FINALIZED", "status": _proj.status},
+        )
     changes = payload.model_dump(exclude_unset=True)
     if "referenceImageId" in changes:
         changes["referencePhotoId"] = changes.pop("referenceImageId")
@@ -124,6 +140,18 @@ async def confirm_measurement(
                 user_id=current_user.id, org_id=current_user.organizationId,
             )
         raise HTTPException(status_code=404, detail="Measurement not found.")
+    latest = await analysis_service.get_latest_result(existing.projectId)
+    if latest and latest.id != measurement_id:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "ANALYSIS_STALE", "latest_id": latest.id},
+        )
+    _proj = await project_service.get_project_lean(existing.projectId, organization_id=org_id)
+    if _proj and _proj.status in _SELECTION_LOCKED:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "CASE_FINALIZED", "status": _proj.status},
+        )
     updated = await analysis_service.update_manual_selection_by_result_id(
         measurement_id,
         {"finalAreaSource": "manual"},
@@ -131,4 +159,46 @@ async def confirm_measurement(
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Measurement not found.")
+
+    # Emit measurement.confirmed outbox event.  The state change was already
+    # committed inside update_manual_selection_by_result_id, so this is a
+    # separate commit on the same session.  Acceptable: if this commit fails,
+    # the state is still correct and the live Redis publish below already
+    # attempted best-effort delivery.
+    from app.offer_processing.outbox import build_case_activity_event  # noqa: PLC0415
+    from app.core.events import EVENT_MEASUREMENT_CONFIRMED, AGGREGATE_CASE, build_live_message  # noqa: PLC0415
+    _evt = build_case_activity_event(
+        event_type=EVENT_MEASUREMENT_CONFIRMED,
+        project_id=existing.projectId,
+        organization_id=org_id,
+        payload={
+            "measurement_id": measurement_id,
+            "manual_area_sqm": updated.manualAreaSqm,
+        },
+    )
+    session = analysis_service.repository.session
+    session.add(_evt)
+    try:
+        await session.commit()
+    except Exception:
+        logger.warning("measurement.confirmed_outbox_write_failed", measurement_id=measurement_id)
+
+    if analysis_service._redis is not None:
+        try:
+            await analysis_service._redis.publish(
+                f"case:events:{existing.projectId}",
+                build_live_message(
+                    event_id=_evt.id,
+                    event_type=EVENT_MEASUREMENT_CONFIRMED,
+                    aggregate_type=AGGREGATE_CASE,
+                    aggregate_id=existing.projectId,
+                    payload={
+                        "measurement_id": measurement_id,
+                        "manual_area_sqm": updated.manualAreaSqm,
+                    },
+                ),
+            )
+        except Exception:
+            logger.warning("measurement.confirmed_live_publish_failed", measurement_id=measurement_id)
+
     return _to_measurement(updated)

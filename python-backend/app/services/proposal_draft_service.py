@@ -387,7 +387,12 @@ def _build_sections(
     ]
 
 
-def build_final_proposal_snapshot_payload(draft: ProjectProposalDraftSchema) -> dict:
+def build_final_proposal_snapshot_payload(
+    draft: ProjectProposalDraftSchema,
+    *,
+    analysis_result_id: str | None = None,
+    input_versions: dict | None = None,
+) -> dict:
     return {
         "status": "ready_for_export",
         "draftVersion": draft.version,
@@ -396,6 +401,8 @@ def build_final_proposal_snapshot_payload(draft: ProjectProposalDraftSchema) -> 
         "summary": draft.summary,
         "totalPrice": draft.totalPrice,
         "sections": [section.model_dump(mode="json") for section in draft.sections],
+        "analysisResultId": analysis_result_id,
+        "inputVersions": input_versions,
     }
 
 
@@ -422,6 +429,8 @@ def build_final_proposal_from_record(record: ProjectFinalProposal | None) -> Pro
         summary=snapshot.get("summary", record.summary),
         totalPrice=snapshot.get("totalPrice", record.total_price),
         sections=[ProposalDraftSection.model_validate(section) for section in snapshot.get("sections", [])],
+        analysisResultId=snapshot.get("analysisResultId", record.analysis_result_id),
+        inputVersions=snapshot.get("inputVersions"),
         createdAt=record.created_at,
     )
 

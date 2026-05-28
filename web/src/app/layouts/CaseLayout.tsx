@@ -1,4 +1,6 @@
 import { Link, Outlet, useParams } from '@tanstack/react-router'
+import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   CasePhaseIndicator,
   CaseStatusBadge,
@@ -6,6 +8,11 @@ import {
   CaseWorkflowActions,
   useCaseDetail,
 } from 'features/cases'
+import { useCaseEvents } from 'features/cases/hooks/useCaseEvents'
+import { CASE_KEYS } from 'features/cases/api/caseQueries'
+import { WORK_CATALOG_KEYS } from 'features/work-catalog/api/workCatalogQueries'
+import type { AnalysisCompletedPayload, CaseEvent } from 'shared/types/events.types'
+import type { CaseDetail } from 'features/cases/types/case.types'
 
 const CASE_NAV = [
   { label: 'Overview', to: '/cases/$caseId' },
@@ -16,9 +23,83 @@ const CASE_NAV = [
   { label: 'Timeline', to: '/cases/$caseId/timeline' },
 ] as const
 
+type ConnectionStatus = 'connected' | 'reconnecting' | 'abandoned'
+
 export function CaseLayout() {
   const { caseId } = useParams({ strict: false })
   const { data: caseDetail, isLoading, isError } = useCaseDetail(caseId ?? '')
+  const queryClient = useQueryClient()
+  const [connStatus, setConnStatus] = useState<ConnectionStatus>('connected')
+  const [proposalRecalculating, setProposalRecalculating] = useState(false)
+
+  useCaseEvents(caseId ?? '', {
+    onEvent(event: CaseEvent) {
+      // Any incoming event means the stream is alive — clear reconnecting state.
+      setConnStatus('connected')
+
+      switch (event.event_type) {
+        case 'analysis.started':
+          queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(event.aggregate_id) })
+          break
+
+        case 'analysis.completed': {
+          // Optimistic update: stamp the new referencePhotoId into the cached
+          // CaseDetail immediately so the overlay guard in PhotoViewerPage is
+          // correct from the first render, before the full refetch returns.
+          // This closes the stale-cache window between invalidation and refetch.
+          //
+          // Guard: only stamp when the incoming ID is different from what is
+          // already cached.  seenIds (lifted in useCaseEvents) prevents most
+          // replay re-delivery, but this check is a second line of defence —
+          // it prevents a replayed older event from rolling the cache back to a
+          // stale analysis_result_id if it somehow slips through deduplication.
+          const acPayload = event.payload as AnalysisCompletedPayload
+          if (acPayload.analysis_result_id && acPayload.reference_photo_id) {
+            const cached = queryClient.getQueryData<CaseDetail>(
+              CASE_KEYS.detail(event.aggregate_id),
+            )
+            if (cached && cached.latestAnalysis?.id !== acPayload.analysis_result_id) {
+              queryClient.setQueryData<CaseDetail>(CASE_KEYS.detail(event.aggregate_id), {
+                ...cached,
+                latestAnalysis: cached.latestAnalysis
+                  ? {
+                      ...cached.latestAnalysis,
+                      id: acPayload.analysis_result_id,
+                      referencePhotoId: acPayload.reference_photo_id,
+                    }
+                  : cached.latestAnalysis,
+              })
+            }
+          }
+          // Full refetch: processingStatus / isAnalysisReference may have changed.
+          queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(event.aggregate_id) })
+          queryClient.invalidateQueries({ queryKey: CASE_KEYS.photos(event.aggregate_id) })
+          break
+        }
+
+        case 'proposal.recalculate.started':
+          setProposalRecalculating(true)
+          break
+
+        case 'proposal.ready':
+          setProposalRecalculating(false)
+          queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(event.aggregate_id) })
+          queryClient.invalidateQueries({
+            queryKey: WORK_CATALOG_KEYS.caseItems(event.aggregate_id),
+          })
+          break
+
+        default:
+          break
+      }
+    },
+    onReconnecting() {
+      setConnStatus('reconnecting')
+    },
+    onAbandoned() {
+      setConnStatus('abandoned')
+    },
+  })
 
   if (!caseId) {
     return null
@@ -68,7 +149,7 @@ export function CaseLayout() {
                 {caseDetail.description ?? 'Workflow, work types and delivery actions are scoped to this case phase.'}
               </p>
 
-              <div className="mt-6 flex flex-wrap gap-3">
+              <div className="mt-6 flex flex-wrap items-center gap-3">
                 {CASE_NAV.map((item) => (
                   <Link
                     key={item.label}
@@ -85,6 +166,8 @@ export function CaseLayout() {
                     {item.label}
                   </Link>
                 ))}
+                <ConnectionBadge status={connStatus} />
+                {proposalRecalculating && <ProposalRecalculatingBadge />}
               </div>
             </div>
 
@@ -109,5 +192,41 @@ export function CaseLayout() {
         <Outlet />
       </div>
     </CaseWorkspaceProvider>
+  )
+}
+
+function ProposalRecalculatingBadge() {
+  return (
+    <span className="flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700">
+      <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-violet-400" />
+      Proposal updating…
+    </span>
+  )
+}
+
+function ConnectionBadge({ status }: { status: ConnectionStatus }) {
+  if (status === 'connected') return null
+
+  if (status === 'reconnecting') {
+    return (
+      <span className="flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700">
+        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+        Syncing…
+      </span>
+    )
+  }
+
+  return (
+    <span className="flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700">
+      <span className="inline-block h-2 w-2 rounded-full bg-red-400" />
+      Live updates paused —{' '}
+      <button
+        type="button"
+        className="underline underline-offset-2 hover:text-red-900"
+        onClick={() => window.location.reload()}
+      >
+        refresh
+      </button>
+    </span>
   )
 }
