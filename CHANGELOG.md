@@ -2,6 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.8.3 — 2026-05-28
+
+### Proposal archive
+
+- **Immutable `proposal-archive-zip`** generated at finalization: `proposal_snapshot.json`, `timeline.json`, `pricing_snapshot.json`, `manifest.json`
+- **Signed manifest** — SHA-256 hash per file; tamper detection on open
+- **Deterministic ZIP** — sorted filenames + ZIP-epoch timestamps; byte-identical rebuilds
+- **`archiveSchemaVersion: 1`** in every JSON file — stable reader contract for future viewers
+
+### Measurement lineage
+
+- **`analysis_result_id` FK** on `project_final_proposals` (migration 0055) — full audit chain: proposal → analysis result
+- **`inputVersions` snapshot** frozen at finalization: `analysisProfileCode/Version`, `catalogPricingProfileCode/Version`, `pricingProfileId`, full pricing rates (hourlyRate, margins, VAT, currency)
+- **`measurement.confirmed` outbox event** emitted on `POST /measurements/{id}/confirm`
+- **`GET /cases/{id}/timeline`** backed by real outbox query (replaced stub)
+
+### Web UI
+
+- **`CaseEstimatesPage`** — measurement timeline with filter chips (Vše / AI / Ceník / Uživatel / Systém) and `ProposalProvenancePanel` showing frozen input versions
+- **`PhotoViewerPage`** — hydrates polygon selection from `latestAnalysis.selectedRepairPolygon` on mount (fixes "Confirmed ✓ disappears on refresh")
+- **`/archive-viewer`** — offline archive viewer: drag-and-drop ZIP, `fflate` client-side parsing, Web Crypto SHA-256 manifest verification, integrity badge, offline timeline + provenance
+
+### Tooling
+
+- **`scripts/check_archive_integrity.py`** — offline CLI validator; exit 0 / 1 / 2 (OK / warning / error); checks required files, schema version, timeline envelope, lineage consistency, manifest hashes
+
+### Pilot ops
+
+- `scripts/Generate-PilotCert.ps1` / `Trust-PilotCert.ps1` — self-signed TLS for internal pilot
+- `scripts/Build-ComposeEnv.ps1`, `python-backend/scripts/create_pilot_admin.py`
+- `desktop-qt/scripts/Package-Pilot.ps1`
+- `python-backend/.env.production.example`
+
+### Qt desktop (audit steps 3–10)
+
+- Directory restructure: `src/ui/`, `src/models/`, `src/state/`, `src/core/`
+- API layer split: `ApiClient`, `AuthApi`, `CasesApi`, `ImagesApi`, `AnalysisApi`, `ExportsApi`, `AdminApi`
+- Cursor-based pagination, centralized `Config.h`, removed unused `LoginDto`/`LoginViewModel`
+
+### Migrations
+
+0045 – 0055 (outbox events, offer pipeline, AI budget, reconciler, analysis_result_id on final proposals)
+
+---
+
 ## v0.8.001 - 2026-04-19
 
 Case workflow and work catalog expansion: explicit project status machine, status transition actions with audit trail, phase-bound work type availability, large catalog seed expansion, and case-aware work item picker flows in the web UI.
