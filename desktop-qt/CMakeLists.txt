@@ -12,10 +12,22 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 
 qt_standard_project_setup()
 
+# Cte verzi z version.json a generuje version.hpp z template
+add_custom_target(read_version
+    COMMAND ${CMAKE_COMMAND}
+        -DVERSION_FILE=${CMAKE_SOURCE_DIR}/version.json
+        -DTEMPLATE_FILE=${CMAKE_SOURCE_DIR}/src/core/version.hpp.in
+        -DOUTPUT_FILE=${CMAKE_SOURCE_DIR}/src/core/version.hpp
+        -P ${CMAKE_SOURCE_DIR}/cmake/read_version.cmake
+    COMMENT "[version] Reading version from version.json..."
+)
+
 qt_add_executable(NovuBuilder
     src/main.cpp
     src/mainwindow.cpp
     src/mainwindow.h
+    src/core/version_loader.cpp
+    src/core/version_loader.hpp
     src/ui/auth/loginview.cpp
     src/ui/auth/loginview.h
     src/ui/auth/serversetupdialog.cpp
@@ -72,10 +84,30 @@ qt_add_executable(NovuBuilder
     src/models/uploadimagedto.h
 )
 
+add_dependencies(NovuBuilder read_version)
+
 target_include_directories(NovuBuilder PRIVATE src)
 
 target_link_libraries(NovuBuilder PRIVATE Qt6::Widgets Qt6::Network)
 
 set_target_properties(NovuBuilder PROPERTIES
     WIN32_EXECUTABLE TRUE
+)
+
+# Zkopirovat version.json vedle exe
+add_custom_command(TARGET NovuBuilder POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/version.json"
+        "$<TARGET_FILE_DIR:NovuBuilder>/version.json"
+    COMMENT "[version] Deploying version.json next to NovuBuilder executable"
+)
+
+# Generovat install.manifest vedle exe
+add_custom_command(TARGET NovuBuilder POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+        -DVERSION_FILE=${CMAKE_SOURCE_DIR}/version.json
+        -DAPP_NAME=novu-builder-desktop
+        -DOUTPUT_DIR=$<TARGET_FILE_DIR:NovuBuilder>
+        -P ${CMAKE_SOURCE_DIR}/cmake/generate_install_manifest.cmake
+    COMMENT "[manifest] Generating install.manifest next to NovuBuilder executable"
 )

@@ -1,0 +1,16 @@
+# <popis změny — co a proč>
+#
+# Typy:
+#   feat:     nová funkce
+#   fix:      oprava chyby
+#   refactor: přepis bez změny chování
+#   style:    UI / vizuální změny
+#   build:    CMake, závislosti, CI
+#   chore:    údržba, verze, dokumentace
+#
+# Příklady:
+#   feat: NovuSpace Dark Theme — Fusion style, DWM integration
+#   fix: Logout button visibility in header
+#   build: přidat dwmapi do CMakeLists
+#
+# "Release v..." NIKDY — release commit dělá user explicitně až po odladění.

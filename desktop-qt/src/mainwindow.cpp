@@ -30,14 +30,13 @@ MainWindow::MainWindow(QWidget *parent)
 {
     setWindowTitle(Config::AppName);
 
-    // Load server URL from settings; prompt setup on first launch
+    // Load server URL from settings; fall back to localhost dev default
     QSettings settings(Config::SettingsOrg, Config::SettingsApp);
     const QString savedUrl = settings.value(Config::KeyServerUrl).toString();
-    if (savedUrl.isEmpty()) {
-        openServerSetupDialog(true);
-    } else {
-        ApiClient::setGlobalBaseUrl(savedUrl);
-    }
+    const QString effectiveUrl = savedUrl.isEmpty()
+        ? QStringLiteral("http://localhost:8000/api/v1")
+        : savedUrl;
+    ApiClient::setGlobalBaseUrl(effectiveUrl);
 
     m_stack = new QStackedWidget(this);
     m_loginView = new LoginView(this);
@@ -48,7 +47,13 @@ MainWindow::MainWindow(QWidget *parent)
     setCentralWidget(m_stack);
     switchToLoginMode();
 
+    m_loginView->setServerUrl(effectiveUrl);
     connect(m_loginView, &LoginView::loginRequested, this, &MainWindow::handleLoginRequested);
+    connect(m_loginView, &LoginView::changeServerRequested, this, [this]() {
+        openServerSetupDialog(false);
+        QSettings s(Config::SettingsOrg, Config::SettingsApp);
+        m_loginView->setServerUrl(s.value(Config::KeyServerUrl).toString());
+    });
 }
 
 void MainWindow::handleLoginRequested(const QString &email, const QString &password)
@@ -536,7 +541,7 @@ QWidget *MainWindow::createWorkspaceShell()
     // Help dialog
     connect(helpButton, &QPushButton::clicked, this, [this]() {
         auto *dlg = new QDialog(this);
-        dlg->setWindowTitle(QString::fromUtf8("N\u00e1pov\u011bda \u2014 FotoNab\u00eddka Desktop"));
+        dlg->setWindowTitle(QString::fromUtf8("N\u00e1pov\u011bda \u2014 NovuBuilder"));
         dlg->setMinimumSize(520, 480);
         auto *dlgLayout = new QVBoxLayout(dlg);
         dlgLayout->setContentsMargins(24, 20, 24, 20);
@@ -608,7 +613,7 @@ QWidget *MainWindow::createWorkspaceShell()
     // Troubleshooting dialog
     connect(troubleshootButton, &QPushButton::clicked, this, [this]() {
         auto *dlg = new QDialog(this);
-        dlg->setWindowTitle(QString::fromUtf8("\u0158e\u0161en\u00ed pot\u00ed\u017e\u00ed \u2014 FotoNab\u00eddka Desktop"));
+        dlg->setWindowTitle(QString::fromUtf8("\u0158e\u0161en\u00ed pot\u00ed\u017e\u00ed \u2014 NovuBuilder"));
         dlg->setMinimumSize(540, 500);
         auto *dlgLayout = new QVBoxLayout(dlg);
         dlgLayout->setContentsMargins(24, 20, 24, 20);

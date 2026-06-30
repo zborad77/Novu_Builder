@@ -17,12 +17,16 @@ public:
     void clearError();
     void setLoading(bool loading);
 
+    void setServerUrl(const QString &url);
+
 signals:
     void loginRequested(const QString &email, const QString &password);
+    void changeServerRequested();
 
 private:
     QLineEdit *m_emailEdit = nullptr;
     QLineEdit *m_passwordEdit = nullptr;
     QPushButton *m_loginButton = nullptr;
     QLabel *m_errorLabel = nullptr;
+    QLabel *m_serverUrlLabel = nullptr;
 };

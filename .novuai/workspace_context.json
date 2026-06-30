@@ -1,0 +1,20 @@
+{
+    "behavior": {
+        "agent_mode": "agent_full",
+        "edit_mode": "ask_first",
+        "language": "cs",
+        "plan_mode": "brief_plan",
+        "verbosity": "normal"
+    },
+    "build": {
+        "build_type": "release"
+    },
+    "created_at": "2026-04-19T11:49:30Z",
+    "identity": {
+        "bound_folder": "J:/Github/Novu_Builder",
+        "project_name": "NovuBuilder",
+        "tech_stack": "Python, QT"
+    },
+    "schema_version": 3,
+    "updated_at": "2026-04-19T11:49:30Z"
+}

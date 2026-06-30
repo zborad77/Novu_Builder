@@ -15,22 +15,20 @@ namespace {
 
 QString localizedCaseStatus(const QString &status)
 {
-    if (status == "draft") {
-        return QString::fromUtf8("Rozpracov\u00e1no");
-    }
-    if (status == "analysed") {
-        return QString::fromUtf8("Analyzov\u00e1no");
-    }
-    if (status == "in_progress") {
-        return QString::fromUtf8("Zpracov\u00e1v\u00e1 se");
-    }
-    if (status == "sent") {
-        return QString::fromUtf8("Odesl\u00e1no z\u00e1kazn\u00edkovi");
-    }
-    if (status == "completed") {
-        return QString::fromUtf8("Dokon\u010deno");
-    }
+    if (status == "draft")       return QString::fromUtf8("Rozpracov\u00e1no");
+    if (status == "analysed")    return QString::fromUtf8("Analyzov\u00e1no");
+    if (status == "in_progress") return QString::fromUtf8("Zpracov\u00e1v\u00e1 se");
+    if (status == "sent")        return QString::fromUtf8("Odesl\u00e1no z\u00e1kazn\u00edkovi");
+    if (status == "completed")   return QString::fromUtf8("Dokon\u010deno");
     return status;
+}
+
+QString statusColor(const QString &status)
+{
+    if (status == "in_progress") return "#c97b3d";
+    if (status == "analysed")    return "#3a7bd5";
+    if (status == "sent" || status == "completed") return "#2a9654";
+    return "#94a3b4"; // draft / unknown
 }
 
 } // namespace
@@ -40,32 +38,29 @@ CaseBrowserView::CaseBrowserView(QWidget *parent)
 {
     auto *rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(0, 0, 0, 0);
-    rootLayout->setSpacing(0);
+    rootLayout->setSpacing(10);
 
-    auto *card = new QFrame(this);
-    card->setObjectName("browserCard");
-    auto *cardLayout = new QVBoxLayout(card);
-    cardLayout->setContentsMargins(20, 16, 20, 20);
-    cardLayout->setSpacing(8);
-
-    m_titleLabel = new QLabel(QString::fromUtf8("Zak\u00e1zky"), card);
+    // \u2500\u2500 Header \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    m_titleLabel = new QLabel(QString::fromUtf8("Zak\u00e1zky"), this);
     m_titleLabel->setObjectName("browserTitle");
 
-    m_subtitleLabel = new QLabel(QString(), card);
+    m_subtitleLabel = new QLabel(QString(), this);
     m_subtitleLabel->setObjectName("browserSubtitle");
-    m_subtitleLabel->setWordWrap(true);
+    m_subtitleLabel->hide();
 
-    m_statusLabel = new QLabel(QString(), card);
+    m_statusLabel = new QLabel(QString(), this);
     m_statusLabel->setObjectName("browserStatus");
     m_statusLabel->setWordWrap(true);
     m_statusLabel->hide();
 
-    cardLayout->addWidget(m_titleLabel);
-    cardLayout->addWidget(m_subtitleLabel);
-    cardLayout->addWidget(m_statusLabel);
+    // \u2500\u2500 Row list \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    auto *listFrame = new QFrame(this);
+    listFrame->setObjectName("listFrame");
+    auto *listFrameLayout = new QVBoxLayout(listFrame);
+    listFrameLayout->setContentsMargins(0, 0, 0, 0);
+    listFrameLayout->setSpacing(0);
 
-    // Scrollable cards area
-    auto *scrollArea = new QScrollArea(card);
+    auto *scrollArea = new QScrollArea(listFrame);
     scrollArea->setWidgetResizable(true);
     scrollArea->setFrameShape(QFrame::NoFrame);
     scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -73,79 +68,84 @@ CaseBrowserView::CaseBrowserView(QWidget *parent)
     m_cardsContainer = new QWidget(scrollArea);
     m_cardsContainer->setObjectName("cardsContainer");
     m_cardsLayout = new QVBoxLayout(m_cardsContainer);
-    m_cardsLayout->setContentsMargins(0, 8, 0, 8);
-    m_cardsLayout->setSpacing(10);
+    m_cardsLayout->setContentsMargins(0, 0, 0, 0);
+    m_cardsLayout->setSpacing(0);
     m_cardsLayout->addStretch();
 
     scrollArea->setWidget(m_cardsContainer);
-    cardLayout->addWidget(scrollArea, 1);
+    listFrameLayout->addWidget(scrollArea);
 
-    rootLayout->addWidget(card);
+    rootLayout->addWidget(m_titleLabel);
+    rootLayout->addWidget(m_subtitleLabel);
+    rootLayout->addWidget(m_statusLabel);
+    rootLayout->addWidget(listFrame, 1);
 
     setStyleSheet(R"(
-        QFrame#browserCard {
-            background: #fffaf2;
-            border: 1px solid #eadcc8;
-            border-radius: 18px;
-        }
         QLabel#browserTitle {
-            font-size: 24px;
+            font-size: 20px;
             font-weight: 700;
-            color: #1f2933;
+            color: #1a2330;
         }
         QLabel#browserSubtitle {
-            color: #607080;
-            font-size: 14px;
+            font-size: 12px;
+            color: #7a8a9a;
         }
         QLabel#browserStatus {
-            color: #607080;
-            font-size: 14px;
+            font-size: 13px;
+            color: #516070;
+            padding: 8px 12px;
+            background: #fdecea;
+            border-radius: 8px;
         }
-        QPushButton#caseCard {
-            background: #f7efe4;
-            border: 1px solid #eadcc8;
+        QFrame#listFrame {
+            border: 1px solid #ded4c2;
             border-radius: 12px;
-            padding: 10px 14px;
+            background: #fffdf8;
+        }
+        QWidget#cardsContainer {
+            background: transparent;
+        }
+        QPushButton#caseRow {
+            background: transparent;
+            border: none;
+            border-bottom: 1px solid #ede5d6;
+            border-radius: 0px;
             text-align: left;
-            min-height: 70px;
+            padding: 0px;
         }
-        QPushButton#caseCard:hover {
-            background: #f0e4d0;
-            border-color: #d4b896;
+        QPushButton#caseRow:hover {
+            background: #f5ead8;
         }
-        QPushButton#caseCard:pressed {
-            background: #e8d8c0;
+        QPushButton#caseRow:pressed {
+            background: #ede0c6;
         }
-        QLabel#caseCardTitle {
-            font-size: 14px;
+        QLabel#rowTitle {
+            font-size: 13px;
             font-weight: 700;
-            color: #1f2933;
+            color: #1a2330;
         }
-        QLabel#caseCardInfo {
+        QLabel#rowInfo {
             font-size: 12px;
-            color: #607080;
+            color: #516070;
         }
-        QLabel#caseCardAuthor {
+        QLabel#rowAuthor {
             font-size: 11px;
-            color: #9a7a50;
+            color: #8a9aaa;
             font-style: italic;
         }
         QLabel#sourceBadgeMobile {
-            font-size: 11px;
+            font-size: 10px;
             color: #1a6eb5;
             background: #ddeeff;
-            border-radius: 6px;
-            padding: 1px 6px;
+            border-radius: 4px;
+            padding: 1px 5px;
         }
         QLabel#sourceBadgeDesktop {
-            font-size: 11px;
+            font-size: 10px;
             color: #2e6b3e;
             background: #d6f0dd;
-            border-radius: 6px;
-            padding: 1px 6px;
-        }
-        QWidget#cardsContainer {
-            background: #fffaf2;
+            border-radius: 4px;
+            padding: 1px 5px;
         }
     )");
 }
@@ -153,16 +153,11 @@ CaseBrowserView::CaseBrowserView(QWidget *parent)
 void CaseBrowserView::loadCases(Mode mode)
 {
     m_statusLabel->hide();
+    m_subtitleLabel->hide();
 
-    if (mode == Mode::WorkCases) {
-        m_titleLabel->setText(QString::fromUtf8("Rozpracovan\u00e9 zak\u00e1zky"));
-        m_subtitleLabel->setText(
-            QString::fromUtf8("Zak\u00e1zky, na kter\u00fdch se pracuje."));
-    } else {
-        m_titleLabel->setText(QString::fromUtf8("Historie zak\u00e1zek"));
-        m_subtitleLabel->setText(
-            QString::fromUtf8("Dokon\u010den\u00e9 a odeslan\u00e9 zak\u00e1zky."));
-    }
+    m_titleLabel->setText(mode == Mode::WorkCases
+        ? QString::fromUtf8("Rozpracovan\u00e9 zak\u00e1zky")
+        : QString::fromUtf8("Historie zak\u00e1zek"));
 
     CasesApi api;
     QString errorMessage;
@@ -183,11 +178,8 @@ void CaseBrowserView::loadCases(Mode mode)
     std::vector<CaseDto> filtered;
     for (const auto &c : allCases) {
         const bool isClosed = (c.status == "sent" || c.status == "completed");
-        if (mode == Mode::WorkCases && !isClosed) {
-            filtered.push_back(c);
-        } else if (mode == Mode::HistoryCases && isClosed) {
-            filtered.push_back(c);
-        }
+        if (mode == Mode::WorkCases && !isClosed)    filtered.push_back(c);
+        else if (mode == Mode::HistoryCases && isClosed) filtered.push_back(c);
     }
 
     buildCards(filtered, mode);
@@ -195,84 +187,102 @@ void CaseBrowserView::loadCases(Mode mode)
 
 void CaseBrowserView::buildCards(const std::vector<CaseDto> &cases, Mode mode)
 {
-    // Remove all widgets from cardsLayout except the trailing stretch
     while (m_cardsLayout->count() > 1) {
         auto *item = m_cardsLayout->takeAt(0);
-        if (item->widget()) {
-            item->widget()->deleteLater();
-        }
+        if (item->widget()) item->widget()->deleteLater();
         delete item;
     }
 
     if (cases.empty()) {
+        m_subtitleLabel->setText(QString::fromUtf8("0 zak\u00e1zek"));
+        m_subtitleLabel->show();
         m_statusLabel->setText(QString::fromUtf8("\u017d\u00e1dn\u00e9 zak\u00e1zky k zobrazen\u00ed."));
         m_statusLabel->show();
         return;
     }
 
     m_statusLabel->hide();
+    m_subtitleLabel->setText(QString::fromUtf8("%1 zak\u00e1zek").arg(cases.size()));
+    m_subtitleLabel->show();
 
     const bool readOnly = (mode == Mode::HistoryCases);
 
     for (const auto &caseDto : cases) {
-        auto *card = new QPushButton(m_cardsContainer);
-        card->setObjectName("caseCard");
-        card->setFlat(false);
-        card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        auto *row = new QPushButton(m_cardsContainer);
+        row->setObjectName("caseRow");
+        row->setFlat(false);
+        row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
-        auto *cardInnerLayout = new QVBoxLayout(card);
-        cardInnerLayout->setContentsMargins(8, 8, 8, 8);
-        cardInnerLayout->setSpacing(4);
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(0);
+
+        // Status color strip (4px left bar)
+        auto *strip = new QFrame(row);
+        strip->setFixedWidth(4);
+        strip->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+        strip->setMinimumHeight(24);
+        strip->setStyleSheet(
+            QString("background: %1; border-radius: 0px;").arg(statusColor(caseDto.status)));
+        strip->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+        // Content
+        auto *content = new QWidget(row);
+        content->setAttribute(Qt::WA_TransparentForMouseEvents);
+        auto *contentLayout = new QVBoxLayout(content);
+        contentLayout->setContentsMargins(12, 9, 12, 9);
+        contentLayout->setSpacing(2);
 
         // Title row: name + source badge
-        auto *titleRow = new QWidget(card);
+        auto *titleRow = new QWidget(content);
         titleRow->setAttribute(Qt::WA_TransparentForMouseEvents);
         auto *titleRowLayout = new QHBoxLayout(titleRow);
         titleRowLayout->setContentsMargins(0, 0, 0, 0);
-        titleRowLayout->setSpacing(8);
+        titleRowLayout->setSpacing(6);
 
-        auto *titleLbl = new QLabel(caseDto.title.isEmpty()
-            ? QString::fromUtf8("(bez n\u00e1zvu)")
-            : caseDto.title, titleRow);
-        titleLbl->setObjectName("caseCardTitle");
+        auto *titleLbl = new QLabel(
+            caseDto.title.isEmpty()
+                ? QString::fromUtf8("(bez n\u00e1zvu)")
+                : caseDto.title,
+            titleRow);
+        titleLbl->setObjectName("rowTitle");
         titleLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
 
         const bool isMobile = (caseDto.source == QLatin1String("mobile"));
-        const QString badgeText = isMobile
-            ? QString::fromUtf8("Mobil")
-            : QString::fromUtf8("PC");
-        auto *sourceBadge = new QLabel(badgeText, titleRow);
+        auto *sourceBadge = new QLabel(isMobile ? "Mobil" : "PC", titleRow);
         sourceBadge->setObjectName(isMobile ? "sourceBadgeMobile" : "sourceBadgeDesktop");
         sourceBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
 
-        titleRowLayout->addWidget(titleLbl);
-        titleRowLayout->addWidget(sourceBadge);
-        titleRowLayout->addStretch();
+        titleRowLayout->addWidget(titleLbl, 1);
+        titleRowLayout->addWidget(sourceBadge, 0, Qt::AlignVCenter);
+        contentLayout->addWidget(titleRow);
 
+        // Info: address \u00b7 status
         const QString statusText = localizedCaseStatus(caseDto.status);
         const QString infoText = caseDto.addressLabel.isEmpty()
             ? statusText
-            : (caseDto.addressLabel + " | " + statusText);
-        auto *infoLbl = new QLabel(infoText, card);
-        infoLbl->setObjectName("caseCardInfo");
+            : caseDto.addressLabel + QString::fromUtf8(" \u00b7 ") + statusText;
+        auto *infoLbl = new QLabel(infoText, content);
+        infoLbl->setObjectName("rowInfo");
         infoLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
-
-        cardInnerLayout->addWidget(titleRow);
-        cardInnerLayout->addWidget(infoLbl);
+        contentLayout->addWidget(infoLbl);
 
         if (!caseDto.createdByName.isEmpty()) {
-            auto *authorLbl = new QLabel(QString::fromUtf8("Technik: ") + caseDto.createdByName, card);
-            authorLbl->setObjectName("caseCardAuthor");
+            auto *authorLbl = new QLabel(
+                QString::fromUtf8("Technik: ") + caseDto.createdByName, content);
+            authorLbl->setObjectName("rowAuthor");
             authorLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
-            cardInnerLayout->addWidget(authorLbl);
+            contentLayout->addWidget(authorLbl);
         }
 
+        rowLayout->addWidget(strip, 0);
+        rowLayout->addWidget(content, 1);
+
         const QString caseId = caseDto.id;
-        connect(card, &QPushButton::clicked, this, [this, caseId, readOnly]() {
+        connect(row, &QPushButton::clicked, this, [this, caseId, readOnly]() {
             emit caseOpenRequested(caseId, readOnly);
         });
 
-        // Insert before the trailing stretch (last item)
-        m_cardsLayout->insertWidget(m_cardsLayout->count() - 1, card);
+        m_cardsLayout->insertWidget(m_cardsLayout->count() - 1, row);
     }
 }

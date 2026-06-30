@@ -19,7 +19,7 @@
 ServerSetupDialog::ServerSetupDialog(const QString &currentUrl, QWidget *parent)
     : QDialog(parent)
 {
-    setWindowTitle(QString::fromUtf8("Nastaven\u00ed serveru \u2014 FotoNab\u00eddka Desktop"));
+    setWindowTitle(QString::fromUtf8("Nastaven\u00ed serveru \u2014 NovuBuilder"));
     setMinimumWidth(480);
 
     auto *layout = new QVBoxLayout(this);
@@ -132,6 +132,7 @@ ServerSetupDialog::ServerSetupDialog(const QString &currentUrl, QWidget *parent)
             border-radius: 10px;
             border: 1px solid #eadcc8;
             background: #fffdf8;
+            color: #1f2933;
             font-size: 14px;
         }
         QPushButton#testButton {

@@ -244,6 +244,18 @@ def configure_logging(log_level: str = "INFO", log_file: str = "", log_error_fil
 
     logging.basicConfig(handlers=handlers, level=level, force=True)
 
+    # Suppress noisy third-party loggers regardless of app log level
+    for noisy_logger in (
+        "sqlalchemy.engine",
+        "sqlalchemy.pool",
+        "sqlalchemy.dialects",
+        "sqlalchemy.orm",
+        "uvicorn.access",
+        "httpx",
+        "httpcore",
+    ):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
     structlog.configure(
         processors=structlog_processors,
         wrapper_class=structlog.make_filtering_bound_logger(level),

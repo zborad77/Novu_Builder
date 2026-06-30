@@ -1,4 +1,4 @@
-﻿#include "caselistview.h"
+#include "caselistview.h"
 
 #include <algorithm>
 
@@ -18,125 +18,117 @@ CaseListView::CaseListView(QWidget *parent)
     : QWidget(parent)
 {
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(20, 20, 20, 20);
-    layout->setSpacing(14);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(4);
 
-    auto *title = new QLabel("Moznosti", this);
-    title->setObjectName("sectionTitle");
-    auto *hint = new QLabel("Vyber si cast aktualni zakazky, kterou chces upravovat nebo doplnit.", this);
-    hint->setWordWrap(true);
-    hint->setObjectName("hintLabel");
+    auto *title = new QLabel(QString::fromUtf8("AKCE"), this);
+    title->setObjectName("panelSectionLabel");
+    layout->addWidget(title);
 
     m_errorLabel = new QLabel(this);
     m_errorLabel->setObjectName("errorLabel");
     m_errorLabel->setWordWrap(true);
     m_errorLabel->hide();
+    layout->addWidget(m_errorLabel);
 
-    auto *optionsCard = new QWidget(this);
-    optionsCard->setObjectName("optionsCard");
-    auto *optionsLayout = new QVBoxLayout(optionsCard);
-    optionsLayout->setContentsMargins(14, 14, 14, 14);
-    optionsLayout->setSpacing(10);
-
-    // Mobile cases: single "Editovat zakázku" entry point — toggles field buttons
-    m_editCaseButton = new QPushButton(QString::fromUtf8("Editovat zak\u00e1zku \u25bc"), optionsCard);
+    // Mobile: single "Editovat zakázku" toggle
+    m_editCaseButton = new QPushButton(QString::fromUtf8("Editovat zakázku ▼"), this);
     m_editCaseButton->setObjectName("optionNavButton");
     m_editCaseButton->setWhatsThis(QString::fromUtf8(
-        "Rozbal\u00ed nebo sbal\u00ed jednotliv\u00e1 editovateln\u00e1 pole zak\u00e1zky "
-        "(p\u0159edm\u011bt, ceny, materi\u00e1ly...). Tla\u010d\u00edtko se zobrazuje u mobiln\u00edch zak\u00e1zek."));
-    optionsLayout->addWidget(m_editCaseButton);
+        "Rozbalí nebo sbalí jednotlivá editovatelná pole zakázky "
+        "(předmět, ceny, materiály...). Tlačítko se zobrazuje u mobilních zakázek."));
+    layout->addWidget(m_editCaseButton);
     m_editCaseButton->hide();
 
-    // Desktop (PC) cases: individual field shortcuts
+    // Desktop: field shortcuts (always visible for desktop cases)
     const auto addField = [&](const QString &label, const QString &key, const QString &whatsThis = {}) {
-        auto *btn = createOptionButton(label, key, optionsCard);
+        auto *btn = createOptionButton(label, key, this);
         if (!whatsThis.isEmpty()) btn->setWhatsThis(whatsThis);
         m_fieldButtons.append(btn);
-        optionsLayout->addWidget(btn);
+        layout->addWidget(btn);
     };
-    addField("Predmet zakazky", "subject",
-        QString::fromUtf8("Otev\u0159e editaci p\u0159edm\u011btu zak\u00e1zky \u2014 co p\u0159esn\u011b se bude opravovat nebo \u010distit."));
-    addField("Cena materialu", "material_cost",
-        QString::fromUtf8("Otev\u0159e editaci ceny materi\u00e1lu v CZK. Zad\u00e1v\u00e1 se bez DPH."));
-    addField("Cena prace", "labor_cost",
-        QString::fromUtf8("Otev\u0159e editaci ceny pr\u00e1ce v CZK. Zad\u00e1v\u00e1 se bez DPH."));
-    addField("Materialy", "materials",
-        QString::fromUtf8("Otev\u0159e seznam navr\u017een\u00fdch materi\u00e1l\u016f pro tuto zak\u00e1zku."));
+    addField(QString::fromUtf8("Předmět zakázky"), "subject",
+        QString::fromUtf8("Otevře editaci předmětu zakázky — co přesně se bude opravovat nebo čistit."));
+    addField(QString::fromUtf8("Cena materiálu"), "material_cost",
+        QString::fromUtf8("Otevře editaci ceny materiálu v CZK. Zadává se bez DPH."));
+    addField(QString::fromUtf8("Cena práce"), "labor_cost",
+        QString::fromUtf8("Otevře editaci ceny práce v CZK. Zadává se bez DPH."));
+    addField(QString::fromUtf8("Materiály"), "materials",
+        QString::fromUtf8("Otevře seznam navržených materiálů pro tuto zakázku."));
     addField("Amortizace", "amortization",
-        QString::fromUtf8("Otev\u0159e editaci amortizace (opot\u0159eben\u00ed n\u00e1\u0159ad\u00ed a vybaven\u00ed) v CZK."));
-    addField("Marze", "margin",
-        QString::fromUtf8("Otev\u0159e editaci mar\u017ee v procentech. Bude p\u0159i\u010dtena k celkov\u00e9 cen\u011b."));
-    addField("Dodavatele materialu", "material_suppliers",
-        QString::fromUtf8("Otev\u0159e editaci navr\u017een\u00fdch dodavatel\u016f materi\u00e1lu."));
+        QString::fromUtf8("Otevře editaci amortizace (opotřebení nářadí a vybavení) v CZK."));
+    addField(QString::fromUtf8("Marže"), "margin",
+        QString::fromUtf8("Otevře editaci marže v procentech. Bude přičtena k celkové ceně."));
+    addField(QString::fromUtf8("Dodavatelé materiálu"), "material_suppliers",
+        QString::fromUtf8("Otevře editaci navržených dodavatelů materiálu."));
 
-    // Toggle field buttons on click (mobile accordion)
     connect(m_editCaseButton, &QPushButton::clicked, this, [this]() {
         m_fieldButtonsExpanded = !m_fieldButtonsExpanded;
         for (auto *btn : m_fieldButtons) {
             if (btn) btn->setVisible(m_fieldButtonsExpanded);
         }
         m_editCaseButton->setText(m_fieldButtonsExpanded
-            ? QString::fromUtf8("Editovat zak\u00e1zku \u25b2")
-            : QString::fromUtf8("Editovat zak\u00e1zku \u25bc"));
+            ? QString::fromUtf8("Editovat zakázku ▲")
+            : QString::fromUtf8("Editovat zakázku ▼"));
     });
 
-    // Always visible
-    auto *uploadPhotosBtn = createOptionButton(QString::fromUtf8("P\u0159id\u00e1n\u00ed fotek"), "upload_photos", optionsCard);
-    uploadPhotosBtn->setWhatsThis(QString::fromUtf8("Otev\u0159e z\u00e1lo\u017eku Fotky, kde m\u016f\u017eete nahr\u00e1t nebo spravovat fotografie zak\u00e1zky."));
-    optionsLayout->addWidget(uploadPhotosBtn);
+    auto *uploadPhotosBtn = createOptionButton(
+        QString::fromUtf8("Přidání fotek"), "upload_photos", this);
+    uploadPhotosBtn->setWhatsThis(QString::fromUtf8(
+        "Otevře záložku Fotky, kde můžete nahrát nebo spravovat fotografie zakázky."));
+    layout->addWidget(uploadPhotosBtn);
 
-    auto *saveBtn = createOptionButton(QString::fromUtf8("Ulo\u017eit"), "save", optionsCard);
+    layout->addStretch();
+
+    auto *saveBtn = createOptionButton(
+        QString::fromUtf8("Uložit"), "save", this);
     saveBtn->setObjectName("optionSaveButton");
-    saveBtn->setWhatsThis(QString::fromUtf8("Ulo\u017e\u00ed aktu\u00e1ln\u00ed rozepsan\u00fd n\u00e1vrh zak\u00e1zky na server."));
-    optionsLayout->addWidget(saveBtn);
-    optionsLayout->addStretch();
-
-    layout->addWidget(title);
-    layout->addWidget(hint);
-    layout->addWidget(m_errorLabel);
-    layout->addWidget(optionsCard, 1);
+    saveBtn->setWhatsThis(QString::fromUtf8(
+        "Uloží aktuální rozepsaný návrh zakázky na server."));
+    layout->addWidget(saveBtn);
 
     setStyleSheet(R"(
-        QLabel#sectionTitle {
-            font-size: 22px;
+        QLabel#panelSectionLabel {
+            font-size: 11px;
             font-weight: 700;
-            color: #1f2933;
-        }
-        QLabel#hintLabel {
-            color: #607080;
+            color: #94a3b4;
+            letter-spacing: 1px;
+            padding-bottom: 2px;
         }
         QLabel#errorLabel {
             color: #a3341d;
             font-weight: 600;
-        }
-        QWidget#optionsCard {
-            background: #fffaf2;
-            border: 1px solid #eadcc8;
-            border-radius: 14px;
+            font-size: 13px;
         }
         QPushButton#optionNavButton {
-            background: #f7efe4;
-            border: 1px solid #eadcc8;
-            border-radius: 12px;
-            padding: 12px;
+            background: transparent;
+            border: none;
+            border-radius: 8px;
+            padding: 7px 10px;
             text-align: left;
-            font-weight: 700;
-            color: #314252;
+            font-weight: 600;
+            color: #374858;
+            font-size: 13px;
         }
         QPushButton#optionNavButton:hover {
-            background: #f4e3cf;
+            background: #ede4d4;
         }
         QPushButton#optionSaveButton {
             background: #c97b3d;
             border: none;
-            border-radius: 12px;
-            padding: 12px;
-            text-align: left;
+            border-radius: 10px;
+            padding: 10px 12px;
+            text-align: center;
             font-weight: 700;
             color: white;
+            font-size: 13px;
         }
         QPushButton#optionSaveButton:hover {
             background: #b56a30;
+        }
+        QPushButton#optionSaveButton:disabled {
+            background: #d4a57a;
+            color: #f5e8d8;
         }
     )");
 
@@ -226,9 +218,8 @@ void CaseListView::updateForCaseSource(const QString &source)
     if (m_editCaseButton) {
         m_editCaseButton->setVisible(!isDesktop);
         if (!isDesktop) {
-            // Reset accordion to collapsed state when switching cases
             m_fieldButtonsExpanded = false;
-            m_editCaseButton->setText(QString::fromUtf8("Editovat zak\u00e1zku \u25bc"));
+            m_editCaseButton->setText(QString::fromUtf8("Editovat zakázku ▼"));
         }
     }
     for (auto *btn : m_fieldButtons) {

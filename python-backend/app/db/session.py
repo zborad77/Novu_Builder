@@ -28,7 +28,7 @@ settings = get_settings()
 # ---------------------------------------------------------------------------
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.app_debug,
+    echo=False,
     future=True,
     **settings.database_engine_kwargs,
 )
@@ -63,7 +63,7 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 # ---------------------------------------------------------------------------
 worker_engine = create_async_engine(
     settings.database_url,
-    echo=settings.app_debug,
+    echo=False,
     future=True,
     **settings.worker_database_engine_kwargs,
 )

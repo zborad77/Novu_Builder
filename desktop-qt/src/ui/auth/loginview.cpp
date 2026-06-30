@@ -4,6 +4,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QHBoxLayout>
 #include <QVBoxLayout>
 
 LoginView::LoginView(QWidget *parent)
@@ -18,7 +19,7 @@ LoginView::LoginView(QWidget *parent)
     cardLayout->setContentsMargins(24, 22, 24, 22);
     cardLayout->setSpacing(14);
 
-    auto *eyebrow = new QLabel("FOTONABIDKA / LOGIN", card);
+    auto *eyebrow = new QLabel("NOVUBUILDER / LOGIN", card);
     eyebrow->setObjectName("eyebrowLabel");
     auto *title = new QLabel("Prihlaseni do desktop klienta", card);
     title->setObjectName("titleLabel");
@@ -39,13 +40,25 @@ LoginView::LoginView(QWidget *parent)
     m_loginButton = new QPushButton("Prihlasit", card);
     m_loginButton->setWhatsThis(QString::fromUtf8("Ode\u0161le p\u0159ihla\u0161ovac\u00ed \u00fadaje na server. Po \u00fasp\u011b\u0161n\u00e9m p\u0159ihl\u00e1\u0161en\u00ed se otev\u0159e hlavn\u00ed obrazovka."));
 
+    auto *serverRow = new QHBoxLayout();
+    m_serverUrlLabel = new QLabel(card);
+    m_serverUrlLabel->setObjectName("serverUrlLabel");
+    m_serverUrlLabel->setTextFormat(Qt::PlainText);
+    auto *changeServerBtn = new QPushButton(QString::fromUtf8("Zm\u011bnit"), card);
+    changeServerBtn->setObjectName("changeServerBtn");
+    serverRow->addWidget(m_serverUrlLabel, 1);
+    serverRow->addWidget(changeServerBtn, 0);
+
     cardLayout->addWidget(eyebrow);
     cardLayout->addWidget(title);
     cardLayout->addWidget(subtitle);
+    cardLayout->addLayout(serverRow);
     cardLayout->addWidget(m_errorLabel);
     cardLayout->addWidget(m_emailEdit);
     cardLayout->addWidget(m_passwordEdit);
     cardLayout->addWidget(m_loginButton, 0, Qt::AlignLeft);
+
+    connect(changeServerBtn, &QPushButton::clicked, this, &LoginView::changeServerRequested);
 
     layout->addStretch();
     layout->addWidget(card, 0, Qt::AlignCenter);
@@ -112,7 +125,29 @@ LoginView::LoginView(QWidget *parent)
             padding: 10px 12px;
             font-size: 13px;
         }
+        QLabel#serverUrlLabel {
+            color: #8a9aaa;
+            font-size: 12px;
+        }
+        QPushButton#changeServerBtn {
+            background: transparent;
+            color: #b46d35;
+            border: none;
+            padding: 2px 6px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        QPushButton#changeServerBtn:hover {
+            color: #8a4a1f;
+        }
     )");
+}
+
+void LoginView::setServerUrl(const QString &url)
+{
+    if (m_serverUrlLabel) {
+        m_serverUrlLabel->setText(QString::fromUtf8("Server: %1").arg(url));
+    }
 }
 
 void LoginView::showError(const QString &message)

@@ -186,6 +186,13 @@ async def _enforce_account_throttle(
             redis_client=shared_redis,
         )
     except AccountThrottleBackendUnavailableError as exc:
+        if settings.app_env == "development":
+            logger.warning(
+                "auth.throttle_check_skipped_no_redis",
+                endpoint=endpoint,
+                email_domain=_email_domain(email),
+            )
+            return settings, shared_redis
         _raise_auth_protection_unavailable(
             request,
             endpoint=endpoint,
@@ -238,13 +245,14 @@ async def login(
         try:
             await record_login_failure(payload.email, settings.redis_url, redis_client=shared_redis)
         except AccountThrottleBackendUnavailableError as exc:
-            _raise_auth_protection_unavailable(
-                request,
-                endpoint="login",
-                email=payload.email,
-                operation=exc.operation,
-                error=exc,
-            )
+            if settings.app_env != "development":
+                _raise_auth_protection_unavailable(
+                    request,
+                    endpoint="login",
+                    email=payload.email,
+                    operation=exc.operation,
+                    error=exc,
+                )
         _record_auth_failure("login", "invalid_credentials")
         logger.warning(
             "SECURITY_EVENT: auth_login_failed",
@@ -257,23 +265,24 @@ async def login(
     try:
         await reset_login_failures(payload.email, settings.redis_url, redis_client=shared_redis)
     except AccountThrottleBackendUnavailableError as exc:
-        await _revoke_login_result(
-            service,
-            result,
-            endpoint="login",
-            user_id=result[2].id,
-            organization_id=result[2].organizationId,
-        )
-        _raise_auth_protection_unavailable(
-            request,
-            endpoint="login",
-            email=payload.email,
-            operation=exc.operation,
-            error=exc,
-            user_id=result[2].id,
-            organization_id=result[2].organizationId,
-            is_superadmin_context=result[2].isSuperAdmin,
-        )
+        if settings.app_env != "development":
+            await _revoke_login_result(
+                service,
+                result,
+                endpoint="login",
+                user_id=result[2].id,
+                organization_id=result[2].organizationId,
+            )
+            _raise_auth_protection_unavailable(
+                request,
+                endpoint="login",
+                email=payload.email,
+                operation=exc.operation,
+                error=exc,
+                user_id=result[2].id,
+                organization_id=result[2].organizationId,
+                is_superadmin_context=result[2].isSuperAdmin,
+            )
     access_token, refresh_token, user = result
     return LoginResponse(
         accessToken=access_token,

@@ -582,7 +582,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
 
     // ── Info strip ────────────────────────────────────────────────────────
     auto *overviewCard = new QFrame();
-    overviewCard->setObjectName("summaryCard");
+    overviewCard->setObjectName("overviewInfoStrip");
     auto *overviewForm = new QFormLayout(overviewCard);
     overviewForm->setContentsMargins(16, 12, 16, 12);
     overviewForm->setVerticalSpacing(8);
@@ -610,7 +610,9 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     // ── Primary photo ─────────────────────────────────────────────────────
     m_dashPhotoLabel = new QLabel();
     m_dashPhotoLabel->setObjectName("dashPhoto");
-    m_dashPhotoLabel->setFixedHeight(280);
+    m_dashPhotoLabel->setMinimumHeight(160);
+    m_dashPhotoLabel->setMaximumHeight(380);
+    m_dashPhotoLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     m_dashPhotoLabel->setAlignment(Qt::AlignCenter);
     m_dashPhotoLabel->setText(QString::fromUtf8("Vyberte zak\u00e1zku pro zobrazen\u00ed hlavn\u00ed fotografie."));
     m_dashPhotoLabel->setCursor(Qt::PointingHandCursor);
@@ -623,7 +625,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     columnsLayout->setSpacing(12);
 
     auto *analysisCard = new QFrame();
-    analysisCard->setObjectName("detailCard");
+    analysisCard->setObjectName("infoBlock");
     auto *analysisCardLayout = new QVBoxLayout(analysisCard);
     analysisCardLayout->setContentsMargins(16, 16, 16, 16);
     analysisCardLayout->setSpacing(8);
@@ -647,7 +649,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
     analysisCardLayout->addStretch();
 
     auto *pricingCard = new QFrame();
-    pricingCard->setObjectName("detailCard");
+    pricingCard->setObjectName("infoBlock");
     auto *pricingCardLayout = new QVBoxLayout(pricingCard);
     pricingCardLayout->setContentsMargins(16, 16, 16, 16);
     pricingCardLayout->setSpacing(8);
@@ -685,7 +687,7 @@ CaseDetailView::CaseDetailView(QWidget *parent)
 
     // ── Technologický postup ──────────────────────────────────────────────
     auto *workflowDashCard = new QFrame();
-    workflowDashCard->setObjectName("detailCard");
+    workflowDashCard->setObjectName("infoBlock");
     auto *workflowDashLayout = new QVBoxLayout(workflowDashCard);
     workflowDashLayout->setContentsMargins(16, 16, 16, 16);
     workflowDashLayout->setSpacing(10);
@@ -1123,95 +1125,103 @@ CaseDetailView::CaseDetailView(QWidget *parent)
 
     setStyleSheet(R"(
         QFrame#detailCard {
-            background: #fffaf2;
-            border: 1px solid #eadcc8;
-            border-radius: 18px;
+            background: #fffdf8;
+            border: 1px solid #ded4c2;
+            border-radius: 14px;
         }
         QTabWidget#detailTabs::pane {
-            border: 1px solid #eadcc8;
-            border-radius: 12px;
-            background: #fffaf2;
+            border: 1px solid #ded4c2;
+            border-radius: 10px;
+            background: #fffdf8;
         }
         QTabWidget#detailTabs > QTabBar::tab {
-            background: #f0e4d0;
-            border: 1px solid #e0cdb8;
+            background: #ede5d8;
+            border: 1px solid #d8cfc0;
             border-bottom: none;
-            border-radius: 8px 8px 0 0;
-            padding: 8px 18px;
+            border-radius: 7px 7px 0 0;
+            padding: 7px 16px;
             font-weight: 600;
-            color: #5a4a38;
-            min-width: 80px;
+            font-size: 13px;
+            color: #516070;
+            min-width: 70px;
         }
         QTabWidget#detailTabs > QTabBar::tab:selected {
-            background: #fffaf2;
-            color: #b46d35;
-            border-bottom: 1px solid #fffaf2;
+            background: #fffdf8;
+            color: #c97b3d;
+            border-bottom: 1px solid #fffdf8;
         }
         QTabWidget#detailTabs > QTabBar::tab:hover:!selected {
-            background: #ede0cc;
+            background: #e5d9c8;
+            color: #374858;
         }
         QWidget#tabPage {
-            background: #fffaf2;
+            background: #fffdf8;
+        }
+        QFrame#overviewInfoStrip {
+            background: transparent;
+            border: none;
+            border-bottom: 1px solid #e8dece;
+        }
+        QFrame#infoBlock {
+            background: transparent;
+            border: none;
         }
         QFrame#variantCard {
             background: #f7efe4;
             border: 1px solid #eadcc8;
-            border-radius: 12px;
+            border-radius: 10px;
             min-height: 80px;
         }
         QLabel#variantTitle {
             font-weight: 700;
             font-size: 14px;
-            color: #5a4a38;
+            color: #374858;
         }
         QLabel#variantTotal {
             font-weight: 700;
             font-size: 18px;
-            color: #b46d35;
-        }
-        QLabel#eyebrowLabel {
-            color: #b46d35;
-            font-weight: 700;
-            letter-spacing: 1px;
-            font-size: 12px;
+            color: #c97b3d;
         }
         QLabel#sectionTitle {
-            font-size: 24px;
+            font-size: 20px;
             font-weight: 700;
-            color: #1f2933;
+            color: #1a2330;
         }
         QLabel#subSectionTitle {
-            font-size: 18px;
+            font-size: 14px;
             font-weight: 700;
-            color: #1f2933;
+            color: #374858;
+            padding-top: 4px;
         }
         QLabel#hintLabel {
-            color: #607080;
+            color: #516070;
+            font-size: 13px;
         }
         QLabel#errorLabel {
             color: #a3341d;
             font-weight: 600;
         }
         QLabel#primaryImageLabel {
-            color: #1f2933;
+            color: #1a2330;
             font-weight: 600;
-            font-size: 16px;
+            font-size: 14px;
         }
         QPushButton#overlayModeBtn {
-            border: 1px solid #d4b896;
+            border: 1px solid #ccc4b4;
             border-radius: 6px;
-            padding: 5px 14px;
-            background: #f0e4d0;
-            color: #5a4a38;
+            padding: 5px 12px;
+            background: #ede5d8;
+            color: #374858;
             font-weight: 600;
+            font-size: 13px;
         }
         QPushButton#overlayModeBtn:checked {
-            background: #d18841;
+            background: #c97b3d;
             color: white;
             border-color: #b46d35;
         }
         QPushButton#overlayModeBtn:hover:!checked {
-            background: #e8d8c0;
+            background: #e2d6c4;
         }
         QPushButton#imageNavButton {
             min-width: 40px;
@@ -1219,76 +1229,77 @@ CaseDetailView::CaseDetailView(QWidget *parent)
             min-height: 40px;
             max-height: 40px;
             border-radius: 20px;
-            font-size: 26px;
+            font-size: 22px;
             font-weight: 700;
-            color: #111111;
+            color: #374858;
             text-align: center;
             padding: 0;
         }
         QFrame#summaryCard {
-            background: #f7efe4;
-            border: 1px solid #eadcc8;
-            border-radius: 14px;
-        }
-        QFrame#proposalInnerCard {
-            background: #fffaf2;
-            border: 1px solid #eadcc8;
+            background: #f5ede0;
+            border: 1px solid #ddd4c2;
             border-radius: 12px;
         }
+        QFrame#proposalInnerCard {
+            background: #fffdf8;
+            border: 1px solid #ded4c2;
+            border-radius: 10px;
+        }
         QListWidget#detailList {
-            background: #f7efe4;
-            border: 1px solid #eadcc8;
-            border-radius: 14px;
-            padding: 8px;
+            background: #f5ede0;
+            border: 1px solid #ddd4c2;
+            border-radius: 12px;
+            padding: 6px;
         }
         QListWidget#detailList::item {
-            padding: 10px;
-            margin: 4px 0;
-            border-radius: 10px;
-            background: #fffaf2;
+            padding: 8px 10px;
+            margin: 3px 0;
+            border-radius: 8px;
+            background: #fffdf8;
+            color: #1a2330;
         }
         QListWidget#detailList::item:selected {
             background: #f0d8bb;
-            color: #1f2933;
+            color: #1a2330;
             border: none;
             outline: none;
         }
         QListWidget#detailList::item:focus {
-            color: #1f2933;
+            color: #1a2330;
             border: none;
             outline: none;
         }
         QScrollArea#thumbnailScrollArea {
-            background: #f7efe4;
-            border: 1px solid #eadcc8;
-            border-radius: 14px;
+            background: #f5ede0;
+            border: 1px solid #ddd4c2;
+            border-radius: 12px;
         }
         QWidget#thumbnailStripWidget {
-            background: #f7efe4;
+            background: #f5ede0;
         }
         QPushButton#thumbnailButton {
             min-width: 132px;
             max-width: 132px;
             min-height: 102px;
             max-height: 102px;
-            border-radius: 12px;
-            background: #fffaf2;
-            border: 1px solid #eadcc8;
+            border-radius: 10px;
+            background: #fffdf8;
+            border: 1px solid #ded4c2;
             padding: 6px;
         }
         QPushButton#thumbnailButton[selected="true"] {
-            border: 2px solid #d18841;
+            border: 2px solid #c97b3d;
         }
         QScrollArea#thumbnailScrollArea QScrollBar:horizontal {
-            height: 12px;
-            background: #efe4d2;
-            border-radius: 6px;
-            margin: 6px 12px 0 12px;
+            height: 10px;
+            background: #ede5d4;
+            border-radius: 5px;
+            margin: 4px 10px 0 10px;
         }
         QScrollArea#thumbnailScrollArea QScrollBar::handle:horizontal {
-            background: #cfa980;
-            min-width: 30px;
-            border-radius: 6px;
+            background: #c9a880;
+            min-width: 28px;
+            border-radius: 5px;
         }
         QScrollArea#thumbnailScrollArea QScrollBar::add-line:horizontal,
         QScrollArea#thumbnailScrollArea QScrollBar::sub-line:horizontal {
@@ -1298,52 +1309,54 @@ CaseDetailView::CaseDetailView(QWidget *parent)
         }
         QLabel#readOnlyBanner {
             background: #fef3cd;
-            color: #856404;
-            border: 1px solid #ffc107;
+            color: #6b4e00;
+            border: 1px solid #f0c030;
             border-radius: 8px;
             padding: 8px 12px;
             font-weight: 600;
+            font-size: 13px;
         }
         QPushButton#editUnlockButton {
-            background: #d18841;
-            border: 1px solid #b46d35;
+            background: #c97b3d;
+            border: none;
             border-radius: 8px;
-            color: #fff9f2;
+            color: white;
             font-weight: 700;
             padding: 8px 20px;
         }
         QPushButton#editUnlockButton:hover {
-            background: #c97b3d;
+            background: #b56a30;
         }
         QLabel#dashPhoto {
-            background: #f0e4d0;
-            border: 1px solid #eadcc8;
-            border-radius: 14px;
-            color: #9a8878;
-            font-size: 14px;
+            background: #ede5d4;
+            border: 1px solid #ddd4c2;
+            border-radius: 12px;
+            color: #7a8a9a;
+            font-size: 13px;
         }
         QLabel#dashTotalKey {
             font-weight: 700;
-            font-size: 14px;
-            color: #1f2933;
+            font-size: 13px;
+            color: #1a2330;
         }
         QLabel#dashTotal {
             font-weight: 700;
-            font-size: 18px;
-            color: #b46d35;
+            font-size: 17px;
+            color: #c97b3d;
         }
         QListWidget#workflowList {
-            background: #f7efe4;
-            border: 1px solid #eadcc8;
+            background: #f5ede0;
+            border: 1px solid #ddd4c2;
             border-radius: 10px;
-            padding: 6px;
+            padding: 4px;
         }
         QListWidget#workflowList::item {
-            padding: 8px 10px;
+            padding: 7px 10px;
             margin: 2px 0;
-            border-radius: 8px;
-            background: #fffaf2;
-            color: #1f2933;
+            border-radius: 6px;
+            background: #fffdf8;
+            color: #1a2330;
+            font-size: 13px;
         }
     )");
 
