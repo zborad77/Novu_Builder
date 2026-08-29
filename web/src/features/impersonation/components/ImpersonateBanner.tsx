@@ -12,7 +12,7 @@ export function ImpersonateBanner() {
   return (
     <div className="flex items-center justify-between bg-amber-500 px-4 py-2 text-sm font-medium text-white">
       <span>
-        Impersonujete uživatele: <strong>{effectiveActor.name}</strong> ({effectiveActor.email})
+        Impersonujete uživatele: <strong>{effectiveActor.fullName}</strong> ({effectiveActor.email})
       </span>
       <button
         onClick={stopImpersonation}

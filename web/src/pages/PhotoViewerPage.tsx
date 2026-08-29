@@ -107,6 +107,11 @@ export function PhotoViewerPage() {
   const userSelectionRef = useRef<OverlaySelection | null>(null)
   userSelectionRef.current = userSelection
 
+  // Declared before the effects below: both read it, and a dependency array is
+  // evaluated during render, so a later `const` would be in the temporal dead
+  // zone and throw on every render.
+  const latestAnalysisId = caseDetail?.latestAnalysis?.id
+
   // Clear selection when the displayed photo or analysis changes, and restore
   // a confirmed manual selection from the backend if one exists for this photo.
   // Runs on mount (imageId known, latestAnalysisId undefined → no hydration),
@@ -137,7 +142,6 @@ export function PhotoViewerPage() {
   // analysis ID, it is now stale (selectionIsLive will become false this render).
   // Notify them so they understand why their drawing disappeared.
   const prevAnalysisIdRef = useRef<string | undefined>(undefined)
-  const latestAnalysisId = caseDetail?.latestAnalysis?.id
   useEffect(() => {
     const prev = prevAnalysisIdRef.current
     prevAnalysisIdRef.current = latestAnalysisId
