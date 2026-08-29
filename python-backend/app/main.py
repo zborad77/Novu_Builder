@@ -61,16 +61,21 @@ _CORS_ALLOW_HEADERS: tuple[str, ...] = (
     "X-Client-Version",
 )
 
-_rate_limit_exceeded_handler: Any
-RateLimitExceeded: Any
+# Optional dependency. The public names are declared and assigned exactly once here;
+# the import binds private aliases instead of rebinding them, so mypy sees no
+# redefinition whether or not slowapi is installed. (Type-checking environments
+# without slowapi previously reported [no-redef] on the import lines.)
+_rate_limit_exceeded_handler: Any = None
+RateLimitExceeded: Any = None
 
 try:
-    from slowapi import _rate_limit_exceeded_handler
-    from slowapi.errors import RateLimitExceeded
+    from slowapi import _rate_limit_exceeded_handler as _slowapi_handler
+    from slowapi.errors import RateLimitExceeded as _SlowapiRateLimitExceeded
 except ModuleNotFoundError as exc:
     logger.warning("rate_limiter.handler_disabled", reason="slowapi_not_installed", error=str(exc))
-    _rate_limit_exceeded_handler = None  # type: ignore[assignment]
-    RateLimitExceeded = None  # type: ignore[misc,assignment]
+else:
+    _rate_limit_exceeded_handler = _slowapi_handler
+    RateLimitExceeded = _SlowapiRateLimitExceeded
 
 
 def verify_runtime_dependency_guards(settings):
