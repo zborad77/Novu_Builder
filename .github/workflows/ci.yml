@@ -18,10 +18,15 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: python-backend/requirements-dev.txt
+          cache-dependency-path: |
+            python-backend/requirements.txt
+            python-backend/requirements-dev.txt
 
-      - name: Install dev tools
-        run: pip install -r python-backend/requirements-dev.txt
+      # Runtime deps are installed too: with them missing, `ignore_missing_imports`
+      # degrades every third-party symbol to Any and mypy silently stops checking
+      # most of app/. Installing both sets makes CI's mypy as strict as the local run.
+      - name: Install runtime + dev dependencies
+        run: pip install -r python-backend/requirements.txt -r python-backend/requirements-dev.txt
 
       - name: Ruff (style + unused imports)
         working-directory: python-backend
@@ -107,10 +112,16 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: python-backend/requirements.txt
+          cache-dependency-path: |
+            python-backend/requirements.txt
+            python-backend/requirements-dev.txt
 
-      - name: Install dependencies
-        run: pip install -r python-backend/requirements.txt
+      # Both sets, pinned. pytest / pytest-asyncio / pytest-cov are declared in
+      # requirements-dev.txt; installing them ad-hoc (or relying on a transitive
+      # pull) is what left pytest-asyncio missing while pytest.ini requires
+      # asyncio_mode = auto.
+      - name: Install runtime + dev dependencies
+        run: pip install -r python-backend/requirements.txt -r python-backend/requirements-dev.txt
 
       # --- No server needed ---
 
@@ -119,9 +130,6 @@ jobs:
 
       - name: Environment check
         run: python scripts/test-env.py
-
-      - name: Install dev tools (for coverage)
-        run: pip install pytest-cov
 
       - name: Pytest
         working-directory: python-backend
