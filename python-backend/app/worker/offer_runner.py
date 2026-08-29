@@ -60,6 +60,7 @@ from app.offer_processing.domain import (
     ERROR_BUDGET_EXHAUSTED,
     ERROR_PROVIDER_RATE_LIMITED,
     ERROR_PROVIDER_UNAVAILABLE,
+    ERROR_SNAPSHOT_BUILD_FAILED,
     ERROR_VALIDATION_FAILED,
     ERROR_UNKNOWN,
     JOB_STATUS_COMPLETED,
@@ -83,6 +84,9 @@ from app.offer_processing.provider import (
 )
 from app.offer_processing.repository import OfferRepository
 from app.offer_processing.snapshot import build_input_snapshot
+from app.repositories.photo_repository import PhotoRepository
+from app.repositories.work_catalog_repository import WorkCatalogRepository
+from app.storage.backend import generate_presigned_url
 from app.offer_processing.validation import (
     InsufficientDataResult,
     OfferOutputValidator,
@@ -99,6 +103,14 @@ logger = structlog.get_logger(__name__)
 _POLL_INTERVAL_S  = 1.0
 _LEASE_DURATION_S = 5 * 60
 _DRAIN_TIMEOUT_S  = 30.0  # max seconds to wait for graceful background-task drain
+
+
+class _AiInputResolutionError(RuntimeError):
+    """Raised when mandatory AI inputs (the work-type whitelist) cannot be resolved.
+
+    Fail-closed (Constitution Art. 6 & 9): the job must not proceed to validate AI
+    output against a missing / permissive whitelist.
+    """
 
 
 class _WorkerState(str, Enum):
@@ -130,6 +142,63 @@ class OfferJobProcessor:
         self._redis = redis
         self._payload = dequeued.payload
         self._job_start_ms = int(time.monotonic() * 1000)
+
+    async def _resolve_ai_inputs(
+        self, *, log
+    ) -> tuple[list[str], dict, frozenset[str]]:
+        """Resolve presigned photo URLs, the work-type definition, and the code whitelist.
+
+        Fail-closed (Constitution Art. 6 & 9): the work-type whitelist is MANDATORY. If the
+        catalog cannot be resolved, this raises ``_AiInputResolutionError`` so the job fails
+        rather than validating AI output against a permissive (missing) whitelist. An empty
+        catalog yields an empty whitelist, which the validator treats as "reject every code"
+        — also fail-closed.
+
+        Photo resolution is non-critical: an unreadable photo degrades the input (fewer
+        images) and is logged (Art. 10), but does not fail the job.
+        """
+        photo_urls: list[str] = []
+        work_type_def: dict = {}
+
+        async with WorkerAsyncSessionFactory() as session:
+            wc_repo = WorkCatalogRepository(session)
+            try:
+                work_type = await wc_repo.get_work_type_by_code(
+                    self._payload.work_type_code
+                )
+                if work_type is not None:
+                    work_type_def = {
+                        "code": work_type.code,
+                        "name": getattr(work_type, "name_cs", None)
+                        or getattr(work_type, "name", ""),
+                    }
+                known_codes = frozenset(
+                    wt.code for wt in await wc_repo.list_work_types_global()
+                )
+            except Exception as exc:  # noqa: BLE001 — logged, then re-raised fail-closed
+                log.warning("offer_runner.catalog_resolution_failed", error=str(exc))
+                raise _AiInputResolutionError(
+                    "Work-type catalog resolution failed; refusing to validate AI "
+                    "output without a whitelist."
+                ) from exc
+
+            photo_repo = PhotoRepository(session)
+            for photo_id in self._payload.photo_ids:
+                try:
+                    photo = await photo_repo.get_photo_by_id_in_org(
+                        photo_id, organization_id=self._payload.organization_id
+                    )
+                    if photo is not None and photo.storage_key:
+                        photo_urls.append(generate_presigned_url(photo.storage_key))
+                except Exception as exc:  # noqa: BLE001 — non-critical, logged, degrade
+                    log.warning(
+                        "offer_runner.photo_resolution_failed",
+                        photo_id=photo_id,
+                        error=str(exc),
+                    )
+                    continue
+
+        return photo_urls, work_type_def, known_codes
 
     async def run(self) -> None:
         # Full context on every log line from this job
@@ -219,26 +288,31 @@ class OfferJobProcessor:
         # Phase 2: build snapshot + create agent run record + AI call
         # -------------------------------------------------------------------
         run_id: str = ""
+        known_codes: frozenset[str] | None = None
         t_ai_start = time.monotonic()
 
         try:
+            # Resolve presigned photo URLs, the work-type definition, and the
+            # code whitelist BEFORE the AI call (no DB session held during it).
+            photo_urls, work_type_def, known_codes = await self._resolve_ai_inputs(log=log)
+
             snapshot = await build_input_snapshot(
                 work_type_code=self._payload.work_type_code,
                 parameters=self._payload.parameters,
-                photo_presigned_urls=self._payload.photo_ids,
-                work_type_definition={},
+                photo_presigned_urls=photo_urls,
+                work_type_definition=work_type_def,
                 pricing_context={},
                 model_id=self._agent_runtime.primary.model_id,
                 model_build=getattr(
-                    self._agent_runtime.primary, "_MODEL_BUILD", "unknown"
+                    self._agent_runtime.primary, "model_id", "unknown"
                 ),
             )
 
             provider_req = ProviderRequest(
                 work_type_code=self._payload.work_type_code,
                 parameters=self._payload.parameters,
-                photo_urls=self._payload.photo_ids,
-                work_type_definition={},
+                photo_urls=photo_urls,
+                work_type_definition=work_type_def,
                 pricing_context={},
             )
 
@@ -268,6 +342,19 @@ class OfferJobProcessor:
             actual_tokens = response.prompt_tokens + response.completion_tokens
             actual_cost = estimate_cost_usd(actual_tokens)
 
+        except _AiInputResolutionError as exc:
+            # Fail-closed: could not resolve the mandatory work-type whitelist.
+            await self._release_budget(budget_reserved, log=log)
+            await self._fail_job(
+                error_code=ERROR_SNAPSHOT_BUILD_FAILED,
+                error_detail=str(exc),
+                retryable=True,
+                lease_version=lease_version,
+                log=log,
+                prior_error_code=_prior_error_code,
+                prior_error_repeat=_prior_error_repeat,
+            )
+            return
         except ProviderRateLimitedError as exc:
             await self._release_budget(budget_reserved, log=log)
             await self._fail_job(
@@ -310,7 +397,7 @@ class OfferJobProcessor:
         # -------------------------------------------------------------------
         # Validate AI output — security boundary, never bypass
         # -------------------------------------------------------------------
-        validator = OfferOutputValidator()
+        validator = OfferOutputValidator(known_work_type_codes=known_codes)
         try:
             validated = validator.validate(response.raw_output)
         except OfferValidationError as exc:
@@ -472,11 +559,13 @@ class OfferJobProcessor:
             outcome=AGENT_OUTCOME_OFFER_GENERATED,
             raw_output=response.raw_output,
             parsed_output={
-                "line_items": [item.model_dump(mode="json") for item in validated.line_items],
-                "total_price_czk": str(validated.total_price_czk),
-                "confidence_score": validated.confidence_score,
-                "currency": validated.currency,
+                "measurements": [
+                    item.model_dump(mode="json") for item in validated.measurements
+                ],
+                "overall_confidence": validated.overall_confidence,
                 "warnings": validated.warnings,
+                # Prices are computed downstream by the catalog pricing engine.
+                "pricing_status": "pending",
             },
             prompt_tokens=response.prompt_tokens,
             completion_tokens=response.completion_tokens,

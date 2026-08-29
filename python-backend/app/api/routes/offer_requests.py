@@ -4,8 +4,7 @@ Consumed by Qt desktop client — additive-only API contract.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_org_id
@@ -70,6 +69,7 @@ def _locked(detail: str) -> HTTPException:
 )
 async def submit_offer_request(
     payload: OfferRequestCreate,
+    response: Response,
     current_user: AuthUserRead = Depends(get_current_user),
     offer_svc: OfferService = Depends(get_offer_service),
 ) -> OfferSubmitResponse:
@@ -92,10 +92,8 @@ async def submit_offer_request(
     except OfferAlreadyExistsError as exc:
         # Idempotent replay — downgrade to 200
         existing = exc.existing
-        return JSONResponse(
-            status_code=200,
-            content={"id": existing.id, "status": existing.status, "created": False},
-        )
+        response.status_code = status.HTTP_200_OK
+        return OfferSubmitResponse(id=existing.id, status=existing.status, created=False)
 
 
 @router.get(

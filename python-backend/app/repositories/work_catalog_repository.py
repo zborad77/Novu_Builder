@@ -158,7 +158,7 @@ class WorkCatalogRepository:
             .where(WorkType.is_active.is_(True), WorkType.state == "active")
             .order_by(WorkCategory.sort_order.asc(), WorkType.sort_order.asc(), WorkType.code.asc())
         )
-        return result.all()
+        return [(work_type, category_code) for work_type, category_code in result.all()]
 
     async def list_work_types(self) -> Sequence[WorkType]:
         result = await self.session.execute(

@@ -97,8 +97,9 @@ async def _publish_analysis_started_to_redis(ctx: EffectContext) -> None:
     logger.info("domain_event.analysis_started", project_id=ctx.project.id)
     if ctx.work_queue is None:
         return
+    outbox_id = ctx.state.get("analysis_started_outbox_id")
     message = build_live_message(
-        event_id=ctx.state.get("analysis_started_outbox_id", str(uuid4())),
+        event_id=outbox_id if isinstance(outbox_id, str) else str(uuid4()),
         event_type=EVENT_ANALYSIS_STARTED,
         aggregate_type=AGGREGATE_CASE,
         aggregate_id=ctx.project.id,
@@ -169,8 +170,9 @@ async def _publish_proposal_ready_to_redis(ctx: EffectContext) -> None:
     logger.info("domain_event.proposal_ready", project_id=ctx.project.id)
     if ctx.work_queue is None:
         return
+    outbox_id = ctx.state.get("proposal_ready_outbox_id")
     message = build_live_message(
-        event_id=ctx.state.get("proposal_ready_outbox_id", str(uuid4())),
+        event_id=outbox_id if isinstance(outbox_id, str) else str(uuid4()),
         event_type=EVENT_PROPOSAL_READY,
         aggregate_type=AGGREGATE_CASE,
         aggregate_id=ctx.project.id,

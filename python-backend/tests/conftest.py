@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 _TESTS_ROOT = pathlib.Path(__file__).resolve().parent
@@ -57,6 +58,44 @@ from app.services.auth_service import hash_password  # noqa: E402
 
 _test_engine = create_async_engine(_TEST_DB_URL, echo=False)
 _TestSession = async_sessionmaker(_test_engine, class_=AsyncSession, expire_on_commit=False)
+
+
+async def _install_sqlite_outbox_seq_emulation(conn) -> None:
+    """Emulate PostgreSQL's DB-managed outbox seq in SQLite test databases."""
+    if _test_engine.sync_engine.dialect.name != "sqlite":
+        return
+
+    await conn.execute(text("DROP TABLE IF EXISTS outbox_events"))
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE outbox_events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                id VARCHAR(64) NOT NULL UNIQUE,
+                event_type VARCHAR(128) NOT NULL,
+                aggregate_type VARCHAR(64) NOT NULL,
+                aggregate_id VARCHAR(64) NOT NULL,
+                organization_id VARCHAR(64) NOT NULL,
+                payload JSON NOT NULL,
+                published BOOLEAN NOT NULL DEFAULT 0,
+                published_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX idx_outbox_events_unpublished "
+            "ON outbox_events (published, created_at)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX idx_outbox_events_aggregate "
+            "ON outbox_events (aggregate_type, aggregate_id)"
+        )
+    )
 
 
 class _InMemoryAuthRedisPipeline:
@@ -195,6 +234,7 @@ async def _setup_test_db():
         if not _USING_LOCAL_SQLITE:
             await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        await _install_sqlite_outbox_seq_emulation(conn)
     yield
     await _test_engine.dispose()
     shutil.rmtree(_TEST_SESSION_ROOT, ignore_errors=True)

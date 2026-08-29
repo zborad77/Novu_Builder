@@ -61,6 +61,7 @@ from app.models.work_catalog import (
 
 __all__ = [
     "AgentRun",
+    "AiBudgetReservation",
     "AnalysisJob",
     "AnalysisProfile",
     "AnalysisProfileConfidenceThreshold",

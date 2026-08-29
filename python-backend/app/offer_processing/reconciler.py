@@ -59,12 +59,8 @@ import structlog
 from sqlalchemy import text
 
 from app.offer_processing.domain import (
-    JOB_STATUS_FAILED,
     JOB_STATUS_RUNNING,
     OFFER_STATUS_FAILED,
-    OFFER_STATUS_PROCESSING,
-    OFFER_STATUS_QUEUED,
-    OFFER_TERMINAL_STATUSES,
     RETRY_BACKOFF_SECONDS,
 )
 from app.worker.offer_queue import OfferJobPayload, enqueue_offer_job

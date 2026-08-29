@@ -17,7 +17,6 @@ Run interval: every 5 minutes (configurable).
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import text

@@ -160,6 +160,17 @@ async def confirm_measurement(
     if not updated:
         raise HTTPException(status_code=404, detail="Measurement not found.")
 
+    # Outbox rows are tenant-scoped (organization_id is NOT NULL).  For a superadmin
+    # context resolve_org_id() returns None, so fall back to the project's own tenant.
+    _event_org_id = org_id or (_proj.organization_id if _proj else None)
+    if _event_org_id is None:
+        logger.warning(
+            "measurement.confirmed_event_skipped",
+            measurement_id=measurement_id,
+            reason="missing_organization_id",
+        )
+        return _to_measurement(updated)
+
     # Emit measurement.confirmed outbox event.  The state change was already
     # committed inside update_manual_selection_by_result_id, so this is a
     # separate commit on the same session.  Acceptable: if this commit fails,
@@ -170,7 +181,7 @@ async def confirm_measurement(
     _evt = build_case_activity_event(
         event_type=EVENT_MEASUREMENT_CONFIRMED,
         project_id=existing.projectId,
-        organization_id=org_id,
+        organization_id=_event_org_id,
         payload={
             "measurement_id": measurement_id,
             "manual_area_sqm": updated.manualAreaSqm,

@@ -22,7 +22,6 @@ from uuid import uuid4
 
 import structlog
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import (
     AGGREGATE_CASE,

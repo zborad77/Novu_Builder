@@ -4,7 +4,8 @@ import pytest
 from sqlalchemy import select
 
 from app.case_workflow.case_actions import CaseActionService
-from app.models import AnalysisJob, Project, ProjectExport, ProjectFinalProposal
+from app.core.events import AGGREGATE_CASE, EVENT_ANALYSIS_STARTED
+from app.models import AnalysisJob, OutboxEvent, Project, ProjectExport, ProjectFinalProposal
 from app.repositories.project_repository import ProjectRepository
 
 
@@ -56,6 +57,18 @@ async def test_start_analysis_creates_job_and_enqueues_transport(db_session):
     assert len(jobs) == 1
     assert jobs[0].status == "queued"
     assert jobs[0].job_type == "manual_trigger"
+
+    outbox_events = (
+        await db_session.execute(
+            select(OutboxEvent).where(
+                OutboxEvent.aggregate_type == AGGREGATE_CASE,
+                OutboxEvent.aggregate_id == project.id,
+                OutboxEvent.event_type == EVENT_ANALYSIS_STARTED,
+            )
+        )
+    ).scalars().all()
+    assert len(outbox_events) == 1
+    assert outbox_events[0].seq > 0
 
     enqueue_job.assert_awaited_once()
     _, kwargs = enqueue_job.await_args

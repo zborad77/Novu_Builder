@@ -8,6 +8,22 @@ Hierarchy:
         → selects ProviderAdapter by key (or fallback chain)
         → ProviderAdapter.complete(input_snapshot) → ProviderResponse
 
+Contract (full price separation — see NOVU_MASTER_PRODUCT_BOOK §AI):
+    The AI agent returns ONLY measurements (quantities, units, surface
+    condition, confidence) derived from the photos and parameters. It does
+    NOT produce prices — pricing is computed deterministically server-side
+    from the tenant catalog/pricing profile. Letting the model invent CZK
+    prices would bypass the pricing subsystem and create a second source of
+    pricing truth.
+
+Structured output:
+    We use *strict tool use* (`strict: true` on the tool definition) so the
+    model's output is schema-validated by the API itself, not parsed from
+    free-form prose. Two tools express the branch in the offer state machine:
+        submit_measurements → outcome "offer_generated"
+        request_more_info   → outcome "insufficient_data"
+    `tool_choice = {"type": "any"}` forces the model to pick exactly one.
+
 Fallback routing rules:
     Only retryable transport errors trigger fallback:
         - 503 Service Unavailable
@@ -17,7 +33,6 @@ Fallback routing rules:
 """
 from __future__ import annotations
 
-import json
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -37,10 +52,10 @@ class ProviderRequest:
     """Anonymized input sent to the AI provider."""
     work_type_code: str
     parameters: dict[str, Any]
-    photo_urls: list[str]          # presigned, short-lived
+    photo_urls: list[str]          # presigned, short-lived GET URLs
     work_type_definition: dict[str, Any]
     pricing_context: dict[str, Any]
-    prompt_version: str = "offer-v1"
+    prompt_version: str = "offer-v2"
 
 
 @dataclass
@@ -83,7 +98,7 @@ class ProviderAdapter(ABC):
         Raises:
             ProviderUnavailableError  — 503 / network failure (retryable)
             ProviderRateLimitedError  — 429 (retryable with backoff)
-            ProviderRequestError      — 400 / bad input (not retryable)
+            ProviderRequestError      — 400 / bad input / refusal (not retryable)
         """
 
 
@@ -113,19 +128,115 @@ class ProviderRequestError(ProviderError):
 
 
 # ---------------------------------------------------------------------------
+# Tool schemas — strict structured output (no prices)
+# ---------------------------------------------------------------------------
+
+# Strict tool use requires every property listed in `required` and
+# `additionalProperties: false`. Numeric bounds (min/max) are NOT supported in
+# strict mode — they are enforced server-side by the Pydantic validation layer.
+
+_MEASUREMENT_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "work_type_code",
+        "quantity",
+        "unit",
+        "surface_condition",
+        "recommended_scope",
+        "description",
+        "confidence",
+    ],
+    "properties": {
+        "work_type_code": {"type": "string"},
+        "quantity": {"type": "number"},
+        "unit": {"type": "string"},
+        "surface_condition": {
+            "type": "string",
+            "enum": ["good", "requires_attention", "critical"],
+        },
+        "recommended_scope": {
+            "type": "string",
+            "enum": ["cleaning", "local_repair", "full_reconstruction"],
+        },
+        "description": {"type": "string"},
+        "confidence": {"type": "number"},
+    },
+}
+
+_SUBMIT_MEASUREMENTS_TOOL: dict[str, Any] = {
+    "name": "submit_measurements",
+    "description": (
+        "Submit the measured quantities for the work items detected on the "
+        "photos. Return quantities, units and condition ONLY — never prices."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["measurements", "overall_confidence", "warnings"],
+        "properties": {
+            "measurements": {
+                "type": "array",
+                "items": _MEASUREMENT_ITEM_SCHEMA,
+            },
+            "overall_confidence": {"type": "number"},
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+    },
+}
+
+_REQUEST_MORE_INFO_TOOL: dict[str, Any] = {
+    "name": "request_more_info",
+    "description": (
+        "Use this when the photos or parameters are insufficient to measure "
+        "the work reliably. Return the specific questions that would unblock "
+        "the measurement."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["questions"],
+        "properties": {
+            "questions": {"type": "array", "items": {"type": "string"}},
+        },
+    },
+}
+
+_OFFER_TOOLS: list[dict[str, Any]] = [_SUBMIT_MEASUREMENTS_TOOL, _REQUEST_MORE_INFO_TOOL]
+
+_SYSTEM_PROMPT = (
+    "Jsi expert na stavební diagnostiku. Z přiložených fotek a parametrů "
+    "stanovíš MĚŘENÍ jednotlivých pracovních položek: množství, jednotku, "
+    "stav povrchu, doporučený rozsah a spolehlivost odhadu.\n\n"
+    "PRAVIDLA:\n"
+    "- NIKDY neuváděj ceny, sazby ani peněžní částky. Ceny dopočítá systém.\n"
+    "- Měř jen to, co je na fotkách skutečně vidět; nedomýšlej.\n"
+    "- quantity je číslo v dané jednotce (m2, m, ks, ...).\n"
+    "- confidence 0.0–1.0: nižší při málo nebo nekvalitních fotkách.\n"
+    "- Pokud data nestačí ke spolehlivému měření, použij nástroj "
+    "request_more_info s konkrétními dotazy.\n"
+    "- Jinak vždy zavolej nástroj submit_measurements."
+)
+
+
+# ---------------------------------------------------------------------------
 # Anthropic / Claude adapter
 # ---------------------------------------------------------------------------
 
 
 class AnthropicAdapter(ProviderAdapter):
-    """Calls Claude via the Anthropic SDK."""
+    """Calls Claude via the Anthropic SDK using strict tool use."""
 
-    _MODEL_ID = "claude-opus-4-7"
-    _MODEL_BUILD = "claude-opus-4-7-20251001"
+    _DEFAULT_MODEL_ID = "claude-opus-5"
+    _MAX_TOKENS = 8192
+    _MAX_PHOTOS = 8           # Anthropic image-per-request soft limit
+    _HTTP_TIMEOUT_S = 120.0
 
     def __init__(self, api_key: str, model_id: str | None = None) -> None:
         self._api_key = api_key
-        self._model_id = model_id or self._MODEL_ID
+        self._model_id = model_id or self._DEFAULT_MODEL_ID
 
     @property
     def key(self) -> str:
@@ -135,25 +246,53 @@ class AnthropicAdapter(ProviderAdapter):
     def model_id(self) -> str:
         return self._model_id
 
+    def _build_content(self, request: ProviderRequest) -> list[dict[str, Any]]:
+        """Build the user content: instruction text first, then image blocks."""
+        import json  # noqa: PLC0415
+
+        text = (
+            f"Typ práce: {request.work_type_code}\n"
+            f"Parametry: {json.dumps(request.parameters, ensure_ascii=False)}\n"
+            f"Definice typu práce (katalog): "
+            f"{json.dumps(request.work_type_definition, ensure_ascii=False)}\n"
+            f"Počet fotek: {len(request.photo_urls)}\n\n"
+            "Změř pracovní položky a zavolej příslušný nástroj."
+        )
+        content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+        for url in request.photo_urls[: self._MAX_PHOTOS]:
+            if url and url.startswith("http"):
+                content.append(
+                    {"type": "image", "source": {"type": "url", "url": url}}
+                )
+        return content
+
     async def complete(self, request: ProviderRequest) -> ProviderResponse:
         try:
             import anthropic  # noqa: PLC0415
         except ImportError as exc:
             raise ProviderUnavailableError("anthropic SDK not installed") from exc
 
-        client = anthropic.AsyncAnthropic(api_key=self._api_key)
-        prompt = _build_offer_prompt(request)
+        if not self._api_key:
+            raise ProviderRequestError(
+                "ANTHROPIC_API_KEY is not configured for the offer provider."
+            )
+
+        client = anthropic.AsyncAnthropic(api_key=self._api_key, timeout=self._HTTP_TIMEOUT_S)
 
         t0 = time.monotonic()
         try:
-            message = await client.messages.create(
+            message = await client.messages.create(  # type: ignore[call-overload]  # dict literals for tools/thinking are valid at the API; SDK overloads want typed params
                 model=self._model_id,
-                max_tokens=4096,
-                messages=[{"role": "user", "content": prompt}],
+                max_tokens=self._MAX_TOKENS,
+                thinking={"type": "adaptive"},
+                system=_SYSTEM_PROMPT,
+                tools=_OFFER_TOOLS,
+                tool_choice={"type": "any"},
+                messages=[{"role": "user", "content": self._build_content(request)}],
             )
         except anthropic.APIStatusError as exc:
             if exc.status_code == 429:
-                retry_after = int(exc.response.headers.get("retry-after", 60))
+                retry_after = _safe_retry_after(exc)
                 raise ProviderRateLimitedError(str(exc), retry_after_seconds=retry_after) from exc
             if exc.status_code >= 500:
                 raise ProviderUnavailableError(str(exc)) from exc
@@ -162,22 +301,44 @@ class AnthropicAdapter(ProviderAdapter):
             raise ProviderUnavailableError(str(exc)) from exc
 
         duration_ms = int((time.monotonic() - t0) * 1000)
-        raw_text = message.content[0].text if message.content else ""
 
-        try:
-            raw_output = json.loads(raw_text)
-        except json.JSONDecodeError:
-            raw_output = {"_raw_text": raw_text}
+        if message.stop_reason == "refusal":
+            raise ProviderRequestError("Model refused the offer measurement request.")
+
+        raw_output = _extract_tool_output(message)
 
         return ProviderResponse(
             raw_output=raw_output,
             prompt_tokens=message.usage.input_tokens,
             completion_tokens=message.usage.output_tokens,
             model_id=self._model_id,
-            model_build=self._MODEL_BUILD,
+            model_build=self._model_id,
             provider_key=self.key,
             duration_ms=duration_ms,
         )
+
+
+def _safe_retry_after(exc: Any) -> int:
+    try:
+        return int(exc.response.headers.get("retry-after", 60))
+    except Exception:  # noqa: BLE001 — header parsing is best-effort
+        return 60
+
+
+def _extract_tool_output(message: Any) -> dict[str, Any]:
+    """Map the model's forced tool call into the validation-layer raw output.
+
+    Returns a dict with an `outcome` discriminator the validator understands.
+    """
+    for block in message.content:
+        if getattr(block, "type", None) != "tool_use":
+            continue
+        tool_input = dict(block.input or {})
+        if block.name == "submit_measurements":
+            return {"outcome": "offer_generated", **tool_input}
+        if block.name == "request_more_info":
+            return {"outcome": "insufficient_data", **tool_input}
+    raise ProviderRequestError("Model returned no tool call.")
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +365,7 @@ class MockAdapter(ProviderAdapter):
         return ProviderResponse(
             raw_output=raw,
             prompt_tokens=500,
-            completion_tokens=800,
+            completion_tokens=300,
             model_id="mock-v1",
             model_build="mock-v1-static",
             provider_key=self.key,
@@ -265,7 +426,8 @@ def _build_adapter(key: str, settings) -> ProviderAdapter:
         return MockAdapter()
     if key == "claude":
         api_key = getattr(settings, "anthropic_api_key", None) or ""
-        return AnthropicAdapter(api_key=api_key)
+        model_id = getattr(settings, "claude_offer_model", None) or AnthropicAdapter._DEFAULT_MODEL_ID
+        return AnthropicAdapter(api_key=api_key, model_id=model_id)
     raise ValueError(f"Unknown AI provider key: {key!r}")
 
 
@@ -274,33 +436,21 @@ def _build_adapter(key: str, settings) -> ProviderAdapter:
 # ---------------------------------------------------------------------------
 
 
-def _build_offer_prompt(req: ProviderRequest) -> str:
-    return (
-        f"You are a construction cost estimation AI. "
-        f"Work type: {req.work_type_code}. "
-        f"Parameters: {json.dumps(req.parameters, ensure_ascii=False)}. "
-        f"Return a JSON object with: line_items (array), total_price_czk (number), "
-        f"confidence_score (0.0-1.0), currency ('CZK'), warnings (array of strings). "
-        f"If you cannot estimate without more information, return: "
-        f'{{ "outcome": "insufficient_data", "questions": ["..."] }}'
-    )
-
-
 def _mock_offer_response(req: ProviderRequest) -> dict[str, Any]:
+    """Deterministic measurements-only mock output (no prices)."""
     return {
         "outcome": "offer_generated",
-        "line_items": [
+        "measurements": [
             {
                 "work_type_code": req.work_type_code,
-                "description": f"Mock: {req.work_type_code}",
                 "quantity": 1.0,
                 "unit": "ks",
-                "unit_price_czk": 10000.0,
-                "total_price_czk": 10000.0,
+                "surface_condition": "requires_attention",
+                "recommended_scope": "local_repair",
+                "description": f"Mock measurement: {req.work_type_code}",
+                "confidence": 0.95,
             }
         ],
-        "total_price_czk": 10000.0,
-        "confidence_score": 0.95,
-        "currency": "CZK",
+        "overall_confidence": 0.95,
         "warnings": [],
     }

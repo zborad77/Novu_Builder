@@ -5,13 +5,12 @@ Aktivace:
   AI_ANALYSIS_PROVIDER=claude
   ANTHROPIC_API_KEY=sk-ant-...   ← přidat do .env
 
-Model: claude-opus-4-6 (výchozí), lze přebít přes CLAUDE_VISION_MODEL v .env.
+Model: claude-opus-5 (výchozí), lze přebít přes CLAUDE_VISION_MODEL v .env.
 """
 
 import asyncio
 import base64
 import json
-import os
 
 import structlog
 
@@ -73,7 +72,7 @@ class ClaudeVisionProvider:
     def __init__(self) -> None:
         settings = get_settings()
         self._api_key: str | None = settings.anthropic_api_key
-        self._model: str = os.getenv("CLAUDE_VISION_MODEL", "claude-opus-4-6")
+        self._model: str = settings.claude_vision_model
         if not self._api_key:
             logger.warning(
                 "claude.provider.init",
@@ -180,7 +179,7 @@ class ClaudeVisionProvider:
         response = None
         for attempt, delay in enumerate((*_RETRY_DELAYS, None), start=1):
             try:
-                response = await client.messages.create(
+                response = await client.messages.create(  # type: ignore[call-overload]  # dict literals for thinking/messages are valid at the API; SDK overloads want typed params
                     model=self._model,
                     max_tokens=4096,
                     thinking={"type": "adaptive"},

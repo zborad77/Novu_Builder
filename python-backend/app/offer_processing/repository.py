@@ -15,7 +15,6 @@ from app.models.offer_processing import AgentRun, OfferJob, OfferRequest
 from app.offer_processing.domain import (
     JOB_STATUS_QUEUED,
     JOB_STATUS_RUNNING,
-    OFFER_STATUS_QUEUED,
     OFFER_STATUS_SUBMITTED,
 )
 
@@ -227,7 +226,8 @@ class OfferRepository:
             )
             .values(**values)
         )
-        return result.rowcount > 0
+        rowcount = getattr(result, "rowcount", None)
+        return bool(rowcount and rowcount > 0)
 
     async def update_job_status(
         self,

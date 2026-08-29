@@ -11,7 +11,6 @@ Entry points:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import uuid4
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,9 +22,7 @@ from app.offer_processing.domain import (
     OFFER_STATUS_NEEDS_MORE_INFO,
     OFFER_STATUS_NEEDS_REVIEW,
     OFFER_STATUS_QUEUED,
-    OFFER_STATUS_SUBMITTED,
     OFFER_TERMINAL_STATUSES,
-    InvalidOfferTransitionError,
     require_offer_transition,
 )
 from app.offer_processing.outbox import build_offer_status_changed_event

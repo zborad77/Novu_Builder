@@ -605,7 +605,8 @@ class ProjectService:
                 "occurredAt": project.created_at.isoformat() if project.created_at else None,
                 "payload": {},
             }
-        ] + [
+        ]
+        timeline_snapshot.extend(
             {
                 "seq": row.seq,
                 "eventType": row.event_type,
@@ -613,7 +614,7 @@ class ProjectService:
                 "payload": row.payload,
             }
             for row in _rows
-        ]
+        )
 
         await self.export_service.create_final_proposal_exports(
             case_detail=detail,

@@ -31,7 +31,7 @@ disallow_untyped_defs = false
 # redis.asyncio stubs return Awaitable[T] | T for many operations.
 # All usages here are correct at runtime; [misc] errors are stub artifacts.
 # The hmget [arg-type] errors are positional-vs-list API accepted by the library.
-module = ["app.worker.queue", "app.worker.heavy_queue"]
+module = ["app.worker.queue", "app.worker.heavy_queue", "app.worker.offer_queue"]
 disable_error_code = ["misc", "arg-type"]
 
 [[tool.mypy.overrides]]

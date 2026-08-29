@@ -22,7 +22,6 @@ Why atomic UPDATE for the counter:
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 

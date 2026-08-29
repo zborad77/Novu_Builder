@@ -373,6 +373,7 @@ class Settings(BaseSettings):
     log_error_file: str = Field(default="", alias="LOG_ERROR_FILE")
     storage_root: str = Field(default="", alias="STORAGE_ROOT")
     ai_analysis_provider: str = Field(default="mock", alias="AI_ANALYSIS_PROVIDER")
+    ai_offer_provider: str = Field(default="mock", alias="AI_OFFER_PROVIDER")
     worker_concurrency: int = Field(default=1, alias="WORKER_CONCURRENCY")
     worker_heavy_concurrency: int = Field(default=0, alias="WORKER_HEAVY_CONCURRENCY")
     worker_job_lease_timeout_seconds: int = Field(default=600, alias="WORKER_JOB_LEASE_TIMEOUT_SECONDS")
@@ -456,6 +457,9 @@ class Settings(BaseSettings):
     worker_instance_count: int = Field(default=1, alias="WORKER_INSTANCE_COUNT")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    # Claude model IDs — single source of truth, never hardcode in providers.
+    claude_vision_model: str = Field(default="claude-opus-5", alias="CLAUDE_VISION_MODEL")
+    claude_offer_model: str = Field(default="claude-opus-5", alias="CLAUDE_OFFER_MODEL")
     max_upload_size_mb: int = Field(default=20, alias="MAX_UPLOAD_SIZE_MB")
     jwt_secret: str = Field(default=_DEFAULT_JWT_SECRET, alias="JWT_SECRET")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
