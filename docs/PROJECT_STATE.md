@@ -6,8 +6,8 @@
 > *where are we right now?* and *what is allowed right now?* Update on every merge and milestone.
 
 **Last updated:** 2026-08-29
-**Current version:** v0.8.3 — the `v0.8.4` work is committed but **not released** (CHANGELOG, version bump and tag still open)
-**Current branch:** master — **5 commits ahead of `origin/master`, nothing pushed.** `origin/master` is still at `d53efdc`, so it does not yet have the v0.8.3 release either.
+**Current version:** v0.8.4 — AI offer contract (measurements-only), fail-closed AI boundary
+**Current branch:** master — release commit and `v0.8.4` tag are local; **push still pending** at the time of this commit.
 
 ---
 
@@ -26,6 +26,8 @@ Change-class requirements: **[CHANGE_CONTROL.md](CHANGE_CONTROL.md)**. Version p
 - ✓ **M1 — Documentation & governance framework** — Constitution, Handbook, AI Engineering Standard, AI guides, Project Invariants, Decision Log, Prompt Library, development standards, this file, ROADMAP
 - ✓ **M2 — AI measurements-only offer contract** — AI returns measurements / confidence / questions only, never prices (Art. 2 & 3). Fail-closed catalog whitelist enforced at both the runner and the validator. Closed 2026-08-29.
 - ✓ Multi-tenant SaaS core, offer pipeline resilience (lease fencing, outbox, AI budget), immutable proposal archive (v0.8.3)
+
+Released as **v0.8.4** on 2026-08-29 — see [../CHANGELOG.md](../CHANGELOG.md).
 
 ## Work streams
 

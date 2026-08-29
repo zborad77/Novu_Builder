@@ -2,20 +2,24 @@
 
 > Engineering roadmap, **not** marketing. Each version lists concrete scope and its release gate.
 > Tags must match releases (see [development/VERSIONING.md](development/VERSIONING.md)).
-> Only **v0.8.3** is released; everything below is **planned** and may be reordered.
+> Up to and including **v0.8.4** is released; everything below is **planned** and may be reordered.
 > Milestone (Mx) tags map to [PROJECT_STATE.md](PROJECT_STATE.md).
 
-**Released:** `v0.8.3` — proposal archive, measurement lineage, offline viewer *(current)*
+**Released:** `v0.8.4` — AI offer contract (measurements-only), fail-closed AI boundary *(current)*
+
+## Released
+
+### v0.8.4 — AI Offer Contract (measurements-only) · M2 — 2026-08-29
+- AI returns measurements / confidence / questions only; never prices (Constitution Art. 2 & 3)
+- Strict tool use (guaranteed JSON), photos to the offer agent, model from config
+- Fixed fail-open whitelist (Art. 6 & 9) + logging on the broad `except` (Art. 10)
+- **Gate met:** 1429 passed / 3 skipped / 0 failed, `mypy` 0 errors, `ruff` clean, no fail-open
+
+### v0.8.3 — proposal archive, measurement lineage, offline viewer — 2026-05-28
 
 ---
 
 ## Planned
-
-### v0.8.4 — AI Offer Contract (measurements-only) · M2
-- AI returns measurements / confidence / questions only; never prices (Constitution Art. 2 & 3)
-- Strict tool use (guaranteed JSON), photos to the offer agent, model from config
-- Fix fail-open whitelist (Art. 6 & 9) + add logging to broad `except` (Art. 10)
-- **Gate:** offer + full regression green, `mypy` green, no fail-open
 
 > **Checkpoint after v0.8.4 — v0.8 Architecture Review.** Before opening M3, confirm the architecture
 > still matches the Product Book vision after the AI-contract and governance changes. Not a bug hunt —

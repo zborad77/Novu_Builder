@@ -2,6 +2,74 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.8.4 — 2026-08-29
+
+Milestone **M2 — AI Offer Contract Review**. Backend and governance only; no UI,
+no pricing-engine and no schema changes.
+
+### AI offer contract — measurements only
+
+- **Full price separation** (Constitution Art. 2 & 3): the offer agent returns measured
+  quantities, units, surface condition and confidence — **never prices**. Prices stay the
+  pricing engine's job; `parsed_output` carries `pricing_status: "pending"`
+- **Strict tool use** replaces free-text JSON parsing — two tools express the branch in the
+  offer state machine (`submit_measurements` / `request_more_info`), with `tool_choice: any`
+  forcing exactly one
+- Validation layer reworked from `line_items`/prices to `measurements`: `RawMeasurementItem`,
+  `ValidatedMeasurements`, plus `surface_condition` and `recommended_scope` enum checks
+- `stop_reason: "refusal"` is now mapped to a non-retryable `ProviderRequestError`
+
+### Fail-closed AI boundary (Art. 6 & 9)
+
+- `offer_runner._resolve_ai_inputs()` raises `_AiInputResolutionError` when the work-type
+  catalog cannot be resolved — the job fails instead of validating model output against a
+  missing whitelist. The broad `except` now logs `offer_runner.catalog_resolution_failed`
+  before re-raising (Art. 10)
+- `OfferOutputValidator` rejects a `None` whitelist outright; an empty whitelist means
+  "reject every code" — fail-closed on both paths
+- Fixed input plumbing: the provider was receiving **photo IDs where presigned URLs were
+  expected** and an empty `work_type_definition`; both are now resolved before the AI call
+
+### Configuration
+
+- `AI_OFFER_PROVIDER` selects the offer provider (`mock` / `claude`)
+- `CLAUDE_VISION_MODEL` / `CLAUDE_OFFER_MODEL` are the single source of truth for model IDs
+  (previously read via `os.getenv` inside the provider); defaults moved to the current
+  generation, `claude-opus-5`
+
+### Fixes
+
+- `POST /measurements/{id}/confirm` wrote an outbox row with `organization_id=None` in a
+  superadmin context, violating the NOT NULL constraint — it now falls back to the project's
+  own tenant and skips the event (with a warning) if no tenant can be determined
+- Idempotent offer-submit replay returns 200 via `response.status_code` instead of a bare
+  `JSONResponse`, so the declared response model matches the wire contract (contract unchanged)
+
+### Release gate repairs
+
+`master` was red before this milestone; both linters are now clean over all of `app/`:
+
+- `ruff` 18 → 0 — unused imports, `AiBudgetReservation` missing from `app.models.__all__`,
+  module-level import ordering, undefined `datetime` in an annotation
+- `mypy` 18 → 0 — `rowcount` via the repository `getattr` idiom, `Row[...]` → tuple unpacking,
+  `event_id` narrowing in case-workflow effects, list concatenation, and `app.worker.offer_queue`
+  added to the existing redis-stub override
+
+### Tests
+
+- New `tests/test_offer_ai_contract.py` — pins the measurements-only contract, both fail-closed
+  paths (validator and runner), strict tool schemas, and tool-output extraction
+- `conftest.py` emulates PostgreSQL's DB-managed `outbox_events.seq` on SQLite
+- Repaired stale expectations in the analysis-route, case-transition and export-consistency tests
+
+### Governance
+
+- The M1 governance framework is now under version control: Constitution, Engineering Handbook,
+  Change Control, Roadmap, Glossary, AI engineering standard, development standards and
+  ADR-0001…0005
+- `.gitignore` now excludes generated artifacts (product-book PDF and its intermediate HTML,
+  Qt packaging output); the build script itself stays versioned
+
 ## v0.8.3 — 2026-05-28
 
 ### Proposal archive
