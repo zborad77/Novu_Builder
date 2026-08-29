@@ -45,7 +45,13 @@ def build_seed_id(prefix: str, *parts: str) -> str:
     if len(raw_id) <= MAX_SEED_ID_LENGTH:
         return validate_seed_id(raw_id)
 
-    digest = hashlib.sha1(raw_id.encode("utf-8")).hexdigest()[:_HASH_SUFFIX_LENGTH]
+    # Not a security hash: this is a deterministic suffix that keeps overflowing
+    # seed IDs unique and stable across runs. `usedforsecurity=False` states that
+    # intent (and satisfies bandit B324); the digest itself is unchanged, so
+    # already-seeded IDs keep resolving.
+    digest = hashlib.sha1(  # noqa: S324 — non-security, deterministic ID suffix
+        raw_id.encode("utf-8"), usedforsecurity=False
+    ).hexdigest()[:_HASH_SUFFIX_LENGTH]
     head_length = MAX_SEED_ID_LENGTH - len(digest) - 1
     if head_length <= 0:
         raise AssertionError("Seed ID max length is too small for deterministic overflow protection.")

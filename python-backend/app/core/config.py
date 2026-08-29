@@ -526,7 +526,14 @@ class Settings(BaseSettings):
     # Example: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     metrics_ip_allowlist: str = Field(default="", alias="METRICS_IP_ALLOWLIST")
     worker_metrics_enabled: bool = Field(default=False, alias="WORKER_METRICS_ENABLED")
-    worker_metrics_host: str = Field(default="0.0.0.0", alias="WORKER_METRICS_HOST")
+    # Binds all interfaces by design: the worker's Prometheus listener must be
+    # reachable from another container (the scraper), which a loopback bind would
+    # break. Exposure is governed by the deployment/network layer — the port is
+    # not published outside the compose network — not by this default.
+    worker_metrics_host: str = Field(  # nosec B104 — see comment above
+        default="0.0.0.0",  # nosec B104
+        alias="WORKER_METRICS_HOST",
+    )
     worker_metrics_port: int = Field(default=9101, alias="WORKER_METRICS_PORT")
 
     # Error monitoring — leave empty to disable Sentry (default: off)
