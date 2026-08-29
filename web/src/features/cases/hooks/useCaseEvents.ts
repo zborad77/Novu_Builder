@@ -19,10 +19,9 @@
  *   should redirect to login via the standard logout flow.
  */
 import { useCallback, useEffect, useReducer, useRef } from 'react'
-import { tokenStorage } from 'shared/lib/apiClient'
+import { apiClient } from 'shared/lib/apiClient'
 import { isCaseEvent, type CaseEvent } from 'shared/types/events.types'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api'
 const MAX_BACKOFF_MS = 16_000
 const INITIAL_BACKOFF_MS = 1_000
 // Must be greater than 2× heartbeat interval (server sends every 30s).
@@ -60,23 +59,22 @@ export function useCaseEvents(caseId: string, opts: CaseEventsOptions): void {
       const seenIds = new Set<string>()
 
       while (!abortSignal.aborted) {
-        const token = tokenStorage.getAccess()
         const headers: Record<string, string> = {
           Accept: 'text/event-stream',
           'Cache-Control': 'no-cache',
         }
-        if (token) headers['Authorization'] = `Bearer ${token}`
         if (lastSeqRef.current !== null) {
           headers['Last-Event-ID'] = String(lastSeqRef.current)
         }
 
         let response: Response
         try {
-          response = await fetch(`${API_BASE}/cases/${caseId}/activity/stream`, {
+          // apiClient.stream owns the base URL and the Authorization header.
+          response = await apiClient.stream(`/cases/${caseId}/activity/stream`, {
             headers,
             signal: abortSignal,
           })
-        } catch (err) {
+        } catch {
           if (abortSignal.aborted) return
           await _backoff(backoffRef, abortSignal)
           continue
@@ -130,7 +128,6 @@ export function useCaseEvents(caseId: string, opts: CaseEventsOptions): void {
       controller.abort()
       window.removeEventListener('online', handleOnline)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [caseId, startConnection, reconnectEpoch])
 }
 
@@ -165,7 +162,7 @@ async function _readStream(
       let value: Uint8Array | undefined
       try {
         ;({ done, value } = await Promise.race([reader.read(), stalePromise]))
-      } catch (err) {
+      } catch {
         clearTimeout(staleTimer)
         break  // stale or aborted — outer loop will reconnect
       }

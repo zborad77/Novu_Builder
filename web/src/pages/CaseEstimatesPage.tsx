@@ -219,7 +219,7 @@ export function CaseEstimatesPage() {
   function handleReload() {
     setStaleNotice(null)
     if (caseId) {
-      queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(caseId) })
+      void queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(caseId) })
     }
     toast.info('Proposal reloaded.')
   }

@@ -24,8 +24,8 @@ export function LoginPage() {
         accessToken: result.accessToken,
         refreshToken: result.refreshToken,
       })
-      queryClient.invalidateQueries({ queryKey: AUTH_ME_KEY })
-      navigate({ to: paths.cases })
+      void queryClient.invalidateQueries({ queryKey: AUTH_ME_KEY })
+      void navigate({ to: paths.cases })
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : 'Přihlášení selhalo. Zkontrolujte přístupové údaje.'
@@ -42,7 +42,7 @@ export function LoginPage() {
         <p className="mt-1 text-sm text-slate-500">Zadejte přístupové údaje k účtu</p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={(e) => { void handleSubmit(e) }} className="space-y-4">
         {error && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}

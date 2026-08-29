@@ -76,7 +76,7 @@ async function parseArchive(file: File): Promise<ParsedArchive> {
       timelineEvents: [],
       pricingSnapshot: null,
       integrityStatus: 'error',
-      messages: [`Not a valid ZIP file: ${e}`],
+      messages: [`Not a valid ZIP file: ${e instanceof Error ? e.message : String(e)}`],
     }
   }
 
@@ -428,7 +428,7 @@ export function ArchiveViewerPage() {
             Open a proposal archive ZIP offline — no backend required.
           </p>
         </div>
-        <DropZone onFile={handleFile} />
+        <DropZone onFile={(f) => { void handleFile(f) }} />
       </section>
     )
   }

@@ -178,7 +178,9 @@ export function PhotoViewerPage() {
       return
     }
 
-    const timerId = setTimeout(async () => {
+    // setTimeout expects a void-returning callback, so the async work is a named
+    // function the timer fires with an explicit `void`.
+    const runSave = async () => {
       saveAbortRef.current?.abort()
       const controller = new AbortController()
       saveAbortRef.current = controller
@@ -229,14 +231,15 @@ export function PhotoViewerPage() {
         } else if (httpStatus === 409) {
           setUserSelection(null)
           setSaveStatus('idle')
-          queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(caseId) })
+          void queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(caseId) })
           toast.warning('Analysis was updated — please review the new result.')
         } else {
           setSaveStatus('error')
           toast.error('Failed to save selection. Please try again.')
         }
       }
-    }, 400)
+    }
+    const timerId = setTimeout(() => { void runSave() }, 400)
 
     return () => {
       clearTimeout(timerId)
@@ -396,7 +399,7 @@ export function PhotoViewerPage() {
           aiInput.height != null ? (
           <UserSelectionOverlay
             key={`user-${latestAnalysis.id}`}
-            polygon={userSelection!.polygon}
+            polygon={userSelection.polygon}
             width={aiInput.width}
             height={aiInput.height}
           />

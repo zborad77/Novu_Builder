@@ -323,6 +323,11 @@ export type ApiRequestOptions = {
   signal?: AbortSignal
 }
 
+export type ApiStreamOptions = ApiRequestOptions & {
+  /** Request-specific headers, e.g. `Accept: text/event-stream`, `Last-Event-ID`. */
+  headers?: Record<string, string>
+}
+
 function cfg(opts?: ApiRequestOptions): AxiosRequestConfig {
   return opts?.signal !== undefined ? { signal: opts.signal } : {}
 }
@@ -346,6 +351,26 @@ export const apiClient = {
 
   delete<T>(url: string, opts?: ApiRequestOptions) {
     return axiosInstance.delete<T>(url, cfg(opts)).then((response) => response.data)
+  },
+
+  /**
+   * Open a streaming GET and return the raw Response, unparsed.
+   *
+   * For endpoints whose body must be read incrementally (SSE): axios' browser
+   * adapter buffers the whole response, so those callers previously reached for
+   * `fetch` directly and re-derived the base URL and auth header themselves.
+   * This keeps both in one place; the caller still owns framing, reconnect and
+   * resume. Response status is NOT checked here — SSE callers branch on 401 vs
+   * other failures themselves.
+   */
+  stream(url: string, opts?: ApiStreamOptions): Promise<Response> {
+    const token = tokenStorage.getAccess()
+    const headers: Record<string, string> = { ...opts?.headers }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    return fetch(`${BASE_URL}${url}`, {
+      headers,
+      ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+    })
   },
 
   postForm<T>(url: string, formData: FormData, opts?: ApiRequestOptions) {

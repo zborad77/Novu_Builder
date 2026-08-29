@@ -39,7 +39,7 @@ export function CaseLayout() {
 
       switch (event.event_type) {
         case 'analysis.started':
-          queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(event.aggregate_id) })
+          void queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(event.aggregate_id) })
           break
 
         case 'analysis.completed': {
@@ -72,8 +72,8 @@ export function CaseLayout() {
             }
           }
           // Full refetch: processingStatus / isAnalysisReference may have changed.
-          queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(event.aggregate_id) })
-          queryClient.invalidateQueries({ queryKey: CASE_KEYS.photos(event.aggregate_id) })
+          void queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(event.aggregate_id) })
+          void queryClient.invalidateQueries({ queryKey: CASE_KEYS.photos(event.aggregate_id) })
           break
         }
 
@@ -83,8 +83,8 @@ export function CaseLayout() {
 
         case 'proposal.ready':
           setProposalRecalculating(false)
-          queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(event.aggregate_id) })
-          queryClient.invalidateQueries({
+          void queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(event.aggregate_id) })
+          void queryClient.invalidateQueries({
             queryKey: WORK_CATALOG_KEYS.caseItems(event.aggregate_id),
           })
           break
