@@ -7,7 +7,23 @@
 
 **Last updated:** 2026-08-29
 **Current version:** v0.8.4 — AI offer contract (measurements-only), fail-closed AI boundary
-**Current branch:** master — release commit and `v0.8.4` tag are local; **push still pending** at the time of this commit.
+**Current branch:** master — in sync with `origin/master` (`a3d6b9f`); tag `v0.8.4` pushed.
+
+> ⚠️ **v0.8.4 was released with the authoritative CI gate red.** The local gate was green
+> (1429 passed / 3 skipped / 0 failed, `mypy` 0, `ruff` clean), but GitHub Actions
+> `orchestration-release-gate` fails, and the push bypassed that required status check.
+> All three failures **predate v0.8.4** — none is caused by M2 — but per
+> [development/RELEASE_PROCESS.md](development/RELEASE_PROCESS.md) a release should not be
+> tagged over a red gate. Fixing this is the first candidate for M3:
+>
+> | CI job | Failure | Origin |
+> |---|---|---|
+> | `lint` | `mypy app/main.py:68-69 no-redef` on the `slowapi` import fallback — **does not reproduce locally**, where `slowapi` is installed | pre-existing; environment-dependent |
+> | `test` | `ModuleNotFoundError: pytest_asyncio` — the job does not install `requirements-dev.txt` | pre-existing CI config gap |
+> | `web-lint` | 2 TS errors in `ImpersonateBanner.tsx` / `PhotoViewerPage.tsx` | pre-existing; `web/` untouched by M2 |
+> | `Repo Guard` | `python-backend/.env.production.example` matches the forbidden `.env` pattern | pre-existing since `f66c8c1` |
+>
+> Lesson: a locally green `mypy` is **not** equivalent to CI — the local venv has packages CI lacks.
 
 ---
 

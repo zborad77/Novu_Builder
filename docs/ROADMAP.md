@@ -13,7 +13,8 @@
 - AI returns measurements / confidence / questions only; never prices (Constitution Art. 2 & 3)
 - Strict tool use (guaranteed JSON), photos to the offer agent, model from config
 - Fixed fail-open whitelist (Art. 6 & 9) + logging on the broad `except` (Art. 10)
-- **Gate met:** 1429 passed / 3 skipped / 0 failed, `mypy` 0 errors, `ruff` clean, no fail-open
+- **Local gate met:** 1429 passed / 3 skipped / 0 failed, `mypy` 0 errors, `ruff` clean, no fail-open
+- ⚠️ **CI gate red** at release time (pre-existing failures, none from M2) — see [PROJECT_STATE.md](PROJECT_STATE.md)
 
 ### v0.8.3 — proposal archive, measurement lineage, offline viewer — 2026-05-28
 

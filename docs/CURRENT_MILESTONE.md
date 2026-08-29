@@ -5,7 +5,7 @@
 > outside it. Update this file when a milestone opens or closes.
 
 **Milestone:** M2 — AI Offer Contract Review
-**Status:** DONE — all blocking issues cleared, release gate green, committed to local `master` (**not pushed**)
+**Status:** DONE — all blocking issues cleared, local gate green, released as `v0.8.4` and pushed to `origin/master`
 **Version target:** v0.8.4 — see [ROADMAP.md](ROADMAP.md)
 **Closed:** 2026-08-29
 **Last updated:** 2026-08-29
@@ -31,7 +31,8 @@
 - Coverage gap closed: added runner-level fail-closed tests to `test_offer_ai_contract.py`; repaired the stale `test_create_final_proposal_awaits_export_generation` stub/assertion
 
 ## Open follow-ups (deliberately deferred, not M2 blockers)
-- `v0.8.4` release itself is **not** done: CHANGELOG entry, version bump and tag are still open (see [development/RELEASE_PROCESS.md](development/RELEASE_PROCESS.md))
+- ⚠️ **CI `orchestration-release-gate` is red** and the v0.8.4 push bypassed it. Four pre-existing failures, none from M2 — full breakdown in [PROJECT_STATE.md](PROJECT_STATE.md). **Top M3 candidate.**
+- `python-backend` `app_version` is still `"0.6.003"` — stale since v0.6, not bumped by any v0.8.x release
 - Untracked governance docs (M1 deliverable) are still uncommitted — they must land as their own documentation commit ([CHANGE_CONTROL.md](CHANGE_CONTROL.md): no code mixed into a docs change)
 - Build artifacts `.pdfbuild/`, `desktop-qt/dist/`, `NOVU_MASTER_PRODUCT_BOOK.pdf` are untracked **and not ignored** — `.gitignore` needs an entry so a future `git add -A` cannot commit them
 - Server-side `fallbacks` against `stop_reason: "refusal"` for `claude-opus-5` — recommended for the offer provider, deferred as an M3 candidate
