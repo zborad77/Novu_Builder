@@ -123,3 +123,15 @@ structure.txt
 # =========================================
 my-app/
 docs/*.pdf
+
+# =========================================
+# GENERATED BUILD ARTIFACTS
+# =========================================
+# Product Book: NOVU_MASTER_PRODUCT_BOOK.md is the source of truth.
+# The PDF and the intermediate HTML are reproducible via
+# `node .pdfbuild/build.mjs` — the build script itself stays versioned.
+.pdfbuild/book.html
+NOVU_MASTER_PRODUCT_BOOK.pdf
+
+# Qt desktop packaging output (windeployqt / Package-Pilot.ps1)
+desktop-qt/dist/
