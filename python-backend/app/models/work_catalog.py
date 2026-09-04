@@ -552,7 +552,11 @@ class CatalogPricingProfileAdjustmentRule(TimestampMixin, Base):
             "CASE WHEN condition_number_value IS NOT NULL THEN 1 ELSE 0 END + "
             "CASE WHEN condition_boolean_value IS NOT NULL THEN 1 ELSE 0 END + "
             "CASE WHEN condition_option_code IS NOT NULL THEN 1 ELSE 0 END) <= 1",
-            name="ck_catalog_pricing_profile_adjustment_rules_single_condition_value",
+            # Deliberately shorter than the sibling constraints on this table: the
+            # full ck_catalog_pricing_profile_adjustment_rules_* form would be 66
+            # characters and PostgreSQL rejects identifiers over 63. Migration 0033
+            # already creates it under this short name, so the database matches.
+            name="ck_pricing_adj_rules_single_condition_value",
         ),
     )
 
