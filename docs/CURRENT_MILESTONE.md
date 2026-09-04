@@ -4,39 +4,72 @@
 > Every AI agent and contributor MUST read this before starting work, and MUST NOT start work
 > outside it. Update this file when a milestone opens or closes.
 
-**Milestone:** M2 — AI Offer Contract Review
-**Status:** DONE — all blocking issues cleared, local gate green, released as `v0.8.4` and pushed to `origin/master`
-**Version target:** v0.8.4 — see [ROADMAP.md](ROADMAP.md)
-**Closed:** 2026-08-29
-**Last updated:** 2026-08-29
+**Milestone:** M3 — Test Isolation & PostgreSQL Async Infrastructure
+**Status:** IN PROGRESS
+**Version target:** v0.8.5 — see [ROADMAP.md](ROADMAP.md)
+**Opened:** 2026-09-04
 
-> M2 is closed. The next milestone is **not** open yet — see *Next milestone* below.
-> Do not start M3 work until this file is updated to open it.
+## Goal
+
+Establish a trustworthy PostgreSQL test baseline and make the authoritative
+`orchestration-release-gate` fully green without weakening test isolation.
 
 ## In scope
-- AI Offer Contract review (measurements-only contract) + Constitution-compliance fixes + merge
 
-## Blocking issues — all cleared
-- [x] Fail-open catalog whitelist → make **fail-closed** (Constitution Art. 6 & 9) — enforced twice: `offer_runner._resolve_ai_inputs` raises `_AiInputResolutionError`, and `OfferOutputValidator` rejects a `None` whitelist outright
-- [x] `except Exception` without logging in `offer_runner._resolve_ai_inputs` (Constitution Art. 10) — logs `offer_runner.catalog_resolution_failed`, then re-raises
-- [x] Red test: `test_patch_analysis_selection_forwards_org_scope_to_service_update` (missing `get_latest_result` mock for the `ANALYSIS_STALE` guard)
-- [x] Out-of-scope working-tree test changes (`conftest.py`, two analysis tests) — triaged: **keep**. Each is a required consequence of already-committed product code (SQLite outbox `seq` emulation, the `ANALYSIS_STALE` / `CASE_FINALIZED` guards, `analysis_results` on the proposal snapshot), not a stray edit.
-- [x] Release gate green: tests + `mypy` + clean tree (see [development/RELEASE_PROCESS.md](development/RELEASE_PROCESS.md)) — `1429 passed, 3 skipped`; `mypy` 0 errors / 146 files; `ruff` clean
+- Make the pytest suite reliable against PostgreSQL.
+- Remove asyncpg/event-loop coupling in the test infrastructure.
+- Resolve already documented subset/order fragility where it belongs to
+  shared test infrastructure.
+- Confirm the complete required CI pipeline against PostgreSQL 16.
 
-### Gate repairs done on the way (`master` was red before this work)
-- `ruff` 18 → 0: unused imports, `AiBudgetReservation` missing from `app.models.__all__`, E402 in `models/offer_processing.py`, F821 `datetime` in `core/metrics.py`
-- `mypy` 18 → 0: `rowcount` via the repo's `getattr` idiom, `Row[...]` → `tuple` unpacking, `ctx.state` `event_id` narrowing, list `+` → `extend`, `JSONResponse` → `response.status_code` (wire contract unchanged), `app.worker.offer_queue` added to the existing redis-stub override
-- Real defect fixed: `confirm_measurement` wrote an outbox row with `organization_id=None` in a superadmin context (NOT NULL violation) — now falls back to the project's tenant
-- Model IDs moved to the current generation (`claude-opus-5`) in `Settings` and `AnthropicAdapter`
-- Coverage gap closed: added runner-level fail-closed tests to `test_offer_ai_contract.py`; repaired the stale `test_create_final_proposal_awaits_export_generation` stub/assertion
+## Blocking issues
 
-## Open follow-ups (deliberately deferred, not M2 blockers)
-- ⚠️ **CI `orchestration-release-gate` is red** and the v0.8.4 push bypassed it. Four pre-existing failures, none from M2 — full breakdown in [PROJECT_STATE.md](PROJECT_STATE.md). **Top M3 candidate.**
-- `python-backend` `app_version` is still `"0.6.003"` — stale since v0.6, not bumped by any v0.8.x release
-- Untracked governance docs (M1 deliverable) are still uncommitted — they must land as their own documentation commit ([CHANGE_CONTROL.md](CHANGE_CONTROL.md): no code mixed into a docs change)
-- Build artifacts `.pdfbuild/`, `desktop-qt/dist/`, `NOVU_MASTER_PRODUCT_BOOK.pdf` are untracked **and not ignored** — `.gitignore` needs an entry so a future `git add -A` cannot commit them
-- Server-side `fallbacks` against `stop_reason: "refusal"` for `claude-opus-5` — recommended for the offer provider, deferred as an M3 candidate
+- [ ] asyncpg connections are pooled on the session-scoped loop and reused from
+      per-test loops → `attached to a different loop` /
+      `another operation is in progress`.
 
-## Next milestone (NOT open yet)
-- **M3 — Backend Stabilization** (target v0.8.5)
-- Checkpoint before M3: *v0.8 Architecture Review* — confirm architecture still matches the Product Book vision
+      Reproduced locally on PostgreSQL 17.9 using an isolated test schema.
+      Even a single test can fail. Root cause is the module-level
+      `_test_engine` combined with session-scoped `_setup_test_db` and
+      function-scoped test loops.
+
+- [ ] Evaluate `NullPool` for the test engine as the smallest isolation-preserving
+      solution. Accept it as the permanent solution only if PostgreSQL tests show
+      that it removes the asyncpg failures without introducing state leakage,
+      unacceptable performance regression, or new failures.
+
+- [ ] If `NullPool` is insufficient, redesign test engine/resource lifetime so
+      async DB resources belong to the event-loop scope that uses them.
+
+- [ ] Resolve documented subset/order fragility in shared test infrastructure.
+
+- [ ] Full required CI green on PostgreSQL 16.
+
+## Known follow-ups — not M3 blockers
+
+- `ck_catalog_pricing_profile_material_assumptions_quantity_source` is exactly
+  63 characters and has no PostgreSQL identifier headroom.
+- `.coverage` is generated locally but is not currently ignored.
+- API/OpenAPI `app_version` is not synchronized with repository releases.
+- Remote release/tag history before v0.8.4 requires separate review.
+
+## Forbidden until M3 closes
+
+- New product features
+- UI redesign
+- Pricing Engine feature work
+- Unrelated schema redesign
+- Tagging v0.8.5 before the authoritative CI release gate is fully green
+
+---
+
+## Previous milestone — M2, closed 2026-08-29
+
+**M2 — AI Offer Contract Review**, released as `v0.8.4`. All five blocking issues
+cleared: fail-closed catalog whitelist enforced at both the runner and the validator,
+exception logging restored, the red analysis-route test fixed, out-of-scope test
+changes triaged as *keep*, and the local release gate green.
+
+Released over a red CI gate — that deviation, and the four pre-existing failures
+behind it, are recorded in [PROJECT_STATE.md](PROJECT_STATE.md). Clearing them is
+what opened M3.
