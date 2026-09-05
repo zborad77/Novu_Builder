@@ -94,6 +94,19 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # Same image as docker-compose. The analysis job queue talks to a real
+      # Redis; without one, POST /analysis-jobs returns 503 and the session-scoped
+      # job_a_id fixture takes the whole E2E and resilience suite down with it.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       APP_ENV: development
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/novu_test
@@ -107,7 +120,7 @@ jobs:
       # another raises "attached to a different loop". Honoured only because
       # APP_ENV is non-strict here; production keeps its pooled engine.
       DB_TEST_DISABLE_POOLING: "true"
-      # REDIS_URL intentionally unset — test-redis-connection.py skips when missing
+      REDIS_URL: redis://localhost:6379/0
       # SENTRY_DSN intentionally unset — error monitoring off in CI
 
     steps:
