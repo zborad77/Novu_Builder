@@ -2,10 +2,12 @@ import logging
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.pool import NullPool
 
 from app.core.analysis_provider_capabilities import validate_selected_analysis_provider
 
@@ -360,6 +362,20 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(default=10, alias="DB_MAX_OVERFLOW")
     db_pool_timeout: int = Field(default=30, alias="DB_POOL_TIMEOUT")
     db_pool_recycle: int = Field(default=1800, alias="DB_POOL_RECYCLE")
+
+    # --- Test-only engine profile ------------------------------------------
+    # Both fields are honoured ONLY in non-strict environments (development /
+    # test) — see database_engine_kwargs. In any other APP_ENV they are ignored,
+    # so a stray env var cannot put a production deployment on the test profile.
+    #
+    # db_test_disable_pooling: run the engine on NullPool. Pytest gives each test
+    #   its own event loop; a pooled asyncpg connection opened on one loop and
+    #   reused from another raises "attached to a different loop".
+    # db_test_search_path: pin PostgreSQL search_path, so a test run can be
+    #   confined to a dedicated schema instead of needing its own database.
+    db_test_disable_pooling: bool = Field(default=False, alias="DB_TEST_DISABLE_POOLING")
+    db_test_search_path: str = Field(default="", alias="DB_TEST_SEARCH_PATH")
+
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     redis_failover_urls: str = Field(default="", alias="REDIS_FAILOVER_URLS")
     redis_socket_connect_timeout: float = Field(default=1.0, alias="REDIS_SOCKET_CONNECT_TIMEOUT")
@@ -558,12 +574,42 @@ class Settings(BaseSettings):
 
         return self.database_url
 
+    def _test_engine_profile(self) -> tuple[dict[str, Any] | None, bool]:
+        """Test-only engine overrides as ``(connect_args, disable_pooling)``.
+
+        Gated on the environment, not just on the env var: in a strict APP_ENV
+        both settings are ignored outright, so a stray env var cannot put a
+        production deployment onto the test engine profile.
+
+        Shared by the API and worker engines so the two cannot drift apart —
+        they talk to the same database and must agree on pooling and schema.
+        """
+        if _is_strict_environment(self.app_env):
+            return None, False
+
+        connect_args: dict[str, Any] | None = None
+        if self.db_test_search_path and self.database_url.startswith("postgresql+asyncpg://"):
+            connect_args = {"server_settings": {"search_path": self.db_test_search_path}}
+
+        return connect_args, self.db_test_disable_pooling
+
     @property
-    def database_engine_kwargs(self) -> dict[str, bool | int]:
-        kwargs: dict[str, bool | int] = {"pool_pre_ping": True}
+    def database_engine_kwargs(self) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {"pool_pre_ping": True}
 
         # SQLite in-memory URLs rely on StaticPool, which rejects queue-pool tuning kwargs.
         if _is_sqlite_in_memory_url(self.database_url):
+            return kwargs
+
+        connect_args, disable_pooling = self._test_engine_profile()
+        if connect_args is not None:
+            kwargs["connect_args"] = connect_args
+
+        if disable_pooling:
+            # NullPool keeps no connections, so pool_size / max_overflow /
+            # pool_timeout are meaningless to it and SQLAlchemy rejects them.
+            # Return before they are added rather than adding then removing.
+            kwargs["poolclass"] = NullPool
             return kwargs
 
         kwargs.update(
@@ -615,7 +661,7 @@ class Settings(BaseSettings):
         return max(1, self.worker_concurrency)
 
     @property
-    def worker_database_engine_kwargs(self) -> dict[str, bool | int]:
+    def worker_database_engine_kwargs(self) -> dict[str, Any]:
         """Engine kwargs for the worker-dedicated DB pool.
 
         max_overflow=0 is intentional: the worker pool is exactly sized.
@@ -623,9 +669,19 @@ class Settings(BaseSettings):
         seconds, then raises — which is the correct fail-fast behaviour.
         SQLite in-memory uses StaticPool and ignores these kwargs.
         """
-        kwargs: dict[str, bool | int] = {"pool_pre_ping": True}
+        kwargs: dict[str, Any] = {"pool_pre_ping": True}
         if _is_sqlite_in_memory_url(self.database_url):
             return kwargs
+
+        # Same test-only profile as the API engine — see _test_engine_profile().
+        connect_args, disable_pooling = self._test_engine_profile()
+        if connect_args is not None:
+            kwargs["connect_args"] = connect_args
+
+        if disable_pooling:
+            kwargs["poolclass"] = NullPool
+            return kwargs
+
         kwargs.update(
             pool_size=self.effective_worker_db_pool_size,
             max_overflow=0,

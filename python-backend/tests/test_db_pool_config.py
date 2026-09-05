@@ -14,13 +14,35 @@ _PG_URL = "postgresql+asyncpg://novu:test-pass@localhost:5432/novu_dev"
 _SQLITE_MEM_URL = "sqlite+aiosqlite:///:memory:"
 
 
+def _pool_settings(**overrides) -> Settings:
+    """Settings with the test-only engine profile explicitly switched off.
+
+    These tests assert the *production* pool contract, but they run inside a
+    pytest process that sets APP_ENV=development and — when the suite is pointed
+    at PostgreSQL — DB_TEST_DISABLE_POOLING / DB_TEST_SEARCH_PATH. Without
+    pinning them here the assertions would silently describe whatever profile
+    the process happened to be started with.
+
+    APP_ENV is deliberately NOT pinned to "production": the strict profile
+    requires DB_POOL_SIZE and friends to be set explicitly, which would defeat
+    the very defaults these tests exist to verify. Pinning the two test-profile
+    inputs is what actually removes the dependency on the process environment.
+    """
+    return Settings(
+        DATABASE_URL=_PG_URL,
+        DB_TEST_DISABLE_POOLING=False,
+        DB_TEST_SEARCH_PATH="",
+        **overrides,
+    )
+
+
 # ===========================================================================
 # Existing tests — API pool defaults and individual-parameter validation
 # ===========================================================================
 
 
 def test_db_pool_defaults_are_conservative_and_explicit():
-    settings = Settings(DATABASE_URL=_PG_URL)
+    settings = _pool_settings()
 
     assert settings.db_pool_size == 10
     assert settings.db_max_overflow == 10
@@ -52,8 +74,7 @@ def test_db_pool_settings_reject_invalid_values(overrides, message):
 
 
 def test_db_pool_settings_create_tuned_queue_pool_for_backend_urls():
-    settings = Settings(
-        DATABASE_URL=_PG_URL,
+    settings = _pool_settings(
         DB_POOL_SIZE=7,
         DB_MAX_OVERFLOW=9,
         DB_POOL_TIMEOUT=11,
@@ -109,25 +130,25 @@ class TestWorkerPoolDefaults:
     """Worker pool defaults and auto-derive behaviour."""
 
     def test_worker_db_pool_size_defaults_to_zero(self):
-        s = Settings(DATABASE_URL=_PG_URL)
+        s = _pool_settings()
         assert s.worker_db_pool_size == 0
 
     def test_effective_pool_size_auto_derives_from_worker_concurrency(self):
-        s = Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=3)
+        s = _pool_settings(WORKER_CONCURRENCY=3)
         assert s.effective_worker_db_pool_size == 3
 
     def test_effective_pool_size_uses_explicit_when_set(self):
-        s = Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=2, WORKER_DB_POOL_SIZE=5)
+        s = _pool_settings(WORKER_CONCURRENCY=2, WORKER_DB_POOL_SIZE=5)
         assert s.effective_worker_db_pool_size == 5
 
     def test_worker_engine_kwargs_include_max_overflow_zero(self):
-        s = Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=4)
+        s = _pool_settings(WORKER_CONCURRENCY=4)
         kwargs = s.worker_database_engine_kwargs
         assert kwargs["max_overflow"] == 0
         assert kwargs["pool_size"] == 4  # auto-derived
 
     def test_worker_engine_kwargs_explicit_pool_size(self):
-        s = Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=2, WORKER_DB_POOL_SIZE=6)
+        s = _pool_settings(WORKER_CONCURRENCY=2, WORKER_DB_POOL_SIZE=6)
         kwargs = s.worker_database_engine_kwargs
         assert kwargs["pool_size"] == 6
         assert kwargs["max_overflow"] == 0
@@ -137,12 +158,12 @@ class TestWorkerPoolDefaults:
         assert s.worker_database_engine_kwargs == {"pool_pre_ping": True}
 
     def test_worker_db_pool_capacity_property_matches_effective(self):
-        s = Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=5)
+        s = _pool_settings(WORKER_CONCURRENCY=5)
         assert s.worker_db_pool_capacity == 5
         assert s.worker_db_safe_concurrency_limit == 5
 
     def test_worker_db_safe_concurrency_limit_equals_effective_pool_size(self):
-        s = Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=2, WORKER_DB_POOL_SIZE=8)
+        s = _pool_settings(WORKER_CONCURRENCY=2, WORKER_DB_POOL_SIZE=8)
         assert s.worker_db_safe_concurrency_limit == 8
 
     def test_api_and_worker_pools_are_independent(self):
@@ -159,7 +180,7 @@ class TestWorkerPoolDefaults:
 
     def test_worker_engine_creates_pool_with_correct_size(self):
         """The SQLAlchemy worker engine actually respects the configured pool size."""
-        s = Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=3, WORKER_DB_POOL_SIZE=3)
+        s = _pool_settings(WORKER_CONCURRENCY=3, WORKER_DB_POOL_SIZE=3)
         engine = create_async_engine(
             s.database_url,
             echo=s.app_debug,
@@ -179,27 +200,27 @@ class TestWorkerPoolParamValidation:
 
     def test_negative_worker_db_pool_size_rejected(self):
         with pytest.raises(ValidationError, match="WORKER_DB_POOL_SIZE must be >= 0"):
-            Settings(DATABASE_URL=_PG_URL, WORKER_DB_POOL_SIZE=-1)
+            _pool_settings(WORKER_DB_POOL_SIZE=-1)
 
     def test_zero_worker_db_pool_timeout_rejected(self):
         with pytest.raises(ValidationError, match="WORKER_DB_POOL_TIMEOUT must be > 0"):
-            Settings(DATABASE_URL=_PG_URL, WORKER_DB_POOL_TIMEOUT=0)
+            _pool_settings(WORKER_DB_POOL_TIMEOUT=0)
 
     def test_zero_worker_instance_count_rejected(self):
         with pytest.raises(ValidationError, match="WORKER_INSTANCE_COUNT must be >= 1"):
-            Settings(DATABASE_URL=_PG_URL, WORKER_INSTANCE_COUNT=0)
+            _pool_settings(WORKER_INSTANCE_COUNT=0)
 
     def test_negative_worker_instance_count_rejected(self):
         with pytest.raises(ValidationError, match="WORKER_INSTANCE_COUNT must be >= 1"):
-            Settings(DATABASE_URL=_PG_URL, WORKER_INSTANCE_COUNT=-1)
+            _pool_settings(WORKER_INSTANCE_COUNT=-1)
 
     def test_valid_explicit_worker_db_pool_size_accepted(self):
-        s = Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=3, WORKER_DB_POOL_SIZE=5)
+        s = _pool_settings(WORKER_CONCURRENCY=3, WORKER_DB_POOL_SIZE=5)
         assert s.worker_db_pool_size == 5
         assert s.effective_worker_db_pool_size == 5
 
     def test_valid_multi_instance_count_accepted(self):
-        s = Settings(DATABASE_URL=_PG_URL, WORKER_INSTANCE_COUNT=5)
+        s = _pool_settings(WORKER_INSTANCE_COUNT=5)
         assert s.worker_instance_count == 5
 
 
@@ -216,22 +237,22 @@ class TestWorkerDbCapacityGuard:
 
     def test_default_config_passes(self):
         """Default WORKER_CONCURRENCY=1, WORKER_DB_POOL_SIZE=0 auto-derives → always safe."""
-        s = Settings(DATABASE_URL=_PG_URL)
+        s = _pool_settings()
         assert s.worker_concurrency == 1
         assert s.effective_worker_db_pool_size == 1
 
     def test_auto_derive_any_concurrency_passes(self):
         """Auto-derive (WORKER_DB_POOL_SIZE=0) always passes regardless of WORKER_CONCURRENCY."""
-        s = Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=20)
+        s = _pool_settings(WORKER_CONCURRENCY=20)
         assert s.effective_worker_db_pool_size == 20
 
     def test_explicit_pool_size_equal_to_concurrency_passes(self):
-        s = Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=5, WORKER_DB_POOL_SIZE=5)
+        s = _pool_settings(WORKER_CONCURRENCY=5, WORKER_DB_POOL_SIZE=5)
         assert s.effective_worker_db_pool_size == 5
 
     def test_explicit_pool_size_larger_than_concurrency_passes(self):
         """WORKER_DB_POOL_SIZE > WORKER_CONCURRENCY is valid (provides buffer)."""
-        s = Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=4, WORKER_DB_POOL_SIZE=8)
+        s = _pool_settings(WORKER_CONCURRENCY=4, WORKER_DB_POOL_SIZE=8)
         assert s.effective_worker_db_pool_size == 8
 
     # ------------------------------------------------------------------
@@ -241,11 +262,11 @@ class TestWorkerDbCapacityGuard:
     def test_explicit_pool_size_smaller_than_concurrency_fails(self):
         """Explicit WORKER_DB_POOL_SIZE < WORKER_CONCURRENCY must fail at startup."""
         with pytest.raises(ValidationError, match="WORKER_DB_POOL_SIZE"):
-            Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=5, WORKER_DB_POOL_SIZE=4)
+            _pool_settings(WORKER_CONCURRENCY=5, WORKER_DB_POOL_SIZE=4)
 
     def test_pool_size_one_concurrency_two_fails(self):
         with pytest.raises(ValidationError, match="WORKER_DB_POOL_SIZE"):
-            Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=2, WORKER_DB_POOL_SIZE=1)
+            _pool_settings(WORKER_CONCURRENCY=2, WORKER_DB_POOL_SIZE=1)
 
     # ------------------------------------------------------------------
     # Error message quality
@@ -253,25 +274,25 @@ class TestWorkerDbCapacityGuard:
 
     def test_error_message_contains_explicit_pool_size(self):
         with pytest.raises(ValidationError) as exc_info:
-            Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=5, WORKER_DB_POOL_SIZE=3)
+            _pool_settings(WORKER_CONCURRENCY=5, WORKER_DB_POOL_SIZE=3)
         assert "WORKER_DB_POOL_SIZE=3" in str(exc_info.value)
 
     def test_error_message_contains_concurrency(self):
         with pytest.raises(ValidationError) as exc_info:
-            Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=5, WORKER_DB_POOL_SIZE=3)
+            _pool_settings(WORKER_CONCURRENCY=5, WORKER_DB_POOL_SIZE=3)
         assert "WORKER_CONCURRENCY=5" in str(exc_info.value)
 
     def test_error_message_mentions_fix(self):
         """Error must tell the operator how to fix the configuration."""
         with pytest.raises(ValidationError) as exc_info:
-            Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=5, WORKER_DB_POOL_SIZE=3)
+            _pool_settings(WORKER_CONCURRENCY=5, WORKER_DB_POOL_SIZE=3)
         msg = str(exc_info.value)
         assert "Fix" in msg or "fix" in msg or ">= 5" in msg
 
     def test_error_message_mentions_max_overflow_zero(self):
         """Error must explain why overflow doesn't help (max_overflow=0)."""
         with pytest.raises(ValidationError) as exc_info:
-            Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=3, WORKER_DB_POOL_SIZE=2)
+            _pool_settings(WORKER_CONCURRENCY=3, WORKER_DB_POOL_SIZE=2)
         assert "max_overflow" in str(exc_info.value).lower() or "overflow" in str(exc_info.value).lower()
 
     # ------------------------------------------------------------------
@@ -312,11 +333,11 @@ class TestWorkerDbCapacityGuard:
     def test_invalid_pool_size_error_fires_before_capacity_guard(self):
         """Individual param validation (_check_worker_db_params) fires first."""
         with pytest.raises(ValidationError, match="WORKER_DB_POOL_SIZE must be >= 0"):
-            Settings(DATABASE_URL=_PG_URL, WORKER_DB_POOL_SIZE=-1, WORKER_CONCURRENCY=5)
+            _pool_settings(WORKER_DB_POOL_SIZE=-1, WORKER_CONCURRENCY=5)
 
     def test_zero_worker_concurrency_fires_before_capacity_guard(self):
         with pytest.raises(ValidationError, match="WORKER_CONCURRENCY must be > 0"):
-            Settings(DATABASE_URL=_PG_URL, WORKER_CONCURRENCY=0, WORKER_DB_POOL_SIZE=5)
+            _pool_settings(WORKER_CONCURRENCY=0, WORKER_DB_POOL_SIZE=5)
 
     # ------------------------------------------------------------------
     # API pool is independent — high WORKER_CONCURRENCY is fine with separate pools
@@ -338,7 +359,7 @@ class TestWorkerDbCapacityGuard:
 
     def test_defaults_result_in_correct_both_pools(self):
         """Default config exposes both pools with correct independent settings."""
-        s = Settings(DATABASE_URL=_PG_URL)
+        s = _pool_settings()
         # API pool
         assert s.database_engine_kwargs["pool_size"] == 10
         assert s.database_engine_kwargs["max_overflow"] == 10

@@ -56,7 +56,12 @@ from app.models import MaterialCatalog, Organization, PricingProfile, Supplier, 
 from app.services.auth_service import hash_password  # noqa: E402
 
 
-_test_engine = create_async_engine(_TEST_DB_URL, echo=False)
+# Mirror the application engine's profile. Both engines talk to the same test
+# database, so they must agree on pooling and (for PostgreSQL) search_path —
+# otherwise fixture DB writes and HTTP-driven writes land in different places.
+_test_engine = create_async_engine(
+    _TEST_DB_URL, echo=False, **get_settings().database_engine_kwargs
+)
 _TestSession = async_sessionmaker(_test_engine, class_=AsyncSession, expire_on_commit=False)
 
 
