@@ -102,6 +102,11 @@ jobs:
       STORAGE_ROOT: /tmp/novu-ci-storage
       AI_ANALYSIS_PROVIDER: mock
       LOG_LEVEL: WARNING
+      # NullPool for the test engines. pytest gives each test its own event loop,
+      # and a pooled asyncpg connection opened on one loop then reused from
+      # another raises "attached to a different loop". Honoured only because
+      # APP_ENV is non-strict here; production keeps its pooled engine.
+      DB_TEST_DISABLE_POOLING: "true"
       # REDIS_URL intentionally unset — test-redis-connection.py skips when missing
       # SENTRY_DSN intentionally unset — error monitoring off in CI
 
