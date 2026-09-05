@@ -20,27 +20,15 @@ import pytest_asyncio
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
-_TestSession = None  # resolved lazily inside fixtures
-
-
-def _get_session_factory():
-    global _TestSession
-    if _TestSession is None:
-        from tests.conftest import _TestSession as _TS  # noqa: PLC0415
-        _TestSession = _TS
-    return _TestSession
-
-
 @pytest_asyncio.fixture
-async def superadmin_for_reset(app_client):
+async def superadmin_for_reset(app_client, db_session_factory):
     """Function-scoped throwaway superadmin for admin-reset tests."""
     from app.models import User
     from app.services.auth_service import hash_password
 
     uid = f"usr_sa_{uuid.uuid4().hex[:8]}"
     email = f"superadmin_{uid}@test.local"
-    TS = _get_session_factory()
-    async with TS() as session:
+    async with db_session_factory() as session:
         session.add(User(
             id=uid,
             organization_id="org_e2e_a",
@@ -59,8 +47,7 @@ async def superadmin_for_reset(app_client):
 
     yield {"user_id": uid, "token": token}
 
-    TS = _get_session_factory()
-    async with TS() as session:
+    async with db_session_factory() as session:
         user = await session.get(User, uid)
         if user:
             await session.delete(user)
@@ -68,7 +55,7 @@ async def superadmin_for_reset(app_client):
 
 
 @pytest_asyncio.fixture
-async def target_user_with_old_token(app_client):
+async def target_user_with_old_token(app_client, db_session_factory):
     """Function-scoped user whose token we will try to invalidate."""
     from app.models import User
     from app.services.auth_service import hash_password
@@ -76,8 +63,7 @@ async def target_user_with_old_token(app_client):
     uid = f"usr_tgt_{uuid.uuid4().hex[:8]}"
     email = f"target_{uid}@test.local"
     original_password = "OriginalPass@1!"
-    TS = _get_session_factory()
-    async with TS() as session:
+    async with db_session_factory() as session:
         session.add(User(
             id=uid,
             organization_id="org_e2e_a",
@@ -96,8 +82,7 @@ async def target_user_with_old_token(app_client):
 
     yield {"user_id": uid, "email": email, "old_token": old_token, "original_password": original_password}
 
-    TS = _get_session_factory()
-    async with TS() as session:
+    async with db_session_factory() as session:
         user = await session.get(User, uid)
         if user:
             await session.delete(user)

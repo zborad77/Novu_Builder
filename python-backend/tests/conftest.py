@@ -374,6 +374,21 @@ async def db_session(_setup_test_db):
         yield session
 
 
+@pytest.fixture
+def db_session_factory() -> async_sessionmaker[AsyncSession]:
+    """The suite's single configured session factory.
+
+    Synchronous on purpose: it only hands over an already-built factory. Callers
+    open sessions themselves with ``async with factory() as session``, so every
+    session is created on the event loop of the test that uses it.
+
+    Exists so test modules never build their own engine. A second engine would
+    miss the pooling and search_path profile from database_engine_kwargs and
+    would hand pooled asyncpg connections across event loops.
+    """
+    return _TestSession
+
+
 @pytest_asyncio.fixture
 async def reset_test_user(test_tenants):
     """Throwaway user for password-reset tests."""
