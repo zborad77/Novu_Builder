@@ -4,7 +4,7 @@ on:
   push:
     branches: [master]
   pull_request:
-    branches: [master]
+    branches: [master, fix/m3-postgresql-final-failures]
 
 jobs:
   # R-28: linting, typing, SAST — runs independently of the test job (fast feedback)
@@ -161,6 +161,14 @@ jobs:
           uvicorn app.main:app --host 127.0.0.1 --port 8000 &
           echo $! > /tmp/backend.pid
 
+      # Post-deploy verification requires strict processing readiness, and the
+      # business flow must actually consume its analysis job.
+      - name: Start worker
+        run: |
+          cd python-backend
+          python -m app.worker.runner > /tmp/worker.log 2>&1 &
+          echo $! > /tmp/worker.pid
+
       - name: Wait for backend to be ready
         run: |
           for i in $(seq 1 30); do
@@ -174,12 +182,28 @@ jobs:
           echo "Backend did not start in 30s"
           exit 1
 
+      - name: Wait for strict processing readiness
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf 'http://127.0.0.1:8000/api/v1/ready/processing?strict=1' > /dev/null 2>&1; then
+              echo "Processing ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/worker.log
+          echo "Processing did not become ready in 30s"
+          exit 1
+
       # --- Live checks ---
 
       - name: DB connectivity
         run: python scripts/test-db-connection.py
 
       - name: Post-deploy verification bundle
+        env:
+          SMOKE_EMAIL: manager_a@test.local
+          SMOKE_PASSWORD: TestPassA1!
         run: python scripts/verify_deploy.py --base-url http://127.0.0.1:8000
 
       - name: API contracts
@@ -189,6 +213,10 @@ jobs:
         run: python scripts/test-auth-validation.py --url http://127.0.0.1:8000
 
       - name: Business flow (create case → analysis → verify)
+        env:
+          # Created by tests/conftest.py in the disposable CI database.
+          NOVU_TEST_EMAIL: manager_a@test.local
+          NOVU_TEST_PASSWORD: TestPassA1!
         run: python scripts/test-business-flow.py --url http://127.0.0.1:8000
 
   # ── Release gate ─────────────────────────────────────────────────────────────
