@@ -394,7 +394,7 @@ class Env:
         log = self.tmp / "docker_calls.log"
         _exe(self.bin / "docker", textwrap.dedent(f"""\
             #!/usr/bin/env bash
-            echo "$*" >> {log}
+            echo "$*" >> {self._bash_path(log)}
             case "$*" in *"ps -q"*) echo "fake_container_id" ;; *) true ;; esac
         """))
         return log
@@ -439,7 +439,7 @@ class Env:
 
         sha = self.bdir / f"db_{ts}.pgdump.sha256"
         sha.write_text(
-            f"{hashlib.sha256(dump_bytes).hexdigest()}  {dump}\n",
+            f"{hashlib.sha256(dump_bytes).hexdigest()}  {self._bash_path(dump)}\n",
             newline="\n",
         )
 
