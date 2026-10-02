@@ -5,69 +5,76 @@
 > (see [NOVU_CONSTITUTION.md](NOVU_CONSTITUTION.md)). This file answers two questions:
 > *where are we right now?* and *what is allowed right now?* Update on every merge and milestone.
 
-**Last updated:** 2026-09-04
-**Current version:** v0.8.4 — AI offer contract (measurements-only), fail-closed AI boundary
-**Current branch:** master — in sync with `origin/master` (`f556816`); tag `v0.8.4` pushed.
+**Last updated:** 2026-10-02  
+**Current release line:** v0.8.5 — Backend Stabilization / M3 close-out  
+**M3 code baseline:** `master` at `5ce8166`; authoritative GitHub CI and Repo Guard green.
 
-> ⚠️ **v0.8.4 was released with the authoritative CI gate red**, and the push bypassed the
-> required status check. Per [development/RELEASE_PROCESS.md](development/RELEASE_PROCESS.md)
-> a release should not be tagged over a red gate. None of the failures came from M2 — they
-> were older problems that had been hiding behind one another, each only visible once the one
-> before it was fixed. Clearing them is what opened M3.
->
-> | CI job | Original failure | Status |
-> |---|---|---|
-> | `Repo Guard` | `.env.production.example` matched the forbidden `.env` pattern | ✅ fixed (`f00edbb`) |
-> | `lint` | `mypy no-redef` on the `slowapi` import fallback; then bandit and pip-audit, which had never run | ✅ fixed (`7a94cb6`, `69597da`, `d3f30cd`, `a59ad26`) |
-> | `web-lint` | 2 TS errors; then 17 ESLint errors, which had never run | ✅ fixed (`99235ad`, `5979d47`) |
-> | `test` | `ModuleNotFoundError: pytest_asyncio`; then a 66-char identifier rejected by PostgreSQL; now asyncpg/event-loop coupling | ⏳ **M3** (`f5175e4`, `f556816` landed) |
->
-> Two lessons worth keeping. A locally green `mypy` is **not** equivalent to CI — the local venv
-> has packages CI lacks. And a sequential CI job hides everything after its first failing step,
-> so until one job runs end to end, the state of that gate is simply unknown.
+M3 repaired the release-gate debt that was still present when v0.8.4 was tagged.
+The important outcome is not merely a locally green suite: PostgreSQL 16, Redis,
+the live backend, a real worker, security scanning, web checks, and the aggregate
+release gate now run successfully together in GitHub Actions.
+
+The v0.8.4 release-over-red-gate event remains a historical process deviation.
+v0.8.5 must be tagged only from the final close-out commit after its own
+authoritative `master` CI is green.
 
 ---
 
 ## Current Development Focus
 
-The **active milestone, its blocking issues, and what is forbidden until it closes** live in a
-single authoritative file: **[CURRENT_MILESTONE.md](CURRENT_MILESTONE.md)** (do not duplicate them here).
-Change-class requirements: **[CHANGE_CONTROL.md](CHANGE_CONTROL.md)**. Version plan: **[ROADMAP.md](ROADMAP.md)**.
+The active milestone, its blocking issues, and close-out state live in
+**[CURRENT_MILESTONE.md](CURRENT_MILESTONE.md)**. Change-class requirements:
+**[CHANGE_CONTROL.md](CHANGE_CONTROL.md)**. Version plan:
+**[ROADMAP.md](ROADMAP.md)**.
 
-**Current milestone:** M3 — Test Isolation & PostgreSQL Async Infrastructure → target `v0.8.5`
+**Current milestone:** M3 — Test Isolation & PostgreSQL Async Infrastructure — **CLOSED**  
+**Release target:** `v0.8.5`  
+**Next planned release:** `v0.8.6` — Catalog Validation Hardening; not opened yet.
 
 ---
 
 ## Completed
 
 - ✓ **M1 — Documentation & governance framework** — Constitution, Handbook, AI Engineering Standard, AI guides, Project Invariants, Decision Log, Prompt Library, development standards, this file, ROADMAP
-- ✓ **M2 — AI measurements-only offer contract** — AI returns measurements / confidence / questions only, never prices (Art. 2 & 3). Fail-closed catalog whitelist enforced at both the runner and the validator. Closed 2026-08-29.
+- ✓ **M2 — AI measurements-only offer contract** — AI returns measurements / confidence / questions only, never prices. Fail-closed catalog whitelist enforced at both runner and validator. Closed 2026-08-29; released as v0.8.4.
+- ✓ **M3 — Test Isolation & PostgreSQL Async Infrastructure** — PostgreSQL test isolation, asyncpg loop-safety, CI portability, release-gate hardening, worker-backed operational verification. Closed 2026-10-02; release target v0.8.5.
 - ✓ Multi-tenant SaaS core, offer pipeline resilience (lease fencing, outbox, AI budget), immutable proposal archive (v0.8.3)
-
-Released as **v0.8.4** on 2026-08-29 — see [../CHANGELOG.md](../CHANGELOG.md).
 
 ## Work streams
 
 | Stream | Milestone | Status |
 |---|---|---|
-| Documentation framework | M1 | ✅ files done · ✅ under version control · ⏳ Codex close-out report |
-| AI Offer Contract (measurements-only) | M2 | ✅ done — released as v0.8.4 |
-| CI / release-gate stabilization | M2→M3 | ✅ `lint`, `web-lint`, `Repo Guard` green; ⏳ `test` remains |
-| Test isolation & PostgreSQL async infrastructure | M3 | 🔄 **in progress** — root cause reproduced locally |
-| Pricing Engine integration | M4 | ⏳ M2 dependency cleared; waits on M3 |
+| Documentation framework | M1 | ✅ complete |
+| AI Offer Contract (measurements-only) | M2 | ✅ released as v0.8.4 |
+| CI / release-gate stabilization | M2→M3 | ✅ Repo Guard + all CI jobs green |
+| Test isolation & PostgreSQL async infrastructure | M3 | ✅ closed 2026-10-02 |
+| Catalog validation hardening | v0.8.6 | ⏳ planned; not opened |
+| Pricing Engine integration | M4 / v0.8.7 | ⏳ waits on v0.8.6 |
 
 ## Known issues (durable)
 
-- Pricing is not yet computed in the offer pipeline — `pricing_status = "pending"`; there is no first-class `pricing_pending → priced` state yet (planned M4)
+- Pricing is not yet computed in the offer pipeline — `pricing_status = "pending"`; there is no first-class `pricing_pending → priced` state yet (planned M4).
+- `ck_catalog_pricing_profile_material_assumptions_quantity_source` is exactly 63 characters and has no PostgreSQL identifier headroom.
+- API/OpenAPI `app_version` is not synchronized with repository releases.
 
 ## Release gate — last measured
 
-Measured on `master` at M2 close (2026-08-29), backend `python-backend/`:
+Authoritative GitHub Actions run on `master`, commit
+`5ce81669eb8354537c0a98b842cb4263dab3705e` (2026-10-02):
 
 | Check | Result |
 |---|---|
-| `pytest tests/` | 1429 passed, 3 skipped, **0 failed** |
-| `mypy app/` | **0 errors** / 146 source files |
-| `ruff check app/` | **clean** |
+| PostgreSQL 16 `pytest tests/` | **1452 passed, 0 failed**, 1 warning; coverage 73.62% |
+| `ruff check app/` | ✅ pass |
+| `mypy app/` | ✅ pass |
+| `bandit -r app/ -ll -ii` | ✅ pass |
+| `pip-audit -r requirements.txt` | ✅ pass |
+| Web typecheck / ESLint / dependency-cruiser | ✅ pass |
+| Post-deploy verification | ✅ pass |
+| API / auth / business-flow smoke | ✅ pass |
+| `orchestration-release-gate` | ✅ pass |
+| Repo Guard | ✅ pass |
 
-No release while tests are red, `mypy` is red, a known fail-open exists, or the working tree is dirty. See [development/RELEASE_PROCESS.md](development/RELEASE_PROCESS.md).
+No release while tests are red, `mypy` is red, a known fail-open exists, a
+security gate is red, or the working tree/release commit is not reproducible.
+See [development/RELEASE_PROCESS.md](development/RELEASE_PROCESS.md).

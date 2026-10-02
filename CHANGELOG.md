@@ -2,6 +2,56 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.8.5 — 2026-10-02
+
+Milestone **M3 — Test Isolation & PostgreSQL Async Infrastructure**. Stabilization
+release only; no product feature, UI redesign, pricing-engine feature, or unrelated
+schema work.
+
+### PostgreSQL test isolation
+
+- Added a guarded non-strict database test profile using `NullPool`; production and
+  staging keep their normal pooled engine configuration.
+- Consolidated integration tests onto the centrally configured shared session factory,
+  removing test-local engines and asyncpg connections crossing pytest event loops.
+- Eliminated the M3 asyncpg failure class (`attached to a different loop`,
+  `another operation is in progress`, related interface/pool errors).
+
+### CI and portability hardening
+
+- CI now runs the backend suite against PostgreSQL 16 plus a real Redis 7 service.
+- Removed hidden local-environment assumptions: request-log tests pin their own log
+  level and filesystem tests resolve paths from the repository instead of a Windows
+  checkout path.
+- Fixed the final PostgreSQL-only failures at their real boundaries:
+  deterministic DB-manifest selection, SQLAlchemy-safe `CAST(:pl AS jsonb)`, and
+  a valid audit-user FK in the work-catalog inconsistency fixture.
+
+### Release-gate and operational verification
+
+- Upgraded `PyJWT` from 2.13.0 to 2.15.0 so the production dependency audit passes
+  without vulnerability suppressions.
+- Updated HTTP verification to use `/api/v1/alive` for liveness and validate the
+  current rich `/health` and `/ready` integrity contract.
+- CI starts a real worker and waits for `/api/v1/ready/processing?strict=1` before
+  running post-deploy verification and the business-flow smoke.
+- Removed the temporary stacked-PR branch trigger during final release close-out.
+
+### Verification
+
+Authoritative GitHub Actions on the M3 code baseline
+`5ce81669eb8354537c0a98b842cb4263dab3705e`:
+
+- PostgreSQL suite: **1452 passed, 0 failed**, 1 warning; **73.62%** coverage
+- Ruff, mypy, Bandit and pip-audit: **PASS**
+- Web TypeScript, ESLint and dependency-cruiser: **PASS**
+- Post-deploy, API, auth/validation and business-flow smoke: **PASS**
+- `orchestration-release-gate`: **PASS**
+- Repo Guard: **PASS**
+
+The final v0.8.5 tag is created only after this release close-out commit itself
+passes the same authoritative checks on `master`.
+
 ## v0.8.4 — 2026-08-29
 
 Milestone **M2 — AI Offer Contract Review**. Backend and governance only; no UI,
