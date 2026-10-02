@@ -4,46 +4,52 @@
 > Every AI agent and contributor MUST read this before starting work, and MUST NOT start work
 > outside it. Update this file when a milestone opens or closes.
 
-**Milestone:** M3 — Test Isolation & PostgreSQL Async Infrastructure
-**Status:** IN PROGRESS
-**Version target:** v0.8.5 — see [ROADMAP.md](ROADMAP.md)
-**Opened:** 2026-09-04
+**Milestone:** M3 — Test Isolation & PostgreSQL Async Infrastructure  
+**Status:** CLOSED  
+**Version target:** v0.8.5 — see [ROADMAP.md](ROADMAP.md)  
+**Opened:** 2026-09-04  
+**Closed:** 2026-10-02
 
 ## Goal
 
 Establish a trustworthy PostgreSQL test baseline and make the authoritative
 `orchestration-release-gate` fully green without weakening test isolation.
 
-## In scope
+## Close-out evidence
 
-- Make the pytest suite reliable against PostgreSQL.
-- Remove asyncpg/event-loop coupling in the test infrastructure.
-- Resolve already documented subset/order fragility where it belongs to
-  shared test infrastructure.
-- Confirm the complete required CI pipeline against PostgreSQL 16.
+- PostgreSQL test infrastructure uses the guarded non-strict test engine profile
+  with `NullPool`, plus one shared session factory for integration tests.
+- The asyncpg cross-event-loop failure class was eliminated:
+  no `attached to a different loop`, `another operation is in progress`,
+  `InterfaceError`, or pooled-connection leakage remains in the authoritative run.
+- The remaining PostgreSQL-only failures were corrected at their actual test/fixture
+  boundaries: deterministic backup-manifest selection, SQLAlchemy-safe JSONB casting,
+  and a valid audit-user FK in the work-catalog inconsistency test.
+- CI now supplies the real Redis dependency required by the queue path and runs a real
+  worker before strict processing-readiness verification.
+- Health/readiness verification follows the current runtime contract:
+  `/alive` for process liveness, rich `/health` / `/ready` integrity payloads,
+  and `/ready/processing?strict=1` for the worker-backed processing path.
+- `PyJWT` was raised from 2.13.0 to 2.15.0; the production dependency
+  `pip-audit` check passes without suppressions.
+- Authoritative GitHub Actions on `master` commit
+  `5ce81669eb8354537c0a98b842cb4263dab3705e`:
+  - `1452 passed, 0 failed`, 73.62% coverage
+  - `ruff`, `mypy`, `bandit`, `pip-audit` — PASS
+  - web typecheck, ESLint, dependency-cruiser — PASS
+  - post-deploy verification, API/auth/business-flow smoke — PASS
+  - `orchestration-release-gate` — PASS
+  - Repo Guard — PASS
 
-## Blocking issues
+## Delivered in M3
 
-- [ ] asyncpg connections are pooled on the session-scoped loop and reused from
-      per-test loops → `attached to a different loop` /
-      `another operation is in progress`.
-
-      Reproduced locally on PostgreSQL 17.9 using an isolated test schema.
-      Even a single test can fail. Root cause is the module-level
-      `_test_engine` combined with session-scoped `_setup_test_db` and
-      function-scoped test loops.
-
-- [ ] Evaluate `NullPool` for the test engine as the smallest isolation-preserving
-      solution. Accept it as the permanent solution only if PostgreSQL tests show
-      that it removes the asyncpg failures without introducing state leakage,
-      unacceptable performance regression, or new failures.
-
-- [ ] If `NullPool` is insufficient, redesign test engine/resource lifetime so
-      async DB resources belong to the event-loop scope that uses them.
-
-- [ ] Resolve documented subset/order fragility in shared test infrastructure.
-
-- [ ] Full required CI green on PostgreSQL 16.
+- PostgreSQL-first, CI-faithful test baseline.
+- Test engine isolation that preserves production/staging pooling behavior.
+- Removal of test-local engines and hidden environment/path dependencies.
+- CI Redis dependency and worker-backed post-deploy verification.
+- Final repair of the five previously exposed PostgreSQL CI failures.
+- Security/dependency gate restored to green.
+- Verification scripts aligned with the implemented liveness/readiness architecture.
 
 ## Known follow-ups — not M3 blockers
 
@@ -53,23 +59,19 @@ Establish a trustworthy PostgreSQL test baseline and make the authoritative
 - API/OpenAPI `app_version` is not synchronized with repository releases.
 - Remote release/tag history before v0.8.4 requires separate review.
 
-## Forbidden until M3 closes
+## Release state
 
-- New product features
-- UI redesign
-- Pricing Engine feature work
-- Unrelated schema redesign
-- Tagging v0.8.5 before the authoritative CI release gate is fully green
+M3 is closed. The v0.8.5 release close-out follows the normal release process:
+merge this documentation/config cleanup, require the authoritative CI gate to
+remain green on `master`, then tag that exact commit as `v0.8.5`.
+
+No successor milestone is open yet. The next planned release is v0.8.6 —
+Catalog Validation Hardening.
 
 ---
 
 ## Previous milestone — M2, closed 2026-08-29
 
-**M2 — AI Offer Contract Review**, released as `v0.8.4`. All five blocking issues
-cleared: fail-closed catalog whitelist enforced at both the runner and the validator,
-exception logging restored, the red analysis-route test fixed, out-of-scope test
-changes triaged as *keep*, and the local release gate green.
-
-Released over a red CI gate — that deviation, and the four pre-existing failures
-behind it, are recorded in [PROJECT_STATE.md](PROJECT_STATE.md). Clearing them is
-what opened M3.
+**M2 — AI Offer Contract Review**, released as `v0.8.4`. M2 established the
+measurements-only AI offer contract and fail-closed catalog boundary. The
+pre-existing red CI gate that remained after M2 is what opened M3.
