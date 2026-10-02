@@ -227,7 +227,7 @@ async def test_replay_ordering_seq_asc(db_session):
                     (id, event_type, aggregate_type, aggregate_id,
                      organization_id, payload, published)
                 VALUES
-                    (:id, :et, :at, :ai, :oi, :pl::jsonb, false)
+                    (:id, :et, :at, :ai, :oi, CAST(:pl AS jsonb), false)
             """),
             {
                 "id": eid,
@@ -271,7 +271,7 @@ async def test_replay_last_seq_filter(db_session):
                     (id, event_type, aggregate_type, aggregate_id,
                      organization_id, payload, published)
                 VALUES
-                    (:id, :et, :at, :ai, :oi, :pl::jsonb, false)
+                    (:id, :et, :at, :ai, :oi, CAST(:pl AS jsonb), false)
             """),
             {
                 "id": eid,
@@ -318,7 +318,7 @@ async def test_stale_seq_returns_empty_replay(db_session):
                 (id, event_type, aggregate_type, aggregate_id,
                  organization_id, payload, published)
             VALUES
-                (:id, :et, :at, :ai, :oi, :pl::jsonb, false)
+                (:id, :et, :at, :ai, :oi, CAST(:pl AS jsonb), false)
         """),
         {
             "id": str(uuid4()),

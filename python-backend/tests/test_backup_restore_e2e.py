@@ -403,7 +403,7 @@ class Env:
         return next(self.bdir.glob("db_*.pgdump"))
 
     def latest_manifest(self) -> Path:
-        return next(self.bdir.glob("db_*.json"))
+        return self.latest_dump().with_suffix(".json")
 
     # ── artifact helpers ──────────────────────────────────────────────────────
 
@@ -1073,7 +1073,7 @@ class TestBackupProductionS3FullStateSemantics:
         )
         combined = r.stdout + r.stderr
         assert r.returncode == 0, combined
-        manifest = json.loads(next(fx.bdir.glob("db_*.json")).read_text())
+        manifest = json.loads(fx.latest_manifest().read_text())
         assert manifest["backup_scope"] == "db-plus-s3-media-manifest"
         assert manifest["production_dr_eligible"] is True
         assert manifest["dr_contract"] == "s3-full-state-v1"
