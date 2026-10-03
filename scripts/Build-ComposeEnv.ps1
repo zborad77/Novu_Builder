@@ -68,7 +68,7 @@ $composeVars = @(
     'ANTHROPIC_API_KEY','APP_BASE_URL','CORS_ALLOWED_ORIGINS','DB_MAX_OVERFLOW','DB_POOL_RECYCLE',
     'DB_POOL_SIZE','DB_POOL_TIMEOUT','EXPORT_TTL_DAYS','HEAVY_QUEUE_MAX_DEPTH','HSTS_MAX_AGE',
     'JWT_ACCESS_TOKEN_EXPIRE_MINUTES','JWT_REFRESH_TOKEN_EXPIRE_DAYS','JWT_SECRET',
-    'METRICS_AUTH_ENABLED','METRICS_AUTH_TOKEN','MINIO_ROOT_USER','MINIO_ROOT_PASSWORD','POSTGRES_PASSWORD',
+    'METRICS_AUTH_ENABLED','METRICS_AUTH_TOKEN','MINIO_SERVER_IMAGE','MINIO_MC_IMAGE','MINIO_ROOT_USER','MINIO_ROOT_PASSWORD','POSTGRES_PASSWORD',
     'RATE_LIMIT_ADMIN','RATE_LIMIT_ADMIN_SENSITIVE','RATE_LIMIT_ADMIN_WRITE',
     'RATE_LIMIT_ANALYSIS_JOBS','RATE_LIMIT_LOGIN','RATE_LIMIT_UPLOAD',
     'READINESS_PROCESSING_GRACE_SECONDS','REDIS_FAILOVER_URLS','REDIS_HEALTH_CHECK_INTERVAL',
@@ -97,6 +97,9 @@ foreach ($v in $composeVars) {
         $needsAttention += $v
     } elseif ($val -match 'CHANGE_ME|REPLACE_WITH') {
         Write-Host "  CHANGE   $v = $val"
+        $needsAttention += $v
+    } elseif (($v -eq 'MINIO_SERVER_IMAGE' -or $v -eq 'MINIO_MC_IMAGE') -and $val -match ':latest$') {
+        Write-Host "  CHANGE   $v must use a pinned tag or digest, not :latest"
         $needsAttention += $v
     } else {
         Write-Host "  ok       $v"
@@ -139,5 +142,5 @@ Write-Host ""
 if ($needsAttention.Count -gt 0) {
     Write-Host "Edit $outPath and fix the $($needsAttention.Count) variable(s) above before running docker compose."
 } else {
-    Write-Host "Next: docker compose --env-file .env.production up -d"
+    Write-Host "Next: build images, start dependencies, run Alembic explicitly, then start backend/worker/nginx (see DEPLOY.md)."
 }

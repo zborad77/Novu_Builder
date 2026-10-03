@@ -260,12 +260,55 @@ jobs:
         working-directory: python-backend
         run: python -m pytest migration_tests/ -v
 
+  # Production-like Compose contract: all substitutions resolve and mutable MinIO
+  # tags are rejected before a release can pass.
+  deployment-config:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare disposable deployment env sources
+        shell: bash
+        run: |
+          cat > .env <<'EOF'
+          POSTGRES_PASSWORD=ci-postgres-password
+          REDIS_PASSWORD=ci-redis-password
+          EOF
+          cat > python-backend/.env.production <<'EOF'
+          AI_ANALYSIS_PROVIDER=mock
+          ANTHROPIC_API_KEY=unused-for-mock-provider
+          JWT_SECRET=ci-jwt-secret-00000000000000000000000000000000
+          METRICS_AUTH_TOKEN=ci-metrics-token-0000000000000000000000000000
+          MINIO_SERVER_IMAGE=minio/minio:RELEASE.2025-09-07T16-13-09Z
+          MINIO_MC_IMAGE=minio/mc:RELEASE.2025-08-13T08-35-41Z
+          MINIO_ROOT_PASSWORD=ci-minio-password
+          S3_SECRET_ACCESS_KEY=ci-minio-password
+          EOF
+
+      - name: Build Compose env
+        shell: pwsh
+        run: ./scripts/Build-ComposeEnv.ps1 -Write
+
+      - name: Validate rendered Compose configuration
+        shell: bash
+        run: |
+          docker compose --env-file .env.production config -q
+          images="$(docker compose --env-file .env.production config --images)"
+          echo "$images"
+          if echo "$images" | grep -E '^minio/(minio|mc):latest$'; then
+            echo "Mutable MinIO :latest tag is forbidden."
+            exit 1
+          fi
+          echo "$images" | grep -Fx 'minio/minio:RELEASE.2025-09-07T16-13-09Z'
+          echo "$images" | grep -Fx 'minio/mc:RELEASE.2025-08-13T08-35-41Z'
+
   # ── Release gate ─────────────────────────────────────────────────────────────
   # Single required status check for branch protection.
-  # Aggregates lint + web-lint + test + migrations — fails if any dependency failed or was
+  # Aggregates lint + web-lint + test + migrations + deployment config — fails if any dependency failed or was
   # skipped. Always runs so GitHub always receives a conclusive status.
   orchestration-release-gate:
-    needs: [lint, web-lint, test, postgresql-migrations]
+    needs: [lint, web-lint, test, postgresql-migrations, deployment-config]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -274,12 +317,14 @@ jobs:
           if [[ "${{ needs.lint.result }}"     != "success" ||
                 "${{ needs.web-lint.result }}" != "success" ||
                 "${{ needs.test.result }}"     != "success" ||
-                "${{ needs.postgresql-migrations.result }}" != "success" ]]; then
+                "${{ needs.postgresql-migrations.result }}" != "success" ||
+                "${{ needs.deployment-config.result }}" != "success" ]]; then
             echo "orchestration-release-gate: FAILED"
             echo "  lint:     ${{ needs.lint.result }}"
             echo "  web-lint: ${{ needs.web-lint.result }}"
             echo "  test:     ${{ needs.test.result }}"
             echo "  postgresql-migrations: ${{ needs.postgresql-migrations.result }}"
+            echo "  deployment-config: ${{ needs.deployment-config.result }}"
             exit 1
           fi
           echo "orchestration-release-gate: PASSED"

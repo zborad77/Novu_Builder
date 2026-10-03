@@ -12,6 +12,12 @@ All notable changes to this project will be documented in this file.
   incompatible schema drift. Downgrading loses stored superadmin assignments.
 - Require independent PostgreSQL 16 fresh-install and migration-path regressions
   in `orchestration-release-gate`; the application suite retains its existing fixtures.
+- Make database migrations an explicit deployment step; backend container startup no
+  longer runs `alembic upgrade head` implicitly and continues to fail fast on schema drift.
+- Require operator-supplied pinned MinIO server/client image references instead of
+  mutable `:latest` tags, and gate rendered Docker Compose configuration in CI.
+- Refresh deployment and release-readiness documentation to the v0.8.6 migration,
+  readiness, staging, backup/restore and rollback contracts.
 - `v0.8.5` remains immutable but is unsuitable for a fresh empty-database install.
   Catalog Validation Hardening moves to v0.8.7; Pricing Engine Integration and
   Proposal Generator move to v0.8.8 and v0.8.9 respectively.

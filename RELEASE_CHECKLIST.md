@@ -1,146 +1,163 @@
-# Novu Builder — Release Readiness Checklist
+# NOVU Builder — Release Readiness Checklist
 
-**Verze:** v0.5.x
-**Použití:** Před každým nasazením do pilot/produkce projdi každou položku. Zaznamenej datum a initials odpovědné osoby.
+**Applies to:** v0.8.6 release candidate  
+**Alembic HEAD:** `20261003_0056`
 
----
-
-## 0. Před nasazením (pre-flight)
-
-| # | Položka | Jak ověřit | OK |
-|---|---------|------------|----|
-| 0.1 | `.env.production` existuje a není `change-me` ani prázdné hodnoty | `grep -E "change-me|^[A-Z_]+=($)" .env.production` nesmí nic vrátit | ☐ |
-| 0.2 | `POSTGRES_PASSWORD` — náhodný, min. 32 hex znaků | `openssl rand -hex 32` | ☐ |
-| 0.3 | `REDIS_PASSWORD` — náhodný, min. 32 hex znaků | `openssl rand -hex 32` | ☐ |
-| 0.4 | `JWT_SECRET` — náhodný, min. 32 hex znaků | `openssl rand -hex 32` | ☐ |
-| 0.5 | `METRICS_AUTH_TOKEN` — náhodný token (bude použit v Prometheus scrape config) | `openssl rand -hex 32` | ☐ |
-| 0.6 | `METRICS_AUTH_ENABLED=true` nastaven | Zkontroluj `.env.production` | ☐ |
-| 0.7 | `CORS_ALLOWED_ORIGINS` — obsahuje pouze povolené origin(y) frontendu | Žádný wildcard `*` v produkci | ☐ |
-| 0.8 | SSL certifikáty v `nginx/certs/cert.pem` a `nginx/certs/key.pem` | `openssl x509 -in nginx/certs/cert.pem -noout -dates` | ☐ |
-| 0.9 | `AI_ANALYSIS_PROVIDER` nastaven (`mock` / `claude` / `openai`) | Závisí na záměru nasazení | ☐ |
-| 0.10 | Pokud `AI_ANALYSIS_PROVIDER=claude`: `ANTHROPIC_API_KEY` vyplněn | — | ☐ |
+Use this checklist for the final staging acceptance before tagging a release.
 
 ---
 
-## 1. Database & migrace
+## 0. Source and CI
 
-| # | Položka | Jak ověřit | OK |
-|---|---------|------------|----|
-| 1.1 | PostgreSQL volume má dostatek místa | `df -h /var/lib/docker/volumes` | ☐ |
-| 1.2 | DB je dostupná před spuštěním backendů | `docker compose up -d db && docker compose exec db pg_isready -U novu -d novu_builder` | ☐ |
-| 1.3 | Migrace aplikovány na HEAD (`20260326_0018`) | `docker compose run --rm backend alembic current` → musí vrátit `20260326_0018 (head)` | ☐ |
-| 1.4 | Žádné čekající migrace | `docker compose run --rm backend alembic check` — musí vrátit `No new upgrade operations detected.` | ☐ |
-| 1.5 | Záloha DB před migrací provedena | Viz BACKUP_RESTORE.md | ☐ |
-
----
-
-## 2. Start backendu a workeru
-
-| # | Položka | Jak ověřit | OK |
-|---|---------|------------|----|
-| 2.1 | Backend kontejner startuje bez chyby | `docker compose logs backend` — žádný ERROR/CRITICAL při startu | ☐ |
-| 2.2 | `GET /api/v1/alive` vrací 200 | `curl -f http://localhost:8000/api/v1/alive` | ☐ |
-| 2.3 | `GET /api/v1/health` vrací `{"status":"ok"}` | `curl http://localhost:8000/api/v1/health` | ☐ |
-| 2.4 | Worker kontejner běží | `docker compose ps worker` — status `running` | ☐ |
-| 2.5 | Worker heartbeat se zapisuje do Redis | Po 60 s: `docker compose exec redis redis-cli -a "$REDIS_PASSWORD" GET worker:heartbeat` — nesmí být prázdné | ☐ |
-| 2.6 | `/api/v1/health/internal` hlásí `worker.alive=true` | Vyžaduje superadmin token, volat pouze z internetu | ☐ |
+| # | Check | Required |
+|---|---|---|
+| 0.1 | Exact release commit identified | MUST |
+| 0.2 | Working tree clean | MUST |
+| 0.3 | PR CI green | MUST |
+| 0.4 | Repo Guard green | MUST |
+| 0.5 | Final push CI on `master` green | MUST |
+| 0.6 | `postgresql-migrations` job green | MUST |
+| 0.7 | `deployment-config` job green | MUST |
 
 ---
 
-## 3. Redis autentizace
+## 1. Environment and images
 
-| # | Položka | Jak ověřit | OK |
-|---|---------|------------|----|
-| 3.1 | Redis vyžaduje heslo | `docker compose exec redis redis-cli ping` → musí vrátit `NOAUTH` | ☐ |
-| 3.2 | Backend se autentizuje | `docker compose logs backend` — žádná chyba `NOAUTH` | ☐ |
-| 3.3 | Cache funguje | Zavolej `GET /api/v1/pricebooks` dvakrát; druhý request musí být rychlejší | ☐ |
-
----
-
-## 4. Storage (souborové úložiště)
-
-| # | Položka | Jak ověřit | OK |
-|---|---------|------------|----|
-| 4.1 | `storage_data` volume je namontován | `docker compose exec backend ls /data/storage` — adresář existuje | ☐ |
-| 4.2 | Backend má práva zápisu do storage | Nahraj testovací fotku přes API, zkontroluj, že soubor vznikl | ☐ |
-| 4.3 | Dostatek místa pro storage | `docker compose exec backend df -h /data/storage` | ☐ |
+| # | Check | Required |
+|---|---|---|
+| 1.1 | Root `.env.production` rendered from local sources | MUST |
+| 1.2 | No `CHANGE_ME`, `REPLACE_WITH` or empty required secrets | MUST |
+| 1.3 | `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `JWT_SECRET`, `METRICS_AUTH_TOKEN` are unique strong values | MUST |
+| 1.4 | `AI_ANALYSIS_PROVIDER` explicitly selected | MUST |
+| 1.5 | `MINIO_SERVER_IMAGE` is an approved pinned tag/digest, not `:latest` | MUST |
+| 1.6 | `MINIO_MC_IMAGE` is an approved pinned tag/digest, not `:latest` | MUST |
+| 1.7 | Exact image references successfully pull in staging | MUST |
+| 1.8 | TLS certificate exists and is valid for the staging host | MUST |
 
 ---
 
-## 5. Bezpečnost a přístupová politika
+## 2. Database and migrations
 
-| # | Položka | Jak ověřit | OK |
-|---|---------|------------|----|
-| 5.1 | `/api/v1/metrics` bez tokenu vrátí 401 z backendu | `curl -o /dev/null -w "%{http_code}" https://<host>/api/v1/metrics` — nginx blokuje, nebo backend vrátí 401 | ☐ |
-| 5.2 | `/api/v1/metrics` s platným tokenem vrátí 200 | `curl -H "Authorization: Bearer $METRICS_AUTH_TOKEN" https://<host>/api/v1/metrics` | ☐ |
-| 5.3 | `/api/v1/health/internal` z veřejného internetu vrátí 403 | `curl https://<host>/api/v1/health/internal` — nginx musí vrátit 403 | ☐ |
-| 5.4 | Port 8000 backendového kontejneru není publicky expozován | `docker compose port backend 8000` — nesmí vrátit výsledek (nebo vrátí 127.0.0.1) | ☐ |
-| 5.5 | HTTPS funguje, HTTP přesměrovává na HTTPS | `curl -I http://<host>/api/v1/alive` — status 301 | ☐ |
-| 5.6 | SSL certifikát je platný a neexpiroval | `openssl s_client -connect <host>:443 </dev/null 2>/dev/null | openssl x509 -noout -dates` | ☐ |
-| 5.7 | CORS hlavičky nepovolují wildcard | V response na preflight request z nepovolené domény — žádné ACAO:* | ☐ |
+| # | Check | Required |
+|---|---|---|
+| 2.1 | PostgreSQL 16 is healthy before migration | MUST |
+| 2.2 | Backup exists before upgrading a non-empty environment | MUST |
+| 2.3 | Backend and worker are stopped before upgrade migration | MUST |
+| 2.4 | Migration is run explicitly with `--entrypoint alembic` | MUST |
+| 2.5 | `alembic current` = `20261003_0056` | MUST |
+| 2.6 | `alembic heads` = one head, `20261003_0056` | MUST |
+| 2.7 | `revoked_tokens` exists | MUST |
+| 2.8 | `users.is_superadmin` is `BOOLEAN NOT NULL` | MUST |
+| 2.9 | Re-running `alembic upgrade head` is a no-op | MUST |
 
----
-
-## 6. Zálohovací strategie
-
-| # | Položka | Jak ověřit | OK |
-|---|---------|------------|----|
-| 6.1 | Zálohovací skript `scripts/backup.sh` je funkční | `BACKUP_DIR=/tmp/test-backup ./scripts/backup.sh` — vzniknou soubory `.pgdump`, `.pgdump.sha256` a `.tar.gz` | ☐ |
-| 6.2 | Cron job pro denní zálohu je nastaven | `crontab -l | grep backup.sh` | ☐ |
-| 6.3 | Zálohy se kopírují na vzdálené úložiště (off-site) | Rsync/S3/jiný mechanismus aktivní | ☐ |
-| 6.4 | Verify zálohy prošel (PASS) | `python-backend/scripts/verify_restore.sh <nejnovější .pgdump>` — výstup PASS | ☐ |
-| 6.5 | Postup restore byl ověřen na jiném prostředí (restore drill) | Viz BACKUP_RESTORE.md | ☐ |
+The backend container must **not** apply migrations automatically on startup.
 
 ---
 
-## 7. Monitoring a alerting
+## 3. Infrastructure services
 
-| # | Položka | Jak ověřit | OK |
-|---|---------|------------|----|
-| 7.1 | Prometheus scrape funguje | `curl -H "Authorization: Bearer $METRICS_AUTH_TOKEN" http://<host>/api/v1/metrics | grep novu_db_alive` | ☐ |
-| 7.2 | Grafana (nebo jiný) dashboard je nastaven | — | ☐ |
-| 7.3 | Alert na `novu_worker_alive == 0` je nakonfigurován | — | ☐ |
-| 7.4 | Alert na `novu_db_alive == 0` je nakonfigurován | — | ☐ |
-| 7.5 | Alerting kanál (email/Slack/PagerDuty) je otestován | Pošli testovací alert | ☐ |
-| 7.6 | `SENTRY_DSN` nastaven (pokud se Sentry používá) | `grep SENTRY_DSN .env.production` | ☐ |
-
----
-
-## 8. Smoke testy
-
-| # | Položka | Jak ověřit | OK |
-|---|---------|------------|----|
-| 8.1 | Smoke check skript prošel | `python scripts/smoke_check_live.py https://<host> <email> <password>` — exit 0 | ☐ |
-| 8.2 | Login s testovacím účtem funguje | Zkusit přes UI nebo API | ☐ |
-| 8.3 | Vytvoření zakázky funguje | `POST /api/v1/cases` vrací 201 | ☐ |
-| 8.4 | Nahrání fotky funguje | `POST /api/v1/cases/{id}/photos` vrací 201 | ☐ |
-| 8.5 | Spuštění analýzy funguje | `POST /api/v1/cases/{id}/analysis-jobs` vrací 202 | ☐ |
+| # | Check | Required |
+|---|---|---|
+| 3.1 | Redis healthy and authentication enforced | MUST |
+| 3.2 | S3-compatible storage healthy | MUST |
+| 3.3 | `minio-setup`/bucket bootstrap exits successfully when local MinIO is used | MUST |
+| 3.4 | Required bucket exists | MUST |
+| 3.5 | Backend can read/write the configured storage backend | MUST |
 
 ---
 
-## 9. Rollback plán
+## 4. Backend and worker
 
-| # | Položka | Jak ověřit | OK |
-|---|---------|------------|----|
-| 9.1 | Předchozí Docker image je dostupný pro rollback | `docker images | grep novu` | ☐ |
-| 9.2 | Záloha DB z těsně před deployem existuje | Soubor v backup adresáři | ☐ |
-| 9.3 | Postup rollback migrací je zdokumentován | Viz DEPLOY.md — sekce Rollback | ☐ |
-| 9.4 | Čas potřebný na rollback je odhadnut a přijatelný | Odhadovaně: ~5-10 minut (bez migrace zpět) | ☐ |
+| # | Check | Required |
+|---|---|---|
+| 4.1 | Backend starts without ERROR/CRITICAL | MUST |
+| 4.2 | Worker starts and remains healthy | MUST |
+| 4.3 | `GET /api/v1/alive` returns HTTP 200 with `{"status":"alive"}` | MUST |
+| 4.4 | `/api/v1/health` passes semantic operational validation | MUST |
+| 4.5 | `/api/v1/ready` reports service ready | MUST |
+| 4.6 | `/api/v1/ready/processing?strict=1` passes with real worker | MUST |
+
+Use `scripts/verify_deploy.py` as the authoritative probe bundle rather than
+checking obsolete exact health payload examples.
+
+---
+
+## 5. Authentication and business flow
+
+| # | Check | Required |
+|---|---|---|
+| 5.1 | Login with staging acceptance account succeeds | MUST |
+| 5.2 | Authenticated core API smoke passes | MUST |
+| 5.3 | Create case succeeds | MUST |
+| 5.4 | Trigger analysis job succeeds | MUST |
+| 5.5 | Worker reaches terminal successful job state | MUST |
+| 5.6 | Latest analysis is available on the case | MUST |
+| 5.7 | Test case cleanup/archive succeeds | MUST |
+| 5.8 | SSE/event delivery verified separately | MUST |
+
+Run:
+
+```bash
+python scripts/verify_deploy.py --base-url https://<host> \
+  --auth-email <email> --auth-password "<password>" --require-auth
+
+python scripts/test-business-flow.py --url https://<host>
+```
+
+The business-flow script does not certify SSE.
+
+---
+
+## 6. Security boundary
+
+| # | Check | Required |
+|---|---|---|
+| 6.1 | Backend port 8000 is not publicly exposed | MUST |
+| 6.2 | HTTP redirects to HTTPS | MUST |
+| 6.3 | Metrics endpoint is not publicly accessible without intended protection | MUST |
+| 6.4 | Internal health endpoint is restricted by nginx/network policy | MUST |
+| 6.5 | CORS has no wildcard in strict deployment | MUST |
+| 6.6 | No real production secrets appear in logs or CI output | MUST |
+
+---
+
+## 7. Backup and restore
+
+| # | Check | Required |
+|---|---|---|
+| 7.1 | Database backup completes successfully | MUST |
+| 7.2 | Backup integrity verification passes | MUST |
+| 7.3 | Restore drill performed into a disposable environment | MUST |
+| 7.4 | Restored DB reaches expected Alembic revision | MUST |
+| 7.5 | Post-deploy verifier passes after restore | MUST |
+
+See `BACKUP_RESTORE.md`.
+
+---
+
+## 8. Rollback readiness
+
+| # | Check | Required |
+|---|---|---|
+| 8.1 | Previous application commit/image is available | MUST |
+| 8.2 | Pre-upgrade backup is accessible | MUST |
+| 8.3 | Operator understands that downgrade `0056 -> 0055` drops `users.is_superadmin` values | MUST |
+| 8.4 | Code-only rollback path has been reviewed | MUST |
+
+Prefer code rollback over schema downgrade when compatible.
 
 ---
 
 ## Go / No-Go
 
-**Blocker (MUST):** položky 0.1–0.8, 1.3, 2.1–2.5, 5.4, 5.5
-**Pilot (SHOULD):** položky 6.1–6.2, 7.1, 8.1
-**Produkce (ALL):** všechny výše + 6.3–6.4, 7.2–7.6
+**GO** only when every MUST item is complete and no unresolved blocker remains.
 
-| Stav | Podmínka |
-|------|----------|
-| **GO** | Všechny MUST položky ✅, žádná otevřená CRITICAL chyba |
-| **CONDITIONAL GO** | MUST splněny, ≥1 SHOULD chybí s dokumentovaným rizikem |
-| **NO-GO** | Jakýkoliv MUST nesplněn |
+For v0.8.6 specifically, do not tag or publish the release until:
 
----
+- final `master` CI is green,
+- fresh PostgreSQL migration coverage is green,
+- deployment-config coverage is green,
+- full staging acceptance passes,
+- backup/restore drill passes.
 
-*Poslední revize: 2026-03-28 | Platí pro v0.5.x*
+If any one of those is missing, the release remains **NO-GO**.
