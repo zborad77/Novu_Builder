@@ -296,7 +296,15 @@ jobs:
           docker compose --env-file .env.production config -q
           images="$(docker compose --env-file .env.production config --images)"
           echo "$images"
-          if echo "$images" | grep -E '^minio/(minio|mc):latest  # Single required status check for branch protection.
+          if echo "$images" | grep -E '^minio/(minio|mc):latest$'; then
+            echo "Mutable MinIO :latest tag is forbidden."
+            exit 1
+          fi
+          echo "$images" | grep -Fx 'minio/minio:RELEASE.2025-09-07T16-13-09Z'
+          echo "$images" | grep -Fx 'minio/mc:RELEASE.2025-08-13T08-35-41Z'
+
+  # ── Release gate ─────────────────────────────────────────────────────────────
+  # Single required status check for branch protection.
   # Aggregates lint + web-lint + test + migrations + deployment config — fails if any dependency failed or was
   # skipped. Always runs so GitHub always receives a conclusive status.
   orchestration-release-gate:
@@ -317,36 +325,6 @@ jobs:
             echo "  test:     ${{ needs.test.result }}"
             echo "  postgresql-migrations: ${{ needs.postgresql-migrations.result }}"
             echo "  deployment-config: ${{ needs.deployment-config.result }}"
-            exit 1
-          fi
-          echo "orchestration-release-gate: PASSED"
-; then
-            echo "Mutable MinIO :latest tag is forbidden."
-            exit 1
-          fi
-          echo "$images" | grep -Fx 'minio/minio:RELEASE.2025-09-07T16-13-09Z'
-          echo "$images" | grep -Fx 'minio/mc:RELEASE.2025-08-13T08-35-41Z'
-
-  # ── Release gate ─────────────────────────────────────────────────────────────
-  # Single required status check for branch protection.
-  # Aggregates lint + web-lint + test + migrations — fails if any dependency failed or was
-  # skipped. Always runs so GitHub always receives a conclusive status.
-  orchestration-release-gate:
-    needs: [lint, web-lint, test, postgresql-migrations]
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Gate — all required checks passed
-        run: |
-          if [[ "${{ needs.lint.result }}"     != "success" ||
-                "${{ needs.web-lint.result }}" != "success" ||
-                "${{ needs.test.result }}"     != "success" ||
-                "${{ needs.postgresql-migrations.result }}" != "success" ]]; then
-            echo "orchestration-release-gate: FAILED"
-            echo "  lint:     ${{ needs.lint.result }}"
-            echo "  web-lint: ${{ needs.web-lint.result }}"
-            echo "  test:     ${{ needs.test.result }}"
-            echo "  postgresql-migrations: ${{ needs.postgresql-migrations.result }}"
             exit 1
           fi
           echo "orchestration-release-gate: PASSED"
