@@ -65,8 +65,10 @@ M3 is closed. The v0.8.5 release close-out follows the normal release process:
 merge this documentation/config cleanup, require the authoritative CI gate to
 remain green on `master`, then tag that exact commit as `v0.8.5`.
 
-No successor milestone is open yet. The next planned release is v0.8.6 —
-Catalog Validation Hardening.
+M3 remains closed. The active stabilization target is **v0.8.6 — Fresh Install /
+Alembic Hotfix (unreleased)**: freeze the historical baseline, migrate
+`users.is_superadmin`, and require independent PostgreSQL migration regressions.
+The next feature release is v0.8.7 — Catalog Validation Hardening; not opened yet.
 
 ---
 

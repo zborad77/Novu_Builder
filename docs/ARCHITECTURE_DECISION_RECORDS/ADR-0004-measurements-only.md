@@ -16,7 +16,7 @@ bounded values). Prices are computed server-side by the Pricing Engine (ADR-0001
 
 ## Consequences
 - **+** No AI-generated money values; guaranteed-valid JSON; validation is a hard security boundary.
-- **−** The offer is unpriced until the Pricing Engine bridge lands (ROADMAP v0.8.7, milestone M4).
+- **−** The offer is unpriced until the Pricing Engine bridge lands (ROADMAP v0.8.8, milestone M4).
 
 ## Alternatives considered
 - **Keep AI prices as "advisory"** — rejected: still a second pricing authority, violating ADR-0001.

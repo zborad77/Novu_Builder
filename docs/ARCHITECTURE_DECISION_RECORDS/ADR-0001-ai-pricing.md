@@ -17,7 +17,7 @@ clarification questions.
 ## Consequences
 - **+** Deterministic, auditable pricing with a single authority.
 - **+** AI providers/models can be swapped or upgraded without touching pricing.
-- **−** Requires a server-side bridge from measurements to the Pricing Engine (see ADR-0004, ROADMAP v0.8.7).
+- **−** Requires a server-side bridge from measurements to the Pricing Engine (see ADR-0004, ROADMAP v0.8.8).
 
 ## Alternatives considered
 - **AI emits prices, server "checks" them** — rejected: still a second pricing source; invites drift and

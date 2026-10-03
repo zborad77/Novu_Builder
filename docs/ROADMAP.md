@@ -30,16 +30,22 @@
 
 ## Planned
 
-### v0.8.6 — Catalog Validation Hardening
+### v0.8.6 — Fresh Install / Alembic Hotfix (unreleased)
+- Frozen historical Alembic baseline; later revisions own their schema objects
+- Forward `users.is_superadmin` migration; new head `20261003_0056`
+- Required PostgreSQL 16 empty-database and existing-installation migration regressions
+- `v0.8.5` remains immutable; its fresh-install migration blocker prevents empty-database deployment
+
+### v0.8.7 — Catalog Validation Hardening
 - Effective work-type whitelist as a first-class, **fail-closed** input to the offer validator
 - Surface work-type parameter schema to improve measurement quality
 
-### v0.8.7 — Pricing Engine Integration · M4
+### v0.8.8 — Pricing Engine Integration · M4
 - Bridge AI measurements → catalog Pricing Engine (`calculate_project_work_item`) via a valid `ProjectWorkItem`
 - Introduce first-class `pricing_pending → priced` state
 - **Invariant:** Pricing Engine remains the only pricing authority (Art. 3); no second pricing path
 
-### v0.8.8 — Proposal Generator
+### v0.8.9 — Proposal Generator
 - Priced offer → proposal draft → immutable archive, end to end
 
 ### v0.9.0 — Complete AI Offer Pipeline
@@ -57,5 +63,5 @@
 
 - Draft `docs/REPOSITORY_CHARTER.md` when the documentation workstream is reopened.
 - Reconcile the older `development/VERSIONING.md` example that places Pricing Engine
-  integration at v0.9.0; the current roadmap schedules it at **v0.8.7**, with v0.9.0
+  integration at v0.9.0; the current roadmap schedules it at **v0.8.8**, with v0.9.0
   reserved for the complete AI offer pipeline.
