@@ -32,7 +32,7 @@ services:
       start_period: 5s
 
   minio:
-    image: ${MINIO_SERVER_IMAGE:?Set MINIO_SERVER_IMAGE to an approved pinned image (never :latest)}
+    image: ${MINIO_SERVER_IMAGE:?MINIO_SERVER_IMAGE must be set to a pinned image}
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -50,7 +50,7 @@ services:
       start_period: 15s
 
   minio-setup:
-    image: ${MINIO_MC_IMAGE:?Set MINIO_MC_IMAGE to an approved pinned image (never :latest)}
+    image: ${MINIO_MC_IMAGE:?MINIO_MC_IMAGE must be set to a pinned image}
     depends_on:
       minio:
         condition: service_healthy
