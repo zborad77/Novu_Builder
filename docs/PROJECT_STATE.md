@@ -5,7 +5,7 @@
 > (see [NOVU_CONSTITUTION.md](NOVU_CONSTITUTION.md)). This file answers two questions:
 > *where are we right now?* and *what is allowed right now?* Update on every merge and milestone.
 
-**Last updated:** 2026-10-02  
+**Last updated:** 2026-10-03
 **Current release line:** v0.8.5 — Backend Stabilization / M3 close-out  
 **M3 code baseline:** `master` at `5ce8166`; authoritative GitHub CI and Repo Guard green.
 
@@ -29,7 +29,12 @@ The active milestone, its blocking issues, and close-out state live in
 
 **Current milestone:** M3 — Test Isolation & PostgreSQL Async Infrastructure — **CLOSED**  
 **Release target:** `v0.8.5`  
-**Next planned release:** `v0.8.6` — Catalog Validation Hardening; not opened yet.
+**Active hotfix target:** `v0.8.6` — Fresh Install / Alembic Hotfix (**unreleased**).
+The released `v0.8.5` tag remains immutable; a fresh empty PostgreSQL installation
+fails because revision 0001 creates later migration objects from live metadata.
+The hotfix freezes that baseline, versions `users.is_superadmin` at `20261003_0056`,
+and adds a required independent PostgreSQL migration check.
+**Next planned feature release:** `v0.8.7` — Catalog Validation Hardening; not opened yet.
 
 ---
 
@@ -48,8 +53,9 @@ The active milestone, its blocking issues, and close-out state live in
 | AI Offer Contract (measurements-only) | M2 | ✅ released as v0.8.4 |
 | CI / release-gate stabilization | M2→M3 | ✅ Repo Guard + all CI jobs green |
 | Test isolation & PostgreSQL async infrastructure | M3 | ✅ closed 2026-10-02 |
-| Catalog validation hardening | v0.8.6 | ⏳ planned; not opened |
-| Pricing Engine integration | M4 / v0.8.7 | ⏳ waits on v0.8.6 |
+| Fresh-install / Alembic hotfix | v0.8.6 | in progress; unreleased |
+| Catalog validation hardening | v0.8.7 | ⏳ planned; not opened |
+| Pricing Engine integration | M4 / v0.8.8 | ⏳ waits on v0.8.7 |
 
 ## Known issues (durable)
 

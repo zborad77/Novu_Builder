@@ -30,7 +30,10 @@ jobs:
 
       - name: Ruff (style + unused imports)
         working-directory: python-backend
-        run: ruff check app/
+        run: >-
+          ruff check app/ migration_tests/
+          alembic/versions/20260318_0001_initial_schema.py
+          alembic/versions/20261003_0056_add_users_is_superadmin.py
 
       - name: Mypy (type check — full app/)
         working-directory: python-backend
@@ -219,12 +222,50 @@ jobs:
           NOVU_TEST_PASSWORD: TestPassA1!
         run: python scripts/test-business-flow.py --url http://127.0.0.1:8000
 
+  # Real migration coverage must stay independent of tests/conftest.py, whose
+  # ORM create_all fixture cannot exercise a fresh Alembic installation.
+  postgresql-migrations:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MIGRATION_TEST_ADMIN_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            python-backend/requirements.txt
+            python-backend/requirements-dev.txt
+      - name: Install runtime + dev dependencies
+        run: pip install -r python-backend/requirements.txt -r python-backend/requirements-dev.txt
+      - name: PostgreSQL 16 fresh-install and migration-path regressions
+        working-directory: python-backend
+        run: python -m pytest migration_tests/ -v
+
   # ── Release gate ─────────────────────────────────────────────────────────────
   # Single required status check for branch protection.
-  # Aggregates lint + web-lint + test — fails if any dependency failed or was
+  # Aggregates lint + web-lint + test + migrations — fails if any dependency failed or was
   # skipped. Always runs so GitHub always receives a conclusive status.
   orchestration-release-gate:
-    needs: [lint, web-lint, test]
+    needs: [lint, web-lint, test, postgresql-migrations]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -232,11 +273,13 @@ jobs:
         run: |
           if [[ "${{ needs.lint.result }}"     != "success" ||
                 "${{ needs.web-lint.result }}" != "success" ||
-                "${{ needs.test.result }}"     != "success" ]]; then
+                "${{ needs.test.result }}"     != "success" ||
+                "${{ needs.postgresql-migrations.result }}" != "success" ]]; then
             echo "orchestration-release-gate: FAILED"
             echo "  lint:     ${{ needs.lint.result }}"
             echo "  web-lint: ${{ needs.web-lint.result }}"
             echo "  test:     ${{ needs.test.result }}"
+            echo "  postgresql-migrations: ${{ needs.postgresql-migrations.result }}"
             exit 1
           fi
           echo "orchestration-release-gate: PASSED"

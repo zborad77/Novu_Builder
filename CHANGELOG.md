@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.8.6 — Fresh Install / Alembic Hotfix (Unreleased)
+
+- Freeze revision `20260318_0001` to its 13 historical core tables instead of
+  creating evolving application metadata ahead of later migrations. Revision
+  `20260321_0007` remains strict and owns `revoked_tokens`.
+- Add forward revision `20261003_0056` for `users.is_superadmin`: safely backfill
+  missing flags with false, preserve compatible existing values, and reject
+  incompatible schema drift. Downgrading loses stored superadmin assignments.
+- Require independent PostgreSQL 16 fresh-install and migration-path regressions
+  in `orchestration-release-gate`; the application suite retains its existing fixtures.
+- `v0.8.5` remains immutable but is unsuitable for a fresh empty-database install.
+  Catalog Validation Hardening moves to v0.8.7; Pricing Engine Integration and
+  Proposal Generator move to v0.8.8 and v0.8.9 respectively.
+
 ## v0.8.5 — 2026-10-02
 
 Milestone **M3 — Test Isolation & PostgreSQL Async Infrastructure**. Stabilization
