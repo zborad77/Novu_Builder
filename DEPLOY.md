@@ -1,338 +1,308 @@
-# Novu Builder — Deployment & Rollback
+# NOVU Builder — Deployment & Rollback
 
-**Stack:** Docker Compose (db + redis + backend + nginx + worker)
-**Migrace:** Alembic — spouštěj ručně, NIKDY se neaplikují automaticky při startu
+**Applies to:** v0.8.6 release candidate and later unless superseded.
+
+**Runtime stack:** Docker Compose with PostgreSQL 16, Redis 7, S3-compatible storage, backend, worker and nginx.
+
+## Deployment invariant: migrations are explicit
+
+Database schema changes are a deployment step. The backend container **must not**
+run Alembic automatically on startup.
+
+The application performs a schema-version guard and fails fast if the database is
+not at the expected Alembic head. For v0.8.6 the expected head is:
+
+```text
+20261003_0056
+```
+
+Use the explicit Compose entrypoint override shown below. Do not rely on the
+backend image entrypoint to migrate the database.
 
 ---
 
-## První nasazení (fresh install)
+## 1. Checkout and verify the release commit
 
-### 1. Příprava prostředí
-
-```bash
-# Klonuj repozitář
-git clone <repo-url> /opt/novu-builder
-cd /opt/novu-builder
-
-# Vytvoř produkční env soubor
-cp .env.production.example .env.production
-```
-
-Vyplň `.env.production` (viz RELEASE_CHECKLIST.md, sekce 0):
-```bash
-# Vygeneruj bezpečné hodnoty
-POSTGRES_PASSWORD=$(openssl rand -hex 32)
-REDIS_PASSWORD=$(openssl rand -hex 32)
-JWT_SECRET=$(openssl rand -hex 32)
-METRICS_AUTH_TOKEN=$(openssl rand -hex 32)
-```
-
-Production values that must be filled before `docker compose up`:
-
-- Root `.env.production` is the authoritative source for compose runtime knobs.
-- Pilot/production must not rely on internal backend defaults for worker, queue, rate-limit, or observability parameters.
-
-- `APP_BASE_URL` - deployed client URL, must not point to localhost/example domains
-- `CORS_ALLOWED_ORIGINS` - deployed browser origins, comma-separated when needed
-- `AI_ANALYSIS_PROVIDER` - explicit provider selection (`mock` for rehearsal, real provider for production usage)
-- `WORKER_CONCURRENCY` - explicit worker parallelism; do not leave implicit default `1`
-- `WORKER_HEAVY_CONCURRENCY`
-- `WORKER_JOB_LEASE_TIMEOUT_SECONDS`
-- `WORKER_JOB_REAP_INTERVAL_SECONDS`
-- `ANALYSIS_QUEUE_MAX_DEPTH`
-- `ANALYSIS_JOB_MAX_ATTEMPTS`
-- `ANALYSIS_RETRY_BACKOFF_BASE_SECONDS`
-- `ANALYSIS_RETRY_BACKOFF_MAX_SECONDS`
-- `ANALYSIS_JOBS_PER_TENANT_LIMIT`
-- `WORKER_DB_POOL_SIZE`
-- `WORKER_INSTANCE_COUNT`
-- `REDIS_FAILOVER_URLS` - empty string is valid only as an explicit single-node choice
-- `REDIS_SOCKET_CONNECT_TIMEOUT`, `REDIS_SOCKET_TIMEOUT`
-- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `JWT_REFRESH_TOKEN_EXPIRE_DAYS`
-- `REQUIRE_HTTPS`, `HSTS_MAX_AGE`
-- `RATE_LIMIT_LOGIN`, `RATE_LIMIT_ADMIN`, `RATE_LIMIT_UPLOAD`, `RATE_LIMIT_ANALYSIS_JOBS`
-- `METRICS_AUTH_ENABLED=true`
-- `METRICS_AUTH_TOKEN` - strong bearer token for `/api/v1/metrics`
-- `WORKER_METRICS_ENABLED=true`
-- `SENTRY_DSN` - set real DSN or explicit empty value to disable intentionally
-- `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_PROFILES_SAMPLE_RATE`
-- `STORAGE_BACKEND=s3`
-- `STORAGE_AUTHORITATIVE=true`
-- `S3_CONNECT_TIMEOUT_SECONDS` - fail-fast S3 connect timeout in seconds, must stay `> 0`
-- `S3_READ_TIMEOUT_SECONDS` - fail-fast S3 read/write timeout in seconds, must stay `> 0`
-- `STORAGE_SIGNED_URL_TTL_SECONDS` - signed download TTL in seconds, must stay `<= 3600`
-- `EXPORT_TTL_DAYS=7` - export artifact retention window; worker deletes expired exports from S3
-- `S3_BUCKET` - real object-storage bucket/container name
-- `S3_REGION` - set explicitly; production startup treats S3 as the only source of truth
-
-Optional S3 wiring:
-
-- `S3_ENDPOINT_URL` for S3-compatible providers
-- `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` together, or leave both unset for IAM/instance-role auth
-
-Note: `docker-compose.yml` still mounts `storage_data` for compatibility, but
-in production `storage_data` is DEV/TEST compatibility only. S3 remains the
-single authoritative source of uploaded media.
-Export artifacts are persisted via storage keys in the active storage backend,
-while authoritative export metadata (including `expires_at`) live in DB;
-production flows must not depend on local filesystem reads.
-All media and export URLs exposed by the API are signed and time-limited; no
-endpoint returns a raw public S3 URL.
-Photo uploads use a single supported flow: `multipart/form-data` is validated
-by backend magic-byte and size checks, then written to the active storage
-backend. Metadata-only JSON uploads are intentionally rejected.
-Orphan cleanup must go through `storage_consistency_service`: `scan_db_vs_s3()`
-reports missing storage references and orphan keys, while `cleanup_orphans()`
-defaults to safe mode and writes structured logs with `org_id`, `key`, and `action`.
-
-### 2. SSL certifikáty
+For a release deployment, deploy an exact tag or commit rather than a moving branch.
 
 ```bash
-mkdir -p nginx/certs
-# Self-signed pro interní pilot:
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-  -keyout nginx/certs/key.pem \
-  -out nginx/certs/cert.pem \
-  -subj "/CN=novu-builder"
-# Pro produkci: použij Let's Encrypt nebo certifikát od CA
+git fetch --tags
+git checkout <release-tag-or-commit>
+git status --short
+git rev-parse HEAD
 ```
 
-### 3. Spuštění DB a Redis
-
-```bash
-docker compose --env-file .env.production up -d db redis
-# Počkej na healthcheck
-docker compose ps   # db a redis musí být "healthy"
-```
-
-### 4. Aplikace migrací
-
-```bash
-docker compose --env-file .env.production run --rm backend alembic upgrade head
-# Musí skončit bez chyby a vypsat: Running upgrade ... -> 20260326_0018
-docker compose --env-file .env.production run --rm backend alembic current
-# Musí vrátit: 20260326_0018 (head)
-```
-
-### 5. Spuštění zbývajících služeb
-
-```bash
-docker compose --env-file .env.production up -d
-docker compose ps   # všechny služby "running" nebo "healthy"
-```
-
-### 6. Ověření
-
-```bash
-# Liveness
-curl -f https://localhost/api/v1/alive
-
-# Public liveness
-curl -k https://localhost/api/v1/health
-curl -k https://localhost/api/v1/ready
-# /health â†’ {"status":"ok","service":"python-backend"}
-curl -k https://localhost/api/v1/ready
-# /ready â†’ {"status":"ready","service":"python-backend"}
-# Očekávané: {"status":"ok","service":"python-backend",...}
-
-# Smoke check
-python scripts/verify_deploy.py --base-url https://localhost --auth-email <email> --auth-password <password>
-```
+The working tree must be clean.
 
 ---
 
-## Upgrade (nová verze aplikace)
+## 2. Prepare deployment environment
 
-### Před upgradema
+The backend template is:
 
-```bash
-# 1. Záloha DB těsně před deployem
-BACKUP_DIR=/backups ./scripts/backup.sh
-
-# 2. Zkontroluj, jestli jsou čekající migrace
-docker compose --env-file .env.production run --rm backend alembic check
-# "New upgrade operations detected" = bude potřeba migrace
+```text
+python-backend/.env.production.example
 ```
 
-### Postup upgradu
+Create the two local source files used by the Compose env builder:
 
-```bash
-# 1. Stáhni nový kód
-cd /opt/novu-builder
-git pull origin main   # nebo konkrétní tag: git checkout v0.6.0
+- `python-backend/.env.production` — application secrets and strict-runtime overrides
+- root `.env` — infrastructure values such as `POSTGRES_PASSWORD` and `REDIS_PASSWORD`
 
-# 2. Buil nové image
-docker compose --env-file .env.production build backend
+Then render root `.env.production`:
 
-# 3. STOP backend a worker (DB a Redis běží dál)
-docker compose --env-file .env.production stop backend worker
-
-# 4. Aplikuj migrace (pokud existují)
-docker compose --env-file .env.production run --rm backend alembic upgrade head
-
-# 5. Start nových kontejnerů
-docker compose --env-file .env.production up -d backend worker
-
-# 6. Ověření (viz níže)
+```powershell
+.\scripts\Build-ComposeEnv.ps1
+.\scripts\Build-ComposeEnv.ps1 -Write
 ```
 
-### Post-deploy ověření
+Before deployment, the dry-run must report no missing or `CHANGE_ME` /
+`REPLACE_WITH` values.
 
-```bash
-# a) Zdraví
-curl -k https://localhost/api/v1/health
-# Musí vrátit "status":"ok"
+### Required MinIO image policy
 
-# b) Verze/prostředí
-curl -k https://localhost/api/v1/
+`docker-compose.yml` intentionally has no mutable MinIO defaults. Set:
 
-# c) Worker heartbeat (počkej 60s)
-sleep 60
-docker compose exec redis redis-cli -a "$REDIS_PASSWORD" GET worker:heartbeat
-
-# d) Smoke check
-python scripts/verify_deploy.py --base-url https://localhost --auth-email <email> --auth-password <pass>
-
-# Bezpecny wrapper pro preflight + explicitni migraci + post-deploy verification
-python scripts/verify_release_gate.py --base-url https://localhost --apply-migrations --auth-email <email> --auth-password <pass>
-
-# e) Zkontroluj logy na chyby
-docker compose logs backend --tail=50 | grep -E "ERROR|CRITICAL"
-docker compose logs worker --tail=50 | grep -E "ERROR|CRITICAL"
+```text
+MINIO_SERVER_IMAGE=<approved pinned tag or digest>
+MINIO_MC_IMAGE=<approved pinned tag or digest>
 ```
+
+Do **not** use `:latest`.
+
+The historical MinIO Community Docker Hub repositories are archived. Treat image
+selection as an operator decision: use a vetted immutable image or an approved
+external S3-compatible service. Validate the exact image in staging before release.
+
+For a disposable internal rehearsal, archived community images may be used only
+after explicit risk acceptance; do not silently promote them to production.
 
 ---
 
-## Rollback
+## 3. TLS certificates
 
-### Kdy rollbackovat
+The nginx service requires:
 
-- Backend vrací > 5 % 5xx odpovědí po deployi
-- `/health` hlásí `degraded` a příčina je v nové verzi
-- Nová verze selhala při post-deploy ověření
-
-### Postup rollback (bez migrace zpět)
-
-Nejčastější případ — nová verze má bug v kódu, ale migrace byly kompatibilní:
-
-```bash
-# 1. Stop nových kontejnerů
-docker compose --env-file .env.production stop backend worker
-
-# 2. Přepni na předchozí image
-#    Pokud jsi buildil s tagem:
-docker compose --env-file .env.production up -d --no-build backend worker
-#    Nebo: upravte docker-compose.yml na předchozí image tag a:
-docker compose --env-file .env.production up -d backend worker
-
-# 3. Ověření
-curl -k https://localhost/api/v1/health
+```text
+nginx/certs/cert.pem
+nginx/certs/key.pem
 ```
 
-### Rollback s migrací zpět (NEBEZPEČNÉ)
+For an internal staging host, use the repository helper:
 
-Pouze pokud migrace přidala/odebrala sloupce, které způsobují problém:
+```powershell
+.\scripts\Generate-PilotCert.ps1
+```
+
+or the shell equivalent:
 
 ```bash
-# POZOR: downgrade může smazat data (DROP COLUMN)!
-# VŽDY mít zálohu z před upgradu.
-
-# 1. Zjisti cílovou revizi
-docker compose run --rm backend alembic history --verbose | head -20
-
-# 2. Downgrade
-docker compose run --rm backend alembic downgrade <target-revision>
-# nebo: alembic downgrade -1  (jeden krok zpět)
-
-# 3. Spusť starou verzi kódu
-docker compose up -d backend worker
+./scripts/generate-pilot-cert.sh
 ```
+
+Use a CA-issued certificate for an internet-facing production deployment.
 
 ---
 
-## Migrace — co si dát pozor
-
-### Bezpečnostní pravidla
-
-1. **Záloha VŽDY před migrací** — i jedna migrace může smazat sloupec
-2. **Migrace testovat ve staging** před produkčním deployem
-3. **DB a backend nesynchronizovat živě** — backend stop → migrace → backend start
-4. **Downgrade migrací je destruktivní** — migrate_check + backup, nikdy impulzivně
-
-### Aktuální stav migrací (v0.5.0)
-```
-HEAD: 20260326_0018_add_role_permissions
-      20260326_0017_add_password_reset_tokens
-      20260326_0016_add_status_check_constraints
-      20260326_0015_financial_float_to_numeric   ← změní typy sloupců
-      20260326_0014_add_performance_indexes
-      20260326_0013_add_user_tokens_valid_after
-      ...
-      20260318_0001_initial_schema
-```
-
-Migrace `0015` (float→numeric) je **destruktivní při downgradu** — ztratíš přesnost dat. Nikdy nechoď pod `20260321_0010`.
-
-### Postup při chybě migrace v půlce
+## 4. Build application images
 
 ```bash
-# 1. Zkontroluj, kde se migrace zastavila
-docker compose run --rm backend alembic current
-
-# 2. Zkontroluj DB, jestli jsou v konzistentním stavu
-docker compose exec db psql -U novu novu_builder \
-  -c "\d+ <tabulka-ze-selhávající-migrace>"
-
-# 3a. Pokud DB je čistá (DDL nebyl aplikován):
-docker compose run --rm backend alembic stamp <předchozí-revize>
-# oprav příčinu, pak upgrade znovu
-
-# 3b. Pokud DDL byl částečně aplikován:
-# → Restore z zálohy (viz BACKUP_RESTORE.md)
+docker compose --env-file .env.production build backend worker
 ```
+
+A build failure is a deployment blocker.
 
 ---
 
-## Worker — speciální situace při deployi
-
-Worker konzumuje Redis queue. Při restartu workeru:
-- Rozpracované joby se **neztratí** — Redis queue je perzistentní
-- Joby ve stavu `running` zůstanou `running` v DB, ale reálně se nedokončí
-- Po restartu worker zpracuje `queued` joby, ale `running` joby neretryuje automaticky
-
-**Po upgradu workeru:**
+## 5. Start infrastructure only
 
 ```bash
-# Zkontroluj zaseknuté "running" joby
-docker compose exec db psql -U novu novu_builder \
-  -c "SELECT id, status, created_at FROM analysis_jobs WHERE status='running' ORDER BY created_at;"
-
-# Pokud jsou starší než 10 minut a worker byl restartován, jsou zaseknuté
-# Manuálně je přehodit na queued (přes admin API nebo přímo v DB) pro retry
+docker compose --env-file .env.production up -d db redis minio minio-setup
+docker compose --env-file .env.production ps -a
 ```
+
+Required state before migration:
+
+- PostgreSQL: healthy
+- Redis: healthy
+- MinIO: healthy
+- `minio-setup`: exited successfully
+
+Do not start backend, worker or nginx yet.
 
 ---
 
-## Prometheus scrape config (po deployi)
+## 6. Apply Alembic migrations explicitly
 
-Po každém deployi ověř, že Prometheus stále sbírá metriky:
-
-```yaml
-# prometheus.yml
-scrape_configs:
-  - job_name: novu-backend
-    static_configs:
-      - targets: ["<backend-host>:80"]
-    metrics_path: /api/v1/metrics
-    scheme: https
-    tls_config:
-      insecure_skip_verify: true   # jen pokud self-signed cert
-    authorization:
-      credentials: "<METRICS_AUTH_TOKEN>"
+```bash
+docker compose --env-file .env.production run --rm --no-deps --entrypoint alembic backend upgrade head
+docker compose --env-file .env.production run --rm --no-deps --entrypoint alembic backend current
+docker compose --env-file .env.production run --rm --no-deps --entrypoint alembic backend heads
 ```
 
-**Poznámka:** Prometheus musí být ve stejné sítí jako backend (docker internal nebo VPN), protože nginx blokuje `/api/v1/metrics` z veřejného internetu.
+For v0.8.6, both `current` and `heads` must report:
+
+```text
+20261003_0056
+```
+
+Verify the database directly:
+
+```bash
+docker compose --env-file .env.production exec db \
+  psql -U novu -d novu_builder -c "SELECT version_num FROM alembic_version;"
+
+docker compose --env-file .env.production exec db \
+  psql -U novu -d novu_builder -c "SELECT to_regclass('public.revoked_tokens');"
+
+docker compose --env-file .env.production exec db \
+  psql -U novu -d novu_builder -c "\d+ users"
+```
+
+Expected:
+
+- `alembic_version.version_num = 20261003_0056`
+- `revoked_tokens` exists
+- `users.is_superadmin` exists and is `BOOLEAN NOT NULL`
+
+Never use `alembic stamp` to bypass a failed migration during a normal deploy.
 
 ---
 
-*Poslední revize: 2026-03-28 | Platí pro v0.5.x*
+## 7. Create the first staging/pilot admin on a fresh database
+
+Only for a genuinely new environment:
+
+```bash
+docker compose --env-file .env.production run --rm --no-deps --entrypoint python backend \
+  scripts/create_pilot_admin.py \
+  --email <admin-email> \
+  --full-name "Staging Admin" \
+  --password "<strong-disposable-or-production-password>"
+```
+
+Do not recreate the first admin on an existing environment.
+
+---
+
+## 8. Start application services
+
+```bash
+docker compose --env-file .env.production up -d backend worker nginx
+docker compose --env-file .env.production ps
+```
+
+The backend startup guard must fail if the schema is not at Alembic head.
+A healthy backend therefore proves that the explicit migration step completed.
+
+---
+
+## 9. Post-deploy verification
+
+Run the authoritative deployment verifier:
+
+```bash
+python scripts/verify_deploy.py \
+  --base-url https://<host> \
+  --auth-email <email> \
+  --auth-password "<password>" \
+  --require-auth
+```
+
+This verifies:
+
+- `/api/v1/alive`
+- operational `/api/v1/health`
+- `/api/v1/ready`
+- strict processing readiness through a real worker
+- authenticated API smoke when credentials are supplied
+
+Then run the end-to-end business flow:
+
+```bash
+python scripts/test-business-flow.py --url https://<host>
+```
+
+Supply `NOVU_TEST_EMAIL` and `NOVU_TEST_PASSWORD` in the environment.
+
+The business-flow script does **not** certify SSE delivery. SSE/event delivery must
+be verified separately during staging acceptance.
+
+---
+
+## 10. Backup and restore acceptance
+
+Before any upgrade of an environment containing real data, create a backup using
+the repository backup procedure in `BACKUP_RESTORE.md`.
+
+A release candidate is not considered staging-accepted until a restore drill has
+been completed in a disposable environment and the restored application passes
+the post-deploy verifier.
+
+Restore operations are destructive. Never run them against the only copy of
+staging or production data.
+
+---
+
+# Upgrade procedure
+
+1. Create a fresh backup.
+2. Fetch and checkout the exact target tag/commit.
+3. Build `backend` and `worker`.
+4. Stop application writers:
+   ```bash
+   docker compose --env-file .env.production stop backend worker
+   ```
+5. Apply the explicit Alembic migration command from section 6.
+6. Start backend and worker:
+   ```bash
+   docker compose --env-file .env.production up -d backend worker
+   ```
+7. Run `verify_deploy.py` with authentication.
+8. Run the business-flow smoke.
+9. Review backend and worker logs for `ERROR` / `CRITICAL`.
+
+Do not downgrade the database as the first rollback action.
+
+---
+
+# Rollback
+
+## Preferred rollback: application code only
+
+If the new schema is backward-compatible with the previous application version:
+
+1. stop backend and worker,
+2. deploy the previous application image/commit,
+3. start backend and worker,
+4. run post-deploy verification.
+
+## Schema downgrade
+
+Schema downgrade is a last resort and requires a verified backup.
+
+Revision `20261003_0056` drops `users.is_superadmin` on downgrade. Existing
+superadmin assignments are therefore lost by that downgrade and cannot be
+reconstructed automatically on a later upgrade.
+
+Never downgrade this revision casually.
+
+---
+
+# Release acceptance rule
+
+Do not tag a release until all of the following are true:
+
+1. PR CI and Repo Guard are green.
+2. Push CI on the final `master` commit is green.
+3. `postgresql-migrations` passes from an empty PostgreSQL 16 database.
+4. `deployment-config` passes.
+5. Staging uses the exact release commit.
+6. Explicit Alembic migration reaches the expected head.
+7. Backend + worker readiness passes.
+8. Authenticated deploy verification passes.
+9. Business flow passes.
+10. SSE/event delivery is checked separately.
+11. Backup/restore drill passes.
+
+Only then create the version tag and GitHub release.
