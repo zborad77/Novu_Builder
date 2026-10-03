@@ -2,6 +2,7 @@
 Schema migrations are the responsibility of the deployment step, not the app process.
 """
 import inspect
+from pathlib import Path
 
 
 def test_lifespan_does_not_call_alembic_upgrade():
@@ -42,3 +43,14 @@ def test_startup_raises_if_schema_mismatch():
 
     # No exception when revisions match
     _schema_guard("abc123", "abc123")  # must not raise
+
+
+def test_docker_entrypoint_does_not_apply_migrations():
+    """Container startup must not mutate database schema implicitly."""
+    backend_root = Path(__file__).resolve().parents[1]
+    entrypoint = (backend_root / "docker-entrypoint.sh").read_text(encoding="utf-8")
+
+    assert "alembic upgrade" not in entrypoint.lower(), (
+        "docker-entrypoint.sh must not apply Alembic migrations implicitly; "
+        "deployment must run an explicit migration step before backend startup."
+    )
