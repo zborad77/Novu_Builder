@@ -5,7 +5,8 @@ Revises: 20260527_0055
 
 Older installations may already have the ordinary BOOLEAN NOT NULL column
 because the former initial revision used live application metadata. Preserve
-those values; fail closed on incompatible definitions rather than coercing them.
+those values; accept only an absent or literal false server default and fail
+closed on incompatible definitions rather than coercing them.
 
 Downgrade drops the flag, including any existing superadmin assignments. Back up
 those assignments before downgrading: a subsequent upgrade initializes all users
@@ -36,9 +37,13 @@ def _require_compatible(column: ReflectedColumn) -> None:
         or column["nullable"]
         or column.get("computed") is not None
         or column.get("identity") is not None
+        # PostgreSQL reflects false Boolean literals/casts as "false". Do not
+        # evaluate expressions: they must fail closed even if they return false.
+        or column.get("default") not in (None, "false")
     ):
         raise RuntimeError(
-            "Incompatible users.is_superadmin: expected an ordinary BOOLEAN NOT NULL column; "
+            "Incompatible users.is_superadmin: expected an ordinary BOOLEAN NOT NULL column "
+            "with no server default or a literal false default; "
             "refusing to coerce values or infer administrator privileges."
         )
 

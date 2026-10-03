@@ -344,7 +344,7 @@ def test_previous_head_missing_flag_backfills_false(database):
         assert _assert_superadmin(sa.inspect(connection))["default"] is None
 
 
-@pytest.mark.parametrize("default", ["", " DEFAULT false"])
+@pytest.mark.parametrize("default", ["", " DEFAULT false", " DEFAULT ('false'::boolean)"])
 def test_previous_head_existing_valid_flag_preserves_values(database, default):
     _cli(database, "upgrade", PREVIOUS_HEAD)
     with database.begin() as connection:
@@ -365,6 +365,9 @@ def test_previous_head_existing_valid_flag_preserves_values(database, default):
         ("INTEGER NOT NULL DEFAULT 0", [0, 1]),
         ("BOOLEAN", [None, True]),
         ("BOOLEAN GENERATED ALWAYS AS (true) STORED NOT NULL", None),
+        ("BOOLEAN NOT NULL DEFAULT true", [False, True]),
+        ("BOOLEAN NOT NULL DEFAULT (true AND false)", [False, True]),
+        ("BOOLEAN NOT NULL DEFAULT (random() > 0.5)", [False, True]),
     ],
 )
 def test_previous_head_incompatible_flag_fails_closed(database, definition, flags):
