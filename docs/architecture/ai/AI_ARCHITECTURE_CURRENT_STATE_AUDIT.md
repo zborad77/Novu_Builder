@@ -10,7 +10,7 @@
 The current backend already contains several strong building blocks for the future NOVU AI System, but they are split across two partially independent AI paths:
 
 1. the vision/analysis path under `app.ai` and `AnalysisService`;
-2. the offer-processing path under `app.offer_processing`, which already has a stronger provider abstraction, immutable-ish per-call `AgentRun` records, AI budget accounting and transactional outbox/SSE infrastructure.
+2. the offer-processing path under `app.offer_processing`, which already has a stronger provider abstraction, job-linked update-oriented `AgentRun` records, token usage/estimated-cost accounting and transactional outbox/SSE infrastructure.
 
 The correct direction is **consolidation through contracts**, not creating a third AI stack.
 
@@ -77,17 +77,17 @@ The detect → extract → catalog-map split already moves toward small responsi
 - durable Redis queue, lease/ack, retry and DLQ;
 - deterministic classification of retryable/non-retryable failures.
 
-These are valuable seeds for agent-run lifecycle, operational intelligence and immutable attempt history.
+These are valuable seeds for agent-run lifecycle and operational intelligence. They are not an existing generic immutable attempt ledger: automatic analysis retry updates the same job's state/error fields, while manual retry can create a linked job and Redis DLQ retains transport failure history.
 
-### 2.4 `AgentRun` is a strong seed for a generic AI run record
+### 2.4 `AgentRun` is a reuse seed with job-linked, mutable grain
 
 **File**
 - `python-backend/app/models/offer_processing.py`
   - `AgentRun`
 
-The model already records:
+The schema provides fields for (not all are fully populated by the worker):
 
-- frozen/anonymized input snapshot reference/hash;
+- input snapshot reference/hash and intended anonymized input;
 - version context;
 - provider;
 - model and model build;
@@ -99,7 +99,17 @@ The model already records:
 - start/completion timestamps;
 - status/outcome.
 
-This is conceptually close to the Foundation's run record and should be studied as a migration/reuse candidate instead of inventing an unrelated run representation.
+Actual runtime qualifications:
+
+- `AgentRun` is linked to an `OfferJob`; `UniqueConstraint(offer_job_id)` allows at most one run row per job. `OfferRepository.update_agent_run()` updates that row's status/output/accounting fields. It is not a generic immutable per-provider-call or per-attempt ledger.
+- One `AgentRuntime.run()` can try several provider adapters/calls through its fallback list. The worker creates one run before that execution. Provider retries/fallback calls do not each have their own canonical row. Automatic `OfferJobRunner._fail_job()` retry and lease reconciliation requeue the same job; this cannot be interpreted as preserved independent attempt records.
+- `build_input_snapshot()` passes through nested parameters/URLs and explicitly delegates stripping PII to its caller. The builder does not intrinsically enforce anonymization or freeze nested data. The worker supplies a hash/version context but does not pass `input_snapshot_key`; a hash alone is not a stored replayable input snapshot.
+- The worker records the primary provider/model before execution and does not pass `agent_model_build` to `create_agent_run()`. Actual selected response identity/build is not fully propagated into that record, particularly relevant to future fallback use.
+- Snapshot context uses `CURRENT_PROMPT_VERSION = "offer-v1"`, while `ProviderRequest.prompt_version` defaults to `"offer-v2"`. Version fields exist, but that is not proof they identify the actual prompt used. Model/build fields can contain an alias rather than a verified artifact revision.
+
+Evidence: `app/models/offer_processing.py: AgentRun`, `app/offer_processing/repository.py: create_agent_run/update_agent_run`, `app/worker/offer_runner.py: run/_fail_job`, `app/offer_processing/provider.py: AgentRuntime/ProviderRequest`, and `app/offer_processing/snapshot.py`.
+
+Reuse its proven domain linkage and available metadata through compatibility projections, while specifying the generic workflow/node/agent/attempt/call identities and append-only semantic history separately. This is a migration seed, not the final run ledger. No runtime repair is made in M1.
 
 ### 2.5 AI cost governance exists
 
@@ -110,7 +120,11 @@ This is conceptually close to the Foundation's run record and should be studied 
 - `python-backend/app/offer_processing/budget.py`
   - `BudgetService`
 
-There is atomic reservation, actual-cost accounting, crash recovery for stale reservations and tenant-level limits. This can later feed model routing and AI cost telemetry.
+There is an atomic daily token-counter admission check, captured actual token/usage values when responses expose them, estimated monetary valuation, stale-reservation recovery and tenant-level daily token limits. `estimate_cost_usd()` currently uses a fixed rate per total tokens; monetary values are estimates, not authoritative provider billing reconciliation. Monthly cost fields alone do not establish a hard monetary execution ceiling.
+
+Important reuse limitations: `reserve()` increments the counter before reservation `INSERT ... ON CONFLICT DO NOTHING`, so repeated reservation of the same job is not counter-idempotent. `record_actual()` adjusts counters/cost before a guarded reservation update; repeated settlement is not made idempotent by that later status predicate. `release()` guards the transition before crediting the returned reservation amount. A future shared execution/accounting port must not inherit the first two operations as proof of replay-safe settlement. Stale reservation expiry credits reserved tokens; it does not establish whether a crashed inference consumed billable usage.
+
+Evidence: `app/offer_processing/budget.py: reserve/record_actual/release/estimate_cost_usd`, `app/offer_processing/budget_sweeper.py`, and `app/worker/offer_runner.py: run`. These foundations can feed routing and telemetry after explicit adaptation; M1 does not change them.
 
 Foundation rule still applies: cost must not override minimum quality/risk thresholds for critical tasks.
 
@@ -126,16 +140,18 @@ Foundation rule still applies: cost must not override minimum quality/risk thres
 
 Current outbox provides transactionally coupled events, monotonic sequence, at-least-once publication and SSE replay/observability. This is a strong transport foundation.
 
+`seq` is a transport cursor, not causal or transaction-commit ordering. SSE replay-before-live-subscribe and capped replay queries do not themselves prove gap-free distributed catch-up. Preserve the transport while specifying semantic consumer ordering/deduplication and projection catch-up explicitly.
+
 Important distinction: the future **semantic AI Event Ledger** is not identical to the current transport outbox. Outbox delivery flags are mutable transport state; AI decision history requires richer immutable lineage semantics.
 
-### 2.7 Existing immutable/append-style audit concepts
+### 2.7 Existing append-style audit concepts
 
 **File**
 - `python-backend/app/models/domain.py`
   - `AuditLog`
   - `ProjectStatusHistory`
 
-Both represent useful audit patterns. `ProjectStatusHistory` explicitly documents never-update/delete transition history.
+Both represent useful append-style audit patterns. `ProjectStatusHistory` explicitly documents never-update/delete transition history. Those comments are not database-enforced append-only controls; its project FK uses cascade deletion. Future semantic immutability and lawful retention/erasure require explicit enforcement/governance, not an assumption based on model docstrings.
 
 ### 2.8 Work catalog / analysis profile contracts
 
@@ -163,7 +179,7 @@ Local vs S3 storage is already selected behind a backend dispatcher. This is a g
 
 Existing signals include HTTP metrics, DB/storage/Redis readiness, worker heartbeat, queue length, retry/DLQ state, job duration/failure, backpressure, audit-write failures, catalog validation metrics and outbox/SSE metrics.
 
-The backend also has fail-fast startup schema/storage/Redis checks. These signals are useful raw inputs for future Operational Intelligence.
+The backend has database/schema startup checks and environment-dependent storage/Redis fail-fast behavior. Strict environments fail fast on the relevant dependency failure; development/test may degrade, and queue initialization can return no client when Redis is not configured. These are useful raw inputs for future Operational Intelligence, not a universal statement that every configuration enforces identical readiness.
 
 ### 2.11 Human/manual override seeds
 
@@ -176,6 +192,8 @@ Examples:
 - `QuoteItem.is_manual_override`
 
 These show existing product semantics for human override, but they are not yet a general Human Gateway with lineage.
+
+Offer processing also has `OfferService.approve_offer()`, `cancel_offer_request()` and `submit_more_info()` with domain state transitions/outbox events. These are additional compatibility seeds. Manual measurement updates mutate the selected `AnalysisResult`; neither that field override nor offer approval establishes the general revision-bound Human Gateway contract.
 
 ---
 
@@ -233,7 +251,9 @@ This is not a defect for the current app, but future agents must not inherit arb
 
 ### 3.9 Cost accounting is offer-specific
 
-`AgentRun`/budgeting is tied to `OfferJob`/organization. A future generic AI run system needs cost/usage across all agent roles and domains without losing the proven reservation/accounting logic.
+`AgentRun`/budgeting is tied to `OfferJob`/organization. A future generic AI run system needs cost/usage across all agent roles and domains while preserving useful reservation patterns and explicitly addressing the documented accounting limitations.
+
+Preserve useful atomic admission and reservation tracking patterns, not unqualified claims of idempotency or actual monetary billing. The limitations in sections 2.4/2.5 must be resolved by explicit later adaptation before those operations enforce the generic envelope.
 
 ---
 
@@ -407,3 +427,49 @@ This milestone is documentation-only.
 - Production behavior: unchanged.
 - Production dependencies: unchanged.
 - Deployment/CI: unchanged.
+
+## 11. Normative target ownership and convergence map
+
+This section specifies future authority under Foundation v0.3.0; it is **not** a claim that these controls already exist at the audited baseline. Components are logical responsibilities/ports within the existing backend unless a later justified ADR changes deployment. No third parallel provider, retry, orchestration or run-persistence stack is permitted.
+
+| Responsibility | SINGLE future authority | Delegation boundary |
+|---|---|---|
+| Capability resolution | Capability Resolver within Workflow Orchestrator | Trusted registries supply versioned data; Policy constrains eligibility |
+| Provider/model selection | Model Router port | Initially delegates to existing factories/adapter selection with immutable bindings; registries/agents do not route independently |
+| Workflow orchestration | Workflow Orchestrator | Domain workflows/capabilities supply definitions, not Kernel branches |
+| Global retry/attempt budget | Trusted Execution Controller within Orchestrator | Every provider retry/fallback/redelivery/recovery consumes its issued credits |
+| Provider-local retry | Provider execution adapter | Mechanical transport handling only, inside Controller admission; no independent budget/reset |
+| Execution lifecycle/state | Execution Controller | Queues deliver and workers report; fences/revisions guard accepted transitions |
+| Policy authorization | Trusted Policy Engine | Decision/human inputs do not themselves grant effect permission; Gateway enforces |
+| Semantic history/order | Semantic Ledger append boundary | Owning state components produce events in one atomic state/history/outbox boundary |
+| Transport publication | Existing outbox publisher port | Delivers semantic projections at least once; publication flags are not business truth |
+| Domain projections | Existing domain services/repositories | Remain authoritative for their domain data; adapt via scoped operations, not duplicate Kernel domain models |
+| Human intervention acceptance | Human Gateway | Verifies actor/authority and binds exact revisions; Controller commits run transitions, Policy remains non-waivable |
+| Usage/cost settlement | Shared Cost Accounting port | Idempotent usage/reservation/valuation records; Controller alone enforces global ceilings |
+
+| Existing concept | Recommendation | Future mapping / required qualification |
+|---|---|---|
+| `app.ai.PROVIDERS` | MIGRATE | Feed compatibility selection into the Router port; no second permanent provider registry |
+| Analysis provider capabilities | ADAPT | Preserve fail-closed implementation/config checks as provider eligibility metadata |
+| `StagedVisionPipeline` | ADAPT | Vision-specific stages become domain capabilities, not a universal provider business protocol |
+| `LegacyProviderAdapter` | KEEP | Preserve single-shot compatibility and legacy result semantics |
+| `PipelineOrchestrator` | WRAP | Domain workflow adapter delegates global lifecycle/retry to Controller |
+| `AnalysisService` | WRAP | Scoped existing behavior/domain persistence; do not hand agents sessions |
+| `ProviderAdapter` | ADAPT | Reuse execution mechanics; move offer-specific inputs into domain adapters |
+| `AgentRuntime` | ADAPT | Execute bound adapter choice/fallback with Controller-issued attempt credits |
+| `AnalysisJob` | WRAP | Domain/transport job projection linked to generic execution identities |
+| `AnalysisResult` | KEEP | Domain result projection; references evidence/decision lineage, not generic Ledger replacement |
+| `AgentRun` | ADAPT | Job-linked legacy projection; address grain/mutability/metadata limitations before reuse |
+| Queue/retry/DLQ | ADAPT | Durable delivery under shared envelope, fencing and deduplication; no fresh budget on redelivery |
+| Budget models/services | ADAPT | Preserve useful counter/reservation patterns; fix replay/accounting limitations in a later scoped implementation |
+| `OutboxEvent` | KEEP | Transport projection with semantic IDs; do not overload published state as history |
+| SSE | KEEP | UI transport/catch-up projection, not execution authority |
+| `AuditLog` | KEEP | Security/business trail; bridge references rather than duplicate it |
+| `ProjectStatusHistory` | KEEP | Domain transition history; document actual retention/enforcement limitations |
+| Storage | WRAP | Scoped versioned object/evidence adapter with integrity, egress and retention rules |
+| Work catalog / analysis profiles | KEEP | Domain configuration/evaluators; generic Policy consumes results without construction branches |
+| Manual/human overrides | WRAP | Preserve domain surfaces; accept through Human Gateway revision/authority fencing |
+
+M2 first introduces typed contracts, ports and compatibility adapters, with one owner per responsibility above. Existing domain storage remains in place; canonical execution/history metadata links it rather than silently replacing or duplicating it. Adapters must declare internal retry bounds and effect scope before claiming compliance; unsupported safety semantics block the new controlled route or remain explicitly outside it, never become an undocumented bypass. Legacy-only behavior is not relabeled as Kernel-compliant.
+
+Milestone separation remains: M2 contract/compatibility skeleton, M3 semantic Ledger implementation/projections, later reference workflows/benchmarks/routing. Any new authoritative state in M2 must already satisfy the Event Contract's atomic history requirement using existing durable infrastructure, or remain non-authoritative/read-only. There is no interim independent run store without history and no permission to rewrite both AI systems at once.

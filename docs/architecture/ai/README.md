@@ -1,7 +1,7 @@
 # NOVU AI Architecture
 
 Status: M1 Architecture Contracts  
-Foundation: `NOVU_AI_SYSTEM_FOUNDATION.md` v0.2.1  
+Foundation: `NOVU_AI_SYSTEM_FOUNDATION.md` v0.3.0\
 Release boundary: documentation-only before v0.8.6 staging acceptance.
 
 ## Purpose
@@ -38,7 +38,7 @@ Until v0.8.6 has passed staging and release acceptance:
 - no autonomous recovery;
 - no self-hosted model/GPU integration.
 
-Findings discovered by the audit are documented, not repaired.
+Runtime issues discovered by the audit are documented, not repaired in M1.
 
 ## Reference flows
 
@@ -66,8 +66,23 @@ Log Intake
 → Objectives & Constraints
 → Optimizer
 → Recovery Decision
+→ AUTO / HUMAN policy gate
+→ Recovery execution through Tool Gateway
 → Recovery Verifier
 → Operational Auditor
 ```
 
 If a future kernel requires special-case code to distinguish these flows, treat that as a design smell and reassess the contracts.
+
+## Normative control contract map
+
+- **Workflow** owns the execution envelope, termination/partial outcomes, shared retry/cost budgets, immutable workflow-start bindings and generic decision artifacts.
+- **Event** defines scoped run/attempt/call identities, semantic aggregate revisions, atomic state/history/outbox, replay/deduplication and fencing.
+- **Policy / Tool Gateway** define the single permission authority and exact-effect enforcement at dispatch.
+- **Human / Evidence** define revision-bound human authority, assertion transformation/provenance, freshness/conflicts and retention/data-use constraints.
+- **Capability / Agent / Router** resolve only approved bound definitions, consume Controller-issued budgets and treat privacy as a hard eligibility gate.
+- **Current State Audit §11** specifies single-owner compatibility/migration mapping for `app.ai` and `app.offer_processing`; its baseline qualifications are not implementation claims.
+
+Role names, selected decisions, transport deliveries and model text never grant permissions. Existing outbox/SSE/storage may be retained; these are logical contracts, not a new service or event-bus plan. Active runs cannot silently upgrade bindings, and retry/fallback/redelivery/recovery cannot reset root limits.
+
+M1 contract remediation is documentation-only. Independent re-verification is still required; this version does not self-approve the architecture, merge PR #13, or begin M2.

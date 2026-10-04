@@ -1,7 +1,7 @@
 # NOVU Construct — AI System Foundation
 
 **Status:** Foundation / living architecture document  
-**Version:** 0.2.1  
+**Version:** 0.3.0\
 **Purpose:** Architectural constitution for NOVU AI.
 
 ## 1. Core principle
@@ -76,6 +76,8 @@ No implicit authority.
 
 Important outputs require an independent verification path. Author and verifier are distinct roles.
 
+Verification binds the exact candidate revision and its evidence/context. Separate producer/verifier runs and risk-appropriate identity/context independence are checked by trusted Policy; a role name or self-referencing capability does not prove independence. An independent challenge preserves an alternative/adversarial assessment without permission to replace the authoritative candidate.
+
 Verifier outcomes:
 
 - PASS
@@ -96,11 +98,15 @@ WORKER → VERIFIER → AUDITOR
 
 The auditor verifies process integrity: required verification occurred, evidence and uncertainty survived, disagreements were handled, assumptions were not promoted to facts, hard rules were not bypassed, and final values remain traceable.
 
+This normal role chain is not the global execution bound. All nested verification/meta-audit, cycles, retries and fan-out obey the finite Workflow execution envelope; no role is exempt.
+
 ## 8. Objectives & Constraints
 
 This role defines the decision context: customer objective, budget, lifetime, risk tolerance, downtime, deadline, warranty, regulation, future reconstruction, logistics, access, labor, environment and business priorities.
 
 It does not choose the final solution.
+
+The versioned Decision Context distinguishes non-waivable/explicitly waivable hard constraints from soft objectives and preferences. Domain schemas supply dimensions/units/evaluators without construction-specific Kernel logic.
 
 ## 9. Optimizer
 
@@ -108,7 +114,9 @@ The Optimizer compares verified candidates against objectives and constraints, i
 
 ## 10. Decision / Policy
 
-The decision layer receives verified candidates, audit state, objectives, constraints, optimization and deterministic policy. It may select, reject, require human approval or block. Hard rules must remain enforceable outside an LLM.
+The decision layer receives verified candidates, audit state, objectives, constraints, optimization and deterministic policy. The trusted Decision operation selects/records; Optimizer recommends; Policy alone authorizes/blocks; Tool Gateway/executor performs the authorized effect. A selected candidate is not permission to execute it. Hard rules remain enforceable outside an LLM.
+
+Candidate, Decision Context, Constraint Evaluation, Optimization Recommendation and Decision Record are domain-neutral artifacts in `AI_WORKFLOW_CONTRACT.md`. They preserve exact revisions, feasibility, PASS/FAIL/UNKNOWN constraints, trade-offs, rejected alternatives and policy/human references. Required failed/unknown hard constraints or unresolved critical evidence prevent finalization.
 
 ## 11. Human escalation
 
@@ -125,11 +133,15 @@ Valid outcomes include:
 
 Critical uncertainty must never be silently converted into certainty.
 
+Human Gateway accepts APPROVE, REJECT, AMEND, REQUEST_MORE_EVIDENCE, PAUSE, RESUME, ABORT, OVERRIDE and EMERGENCY_STOP through verified scoped authority and revision/fencing checks. Late agent results cannot silently supersede an accepted correction/stop/override. Human approval cannot waive non-waivable hard policy or enlarge an active execution budget.
+
 ## 12. Immutable event history
 
 Important actions produce versioned, traceable events. Typical families include case/input, agent run/result/failure, verification, audit, conflict/retry, help/human correction, objectives/constraints, optimization, decision/policy, finalization and system failure.
 
 Raw evidence must remain distinct from AI interpretation.
+
+Semantic events carry verified tenant/platform scope, aggregate revision, execution/node/agent/attempt/call identity and causal references. State/history/outbox intents commit atomically. Producer idempotency, consumer deduplication and fencing protect replay/concurrency; replay does not re-execute effects. Outbox/SSE remain transport, not semantic order or workflow authority.
 
 ## 13. Log categories
 
@@ -209,6 +221,8 @@ Important outputs distinguish:
 
 Confidence alone is insufficient. Preserve provenance, missing information, alternative hypotheses, measurement tolerance and critical unknowns.
 
+Assertions have exact versions and evidence links, multiple-source `derived_from` transformations, model/prompt/adapter/tool identity, trust/completeness, freshness, contradiction and supersession. Decision finalization evaluates those properties, not only confidence. Large raw evidence remains in governed scoped objects referenced by the semantic Ledger.
+
 ## 23. Operational Intelligence
 
 NOVU has a separate intelligence branch protecting NOVU itself:
@@ -224,8 +238,8 @@ RAW LOGS / METRICS / TRACES
 → OBJECTIVES & CONSTRAINTS
 → OPTIMIZER
 → RECOVERY DECISION
-→ AUTO / HUMAN
-→ RECOVERY AGENT
+→ AUTO / HUMAN policy gate
+→ Recovery execution through Tool Gateway
 → RECOVERY VERIFIER
 → OPERATIONAL AUDITOR
 → INCIDENT CLOSED
@@ -235,6 +249,8 @@ RAW LOGS / METRICS / TRACES
 Raw machine evidence is immutable and separate from interpretations.
 
 Autonomous recovery may use only approved, versioned, auditable runbooks with explicit permissions. Destructive or high-risk actions require policy/human gates. Successful command execution is not proof of recovery; the resulting system behavior must be verified.
+
+RCA/remediation agents propose; Policy is the action authorizer and Gateway the executor boundary. Recovery consumes the same root execution budget and cannot modify its own governing policy, approvals or limits. Autonomous recovery remains deferred; its runbook envelope must define environment/blast-radius constraints, rollback/compensation applicability, cooldown/circuit breaker and bounded escalation before activation.
 
 ## 24. Future intelligence domains
 
@@ -261,6 +277,9 @@ A new extension supplies a manifest, capabilities, input/output schemas, permiss
 13. Every failure should improve system knowledge.
 14. Every correction is potential training/benchmark data.
 15. Important agents must be replaceable without redesign.
+16. One trusted Controller owns finite execution limits; no retry/fallback/redelivery/recovery resets them.
+17. Privacy/locality/retention/data-use constraints are hard gates for every route and fallback.
+18. Active runs never silently rebind workflow/agent/capability/policy/prompt/model/adapter/tool definitions.
 
 ## 27. Foundation governance
 
@@ -274,6 +293,17 @@ Reference question:
 
 M1 is documentation and read-only audit only. v0.8.6 remains a release candidate awaiting staging acceptance. Runtime implementation belongs to later milestones after explicit approval.
 
-## 29. Architectural motto
+## 29. Normative M1 control boundaries (v0.3.0)
+
+MUST/MUST NOT requirements in the contracts define target invariants, not claims of existing implementation. `AI_ARCHITECTURE_CURRENT_STATE_AUDIT.md` separates baseline facts/limitations from the single-owner target convergence map. This version strengthens the existing Foundation; it does not authorize M2 or create physical services.
+
+- **Execution:** `AI_WORKFLOW_CONTRACT.md` defines the trusted Controller, finite validated depth/cycle/fan-out/run/concurrency limits, shared attempt/cost budget, absolute deadline, cancellation fences, terminal/partial/evidence outcomes and immutable start bindings. No production numeric defaults are selected in M1.
+- **Authority:** `AI_POLICY_ENGINE.md` defines exact-effect authorization; `AI_TOOL_GATEWAY.md` validates it at dispatch. Actor/tenant/resource/revision/parameters/purpose/environment/risk/validity are bound, not supplied as permission by an agent.
+- **History:** `AI_EVENT_CONTRACT.md` owns identity vocabulary, scope, aggregate ordering, atomic state/history/outbox, deduplication and stale writer rejection. Corrections are new events, never silent rewrites.
+- **Human/evidence:** the Human and Evidence contracts define authority/fencing, transformation provenance, validity and critical conflict/missing-evidence handling.
+- **Privacy:** recipient egress/locality/retention/training restrictions, redaction, raw-output retention and dataset eligibility are hard Policy/Router/Gateway constraints. Untrusted evidence cannot become instruction authority. Immutable references do not permit indefinite PII retention or exposing credentials/presigned URLs.
+- **Convergence:** existing vision/offer adapters and domain persistence are reused through these boundaries. A third parallel provider/orchestration/retry/run store is prohibited. Logical modules and current outbox/storage are sufficient starting points.
+
+## 30. Architectural motto
 
 > **NOVU Construct does not ask one AI for an answer. It builds, verifies, challenges, optimizes and audits a decision.**
