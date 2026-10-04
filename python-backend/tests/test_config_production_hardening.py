@@ -5,6 +5,8 @@
 # values of METRICS_AUTH_TOKEN, REDIS_URL, DATABASE_URL and STORAGE_BACKEND
 # in production, and that dev / test environments remain tolerant.
 # =============================================================================
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -755,3 +757,52 @@ def test_cors_localhost_allowed_in_test(monkeypatch):
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
     s = Settings()
     assert "localhost" in s.cors_allowed_origins
+
+
+# ── Pre-staging deployment/config contract regression ─────────────────────────
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_PROD_TEMPLATE = _REPO_ROOT / "python-backend" / ".env.production.example"
+_COMPOSE_FILE = _REPO_ROOT / "docker-compose.yml"
+
+_STRICT_COMPOSE_ALIASES = (
+    "BACKPRESSURE_MAX_CONCURRENT_JOBS",
+    "BACKPRESSURE_MAX_QUEUED_JOBS",
+    "BACKPRESSURE_MAX_RETRY_INFLIGHT",
+    "RATE_LIMIT_MARKER_WRITE",
+    "RATE_LIMIT_READ_LIST",
+    "RATE_LIMIT_READ_DETAIL",
+)
+
+
+def _compose_service_block(compose_text: str, service: str, next_service: str | None = None) -> str:
+    start = compose_text.index(f"  {service}:")
+    end = compose_text.index(f"  {next_service}:", start) if next_service else len(compose_text)
+    return compose_text[start:end]
+
+
+def test_production_template_uses_supported_claude_provider_key():
+    template = _PROD_TEMPLATE.read_text(encoding="utf-8")
+    assert "AI_ANALYSIS_PROVIDER=claude" in template
+    assert "AI_ANALYSIS_PROVIDER=anthropic" not in template
+    assert "# Options: claude | openai | mock" in template
+    assert "# Required when AI_ANALYSIS_PROVIDER=claude" in template
+
+
+def test_production_template_database_name_matches_compose():
+    template = _PROD_TEMPLATE.read_text(encoding="utf-8")
+    compose = _COMPOSE_FILE.read_text(encoding="utf-8")
+    assert "@db:5432/novu_builder" in template
+    assert "POSTGRES_DB: novu_builder" in compose
+    assert "@db:5432/novu_builder" in compose
+
+
+def test_strict_runtime_aliases_are_passed_to_backend_and_worker():
+    compose = _COMPOSE_FILE.read_text(encoding="utf-8")
+    backend = _compose_service_block(compose, "backend", "nginx")
+    worker = _compose_service_block(compose, "worker")
+
+    for alias in _STRICT_COMPOSE_ALIASES:
+        expected = f"      {alias}: ${{{alias}}}"
+        assert expected in backend
+        assert expected in worker

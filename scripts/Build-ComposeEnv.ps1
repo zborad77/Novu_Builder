@@ -65,12 +65,14 @@ foreach ($kv in $appVars.GetEnumerator()) { $merged[$kv.Key] = $kv.Value }
 $composeVars = @(
     'AI_ANALYSIS_PROVIDER','ANALYSIS_JOBS_PER_TENANT_LIMIT','ANALYSIS_JOB_MAX_ATTEMPTS',
     'ANALYSIS_QUEUE_MAX_DEPTH','ANALYSIS_RETRY_BACKOFF_BASE_SECONDS','ANALYSIS_RETRY_BACKOFF_MAX_SECONDS',
+    'BACKPRESSURE_MAX_CONCURRENT_JOBS','BACKPRESSURE_MAX_QUEUED_JOBS','BACKPRESSURE_MAX_RETRY_INFLIGHT',
     'ANTHROPIC_API_KEY','APP_BASE_URL','CORS_ALLOWED_ORIGINS','DB_MAX_OVERFLOW','DB_POOL_RECYCLE',
     'DB_POOL_SIZE','DB_POOL_TIMEOUT','EXPORT_TTL_DAYS','HEAVY_QUEUE_MAX_DEPTH','HSTS_MAX_AGE',
     'JWT_ACCESS_TOKEN_EXPIRE_MINUTES','JWT_REFRESH_TOKEN_EXPIRE_DAYS','JWT_SECRET',
     'METRICS_AUTH_ENABLED','METRICS_AUTH_TOKEN','MINIO_SERVER_IMAGE','MINIO_MC_IMAGE','MINIO_ROOT_USER','MINIO_ROOT_PASSWORD','POSTGRES_PASSWORD',
     'RATE_LIMIT_ADMIN','RATE_LIMIT_ADMIN_SENSITIVE','RATE_LIMIT_ADMIN_WRITE',
     'RATE_LIMIT_ANALYSIS_JOBS','RATE_LIMIT_LOGIN','RATE_LIMIT_UPLOAD',
+    'RATE_LIMIT_MARKER_WRITE','RATE_LIMIT_READ_LIST','RATE_LIMIT_READ_DETAIL',
     'READINESS_PROCESSING_GRACE_SECONDS','REDIS_FAILOVER_URLS','REDIS_HEALTH_CHECK_INTERVAL',
     'REDIS_PASSWORD','REDIS_RETRY_ATTEMPTS','REDIS_RETRY_BACKOFF_BASE','REDIS_RETRY_BACKOFF_CAP',
     'REDIS_SOCKET_CONNECT_TIMEOUT','REDIS_SOCKET_TIMEOUT','REQUIRE_HTTPS',
@@ -87,16 +89,20 @@ $composeVars = @(
 $extraRequired = @('S3_BUCKET','S3_REGION','S3_ENDPOINT_URL','S3_ACCESS_KEY_ID','S3_SECRET_ACCESS_KEY',
                    'S3_CDN_BASE_URL','S3_CONNECT_TIMEOUT_SECONDS','S3_READ_TIMEOUT_SECONDS')
 
+$requiredVars = @($composeVars + $extraRequired) | Sort-Object -Unique
+
+$allowEmpty = @('REDIS_FAILOVER_URLS','S3_CDN_BASE_URL','SENTRY_DSN')
+
 Write-Host ""
 Write-Host "=== Compose variable coverage ==="
 $needsAttention = @()
-foreach ($v in $composeVars) {
+foreach ($v in $requiredVars) {
     $val = $merged[$v]
-    if ($null -eq $val -or $val -eq '') {
+    if ($null -eq $val -or ($val -eq '' -and $v -notin $allowEmpty)) {
         Write-Host "  MISSING  $v"
         $needsAttention += $v
     } elseif ($val -match 'CHANGE_ME|REPLACE_WITH') {
-        Write-Host "  CHANGE   $v = $val"
+        Write-Host "  CHANGE   $v"
         $needsAttention += $v
     } elseif (($v -eq 'MINIO_SERVER_IMAGE' -or $v -eq 'MINIO_MC_IMAGE') -and $val -match ':latest$') {
         Write-Host "  CHANGE   $v must use a pinned tag or digest, not :latest"
@@ -113,6 +119,12 @@ if ($needsAttention.Count -eq 0) {
     Write-Host ""
     Write-Host "Variables needing manual attention: $($needsAttention.Count)"
     foreach ($v in $needsAttention) { Write-Host "  - $v" }
+}
+
+if ($needsAttention.Count -gt 0) {
+    Write-Host ""
+    Write-Host "Validation failed. Root .env.production was not written."
+    exit 1
 }
 
 if (-not $Write) {
