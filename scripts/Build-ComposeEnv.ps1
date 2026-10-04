@@ -91,12 +91,14 @@ $extraRequired = @('S3_BUCKET','S3_REGION','S3_ENDPOINT_URL','S3_ACCESS_KEY_ID',
 
 $requiredVars = @($composeVars + $extraRequired) | Sort-Object -Unique
 
+$allowEmpty = @('REDIS_FAILOVER_URLS','S3_CDN_BASE_URL','SENTRY_DSN')
+
 Write-Host ""
 Write-Host "=== Compose variable coverage ==="
 $needsAttention = @()
 foreach ($v in $requiredVars) {
     $val = $merged[$v]
-    if ($null -eq $val -or $val -eq '') {
+    if ($null -eq $val -or ($val -eq '' -and $v -notin $allowEmpty)) {
         Write-Host "  MISSING  $v"
         $needsAttention += $v
     } elseif ($val -match 'CHANGE_ME|REPLACE_WITH') {
