@@ -280,8 +280,8 @@ jobs:
           ANTHROPIC_API_KEY=unused-for-mock-provider
           JWT_SECRET=ci-jwt-secret-00000000000000000000000000000000
           METRICS_AUTH_TOKEN=ci-metrics-token-0000000000000000000000000000
-          MINIO_SERVER_IMAGE=minio/minio:RELEASE.2025-09-07T16-13-09Z
-          MINIO_MC_IMAGE=minio/mc:RELEASE.2025-08-13T08-35-41Z
+          MINIO_SERVER_IMAGE=quay.io/minio/minio:RELEASE.2025-09-06T17-38-46Z
+          MINIO_MC_IMAGE=quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
           MINIO_ROOT_PASSWORD=ci-minio-password
           S3_SECRET_ACCESS_KEY=ci-minio-password
           EOF
@@ -300,8 +300,24 @@ jobs:
             echo "Mutable MinIO :latest tag is forbidden."
             exit 1
           fi
-          echo "$images" | grep -Fx 'minio/minio:RELEASE.2025-09-07T16-13-09Z'
-          echo "$images" | grep -Fx 'minio/mc:RELEASE.2025-08-13T08-35-41Z'
+          echo "$images" | grep -Fx 'quay.io/minio/minio:RELEASE.2025-09-06T17-38-46Z'
+          echo "$images" | grep -Fx 'quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z'
+
+          # Historical Community images are disposable CI/rehearsal fixtures only.
+          # A successful pull does not approve them for final staging or production.
+          # This gate exists to detect stale or unpullable deployment artifacts.
+          docker compose --env-file .env.production pull minio minio-setup
+
+          server_ref='quay.io/minio/minio:RELEASE.2025-09-06T17-38-46Z'
+          mc_ref='quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z'
+          server_digest="$(docker image inspect "$server_ref" --format '{{join .RepoDigests "\n"}}' | head -n1)"
+          mc_digest="$(docker image inspect "$mc_ref" --format '{{join .RepoDigests "\n"}}' | head -n1)"
+          test -n "$server_digest"
+          test -n "$mc_digest"
+          echo "MinIO server requested image: $server_ref"
+          echo "MinIO server resolved digest: $server_digest"
+          echo "MinIO mc requested image: $mc_ref"
+          echo "MinIO mc resolved digest: $mc_digest"
 
   # ── Release gate ─────────────────────────────────────────────────────────────
   # Single required status check for branch protection.
