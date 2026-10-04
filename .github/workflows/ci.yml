@@ -260,13 +260,130 @@ jobs:
         working-directory: python-backend
         run: python -m pytest migration_tests/ -v
 
-  # Production-like Compose contract: all substitutions resolve and mutable MinIO
-  # tags are rejected before a release can pass.
+  # Production-like Compose contract. MinIO Community is source-built from
+  # pinned upstream refs for disposable CI compatibility testing only. The
+  # resulting local images are never published and do not approve a final
+  # staging/production artifact; final staging storage remains an operator choice.
   deployment-config:
     runs-on: ubuntu-latest
+    env:
+      MINIO_SERVER_SOURCE_REPO: https://github.com/minio/minio.git
+      MINIO_SERVER_SOURCE_TAG: RELEASE.2025-10-15T17-29-55Z
+      MINIO_SERVER_SOURCE_SHA: 9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
+      MINIO_SERVER_IMAGE: novu/minio-ce-rehearsal:RELEASE.2025-10-15T17-29-55Z
+      MINIO_MC_SOURCE_REPO: https://github.com/minio/mc.git
+      MINIO_MC_SOURCE_TAG: RELEASE.2025-08-13T08-35-41Z
+      MINIO_MC_SOURCE_SHA: 7394ce0dd2a80935aded936b09fa12cbb3cb8096
+      MINIO_MC_IMAGE: novu/mc-rehearsal:RELEASE.2025-08-13T08-35-41Z
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Go 1.24.8
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.8"
+          cache: false
+
+      - name: Fetch and verify pinned MinIO server source
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/minio-server-src"
+          git clone --quiet --depth 1 --branch "$MINIO_SERVER_SOURCE_TAG" "$MINIO_SERVER_SOURCE_REPO" "$src"
+          actual="$(git -C "$src" rev-parse HEAD)"
+          echo "MinIO source repository: $MINIO_SERVER_SOURCE_REPO"
+          echo "MinIO source tag: $MINIO_SERVER_SOURCE_TAG"
+          echo "MinIO source commit: $actual"
+          test "$actual" = "$MINIO_SERVER_SOURCE_SHA"
+
+      - name: Build and verify MinIO server binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/minio-server-src"
+          make -C "$src" build
+          test -x "$src/minio"
+          "$src/minio" --version
+          checksum="$(sha256sum "$src/minio" | awk '{print $1}')"
+          test -n "$checksum"
+          echo "MINIO_SERVER_BINARY_SHA256=$checksum" >> "$GITHUB_ENV"
+          echo "MinIO server binary SHA256: $checksum"
+
+      - name: Fetch and verify pinned mc source
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/minio-mc-src"
+          git clone --quiet --depth 1 --branch "$MINIO_MC_SOURCE_TAG" "$MINIO_MC_SOURCE_REPO" "$src"
+          actual="$(git -C "$src" rev-parse HEAD)"
+          echo "mc source repository: $MINIO_MC_SOURCE_REPO"
+          echo "mc source tag: $MINIO_MC_SOURCE_TAG"
+          echo "mc source commit: $actual"
+          test "$actual" = "$MINIO_MC_SOURCE_SHA"
+
+      - name: Build and verify mc binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/minio-mc-src"
+          make -C "$src" build
+          test -x "$src/mc"
+          "$src/mc" --version
+          checksum="$(sha256sum "$src/mc" | awk '{print $1}')"
+          test -n "$checksum"
+          echo "MINIO_MC_BINARY_SHA256=$checksum" >> "$GITHUB_ENV"
+          echo "mc binary SHA256: $checksum"
+
+      - name: Build disposable local MinIO images
+        shell: bash
+        run: |
+          set -euo pipefail
+          server_src="$RUNNER_TEMP/minio-server-src"
+          mc_src="$RUNNER_TEMP/minio-mc-src"
+          server_ctx="$RUNNER_TEMP/minio-server-image"
+          mc_ctx="$RUNNER_TEMP/minio-mc-image"
+          mkdir -p "$server_ctx" "$mc_ctx"
+
+          cp "$server_src/minio" "$server_ctx/minio"
+          cp "$server_src/LICENSE" "$server_src/CREDITS" "$server_ctx/"
+          cat > "$server_ctx/Dockerfile" <<'EOF'
+          FROM alpine:3.22
+          RUN apk add --no-cache ca-certificates wget
+          COPY minio /usr/local/bin/minio
+          COPY LICENSE /licenses/minio/LICENSE
+          COPY CREDITS /licenses/minio/CREDITS
+          RUN chmod 0755 /usr/local/bin/minio
+          ENTRYPOINT ["/usr/local/bin/minio"]
+          EOF
+
+          cp "$mc_src/mc" "$mc_ctx/mc"
+          cp "$mc_src/LICENSE" "$mc_src/CREDITS" "$mc_ctx/"
+          cat > "$mc_ctx/Dockerfile" <<'EOF'
+          FROM alpine:3.22
+          RUN apk add --no-cache ca-certificates
+          COPY mc /usr/local/bin/mc
+          COPY LICENSE /licenses/minio-mc/LICENSE
+          COPY CREDITS /licenses/minio-mc/CREDITS
+          RUN chmod 0755 /usr/local/bin/mc
+          ENTRYPOINT ["/usr/local/bin/mc"]
+          EOF
+
+          docker build --pull -t "$MINIO_SERVER_IMAGE" "$server_ctx"
+          docker build --pull -t "$MINIO_MC_IMAGE" "$mc_ctx"
+          server_id="$(docker image inspect "$MINIO_SERVER_IMAGE" --format '{{.Id}}')"
+          mc_id="$(docker image inspect "$MINIO_MC_IMAGE" --format '{{.Id}}')"
+          test -n "$server_id"
+          test -n "$mc_id"
+          echo "MinIO local image: $MINIO_SERVER_IMAGE"
+          echo "MinIO local image ID: $server_id"
+          echo "MinIO source commit: $MINIO_SERVER_SOURCE_SHA"
+          echo "MinIO binary SHA256: $MINIO_SERVER_BINARY_SHA256"
+          echo "mc local image: $MINIO_MC_IMAGE"
+          echo "mc local image ID: $mc_id"
+          echo "mc source commit: $MINIO_MC_SOURCE_SHA"
+          echo "mc binary SHA256: $MINIO_MC_BINARY_SHA256"
+          echo "SOURCE-BUILT COMMUNITY IMAGE - DISPOSABLE CI/REHEARSAL ONLY - NOT FINAL STAGING APPROVAL - NOT PRODUCTION APPROVAL"
 
       - name: Prepare disposable deployment env sources
         shell: bash
@@ -275,13 +392,13 @@ jobs:
           POSTGRES_PASSWORD=ci-postgres-password
           REDIS_PASSWORD=ci-redis-password
           EOF
-          cat > python-backend/.env.production <<'EOF'
+          cat > python-backend/.env.production <<EOF
           AI_ANALYSIS_PROVIDER=mock
           ANTHROPIC_API_KEY=unused-for-mock-provider
           JWT_SECRET=ci-jwt-secret-00000000000000000000000000000000
           METRICS_AUTH_TOKEN=ci-metrics-token-0000000000000000000000000000
-          MINIO_SERVER_IMAGE=minio/minio:RELEASE.2025-09-07T16-13-09Z
-          MINIO_MC_IMAGE=minio/mc:RELEASE.2025-08-13T08-35-41Z
+          MINIO_SERVER_IMAGE=$MINIO_SERVER_IMAGE
+          MINIO_MC_IMAGE=$MINIO_MC_IMAGE
           MINIO_ROOT_PASSWORD=ci-minio-password
           S3_SECRET_ACCESS_KEY=ci-minio-password
           EOF
@@ -290,18 +407,59 @@ jobs:
         shell: pwsh
         run: ./scripts/Build-ComposeEnv.ps1 -Write
 
-      - name: Validate rendered Compose configuration
+      - name: Validate rendered Compose configuration and local images
         shell: bash
         run: |
+          set -euo pipefail
           docker compose --env-file .env.production config -q
           images="$(docker compose --env-file .env.production config --images)"
           echo "$images"
-          if echo "$images" | grep -E '^minio/(minio|mc):latest$'; then
-            echo "Mutable MinIO :latest tag is forbidden."
-            exit 1
-          fi
-          echo "$images" | grep -Fx 'minio/minio:RELEASE.2025-09-07T16-13-09Z'
-          echo "$images" | grep -Fx 'minio/mc:RELEASE.2025-08-13T08-35-41Z'
+          echo "$images" | grep -Fx "$MINIO_SERVER_IMAGE"
+          echo "$images" | grep -Fx "$MINIO_MC_IMAGE"
+          docker image inspect "$MINIO_SERVER_IMAGE" >/dev/null
+          docker image inspect "$MINIO_MC_IMAGE" >/dev/null
+
+      - name: Start source-built MinIO and wait for current healthcheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env.production up -d --pull never minio
+          cid="$(docker compose --env-file .env.production ps -q minio)"
+          test -n "$cid"
+          health=""
+          for i in $(seq 1 90); do
+            health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid")"
+            if [ "$health" = "healthy" ]; then
+              echo "MinIO healthy after ${i}s"
+              break
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' "$cid")" != "true" ]; then
+              docker logs "$cid"
+              exit 1
+            fi
+            sleep 1
+          done
+          test "$health" = "healthy"
+
+      - name: Run current minio-setup and verify bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env.production up --no-deps --pull never --exit-code-from minio-setup minio-setup
+          setup_cid="$(docker compose --env-file .env.production ps -a -q minio-setup)"
+          test -n "$setup_cid"
+          test "$(docker inspect -f '{{.State.ExitCode}}' "$setup_cid")" = "0"
+          docker compose --env-file .env.production run --rm --no-deps --pull never --entrypoint /bin/sh minio-setup -c             'mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc ls "local/$S3_BUCKET" >/dev/null'
+          echo "MinIO setup and bucket verification passed."
+
+      - name: Cleanup disposable MinIO source-build fixture
+        if: always()
+        shell: bash
+        run: |
+          docker compose --env-file .env.production down -v --remove-orphans || true
+          docker image rm -f "$MINIO_SERVER_IMAGE" "$MINIO_MC_IMAGE" || true
+          rm -f .env .env.production python-backend/.env.production
+          rm -rf "$RUNNER_TEMP/minio-server-src" "$RUNNER_TEMP/minio-mc-src"                  "$RUNNER_TEMP/minio-server-image" "$RUNNER_TEMP/minio-mc-image"
 
   # ── Release gate ─────────────────────────────────────────────────────────────
   # Single required status check for branch protection.
