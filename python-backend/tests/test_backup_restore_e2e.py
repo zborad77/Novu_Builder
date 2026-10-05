@@ -117,6 +117,8 @@ class Env:
         pg_dump_fail: bool = False,
         pg_restore_exit_code: int = 0,
         consistency_check_exit_code: int = 0,
+        backend_health: str = "healthy",
+        worker_health: str = "healthy",
     ) -> None:
         pg_body = (
             "exit 1"
@@ -130,7 +132,13 @@ class Env:
             case "$args" in
                 *pg_dump*)              {pg_body} ;;
                 *alembic_version*)      echo "{alembic_head}" ;;
+                *"ps -q backend"*)     echo "fake_backend_id" ;;
+                *"ps -q worker"*)      echo "fake_worker_id" ;;
                 *"ps -q"*)             echo "fake_container_id" ;;
+                *"inspect -f"*".State.Health.Status"*fake_backend_id*) echo "{backend_health}" ;;
+                *"inspect -f"*".State.Health.Status"*fake_worker_id*)  echo "{worker_health}" ;;
+                *"inspect -f"*".State.Status"*fake_backend_id*)        echo "running" ;;
+                *"inspect -f"*".State.Status"*fake_worker_id*)         echo "running" ;;
                 *" cp "*)              true ;;
                 *" rm "*)              true ;;
                 *"check_storage_consistency.py"*)
@@ -1195,7 +1203,7 @@ class TestRestoreValidArtifacts:
         assert "Backup-set verify: SKIPPED (operator override)" in combined
 
     def test_restore_fails_when_liveness_not_confirmed(self, fx: Env) -> None:
-        fx.curl(exit_code=1)
+        fx.docker(backend_health="unhealthy")
         dump, _, _ = fx.make_artifacts()
         r = fx.run_restore(dump)
         combined = r.stdout + r.stderr
@@ -1204,7 +1212,7 @@ class TestRestoreValidArtifacts:
         assert "9. Backend liveness / handoff readiness: FAILED" in combined
         assert "10. Post-restore validation: FAILED" in combined
         assert "11. Release readiness decision: FAILED" in combined
-        assert "Backend liveness probe: FAILED" in combined
+        assert "Backend/worker handoff readiness: FAILED" in combined
         assert "Release readiness decision: FAILED (backend liveness was not confirmed; Production DR remains NOT VERIFIED)" in combined
 
     def test_legacy_manifest_name_is_still_readable_with_warning(self, fx: Env) -> None:
@@ -1685,7 +1693,7 @@ class TestRestoreSuccessSemantics:
         assert "Restore handoff status:" not in combined
 
     def test_no_runtime_confirmed_message_when_liveness_fails(self, fx: Env) -> None:
-        fx.curl(exit_code=1)
+        fx.docker(backend_health="unhealthy")
         dump, _, _ = fx.make_artifacts()
         r = fx.run_restore(dump)
         combined = r.stdout + r.stderr
@@ -1998,7 +2006,7 @@ class TestDrClaimGating:
         combined = r.stdout + r.stderr
         assert r.returncode == 0, combined
         assert "DB restore contract: PASSED" in combined
-        assert "Backend liveness probe: PASSED" in combined
+        assert "Backend/worker handoff readiness: PASSED (Compose Docker health)" in combined
         assert "Production DR: NOT VERIFIED" in combined
 
     def test_restore_rejects_manifest_with_production_dr_eligible_true(self, fx: Env) -> None:
