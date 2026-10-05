@@ -886,6 +886,7 @@ def test_restore_handoff_uses_compose_health_without_host_backend_port():
     backend = _compose_service_block(compose, "backend", "nginx")
 
     assert 'HEALTH_URL="http://localhost:8000/api/v1/health"' not in restore
+    assert "$HEALTH_URL" not in restore
     assert 'ps -q backend' in restore
     assert 'ps -q worker' in restore
     assert "docker inspect -f '{{.State.Status}}'" in restore
