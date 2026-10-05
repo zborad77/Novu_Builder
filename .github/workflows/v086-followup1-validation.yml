@@ -1,0 +1,145 @@
+name: v086 follow-up one targeted validation
+on:
+  push:
+    branches: [diagnostic/v086-followup1-validation]
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_USER: postgres, POSTGRES_PASSWORD: postgres, POSTGRES_DB: novu_test}
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: --health-cmd 'redis-cli ping' --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      SOURCE_MASTER: 71d24f10f17b5fc1599c68be1c48f7330ec366f0
+      PATCH_BLOB: 6bc5c04144d8589b020164ce2810ee06ed03f6fe
+      APP_ENV: development
+      AI_ANALYSIS_PROVIDER: mock
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/novu_test
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/novu_test
+      REDIS_URL: redis://localhost:6379/0
+      JWT_SECRET: ci-disposable-followup-test-secret-not-production
+      DB_TEST_DISABLE_POOLING: 'true'
+      STORAGE_ROOT: /tmp/novu-followup-storage
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Establish exact clean baseline and add only regression tests
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$SOURCE_MASTER"
+          test "$(git rev-parse origin/master)" = "$SOURCE_MASTER"
+          test "$(git diff --name-only "$SOURCE_MASTER" HEAD)" = '.github/workflows/v086-followup1-validation.yml'
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/followup1-evidence"
+          gh api "repos/$GITHUB_REPOSITORY/git/blobs/$PATCH_BLOB" --jq .content | base64 --decode > "$RUNNER_TEMP/followup1.py"
+          test "$(git hash-object "$RUNNER_TEMP/followup1.py")" = "$PATCH_BLOB"
+          python "$RUNNER_TEMP/followup1.py" --tests-only
+      - name: Install declared dependencies and tools
+        run: python -m pip install -r python-backend/requirements.txt -r python-backend/requirements-dev.txt
+      - name: Regressions must fail against original production source
+        run: |
+          set +e
+          cd python-backend
+          python -m pytest tests/test_redis_client_hardening.py tests/test_backup_restore_e2e.py -q -k test_rehearsal_ > "$RUNNER_TEMP/followup1-evidence/red.log" 2>&1
+          rc=$?
+          cat "$RUNNER_TEMP/followup1-evidence/red.log"
+          test "$rc" = 1
+      - name: Apply narrow runtime fixes and run relevant existing suites
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/followup1.py"
+          cd python-backend
+          python -m pytest tests/test_redis_client_hardening.py tests/test_backup_restore_e2e.py tests/test_sse_event_invariants.py tests/test_config_production_hardening.py -q | tee "$RUNNER_TEMP/followup1-evidence/targeted.log"
+          ruff check app/core/redis_client.py
+          mypy app/ | tee "$RUNNER_TEMP/followup1-evidence/mypy.log"
+      - name: Real Redis publish-subscribe round trip through production wrapper
+        run: |
+          cd python-backend
+          python - <<'PY' | tee "$RUNNER_TEMP/followup1-evidence/real-redis.log"
+          import asyncio,json,os,uuid
+          from app.core.redis_client import build_queue_redis_client_from_settings
+          from app.core.config import get_settings
+          async def check():
+              wrapper=build_queue_redis_client_from_settings(get_settings())
+              channel='rehearsal-proof:'+uuid.uuid4().hex
+              subscription=wrapper.pubsub()
+              try:
+                  await wrapper.ping()
+                  await subscription.subscribe(channel)
+                  message=None
+                  for i in range(20):
+                      message=await subscription.get_message(ignore_subscribe_messages=False,timeout=1)
+                      if message and message['type']=='subscribe':break
+                  assert message and message['type']=='subscribe'
+                  payload=json.dumps({'kind':'disposable-wrapper-proof','nonce':uuid.uuid4().hex})
+                  assert await wrapper.publish(channel,payload)==1
+                  received=None
+                  for i in range(20):
+                      received=await subscription.get_message(ignore_subscribe_messages=True,timeout=1)
+                      if received and received['type']=='message':break
+                  assert received and received['data'].decode()==payload
+                  print('ACTUAL_REDIS_WRAPPER_PUBSUB_PUBLISH_PASS')
+              finally:
+                  await subscription.unsubscribe(channel)
+                  await subscription.aclose()
+                  await wrapper.aclose()
+          asyncio.run(check())
+          PY
+      - name: One targeted precommit review and tested-blob export
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          set -euo pipefail
+          {
+            echo '$ git diff --check';git diff --check
+            echo '$ git status --short';git status --short
+            echo '$ git diff';git diff
+            echo '$ git diff --summary';git diff --summary
+            echo '$ git diff --name-only';git diff --name-only
+          } | tee "$RUNNER_TEMP/followup1-evidence/precommit.log"
+          python - <<'PY'
+          import base64,json,os,subprocess
+          from pathlib import Path
+          expected={'python-backend/app/core/redis_client.py','ops/restore.sh','python-backend/tests/test_redis_client_hardening.py','python-backend/tests/test_backup_restore_e2e.py'}
+          actual=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          assert actual==expected,actual
+          for p in ('scripts/backup.sh','ops/restore.sh','python-backend/scripts/verify_restore.sh','scripts/generate-pilot-cert.sh'):
+              assert subprocess.check_output(['git','ls-files','-s',p],text=True).startswith('100755 ')
+          result={}
+          for path in sorted(expected):
+              data=Path(path).read_bytes()
+              want=subprocess.check_output(['git','hash-object',path],text=True).strip()
+              payload=json.dumps({'content':base64.b64encode(data).decode(),'encoding':'base64'})
+              response=subprocess.run(['gh','api','--method','POST','repos/'+os.environ['GITHUB_REPOSITORY']+'/git/blobs','--input','-'],input=payload,capture_output=True,text=True,check=True)
+              actual=json.loads(response.stdout)['sha'];assert actual==want
+              result[path]=actual;print('REVIEWED_FOLLOWUP1_BLOB',path,actual)
+          (Path(os.environ['RUNNER_TEMP'])/'followup1-evidence/reviewed-blobs.json').write_text(json.dumps(result,indent=2))
+          print('FOLLOWUP1_TARGETED_REVIEW_PASS_NO_OTHER_FILES')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v086-followup1-evidence
+          path: ${{ runner.temp }}/followup1-evidence/
+          retention-days: 7
+      - name: Cleanup temporary source and exact diagnostic branch
+        if: always()
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          set -euo pipefail
+          git restore ops/restore.sh python-backend/app/core/redis_client.py python-backend/tests/test_redis_client_hardening.py python-backend/tests/test_backup_restore_e2e.py
+          test -z "$(git status --porcelain)"
+          rm -rf "$RUNNER_TEMP/followup1-evidence" "$RUNNER_TEMP/followup1.py" /tmp/novu-followup-storage
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/diagnostic/v086-followup1-validation" --jq .object.sha)" = "$GITHUB_SHA"
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/diagnostic/v086-followup1-validation"
