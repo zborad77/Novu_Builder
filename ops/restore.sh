@@ -1271,9 +1271,9 @@ emit_dr_claim_decision_block
 echo "  DB restore contract: PASSED"
 echo "  Schema/head alignment: PASSED ($POST_MIGRATION_REV)"
 if [[ $HEALTHY -eq 1 ]]; then
-  echo "  Backend liveness probe: PASSED ($HEALTH_URL)"
+  echo "  Backend/worker handoff readiness: PASSED (Compose Docker health)"
 else
-  echo "  Backend liveness probe: FAILED (no response within 60s)"
+  echo "  Backend/worker handoff readiness: FAILED (not both running + healthy within 90s)"
 fi
 echo "  DB -> storage sampled reference validation: $VERIFY_REFERENCE_SAMPLE_VALIDATION_STATUS"
 echo "  Signed URL / storage access path validation: $VERIFY_SIGNED_URL_VALIDATION_STATUS"
