@@ -880,6 +880,32 @@ def test_restore_migration_command_relies_on_backend_command_passthrough():
     assert 'docker compose -f "$COMPOSE_FILE" run --rm backend alembic upgrade head' in restore
 
 
+def test_restore_handoff_uses_compose_health_without_host_backend_port():
+    restore = (_REPO_ROOT / "ops/restore.sh").read_text(encoding="utf-8")
+    compose = _COMPOSE_FILE.read_text(encoding="utf-8")
+    backend = _compose_service_block(compose, "backend", "nginx")
+
+    assert 'HEALTH_URL="http://localhost:8000/api/v1/health"' not in restore
+    assert 'ps -q backend' in restore
+    assert 'ps -q worker' in restore
+    assert "docker inspect -f '{{.State.Status}}'" in restore
+    assert ".State.Health.Status" in restore
+    assert '"running"' in restore and '"healthy"' in restore
+    assert "    ports:" not in backend
+    assert "http://localhost:8000/api/v1/alive" in backend
+
+
+def test_restore_preserves_db_only_contract_and_production_dr_non_claim():
+    restore = (_REPO_ROOT / "ops/restore.sh").read_text(encoding="utf-8")
+    backup_restore = (_REPO_ROOT / "BACKUP_RESTORE.md").read_text(encoding="utf-8")
+
+    assert "AUTHORITATIVE DB-only restore path" in restore
+    assert 'PRODUCTION_DR_STATUS="NOT VERIFIED"' in restore
+    assert "repo restore = DB-only restore contract" in backup_restore
+    assert "Production DR: NOT VERIFIED" in backup_restore
+    assert "no S3 object recovery automation" in backup_restore
+
+
 def test_production_internal_health_and_proxy_contract():
     compose = _COMPOSE_FILE.read_text(encoding="utf-8")
     backend = _compose_service_block(compose, "backend", "nginx")
