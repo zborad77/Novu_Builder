@@ -195,6 +195,22 @@ def test_failover_client_pubsub_delegates_to_active_candidate():
 
 
 @pytest.mark.asyncio
+async def test_failover_client_publish_uses_write_semantics():
+    primary = AsyncMock()
+    primary.publish = AsyncMock(return_value=2)
+    client = FailoverRedisClient(
+        urls=("redis://:secret@primary:6379/0",),
+        clients=(primary,),
+    )
+
+    assert await client.publish("case:events:prj_123", '{"event_id":"evt_1"}') == 2
+    primary.publish.assert_awaited_once_with(
+        "case:events:prj_123",
+        '{"event_id":"evt_1"}',
+    )
+
+
+@pytest.mark.asyncio
 async def test_failover_client_ping_promotes_second_candidate_when_primary_down():
     primary = AsyncMock()
     primary.ping = AsyncMock(side_effect=OSError("primary down"))
