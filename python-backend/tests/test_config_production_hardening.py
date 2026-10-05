@@ -5,6 +5,11 @@
 # values of METRICS_AUTH_TOKEN, REDIS_URL, DATABASE_URL and STORAGE_BACKEND
 # in production, and that dev / test environments remain tolerant.
 # =============================================================================
+import os
+import re
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -806,3 +811,34 @@ def test_strict_runtime_aliases_are_passed_to_backend_and_worker():
         expected = f"      {alias}: ${{{alias}}}"
         assert expected in backend
         assert expected in worker
+
+
+# Narrow executable deployment contract exposed by the production-like rehearsal.
+
+
+def test_documented_pilot_admin_invocation_imports_and_renders_help():
+    deploy = (_REPO_ROOT / "DEPLOY.md").read_text(encoding="utf-8")
+    blocks = re.findall(r"```bash\n(.*?)```", deploy, flags=re.DOTALL)
+    command = next(
+        block for block in blocks
+        if "--entrypoint python backend" in block and "create_pilot_admin" in block
+    )
+    argv = shlex.split(command.replace("\\\n", " "))
+    start = argv.index("backend", argv.index("--entrypoint")) + 1
+    invocation = argv[start:argv.index("--email")]
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, *invocation, "--help"],
+        cwd=_REPO_ROOT / "python-backend",
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert invocation == ["-m", "scripts.create_pilot_admin"]
+    assert "--email" in result.stdout and "--password" in result.stdout
+    script = (_REPO_ROOT / "python-backend/scripts/create_pilot_admin.py").read_text(encoding="utf-8")
+    assert "python -m scripts.create_pilot_admin" in script.split('"""', 2)[1]

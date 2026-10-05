@@ -175,7 +175,7 @@ Only for a genuinely new environment:
 
 ```bash
 docker compose --env-file .env.production run --rm --no-deps --entrypoint python backend \
-  scripts/create_pilot_admin.py \
+  -m scripts.create_pilot_admin \
   --email <admin-email> \
   --full-name "Staging Admin" \
   --password "<strong-disposable-or-production-password>"

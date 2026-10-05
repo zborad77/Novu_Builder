@@ -279,6 +279,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check executable release operator entrypoints
+        shell: bash
+        run: |
+          test -x scripts/backup.sh
+          test -x ops/restore.sh
+          test -x python-backend/scripts/verify_restore.sh
+          test -x scripts/generate-pilot-cert.sh
+
       - name: Set up Go 1.24.8
         uses: actions/setup-go@v5
         with:
