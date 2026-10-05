@@ -4,11 +4,13 @@ Bootstrap the first superadmin user for a fresh pilot deployment.
 
 Run inside the backend container after `alembic upgrade head`:
 
-    docker compose --env-file .env.production run --rm backend \\
-        python scripts/create_pilot_admin.py \\
+    docker compose --env-file .env.production run --rm --no-deps --entrypoint python backend \\
+        -m scripts.create_pilot_admin \\
         --email admin@yourcompany.cz \\
         --full-name "Pilot Admin" \\
         --password "YourStr0ng!Pass"
+
+Module execution (python -m scripts.create_pilot_admin) keeps /app as the import root.
 
 Idempotent: exits cleanly if a superadmin already exists.
 Also seeds the global work catalog (analysis profiles, pricing, work types)

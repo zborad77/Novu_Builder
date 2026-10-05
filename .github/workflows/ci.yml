@@ -279,6 +279,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check executable release operator entrypoints
+        shell: bash
+        run: |
+          test -x scripts/backup.sh
+          test -x ops/restore.sh
+          test -x python-backend/scripts/verify_restore.sh
+          test -x scripts/generate-pilot-cert.sh
+
       - name: Set up Go 1.24.8
         uses: actions/setup-go@v5
         with:
@@ -393,6 +401,8 @@ jobs:
           REDIS_PASSWORD=ci-redis-password
           EOF
           cat > python-backend/.env.production <<EOF
+          APP_BASE_URL=https://novu-ci.local
+          CORS_ALLOWED_ORIGINS=https://novu-ci.local
           AI_ANALYSIS_PROVIDER=mock
           ANTHROPIC_API_KEY=unused-for-mock-provider
           JWT_SECRET=ci-jwt-secret-00000000000000000000000000000000
@@ -452,11 +462,63 @@ jobs:
           docker compose --env-file .env.production run --rm --no-deps --pull never --entrypoint /bin/sh minio-setup -c             'mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc ls "local/$S3_BUCKET" >/dev/null'
           echo "MinIO setup and bucket verification passed."
 
+      - name: Build production backend and verify direct S3 imports
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env.production build backend
+          docker compose --env-file .env.production run --rm --no-deps --entrypoint python backend             -c "import boto3; from botocore.config import Config; print('s3-runtime-deps-ok')"
+
+      - name: Validate real production S3 backend startup and health
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env.production up -d db redis
+          for service in db redis; do
+            cid="$(docker compose --env-file .env.production ps -q "$service")"
+            test -n "$cid"
+            health=""
+            for i in $(seq 1 90); do
+              health="$(docker inspect -f '{{.State.Health.Status}}' "$cid")"
+              [ "$health" = healthy ] && break
+              sleep 1
+            done
+            test "$health" = healthy
+          done
+          docker compose --env-file .env.production run --rm --no-deps --entrypoint alembic backend upgrade head
+          test "$(docker compose --env-file .env.production exec -T db psql -U novu -d novu_builder -Atc 'SELECT version_num FROM alembic_version')" = 20261003_0056
+          docker compose --env-file .env.production up -d --no-deps backend
+          cid="$(docker compose --env-file .env.production ps -a -q backend)"
+          health=""
+          for i in $(seq 1 120); do
+            health="$(docker inspect -f '{{.State.Health.Status}}' "$cid")"
+            [ "$health" = healthy ] && break
+            test "$(docker inspect -f '{{.RestartCount}}' "$cid")" = 0
+            sleep 1
+          done
+          test "$health" = healthy
+          sleep 10
+          test "$(docker inspect -f '{{.State.Running}}' "$cid")" = true
+          test "$(docker inspect -f '{{.RestartCount}}' "$cid")" = 0
+          echo 'Production S3 backend startup and Docker health: PASSED'
+
+      - name: Capture production startup evidence before cleanup
+        if: always()
+        shell: bash
+        run: |
+          if [ -f .env.production ]; then
+            docker compose --env-file .env.production ps -a
+            docker compose --env-file .env.production logs --no-color backend worker nginx
+            for cid in $(docker compose --env-file .env.production ps -a -q); do
+              docker inspect -f 'Name={{.Name}} Status={{.State.Status}} ExitCode={{.State.ExitCode}} RestartCount={{.RestartCount}} Health={{json .State.Health}} Ports={{json .HostConfig.PortBindings}}' "$cid"
+            done
+          fi
+
       - name: Cleanup disposable MinIO source-build fixture
         if: always()
         shell: bash
         run: |
-          docker compose --env-file .env.production down -v --remove-orphans || true
+          docker compose --env-file .env.production down -v --rmi local --remove-orphans || true
           docker image rm -f "$MINIO_SERVER_IMAGE" "$MINIO_MC_IMAGE" || true
           rm -f .env .env.production python-backend/.env.production
           rm -rf "$RUNNER_TEMP/minio-server-src" "$RUNNER_TEMP/minio-mc-src"                  "$RUNNER_TEMP/minio-server-image" "$RUNNER_TEMP/minio-mc-image"
