@@ -842,3 +842,49 @@ def test_documented_pilot_admin_invocation_imports_and_renders_help():
     assert "--email" in result.stdout and "--password" in result.stdout
     script = (_REPO_ROOT / "python-backend/scripts/create_pilot_admin.py").read_text(encoding="utf-8")
     assert "python -m scripts.create_pilot_admin" in script.split('"""', 2)[1]
+
+
+@pytest.mark.parametrize("package", ("boto3", "botocore"))
+def test_production_s3_direct_dependency_pins(package):
+    requirements = (_REPO_ROOT / "python-backend/requirements.txt").read_text(encoding="utf-8")
+    pins = [line.strip() for line in requirements.splitlines() if line.strip() and not line.startswith("#")]
+    assert pins.count(f"{package}==1.43.107") == 1
+
+
+def test_production_s3_runtime_dependencies_import():
+    import boto3
+    import botocore
+    from botocore.config import Config
+
+    assert boto3.__version__ == "1.43.107"
+    assert botocore.__version__ == "1.43.107"
+    assert Config(connect_timeout=3, read_timeout=10).connect_timeout == 3
+
+
+def test_production_internal_health_and_proxy_contract():
+    compose = _COMPOSE_FILE.read_text(encoding="utf-8")
+    backend = _compose_service_block(compose, "backend", "nginx")
+    nginx = _compose_service_block(compose, "nginx", "worker")
+    template = _PROD_TEMPLATE.read_text(encoding="utf-8")
+    assert "REQUIRE_HTTPS=true" in template.splitlines()
+    assert "      REQUIRE_HTTPS: ${REQUIRE_HTTPS}" in backend
+    assert '      FORWARDED_ALLOW_IPS: "*"' in backend
+    assert "headers={'X-Forwarded-Proto': 'https'}" in backend
+    assert "    ports:" not in backend
+    assert '      - "80:80"' in nginx
+    assert '      - "443:443"' in nginx
+
+
+def test_nginx_overwrites_untrusted_forwarded_client_chain():
+    nginx = (_REPO_ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
+    forwarded = [" ".join(line.split()) for line in nginx.splitlines() if " ".join(line.split()).startswith("proxy_set_header X-Forwarded-For ")]
+    assert forwarded
+    assert all(line == "proxy_set_header X-Forwarded-For $remote_addr;" for line in forwarded)
+    assert "proxy_set_header X-Forwarded-Proto $scheme;" in " ".join(nginx.split())
+
+
+def test_nginx_loopback_health_exercises_public_tls_path():
+    compose = _COMPOSE_FILE.read_text(encoding="utf-8")
+    nginx = _compose_service_block(compose, "nginx", "worker")
+    assert "https://127.0.0.1/api/v1/alive" in nginx
+    assert "--no-check-certificate" in nginx  # Only the container-loopback health probe.
