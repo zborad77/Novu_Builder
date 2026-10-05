@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -179,6 +179,19 @@ def test_build_queue_redis_client_from_settings_wraps_primary_and_failover_candi
     assert isinstance(client, FailoverRedisClient)
     assert client.candidate_count == 3
     assert build_client.call_count == 3
+
+
+def test_failover_client_pubsub_delegates_to_active_candidate():
+    primary = MagicMock()
+    pubsub = MagicMock()
+    primary.pubsub.return_value = pubsub
+    client = FailoverRedisClient(
+        urls=("redis://:secret@primary:6379/0",),
+        clients=(primary,),
+    )
+
+    assert client.pubsub() is pubsub
+    primary.pubsub.assert_called_once_with()
 
 
 @pytest.mark.asyncio

@@ -861,6 +861,25 @@ def test_production_s3_runtime_dependencies_import():
     assert Config(connect_timeout=3, read_timeout=10).connect_timeout == 3
 
 
+def test_backend_entrypoint_passes_explicit_operator_command_through():
+    entrypoint = _REPO_ROOT / "python-backend/docker-entrypoint.sh"
+    result = subprocess.run(
+        ["sh", str(entrypoint), sys.executable, "-c", "print('entrypoint-command-ok')"],
+        cwd=_REPO_ROOT / "python-backend",
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "entrypoint-command-ok"
+
+
+def test_restore_migration_command_relies_on_backend_command_passthrough():
+    restore = (_REPO_ROOT / "ops/restore.sh").read_text(encoding="utf-8")
+    assert 'docker compose -f "$COMPOSE_FILE" run --rm backend alembic upgrade head' in restore
+
+
 def test_production_internal_health_and_proxy_contract():
     compose = _COMPOSE_FILE.read_text(encoding="utf-8")
     backend = _compose_service_block(compose, "backend", "nginx")
