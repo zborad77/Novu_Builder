@@ -1,0 +1,93 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Arial;}{\f1 Courier New;}}
+\f0\fs24
+\b Analyza stavu projektu NOVU Builder\b0\par
+Datum: 21.03.2026\par
+\par
+\b Metodika\b0\par
+Tato analyza vychazi jen z overenych podkladu: aktualni struktury repozitare, aktualniho git statusu a diffu a skutecnych build/check vysledku provedenych 21.03.2026.\par
+\par
+\b Cil\b0\par
+Vytvorit jeden dokument s kompletni analyzou aktualniho stavu projektu.\par
+\par
+\b Co nechame na pozdeji\b0\par
+- navrh dalsich architektonickych zmen\par
+- prioritizace dalsich implementacnich kroku\par
+- samotne opravovani kodu\par
+\par
+\b Strucne shrnuti\b0\par
+Repozitar je aktivne rozdeleny do casti \f1 desktop-qt\f0 , \f1 novu-react\f0 , \f1 python-backend\f0 , \f1 docs\f0 , \f1 storage\f0  a \f1 test-data\f0 .\par
+Projekt uz neni jen prazdna kostra. Desktop, backend i web uz obsahuji realny workflow kolem cases, images, proposal draft a final proposal.\par
+Aktualni stav odpovida funkcni prototypove vetvi, ktera se stale meni, ne stabilni uzavrene verzi.\par
+\par
+\b Overene vysledky kontrol\b0\par
+- \f1 git status --short --branch\f0 : working tree je dirty.\par
+- \f1 git diff --raw\f0  a \f1 git diff --numstat\f0  dnes potvrzuji obsahovou zmenu jen ve 3 souborech.\par
+- React lint probehl uspesne: \f1 npm.cmd --prefix novu-react run lint\f0 .\par
+- React production build probehl uspesne: \f1 npm.cmd --prefix novu-react run build\f0 .\par
+- Backend import probehl uspesne: \f1 python -c "import app.main"\f0  po vlozeni \f1 python-backend\f0  do \f1 sys.path\f0 .\par
+- Desktop primy build probehl uspesne: \f1 cmake --build ... --target FotoNabidkaDesktop\f0  vratil \f1 ninja: no work to do.\f0\par
+- Desktop build skript \f1 desktop-qt\\scripts\\build-debug.ps1\f0  pri dnesnim spusteni zanechal \f1 build-debug-status.json\f0  ve stavu \f1 running\f0  a oba nove logy byly prazdne. Tento skript proto dnes nelze brat jako spolehlivy zdroj pravdy.\par
+\par
+\b Stav po castich\b0\par
+\b 1. desktop-qt\b0\par
+Desktop je Qt6 Widgets aplikace s okny a pohledy \f1 MainWindow\f0 , \f1 LoginView\f0 , \f1 CaseListView\f0  a \f1 CaseDetailView\f0 .\par
+Soubor \f1 desktop-qt\\src\\services\\apiservice.cpp\f0  obsahuje realna HTTP volani na backend pro seznam cases, detail case, duplicate, send, final proposal, images, primary image, analysis reference image a upload fotek.\par
+Soubor \f1 desktop-qt\\src\\views\\casedetailview.cpp\f0  ma 1591 radku. To je fakticky velky monolit UI a workflow logiky v jednom souboru.\par
+Soubor \f1 desktop-qt\\README.md\f0  tvrdi \f1 zatim bez realneho API napojeni\f0 , ale aktualni kod uz realne API vola. README je tedy v tomto bode zastaraly vuci skutecnemu stavu kodu.\par
+\par
+\b 2. novu-react\b0\par
+React cast je funkcni referencni prototyp kancelarskeho workflow nad API \f1 http://127.0.0.1:8000/api/v1\f0 .\par
+Soubor \f1 novu-react\\src\\App.jsx\f0  ma 1536 radku a soustreduje velkou cast UI, fetch logiky i workflow stavu do jednoho mista.\par
+Build i lint dnes prosly. To potvrzuje, ze webovy prototyp je v aktualni vetvi aspon na urovni sestaveni konzistentni.\par
+\par
+\b 3. python-backend\b0\par
+Backend je FastAPI aplikace. \f1 python-backend\\app\\main.py\f0  obsahuje fail-fast startup kontroly databaze, schematu a zapisovatelnosti storage.\par
+Centralni API router registruje route skupiny pro system, auth, cases, images, analysis-jobs, measurements, estimates, exports, material-catalog, suppliers, projects, photos, analysis a quote-variants.\par
+Backend sel dnes uspesne importovat bez chyby, takze minimalne zakladni modulovy bootstrap je v poradku.\par
+\par
+\b 4. docs, storage, test-data\b0\par
+Slozka \f1 docs\f0  obsahuje architektonicke a provozni podklady.\par
+Slozka \f1 test-data\\reference-cases\f0  obsahuje referencni datasety s manifesty a fotkami.\par
+Slozka \f1 storage\f0  slouzi jako lokalni dev storage.\par
+\par
+\b Aktualni rozpracovane zmeny v working tree\b0\par
+- \f1 desktop-qt\\src\\main.cpp\f0 : pridany include \f1 QJsonObject\f0 .\par
+- \f1 python-backend\\app\\schemas\\project.py\f0 : pridany model workflow statusu projektu a photo readiness.\par
+- \f1 python-backend\\app\\services\\project_service.py\f0 : pridana logika pro sestaveni workflow summary a napojeni do detailu projektu.\par
+Poznamka: \f1 git status\f0  navic hlasi modified i pro \f1 desktop-qt\\src\\views\\casedetailview.cpp\f0  a \f1 desktop-qt\\src\\views\\casedetailview.h\f0 , ale dnesni \f1 git diff --raw\f0  a \f1 git diff --numstat\f0  potvrzuji obsahovou zmenu jen ve 3 souborech vyse. Tento nesoulad je realny a nelze ho bez dalsi kontroly vydavat za potvrzenou obsahovou editaci.\par
+\par
+\b Rizika a nesoulady\b0\par
+- Dokumentace desktopu je v casti API napojeni zastarala proti skutecnemu kodu.\par
+- Build automatizace desktopu neni dnes plne duveryhodna, protoze build skript zanechal neuzavreny stav \f1 running\f0  s prazdnymi logy.\par
+- Desktop i React maji klicovou UI logiku soustredenou do velmi dlouhych centralnich souboru.\par
+- Vyhledani souboru podle vzoru \f1 *test*\f0  a \f1 *spec*\f0  v kodovych castich repozitare nic nevratilo. Prakticky overene jsou hlavne smoke skripty, build, lint a import kontrola.\par
+\par
+\b Zaver\b0\par
+Projekt je v aktualni vetvi funkcni a aktivne rozpracovany prototyp.\par
+Backend a web jsou dnes overene jako konzistentni na urovni importu, lintu a buildu.\par
+Desktop cilova aplikace je dnes sestavitelna, ale pomocny build skript ma nejednoznacne chovani a nelze se na nej bez vyhrady spolehnout.\par
+Nejvetsi aktualni dluhy, ktere jsou primo videt z dnesni kontroly, jsou nesoulad README versus realny stav, spolehlivost desktop build automace a koncentrace UI logiky do velkych souboru.\par
+\par
+\b Doporucene dalsi kroky\b0\par
+1. Opravit duveryhodnost desktop buildu.\par
+Nejdriv sjednotit realny build stav a vystupy skriptu \f1 desktop-qt\\scripts\\build-debug.ps1\f0 , aby status soubor a logy odpovidaly skutecnemu vysledku.\par
+\par
+2. Srovnat dokumentaci se skutecnym stavem kodu.\par
+Aktualizovat hlavne \f1 desktop-qt\\README.md\f0 , protoze dnes uz neplati tvrzeni, ze desktop je bez realneho API napojeni.\par
+\par
+3. Ustalit jeden hlavni pracovni tok end-to-end.\par
+Vzít konkretni workflow \f1 case -> images -> proposal draft -> final proposal -> send\f0  a overit ho jako referencni hlavni scenar pro dalsi rozvoj.\par
+\par
+4. Rozdelit nejvetsi monoliticke UI soubory.\par
+Nejvyssi prioritu maji \f1 novu-react\\src\\App.jsx\f0  a \f1 desktop-qt\\src\\views\\casedetailview.cpp\f0 , protoze soustredi prilis mnoho UI i workflow logiky do jednoho mista.\par
+\par
+5. Dodat skutecne automaticke testy nad kriticke workflow.\par
+Aktualne jsou realne videt hlavne smoke skripty a build kontroly. Dalsi krok je pridat testy aspon pro backend workflow pravidla a hlavni API scenare.\par
+\par
+6. Dokoncit workflow status i na klientovi.\par
+Backend uz ma rozpracovany \f1 workflowStatus\f0  v detailu projektu. Dalsi logicky krok je tento stav zobrazit v desktopu a pouzit ho pro blokace akci typu final proposal a send.\par
+\par
+7. Az potom resit dalsi rozsirovani funkci.\par
+Teprve po stabilizaci buildu, dokumentace a hlavniho workflow dava smysl rozsirovat dalsi moduly a vedlejsi UX vrstvy.\par
+}

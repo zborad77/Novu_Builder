@@ -98,6 +98,11 @@ nginx/certs/*.pem
 desktop-qt/.qtcreator/
 .claude/
 
+# Personal editor / AI-tool metadata and generated code indexes (not shared)
+.workspace/
+.novuai/
+*.code-workspace
+
 # =========================================
 # WEB FRONTEND BUILD ARTIFACTS
 # =========================================

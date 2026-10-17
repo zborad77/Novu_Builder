@@ -84,10 +84,11 @@ void MainWindow::handleLoginRequested(const QString &email, const QString &passw
     const bool isSuperAdmin = result.isSuperAdmin
         || result.role == QLatin1String("superadmin");
 
-    // Server button visible only for admins
+    // Server button visible only for admins. "admin" is the backend's company
+    // administrator role (python-backend/app/core/rbac.py TENANT_ADMIN_ROLE).
     if (m_serverButton) {
         const bool isAdmin = isSuperAdmin
-            || result.role == QLatin1String("company-admin");
+            || result.role == QLatin1String("admin");
         m_serverButton->setVisible(isAdmin);
     }
 
