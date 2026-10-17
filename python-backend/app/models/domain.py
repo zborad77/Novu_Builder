@@ -243,6 +243,7 @@ class ProjectFinalProposal(TimestampMixin, Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    analysis_result_id: Mapped[str | None] = mapped_column(ForeignKey("analysis_results.id", ondelete="SET NULL"))
     draft_version: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(64), default="ready_for_export", nullable=False)
     currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False)

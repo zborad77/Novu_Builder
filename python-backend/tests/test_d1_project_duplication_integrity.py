@@ -19,17 +19,6 @@ import uuid
 import pytest
 import pytest_asyncio
 
-_TestSession = None
-
-
-def _get_session_factory():
-    global _TestSession
-    if _TestSession is None:
-        from tests.conftest import _TestSession as _TS  # noqa: PLC0415
-        _TestSession = _TS
-    return _TestSession
-
-
 def _get_storage_root() -> pathlib.Path:
     from app.storage.local_photo_storage import STORAGE_ROOT  # noqa: PLC0415
     return STORAGE_ROOT
@@ -38,7 +27,7 @@ def _get_storage_root() -> pathlib.Path:
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
 @pytest_asyncio.fixture
-async def source_project_with_photo(app_client, token_a):
+async def source_project_with_photo(app_client, token_a, db_session_factory):
     """Create a project via API, insert a photo record + physical file, yield both."""
     from app.models import ProjectPhoto  # noqa: PLC0415
 
@@ -68,8 +57,7 @@ async def source_project_with_photo(app_client, token_a):
 
     # Insert photo record into DB
     photo_id = f"pho_{uuid.uuid4().hex[:8]}"
-    TS = _get_session_factory()
-    async with TS() as session:
+    async with db_session_factory() as session:
         session.add(ProjectPhoto(
             id=photo_id,
             project_id=source_id,
@@ -132,7 +120,7 @@ class TestProjectDuplicationIntegrity:
 
     @pytest.mark.asyncio
     async def test_duplicate_photo_db_record_copied(
-        self, app_client, token_a, source_project_with_photo
+        self, app_client, token_a, source_project_with_photo, db_session_factory
     ):
         """After duplication, the new project has a photo DB record with remapped storage key."""
         from app.models import ProjectPhoto  # noqa: PLC0415
@@ -149,8 +137,7 @@ class TestProjectDuplicationIntegrity:
         assert resp.status_code == 201
         new_id = resp.json()["id"]
 
-        TS = _get_session_factory()
-        async with TS() as session:
+        async with db_session_factory() as session:
             result = await session.execute(
                 select(ProjectPhoto).where(ProjectPhoto.project_id == new_id)
             )

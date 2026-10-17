@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -25,15 +26,22 @@ async def test_create_final_proposal_awaits_export_generation():
     )
     project = SimpleNamespace(
         id="prj_001",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
         proposal_draft=object(),
         photos=[ready_primary, ready_reference, ready_other],
         final_proposals=[],
+        analysis_results=[],
+        quote_variants=[],
     )
     detail = SimpleNamespace(id="prj_001", finalProposal=object())
     created_snapshot = SimpleNamespace(id="fin_001")
 
     repository = MagicMock()
     repository.get_project = AsyncMock(return_value=project)
+    # Archive timeline query — no outbox rows for this case.
+    _timeline_rows = MagicMock()
+    _timeline_rows.scalars.return_value.all.return_value = []
+    repository.session.execute = AsyncMock(return_value=_timeline_rows)
     final_proposal_repository = MagicMock()
     final_proposal_repository.create_for_project = AsyncMock(return_value=created_snapshot)
     export_service = MagicMock()
@@ -60,4 +68,14 @@ async def test_create_final_proposal_awaits_export_generation():
         result = await service.create_final_proposal("prj_001", organization_id="org_001")
 
     assert result is detail
-    export_service.create_final_proposal_exports.assert_awaited_once_with(case_detail=detail)
+    # The immutable archive always carries at least the synthetic case.created entry.
+    export_service.create_final_proposal_exports.assert_awaited_once_with(
+        case_detail=detail,
+        timeline_events=[
+            {
+                "eventType": "case.created",
+                "occurredAt": "2026-01-01T00:00:00+00:00",
+                "payload": {},
+            }
+        ],
+    )

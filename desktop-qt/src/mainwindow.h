@@ -13,6 +13,7 @@ class AdminPanelView;
 class CaseBrowserView;
 class CaseDetailView;
 class CaseListView;
+class DashboardView;
 class LoginView;
 class NewCaseView;
 
@@ -51,7 +52,7 @@ private:
     CaseBrowserView *m_caseBrowserView = nullptr;
     AdminPanelView *m_adminPanelView = nullptr;
     QStackedWidget *m_detailStack = nullptr;
-    QWidget *m_welcomeView = nullptr;
+    DashboardView *m_dashboardView = nullptr;
     QFrame *m_caseColumn = nullptr;
     QLabel *m_workspaceTitleLabel = nullptr;
     QLabel *m_workspaceSubtitleLabel = nullptr;

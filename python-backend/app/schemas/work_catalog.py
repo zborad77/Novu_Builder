@@ -290,6 +290,7 @@ class WorkCategoryRead(BaseModel):
     code: str
     slug: str
     name: str
+    name_cs: str | None = None
     description: str | None = None
     sortOrder: int
     catalogVersion: int
@@ -649,3 +650,24 @@ class ProjectWorkItemDetailRead(BaseModel):
     workItem: ProjectWorkItemRead
     effectiveConfiguration: ProjectWorkItemEffectiveConfigurationRead
     workflow: ProjectWorkItemWorkflowRead
+
+
+# ---------------------------------------------------------------------------
+# Grouped catalog — 4 display groups with Czech names for the UI picker
+# ---------------------------------------------------------------------------
+
+class CatalogGroupedWorkTypeRead(BaseModel):
+    code: str
+    name: str
+
+
+class CatalogGroupedCategoryRead(BaseModel):
+    code: str
+    name: str
+    types: list[CatalogGroupedWorkTypeRead] = Field(default_factory=list)
+
+
+class CatalogGroupedResponse(BaseModel):
+    items: list[CatalogGroupedCategoryRead]
+    total: int
+

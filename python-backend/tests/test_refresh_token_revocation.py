@@ -9,13 +9,11 @@
 #   1. Unit tests (mocked) — fast, no DB, cover the guard logic directly
 #   2. E2E integration test — real DB + ASGI client, exercises the full flow
 # =============================================================================
-import os
 from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from unittest.mock import AsyncMock, MagicMock
 
 from app.models import User
@@ -174,18 +172,15 @@ class TestRefreshTokensValidAfterGuard:
 
 # ── 2. E2E integration test ───────────────────────────────────────────────────
 
-_engine_e2e = create_async_engine(os.environ["DATABASE_URL"])
-_E2ESession = async_sessionmaker(_engine_e2e, class_=AsyncSession, expire_on_commit=False)
-
 _RT_USER_ID = "usr_rt_revoke_test"
 _RT_USER_EMAIL = "rt_revoke@test.local"
 _RT_PASSWORD = "RefreshRevoke99!"
 
 
 @pytest_asyncio.fixture()
-async def rt_user(app_client, test_tenants):
+async def rt_user(app_client, test_tenants, db_session_factory):
     """Function-scoped user for refresh-revocation tests; cleaned up after each test."""
-    async with _E2ESession() as session:
+    async with db_session_factory() as session:
         existing = await session.get(User, _RT_USER_ID)
         if existing:
             await session.delete(existing)
@@ -204,7 +199,7 @@ async def rt_user(app_client, test_tenants):
 
     yield {"email": _RT_USER_EMAIL, "password": _RT_PASSWORD}
 
-    async with _E2ESession() as session:
+    async with db_session_factory() as session:
         user = await session.get(User, _RT_USER_ID)
         if user:
             await session.delete(user)

@@ -34,9 +34,11 @@ class TestMeasurementRouteTenantEnforcement:
 
         analysis_service = AsyncMock(spec=AnalysisService)
         analysis_service.get_analysis_result_by_id = AsyncMock(return_value=existing)
+        analysis_service.get_latest_result = AsyncMock(return_value=None)
         analysis_service.update_manual_selection_by_result_id = AsyncMock(return_value=existing)
 
         project_service = AsyncMock(spec=ProjectService)
+        project_service.get_project_lean = AsyncMock(return_value=None)
 
         response = await patch_measurement(
             request=_mock_request(),
@@ -72,9 +74,11 @@ class TestMeasurementRouteTenantEnforcement:
 
         analysis_service = AsyncMock(spec=AnalysisService)
         analysis_service.get_analysis_result_by_id = AsyncMock(return_value=existing)
+        analysis_service.get_latest_result = AsyncMock(return_value=None)
         analysis_service.update_manual_selection_by_result_id = AsyncMock(return_value=None)
 
         project_service = AsyncMock(spec=ProjectService)
+        project_service.get_project_lean = AsyncMock(return_value=None)
 
         with pytest.raises(HTTPException) as exc_info:
             await patch_measurement(
@@ -112,6 +116,8 @@ class TestAnalysisSelectionRouteTenantEnforcement:
 
         analysis_service = AsyncMock(spec=AnalysisService)
         analysis_service.get_analysis_result_by_id = AsyncMock(return_value=analysis_result)
+        # Latest result IS the one being edited → not stale → ANALYSIS_STALE guard passes.
+        analysis_service.get_latest_result = AsyncMock(return_value=analysis_result)
         updated = MagicMock()
         updated.id = "ana_1"
         analysis_service.update_manual_selection_by_result_id = AsyncMock(return_value=updated)

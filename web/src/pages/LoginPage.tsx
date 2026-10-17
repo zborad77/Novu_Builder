@@ -1,74 +1,57 @@
-import { useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { type FormEvent, useState } from 'react'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { apiClient, tokenStorage } from 'shared/lib/apiClient'
 import { AUTH_ME_KEY } from 'app/providers/AuthProvider'
-import type { Actor } from 'shared/types/actor.types'
 import { paths } from 'app/router/paths'
-
-interface LoginApiResponse {
-  accessToken: string
-  refreshToken: string
-  tokenType: string
-  sessionId: string | null
-  user: {
-    id: string
-    email: string
-    fullName: string
-    role: Actor['role']
-    organizationId: string
-    isSuperAdmin: boolean
-  }
-}
+import { apiClient, tokenStorage } from 'shared/lib/apiClient'
+import type { LoginResponse } from 'features/auth'
 
 export function LoginPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    setError(null)
     setLoading(true)
+    setError(null)
     try {
-      const res = await apiClient.post<LoginApiResponse>('/auth/login', { email, password })
+      const result = await apiClient.post<LoginResponse>('/auth/login', { email, password })
       tokenStorage.setTokens({
-        accessToken: res.accessToken,
-        refreshToken: res.refreshToken,
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
       })
-      const actor: Actor = {
-        id: res.user.id,
-        email: res.user.email,
-        name: res.user.fullName,
-        role: res.user.role,
-        organizationId: res.user.organizationId,
-      }
-      queryClient.setQueryData(AUTH_ME_KEY, actor)
-      navigate({ to: paths.cases })
+      void queryClient.invalidateQueries({ queryKey: AUTH_ME_KEY })
+      void navigate({ to: paths.cases })
     } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : 'Nesprávný email nebo heslo.'
-      setError(msg)
+      const message =
+        err instanceof Error ? err.message : 'Přihlášení selhalo. Zkontrolujte přístupové údaje.'
+      setError(message)
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="w-full space-y-6">
+    <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-semibold text-slate-900">Přihlášení</h2>
-        <p className="mt-1 text-sm text-slate-500">Zadejte své přihlašovací údaje</p>
+        <p className="mt-1 text-sm text-slate-500">Zadejte přístupové údaje k účtu</p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
+      <form onSubmit={(e) => { void handleSubmit(e) }} className="space-y-4">
+        {error && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        <div className="space-y-1">
           <label htmlFor="email" className="block text-sm font-medium text-slate-700">
-            Email
+            E-mail
           </label>
           <input
             id="email"
@@ -76,36 +59,42 @@ export function LoginPage() {
             autoComplete="email"
             required
             value={email}
-            onChange={e => setEmail(e.target.value)}
-            className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
-            placeholder="admin@novu.cz"
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={loading}
+            placeholder="vas@email.cz"
+            className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
           />
         </div>
 
-        <div>
-          <label htmlFor="password" className="block text-sm font-medium text-slate-700">
-            Heslo
-          </label>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <label htmlFor="password" className="block text-sm font-medium text-slate-700">
+              Heslo
+            </label>
+            <Link
+              to={paths.forgotPassword}
+              className="text-xs text-emerald-600 hover:text-emerald-700"
+            >
+              Zapomenuté heslo?
+            </Link>
+          </div>
           <input
             id="password"
             type="password"
             autoComplete="current-password"
             required
             value={password}
-            onChange={e => setPassword(e.target.value)}
-            className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
-            placeholder="••••••••"
+            onChange={(e) => setPassword(e.target.value)}
+            disabled={loading}
+            placeholder="••••••••••"
+            className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
           />
         </div>
 
-        {error && (
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
-        )}
-
         <button
           type="submit"
-          disabled={loading}
-          className="w-full rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+          disabled={loading || !email || !password}
+          className="flex w-full items-center justify-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {loading ? 'Přihlašuji…' : 'Přihlásit se'}
         </button>

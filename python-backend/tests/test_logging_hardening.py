@@ -45,7 +45,9 @@ def test_redact_sensitive_data_masks_nested_credentials_and_urls():
 
 
 def test_configured_structlog_output_redacts_sensitive_values_and_normalizes_security_event(capsys):
-    log_path = Path("d:/Novu_Hub/Novu_Builder/python-backend") / f".log-test-{uuid4().hex}.json"
+    # Anchored to this file: an absolute Windows path is merely relative on Linux,
+    # so CI would write the log into a stray "d:" directory instead.
+    log_path = Path(__file__).resolve().parents[1] / f".log-test-{uuid4().hex}.json"
     logger = structlog.get_logger("logging-test")
     configure_logging("INFO", log_file=str(log_path))
     try:

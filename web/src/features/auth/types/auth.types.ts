@@ -18,8 +18,10 @@ export interface LoginRequest {
 }
 
 export interface LoginResponse {
-  actor: Actor
-  tokens: AuthTokens
+  accessToken: string
+  refreshToken: string
+  tokenType: string
+  user: Actor
 }
 
 export type AuthMeResponse = Actor
@@ -88,7 +90,7 @@ export interface RevokeSessionResponse {
 export interface JwtActorPayload {
   sub: Actor['id']
   email: Actor['email']
-  name: Actor['name']
+  name: string
   role: ActorRole
   organizationId: Actor['organizationId']
   iat: number

@@ -20,6 +20,7 @@ def round_measure(value: float) -> float:
 class QuoteVariantRecalculationResult:
     variants: list[QuoteVariantRead]
     source: str
+    proposal_event_id: str | None = None
 
     @property
     def variant_count(self) -> int:
@@ -227,7 +228,7 @@ class QuoteVariantService:
                         item_row["sort_order"] = index
                         items_with_ids.append(item_row)
                     variant_payload["items"] = items_with_ids
-                created = await self.repository.replace_project_variants(
+                created, proposal_event_id = await self.repository.replace_project_variants(
                     project=project,
                     analysis=analysis,
                     pricing_profile=pricing_profile,
@@ -236,6 +237,7 @@ class QuoteVariantService:
                 return QuoteVariantRecalculationResult(
                     variants=[to_variant_read(variant) for variant in created],
                     source="project_work_items",
+                    proposal_event_id=proposal_event_id,
                 )
 
         if analysis is None:
@@ -396,7 +398,7 @@ class QuoteVariantService:
                 }
             )
 
-        created = await self.repository.replace_project_variants(
+        created, proposal_event_id = await self.repository.replace_project_variants(
             project=project,
             analysis=analysis,
             pricing_profile=pricing_profile,
@@ -405,6 +407,7 @@ class QuoteVariantService:
         return QuoteVariantRecalculationResult(
             variants=[to_variant_read(variant) for variant in created],
             source="analysis_fallback",
+            proposal_event_id=proposal_event_id,
         )
 
     @staticmethod

@@ -31,6 +31,39 @@ services:
       retries: 5
       start_period: 5s
 
+  minio:
+    image: ${MINIO_SERVER_IMAGE:?MINIO_SERVER_IMAGE must be set to a pinned image}
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  minio-setup:
+    image: ${MINIO_MC_IMAGE:?MINIO_MC_IMAGE must be set to a pinned image}
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET}
+    entrypoint: /bin/sh
+    command: >-
+      -c "mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+          mc mb --ignore-existing local/$$S3_BUCKET"
+    restart: "no"
+
   backend:
     build:
       context: ./python-backend
@@ -39,6 +72,8 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     environment:
       APP_ENV: production
@@ -67,6 +102,8 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
       APP_BASE_URL: ${APP_BASE_URL}
       REQUIRE_HTTPS: ${REQUIRE_HTTPS}
+      # Internal-only backend; nginx is the public TLS boundary.
+      FORWARDED_ALLOW_IPS: "*"
       HSTS_MAX_AGE: ${HSTS_MAX_AGE}
       RATE_LIMIT_LOGIN: ${RATE_LIMIT_LOGIN}
       RATE_LIMIT_ADMIN: ${RATE_LIMIT_ADMIN}
@@ -74,6 +111,9 @@ services:
       RATE_LIMIT_ADMIN_SENSITIVE: ${RATE_LIMIT_ADMIN_SENSITIVE}
       RATE_LIMIT_UPLOAD: ${RATE_LIMIT_UPLOAD}
       RATE_LIMIT_ANALYSIS_JOBS: ${RATE_LIMIT_ANALYSIS_JOBS}
+      RATE_LIMIT_MARKER_WRITE: ${RATE_LIMIT_MARKER_WRITE}
+      RATE_LIMIT_READ_LIST: ${RATE_LIMIT_READ_LIST}
+      RATE_LIMIT_READ_DETAIL: ${RATE_LIMIT_READ_DETAIL}
       METRICS_AUTH_ENABLED: ${METRICS_AUTH_ENABLED}
       METRICS_AUTH_TOKEN: ${METRICS_AUTH_TOKEN}
       WORKER_METRICS_ENABLED: ${WORKER_METRICS_ENABLED}
@@ -107,6 +147,9 @@ services:
       READINESS_PROCESSING_GRACE_SECONDS: ${READINESS_PROCESSING_GRACE_SECONDS}
       ANALYSIS_QUEUE_MAX_DEPTH: ${ANALYSIS_QUEUE_MAX_DEPTH}
       HEAVY_QUEUE_MAX_DEPTH: ${HEAVY_QUEUE_MAX_DEPTH}
+      BACKPRESSURE_MAX_CONCURRENT_JOBS: ${BACKPRESSURE_MAX_CONCURRENT_JOBS}
+      BACKPRESSURE_MAX_QUEUED_JOBS: ${BACKPRESSURE_MAX_QUEUED_JOBS}
+      BACKPRESSURE_MAX_RETRY_INFLIGHT: ${BACKPRESSURE_MAX_RETRY_INFLIGHT}
       ANALYSIS_JOB_MAX_ATTEMPTS: ${ANALYSIS_JOB_MAX_ATTEMPTS}
       ANALYSIS_RETRY_BACKOFF_BASE_SECONDS: ${ANALYSIS_RETRY_BACKOFF_BASE_SECONDS}
       ANALYSIS_RETRY_BACKOFF_MAX_SECONDS: ${ANALYSIS_RETRY_BACKOFF_MAX_SECONDS}
@@ -122,7 +165,7 @@ services:
     healthcheck:
       # python:3.12-slim has no curl; use stdlib urllib instead
       test: ["CMD", "python", "-c",
-             "import urllib.request, sys; urllib.request.urlopen('http://localhost:8000/api/v1/alive', timeout=5) or sys.exit(1)"]
+             "import urllib.request; req = urllib.request.Request('http://localhost:8000/api/v1/alive', headers={'X-Forwarded-Proto': 'https'}); assert urllib.request.urlopen(req, timeout=5).status == 200"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -141,7 +184,7 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost/ 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO /dev/null --no-check-certificate https://127.0.0.1/api/v1/alive 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -156,6 +199,8 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     environment:
       APP_ENV: production
@@ -187,6 +232,9 @@ services:
       RATE_LIMIT_ADMIN_SENSITIVE: ${RATE_LIMIT_ADMIN_SENSITIVE}
       RATE_LIMIT_UPLOAD: ${RATE_LIMIT_UPLOAD}
       RATE_LIMIT_ANALYSIS_JOBS: ${RATE_LIMIT_ANALYSIS_JOBS}
+      RATE_LIMIT_MARKER_WRITE: ${RATE_LIMIT_MARKER_WRITE}
+      RATE_LIMIT_READ_LIST: ${RATE_LIMIT_READ_LIST}
+      RATE_LIMIT_READ_DETAIL: ${RATE_LIMIT_READ_DETAIL}
       METRICS_AUTH_ENABLED: ${METRICS_AUTH_ENABLED}
       METRICS_AUTH_TOKEN: ${METRICS_AUTH_TOKEN}
       WORKER_METRICS_ENABLED: ${WORKER_METRICS_ENABLED}
@@ -220,6 +268,9 @@ services:
       READINESS_PROCESSING_GRACE_SECONDS: ${READINESS_PROCESSING_GRACE_SECONDS}
       ANALYSIS_QUEUE_MAX_DEPTH: ${ANALYSIS_QUEUE_MAX_DEPTH}
       HEAVY_QUEUE_MAX_DEPTH: ${HEAVY_QUEUE_MAX_DEPTH}
+      BACKPRESSURE_MAX_CONCURRENT_JOBS: ${BACKPRESSURE_MAX_CONCURRENT_JOBS}
+      BACKPRESSURE_MAX_QUEUED_JOBS: ${BACKPRESSURE_MAX_QUEUED_JOBS}
+      BACKPRESSURE_MAX_RETRY_INFLIGHT: ${BACKPRESSURE_MAX_RETRY_INFLIGHT}
       ANALYSIS_JOB_MAX_ATTEMPTS: ${ANALYSIS_JOB_MAX_ATTEMPTS}
       ANALYSIS_RETRY_BACKOFF_BASE_SECONDS: ${ANALYSIS_RETRY_BACKOFF_BASE_SECONDS}
       ANALYSIS_RETRY_BACKOFF_MAX_SECONDS: ${ANALYSIS_RETRY_BACKOFF_MAX_SECONDS}
@@ -245,3 +296,4 @@ volumes:
   postgres_data:
   storage_data:
   redis_data:
+  minio_data:

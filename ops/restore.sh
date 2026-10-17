@@ -29,7 +29,7 @@
 #    6. Verifies critical tables exist + alembic_version is set
 #    7. Applies any pending Alembic migrations (alembic upgrade head)
 #    8. Restarts backend + worker
-#    9. Polls liveness endpoint
+#    9. Polls backend and worker Compose health
 #
 #  verify_restore.sh requires: psql, pg_restore on host + DATABASE_URL in
 #  python-backend/.env. Use --skip-verify if these are not available.
@@ -1180,24 +1180,35 @@ set_step_status BACKEND_HANDOFF_READINESS "IN PROGRESS" "backend and worker rest
 log "Starting backend and worker …"
 docker compose -f "$COMPOSE_FILE" start backend worker || fail_restore BACKEND_HANDOFF_READINESS "could not start backend and worker after restore"
 
-# ── 7. Health poll ─────────────────────────────────────────────────────────────
-log "Waiting for backend liveness (max 60s) …"
-HEALTH_URL="http://localhost:8000/api/v1/health"
+# ── 7. Compose health handoff ─────────────────────────────────────────────────
+log "Waiting for backend and worker Docker health (max 90s) …"
 HEALTHY=0
-for i in $(seq 1 12); do
-  if curl -sf "$HEALTH_URL" > /dev/null 2>&1; then
-    HEALTHY=1
-    break
-  fi
-  sleep 5
-done
+BACKEND_CONTAINER_ID="$(docker compose -f "$COMPOSE_FILE" ps -q backend)"
+WORKER_CONTAINER_ID="$(docker compose -f "$COMPOSE_FILE" ps -q worker)"
+
+if [[ -z "$BACKEND_CONTAINER_ID" || -z "$WORKER_CONTAINER_ID" ]]; then
+  warn "Backend or worker container was not created — check 'docker compose ps -a'."
+else
+  for i in $(seq 1 18); do
+    BACKEND_STATE="$(docker inspect -f '{{.State.Status}}' "$BACKEND_CONTAINER_ID" 2>/dev/null || true)"
+    BACKEND_HEALTH="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$BACKEND_CONTAINER_ID" 2>/dev/null || true)"
+    WORKER_STATE="$(docker inspect -f '{{.State.Status}}' "$WORKER_CONTAINER_ID" 2>/dev/null || true)"
+    WORKER_HEALTH="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$WORKER_CONTAINER_ID" 2>/dev/null || true)"
+
+    if [[ "$BACKEND_STATE" == "running" && "$BACKEND_HEALTH" == "healthy"        && "$WORKER_STATE" == "running" && "$WORKER_HEALTH" == "healthy" ]]; then
+      HEALTHY=1
+      break
+    fi
+    sleep 5
+  done
+fi
 
 if [[ $HEALTHY -eq 1 ]]; then
-  set_step_status BACKEND_HANDOFF_READINESS "PASSED" "backend responded to liveness probe at $HEALTH_URL"
-  log "✓ Backend process responded to liveness probe."
+  set_step_status BACKEND_HANDOFF_READINESS "PASSED"     "backend and worker containers are running and Docker healthy"
+  log "✓ Backend and worker handoff is healthy through the Compose health contract."
 else
-  set_step_status BACKEND_HANDOFF_READINESS "FAILED" "backend did not respond to liveness probe within 60s at $HEALTH_URL"
-  warn "Backend did not respond within 60s — check 'docker compose logs backend'."
+  set_step_status BACKEND_HANDOFF_READINESS "FAILED"     "backend/worker did not both reach running + healthy within 90s"
+  warn "Backend/worker handoff did not become Docker healthy within 90s — check 'docker compose ps -a' and service logs."
 fi
 
 # ── 8. Summary ─────────────────────────────────────────────────────────────────
@@ -1260,9 +1271,9 @@ emit_dr_claim_decision_block
 echo "  DB restore contract: PASSED"
 echo "  Schema/head alignment: PASSED ($POST_MIGRATION_REV)"
 if [[ $HEALTHY -eq 1 ]]; then
-  echo "  Backend liveness probe: PASSED ($HEALTH_URL)"
+  echo "  Backend/worker handoff readiness: PASSED (Compose Docker health)"
 else
-  echo "  Backend liveness probe: FAILED (no response within 60s)"
+  echo "  Backend/worker handoff readiness: FAILED (not both running + healthy within 90s)"
 fi
 echo "  DB -> storage sampled reference validation: $VERIFY_REFERENCE_SAMPLE_VALIDATION_STATUS"
 echo "  Signed URL / storage access path validation: $VERIFY_SIGNED_URL_VALIDATION_STATUS"

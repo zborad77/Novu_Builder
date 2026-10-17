@@ -34,6 +34,7 @@ class WorkCategory(TimestampMixin, Base):
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     slug: Mapped[str] = mapped_column(String(128), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    name_cs: Mapped[str | None] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text)
     sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -551,7 +552,11 @@ class CatalogPricingProfileAdjustmentRule(TimestampMixin, Base):
             "CASE WHEN condition_number_value IS NOT NULL THEN 1 ELSE 0 END + "
             "CASE WHEN condition_boolean_value IS NOT NULL THEN 1 ELSE 0 END + "
             "CASE WHEN condition_option_code IS NOT NULL THEN 1 ELSE 0 END) <= 1",
-            name="ck_catalog_pricing_profile_adjustment_rules_single_condition_value",
+            # Deliberately shorter than the sibling constraints on this table: the
+            # full ck_catalog_pricing_profile_adjustment_rules_* form would be 66
+            # characters and PostgreSQL rejects identifiers over 63. Migration 0033
+            # already creates it under this short name, so the database matches.
+            name="ck_pricing_adj_rules_single_condition_value",
         ),
     )
 
@@ -629,6 +634,7 @@ class WorkType(TimestampMixin, Base):
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     slug: Mapped[str] = mapped_column(String(128), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    name_cs: Mapped[str | None] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text)
     default_unit: Mapped[str] = mapped_column(String(32), nullable=False)
     measurement_kind: Mapped[str] = mapped_column(String(32), default="area", nullable=False)

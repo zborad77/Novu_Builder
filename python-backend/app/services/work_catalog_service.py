@@ -56,6 +56,9 @@ from app.schemas.work_catalog import (
     TenantWorkTypeSettingWithParametersUpsert,
     VisionDetectionCreate,
     VisionDetectionRead,
+    CatalogGroupedCategoryRead,
+    CatalogGroupedResponse,
+    CatalogGroupedWorkTypeRead,
     WorkCategoryRead,
     WorkTypePhaseBindingRead,
     WorkTypeParameterOptionRead,
@@ -554,6 +557,45 @@ def _global_parameter_read(parameter) -> WorkTypeParameterRead:
     )
 
 
+# Maps the 10 DB category codes to 4 UI display group codes.
+_CATEGORY_TO_GROUP: dict[str, str] = {
+    "masonry-structural": "masonry-structural",
+    "roofing": "roofing",
+    "exterior": "exterior-works",
+    "floors-paving": "demolition-finishing-utilities",
+    "windows-doors": "demolition-finishing-utilities",
+    "electrical": "demolition-finishing-utilities",
+    "plumbing": "demolition-finishing-utilities",
+    "heating": "demolition-finishing-utilities",
+    "finishing": "demolition-finishing-utilities",
+    "inspection-service": "demolition-finishing-utilities",
+}
+
+_GROUP_META: dict[str, str] = {
+    "masonry-structural": "Zednické a konstrukční práce",
+    "roofing": "Střešní práce",
+    "exterior-works": "Exteriérové práce",
+    "demolition-finishing-utilities": "Další stavební práce",
+}
+
+_GROUP_ORDER = ["masonry-structural", "roofing", "exterior-works", "demolition-finishing-utilities"]
+
+
+def _build_grouped_catalog(rows) -> CatalogGroupedResponse:
+    groups: dict[str, list[CatalogGroupedWorkTypeRead]] = {g: [] for g in _GROUP_ORDER}
+    for work_type, category_code in rows:
+        group_code = _CATEGORY_TO_GROUP.get(category_code)
+        if group_code is None:
+            continue
+        name = work_type.name_cs or work_type.name
+        groups[group_code].append(CatalogGroupedWorkTypeRead(code=work_type.code, name=name))
+    items = [
+        CatalogGroupedCategoryRead(code=g, name=_GROUP_META[g], types=groups[g])
+        for g in _GROUP_ORDER
+    ]
+    return CatalogGroupedResponse(items=items, total=sum(len(g.types) for g in items))
+
+
 class WorkCatalogService:
     def __init__(self, repository: WorkCatalogRepository, redis: Redis | None = None):
         self.repository = repository
@@ -957,6 +999,22 @@ class WorkCatalogService:
         finally:
             self._observe_operation(
                 operation="work_catalog.list_work_types_global",
+                started_at=started_at,
+                outcome=outcome,
+            )
+
+    async def list_grouped_catalog(self) -> CatalogGroupedResponse:
+        started_at = perf_counter()
+        outcome = "success"
+        try:
+            rows = await self.repository.list_work_types_for_grouped()
+            return _build_grouped_catalog(rows)
+        except Exception:
+            outcome = "error"
+            raise
+        finally:
+            self._observe_operation(
+                operation="work_catalog.list_grouped_catalog",
                 started_at=started_at,
                 outcome=outcome,
             )

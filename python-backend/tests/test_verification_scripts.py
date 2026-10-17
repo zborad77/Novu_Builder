@@ -75,11 +75,29 @@ def stub_server():
         thread.join(timeout=5)
 
 
+def _public_probe_payload(*, database_ready: bool = True, worker_state: str = "ready") -> dict:
+    return {
+        "status": "unavailable" if not database_ready else "ready" if worker_state == "ready" else "degraded",
+        "service": "python-backend",
+        "ready": database_ready,
+        "apiState": "ready" if database_ready else "unavailable",
+        "processingState": "ready" if worker_state == "ready" else "degraded",
+        "dependencies": {
+            "startup": "ready", "db": "ready" if database_ready else "unavailable",
+            "storage": "ready", "redis": "ready",
+        },
+        "queue": {"state": "ready"},
+        "worker": {"state": worker_state},
+        "security": {"authProtection": {"state": "ready", "enforced": True}},
+    }
+
+
 def test_verify_http_probes_success_for_ready_service(stub_server):
     server, base_url = stub_server
     server.RequestHandlerClass.routes = {
-        ("GET", "/api/v1/health"): (200, {"status": "ok", "service": "python-backend"}),
-        ("GET", "/api/v1/ready"): (200, {"status": "ready", "service": "python-backend"}),
+        ("GET", "/api/v1/alive"): (200, {"status": "alive"}),
+        ("GET", "/api/v1/health"): (200, {**_public_probe_payload(), "extraDiagnostic": "allowed"}),
+        ("GET", "/api/v1/ready"): (200, _public_probe_payload()),
         ("GET", "/api/v1/ready/processing?strict=1"): (
             200,
             {
@@ -101,8 +119,9 @@ def test_verify_http_probes_success_for_ready_service(stub_server):
 def test_verify_http_probes_accepts_degraded_queue_state_when_processing_is_ready(stub_server):
     server, base_url = stub_server
     server.RequestHandlerClass.routes = {
-        ("GET", "/api/v1/health"): (200, {"status": "ok", "service": "python-backend"}),
-        ("GET", "/api/v1/ready"): (200, {"status": "ready", "service": "python-backend"}),
+        ("GET", "/api/v1/alive"): (200, {"status": "alive"}),
+        ("GET", "/api/v1/health"): (200, _public_probe_payload()),
+        ("GET", "/api/v1/ready"): (200, _public_probe_payload()),
         ("GET", "/api/v1/ready/processing?strict=1"): (
             200,
             {
@@ -124,8 +143,9 @@ def test_verify_http_probes_accepts_degraded_queue_state_when_processing_is_read
 def test_verify_http_probes_fails_when_readiness_is_not_ready(stub_server):
     server, base_url = stub_server
     server.RequestHandlerClass.routes = {
-        ("GET", "/api/v1/health"): (200, {"status": "ok", "service": "python-backend"}),
-        ("GET", "/api/v1/ready"): (503, {"status": "not_ready", "service": "python-backend"}),
+        ("GET", "/api/v1/alive"): (200, {"status": "alive"}),
+        ("GET", "/api/v1/health"): (503, _public_probe_payload(database_ready=False)),
+        ("GET", "/api/v1/ready"): (503, _public_probe_payload(database_ready=False)),
         ("GET", "/api/v1/ready/processing?strict=1"): (
             200,
             {
@@ -148,8 +168,9 @@ def test_verify_http_probes_fails_when_readiness_is_not_ready(stub_server):
 def test_verify_http_probes_fails_when_processing_path_is_not_ready(stub_server):
     server, base_url = stub_server
     server.RequestHandlerClass.routes = {
-        ("GET", "/api/v1/health"): (200, {"status": "ok", "service": "python-backend"}),
-        ("GET", "/api/v1/ready"): (200, {"status": "ready", "service": "python-backend"}),
+        ("GET", "/api/v1/alive"): (200, {"status": "alive"}),
+        ("GET", "/api/v1/health"): (200, _public_probe_payload(worker_state="stale")),
+        ("GET", "/api/v1/ready"): (200, _public_probe_payload(worker_state="stale")),
         ("GET", "/api/v1/ready/processing?strict=1"): (
             503,
             {
@@ -165,14 +186,21 @@ def test_verify_http_probes_fails_when_processing_path_is_not_ready(stub_server)
         ),
     }
 
+    results = verify_http_probes.run_probe_verification(
+        base_url=base_url, timeout=5, require_ready=True,
+        require_processing_ready=True, allow_processing_grace=False,
+    )
+    failures = [result.name for result in results if not result.ok]
+    assert failures == ["job-based processing path is ready when required"]
     assert verify_http_probes.main(["--base-url", base_url]) == 1
 
 
 def test_verify_http_probes_accepts_processing_grace_when_requested(stub_server):
     server, base_url = stub_server
     server.RequestHandlerClass.routes = {
-        ("GET", "/api/v1/health"): (200, {"status": "ok", "service": "python-backend"}),
-        ("GET", "/api/v1/ready"): (200, {"status": "ready", "service": "python-backend"}),
+        ("GET", "/api/v1/alive"): (200, {"status": "alive"}),
+        ("GET", "/api/v1/health"): (200, _public_probe_payload(worker_state="missing")),
+        ("GET", "/api/v1/ready"): (200, _public_probe_payload(worker_state="missing")),
         ("GET", "/api/v1/ready/processing"): (
             200,
             {
@@ -189,6 +217,91 @@ def test_verify_http_probes_accepts_processing_grace_when_requested(stub_server)
     }
 
     assert verify_http_probes.main(["--base-url", base_url, "--allow-processing-grace"]) == 0
+
+
+@pytest.mark.parametrize("path,value", [
+    (("service",), "another-service"),
+    (("status",), "ok"),
+    (("ready",), "true"),
+    (("ready",), False),
+    (("apiState",), "unavailable"),
+    (("dependencies",), None),
+    (("dependencies", "storage"), "unavailable"),
+    (("queue", "state"), "unavailable"),
+    (("worker", "state"), "invalid"),
+    (("security", "authProtection", "enforced"), "true"),
+])
+def test_verify_http_probes_rejects_invalid_ready_payload(stub_server, path, value):
+    server, base_url = stub_server
+    payload = _public_probe_payload()
+    target = payload
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    server.RequestHandlerClass.routes = {
+        ("GET", "/api/v1/alive"): (200, {"status": "alive"}),
+        ("GET", "/api/v1/health"): (200, _public_probe_payload()),
+        ("GET", "/api/v1/ready"): (200, payload),
+    }
+    results = verify_http_probes.run_probe_verification(
+        base_url=base_url, timeout=5, require_ready=True,
+        require_processing_ready=False, allow_processing_grace=False,
+    )
+    assert not next(result for result in results if result.name == "readiness ready payload is correct").ok
+
+
+@pytest.mark.parametrize("body", [None, [], {}, {"status": "ready", "service": "python-backend"}])
+def test_verify_http_probes_rejects_missing_or_legacy_integrity_payload(body):
+    assert verify_http_probes._public_probe_payload_valid(body) is False
+
+
+def test_verify_http_probes_rejects_wrong_liveness_payload(stub_server):
+    server, base_url = stub_server
+    server.RequestHandlerClass.routes = {
+        ("GET", "/api/v1/alive"): (200, {"status": "ready"}),
+        ("GET", "/api/v1/health"): (200, _public_probe_payload()),
+        ("GET", "/api/v1/ready"): (200, _public_probe_payload()),
+    }
+    results = verify_http_probes.run_probe_verification(
+        base_url=base_url, timeout=5, require_ready=True,
+        require_processing_ready=False, allow_processing_grace=False,
+    )
+    assert not next(result for result in results if result.name == "liveness payload stays minimal and stable").ok
+
+
+def test_verify_http_probes_rejects_health_status_payload_mismatch(stub_server):
+    server, base_url = stub_server
+    server.RequestHandlerClass.routes = {
+        ("GET", "/api/v1/alive"): (200, {"status": "alive"}),
+        ("GET", "/api/v1/health"): (200, _public_probe_payload(database_ready=False)),
+        ("GET", "/api/v1/ready"): (200, _public_probe_payload()),
+    }
+    results = verify_http_probes.run_probe_verification(
+        base_url=base_url, timeout=5, require_ready=True,
+        require_processing_ready=False, allow_processing_grace=False,
+    )
+    assert not next(result for result in results if result.name == "operational health payload matches its HTTP status").ok
+
+
+@pytest.mark.parametrize("field,value", [
+    ("strict", False), ("jobProcessingReady", False),
+    ("workerState", "missing"), ("queueState", "unavailable"),
+])
+def test_verify_http_probes_rejects_false_processing_readiness(stub_server, field, value):
+    server, base_url = stub_server
+    processing = {
+        "status": "ready", "service": "python-backend", "apiReady": True,
+        "jobProcessingReady": True, "workerState": "ready", "queueState": "ready",
+        "graceActive": False, "strict": True,
+    }
+    processing[field] = value
+    server.RequestHandlerClass.routes = {
+        ("GET", "/api/v1/alive"): (200, {"status": "alive"}),
+        ("GET", "/api/v1/health"): (200, _public_probe_payload()),
+        ("GET", "/api/v1/ready"): (200, _public_probe_payload()),
+        ("GET", "/api/v1/ready/processing?strict=1"): (200, processing),
+    }
+    assert verify_http_probes.main(["--base-url", base_url]) == 1
 
 
 def test_verify_auth_smoke_returns_skip_without_credentials():

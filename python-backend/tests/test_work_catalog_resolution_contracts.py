@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from uuid import uuid4
-
 import pytest
 from sqlalchemy import select
 
@@ -252,7 +250,7 @@ async def test_resolution_fails_closed_when_override_scope_is_inconsistent(
         )
     )[other_work_type.id]
     override.tenant_work_type_setting_id = other_setting.id
-    override.updated_by_user_id = f"usr_scope_{uuid4().hex[:8]}"
+    override.updated_by_user_id = "usr_e2e_a1"
     await db_session.commit()
 
     resolution_service = TenantWorkTypeResolutionService(repository)

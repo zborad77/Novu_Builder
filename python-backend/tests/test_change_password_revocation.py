@@ -7,17 +7,11 @@
 # Uses a dedicated function-scoped user so that session-scoped token_a/token_b
 # fixtures used by other tests are never affected.
 # =============================================================================
-import os
-
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models import User
 from app.services.auth_service import hash_password
-
-_engine = create_async_engine(os.environ["DATABASE_URL"])
-_PwSession = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
 
 _PW_USER_ID = "usr_pw_change_test"
 _PW_USER_EMAIL = "pw_change_test@test.local"
@@ -26,9 +20,9 @@ _PW_NEW = "NewSecurePass99!"
 
 
 @pytest_asyncio.fixture()
-async def pw_user(app_client, test_tenants):
+async def pw_user(app_client, test_tenants, db_session_factory):
     """Create a dedicated user for password change tests; delete after each test."""
-    async with _PwSession() as session:
+    async with db_session_factory() as session:
         existing = await session.get(User, _PW_USER_ID)
         if existing:
             await session.delete(existing)
@@ -47,7 +41,7 @@ async def pw_user(app_client, test_tenants):
 
     yield {"email": _PW_USER_EMAIL, "password": _PW_ORIGINAL}
 
-    async with _PwSession() as session:
+    async with db_session_factory() as session:
         user = await session.get(User, _PW_USER_ID)
         if user:
             await session.delete(user)

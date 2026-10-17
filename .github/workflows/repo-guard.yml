@@ -21,7 +21,15 @@ jobs:
 
           echo "Scanning tracked files for forbidden patterns..."
 
-          forbidden="$(git ls-files | grep -E '(^|/)\.env($|\.|/)|(^|/).*\.db$|(^|/).*\.sqlite3$|(^|/).*\.log$|(^|/)tmp_.*|(^|/)\.debug_.*|(^|/)\.codex_tmp_validation/|(^|/)artifacts/|(^|/)pytest-local/|(^|/)tmp_pytest/|(^|/)tmp_pytest_orch/' || true)"
+          # Real env files stay forbidden (.env, .env.production, .env.local, .env/...).
+          # Committed templates are explicitly allowed: they carry key NAMES only, never
+          # values, and the deployment docs require them to be in the repo. The allow-list
+          # is a suffix match applied after the forbidden match, so a file must be named
+          # *.example / *.template to escape — `.env.production` still fails.
+          forbidden="$(git ls-files \
+            | grep -E '(^|/)\.env($|\.|/)|(^|/).*\.db$|(^|/).*\.sqlite3$|(^|/).*\.log$|(^|/)tmp_.*|(^|/)\.debug_.*|(^|/)\.codex_tmp_validation/|(^|/)artifacts/|(^|/)pytest-local/|(^|/)tmp_pytest/|(^|/)tmp_pytest_orch/' \
+            | grep -vE '\.(example|template)$' \
+            || true)"
 
           if [ -n "$forbidden" ]; then
             echo "Forbidden tracked files detected:"

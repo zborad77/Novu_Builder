@@ -117,10 +117,15 @@ QByteArray ApiClient::waitForReply(QNetworkReply *reply, int timeoutMs, QString 
     }
 
     if (reply->error() != QNetworkReply::NoError && httpStatus == 0) {
+        const auto err = reply->error();
         const auto errStr = reply->errorString();
         reply->deleteLater();
         if (errorMessage) {
-            *errorMessage = QString("Sit'ova chyba: %1").arg(errStr);
+            if (err == QNetworkReply::SslHandshakeFailedError) {
+                *errorMessage = "Chyba TLS/SSL: nelze overit certifikat serveru.";
+            } else {
+                *errorMessage = QString("Sit'ova chyba: %1").arg(errStr);
+            }
         }
         return {};
     }
@@ -130,11 +135,23 @@ QByteArray ApiClient::waitForReply(QNetworkReply *reply, int timeoutMs, QString 
 
     if (httpStatus >= 400) {
         if (errorMessage) {
-            const auto doc = QJsonDocument::fromJson(body);
-            const auto detail = doc.isObject() ? doc.object().value("detail").toString() : QString();
-            *errorMessage = detail.isEmpty()
-                ? QString("Chyba serveru (%1).").arg(httpStatus)
-                : detail;
+            if (httpStatus == 403) {
+                *errorMessage = "Pristup zamitnuto. Kontaktujte spravce.";
+            } else if (httpStatus == 422) {
+                const auto doc = QJsonDocument::fromJson(body);
+                const auto detail = doc.isObject() ? doc.object().value("detail").toString() : QString();
+                *errorMessage = detail.isEmpty() ? "Neplatna data. Zkontrolujte vyplnena pole." : detail;
+            } else if (httpStatus == 429) {
+                *errorMessage = "Prilis mnoho pozadavku. Pockejte chvili a zkuste znovu.";
+            } else if (httpStatus == 503) {
+                *errorMessage = "Server je docasne nedostupny. Zkuste znovu za chvili.";
+            } else {
+                const auto doc = QJsonDocument::fromJson(body);
+                const auto detail = doc.isObject() ? doc.object().value("detail").toString() : QString();
+                *errorMessage = detail.isEmpty()
+                    ? QString("Chyba serveru (%1).").arg(httpStatus)
+                    : detail;
+            }
         }
         return {};
     }

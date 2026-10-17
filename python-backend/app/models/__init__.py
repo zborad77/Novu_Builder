@@ -1,3 +1,11 @@
+from app.models.offer_processing import (
+    AgentRun,
+    AiBudgetReservation,
+    OfferJob,
+    OfferRequest,
+    OrganizationAiBudget,
+    OutboxEvent,
+)
 from app.models.domain import (
     AnalysisJob,
     AnalysisResult,
@@ -52,6 +60,8 @@ from app.models.work_catalog import (
 )
 
 __all__ = [
+    "AgentRun",
+    "AiBudgetReservation",
     "AnalysisJob",
     "AnalysisProfile",
     "AnalysisProfileConfidenceThreshold",
@@ -71,7 +81,11 @@ __all__ = [
     "Client",
     "Marker",
     "MaterialCatalog",
+    "OfferJob",
+    "OfferRequest",
     "Organization",
+    "OrganizationAiBudget",
+    "OutboxEvent",
     "PasswordResetToken",
     "PricingProfile",
     "ProjectWorkItem",

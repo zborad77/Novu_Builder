@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 _TESTS_ROOT = pathlib.Path(__file__).resolve().parent
@@ -55,8 +56,51 @@ from app.models import MaterialCatalog, Organization, PricingProfile, Supplier, 
 from app.services.auth_service import hash_password  # noqa: E402
 
 
-_test_engine = create_async_engine(_TEST_DB_URL, echo=False)
+# Mirror the application engine's profile. Both engines talk to the same test
+# database, so they must agree on pooling and (for PostgreSQL) search_path —
+# otherwise fixture DB writes and HTTP-driven writes land in different places.
+_test_engine = create_async_engine(
+    _TEST_DB_URL, echo=False, **get_settings().database_engine_kwargs
+)
 _TestSession = async_sessionmaker(_test_engine, class_=AsyncSession, expire_on_commit=False)
+
+
+async def _install_sqlite_outbox_seq_emulation(conn) -> None:
+    """Emulate PostgreSQL's DB-managed outbox seq in SQLite test databases."""
+    if _test_engine.sync_engine.dialect.name != "sqlite":
+        return
+
+    await conn.execute(text("DROP TABLE IF EXISTS outbox_events"))
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE outbox_events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                id VARCHAR(64) NOT NULL UNIQUE,
+                event_type VARCHAR(128) NOT NULL,
+                aggregate_type VARCHAR(64) NOT NULL,
+                aggregate_id VARCHAR(64) NOT NULL,
+                organization_id VARCHAR(64) NOT NULL,
+                payload JSON NOT NULL,
+                published BOOLEAN NOT NULL DEFAULT 0,
+                published_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX idx_outbox_events_unpublished "
+            "ON outbox_events (published, created_at)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX idx_outbox_events_aggregate "
+            "ON outbox_events (aggregate_type, aggregate_id)"
+        )
+    )
 
 
 class _InMemoryAuthRedisPipeline:
@@ -195,6 +239,7 @@ async def _setup_test_db():
         if not _USING_LOCAL_SQLITE:
             await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        await _install_sqlite_outbox_seq_emulation(conn)
     yield
     await _test_engine.dispose()
     shutil.rmtree(_TEST_SESSION_ROOT, ignore_errors=True)
@@ -327,6 +372,21 @@ async def db_session(_setup_test_db):
     """Function-scoped async DB session for direct DB assertions."""
     async with _TestSession() as session:
         yield session
+
+
+@pytest.fixture
+def db_session_factory() -> async_sessionmaker[AsyncSession]:
+    """The suite's single configured session factory.
+
+    Synchronous on purpose: it only hands over an already-built factory. Callers
+    open sessions themselves with ``async with factory() as session``, so every
+    session is created on the event loop of the test that uses it.
+
+    Exists so test modules never build their own engine. A second engine would
+    miss the pooling and search_path profile from database_engine_kwargs and
+    would hand pooled asyncpg connections across event loops.
+    """
+    return _TestSession
 
 
 @pytest_asyncio.fixture

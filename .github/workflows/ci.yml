@@ -18,14 +18,22 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: python-backend/requirements-dev.txt
+          cache-dependency-path: |
+            python-backend/requirements.txt
+            python-backend/requirements-dev.txt
 
-      - name: Install dev tools
-        run: pip install -r python-backend/requirements-dev.txt
+      # Runtime deps are installed too: with them missing, `ignore_missing_imports`
+      # degrades every third-party symbol to Any and mypy silently stops checking
+      # most of app/. Installing both sets makes CI's mypy as strict as the local run.
+      - name: Install runtime + dev dependencies
+        run: pip install -r python-backend/requirements.txt -r python-backend/requirements-dev.txt
 
       - name: Ruff (style + unused imports)
         working-directory: python-backend
-        run: ruff check app/
+        run: >-
+          ruff check app/ migration_tests/
+          alembic/versions/20260318_0001_initial_schema.py
+          alembic/versions/20261003_0056_add_users_is_superadmin.py
 
       - name: Mypy (type check — full app/)
         working-directory: python-backend
@@ -89,6 +97,19 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # Same image as docker-compose. The analysis job queue talks to a real
+      # Redis; without one, POST /analysis-jobs returns 503 and the session-scoped
+      # job_a_id fixture takes the whole E2E and resilience suite down with it.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       APP_ENV: development
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/novu_test
@@ -97,7 +118,12 @@ jobs:
       STORAGE_ROOT: /tmp/novu-ci-storage
       AI_ANALYSIS_PROVIDER: mock
       LOG_LEVEL: WARNING
-      # REDIS_URL intentionally unset — test-redis-connection.py skips when missing
+      # NullPool for the test engines. pytest gives each test its own event loop,
+      # and a pooled asyncpg connection opened on one loop then reused from
+      # another raises "attached to a different loop". Honoured only because
+      # APP_ENV is non-strict here; production keeps its pooled engine.
+      DB_TEST_DISABLE_POOLING: "true"
+      REDIS_URL: redis://localhost:6379/0
       # SENTRY_DSN intentionally unset — error monitoring off in CI
 
     steps:
@@ -107,10 +133,16 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: python-backend/requirements.txt
+          cache-dependency-path: |
+            python-backend/requirements.txt
+            python-backend/requirements-dev.txt
 
-      - name: Install dependencies
-        run: pip install -r python-backend/requirements.txt
+      # Both sets, pinned. pytest / pytest-asyncio / pytest-cov are declared in
+      # requirements-dev.txt; installing them ad-hoc (or relying on a transitive
+      # pull) is what left pytest-asyncio missing while pytest.ini requires
+      # asyncio_mode = auto.
+      - name: Install runtime + dev dependencies
+        run: pip install -r python-backend/requirements.txt -r python-backend/requirements-dev.txt
 
       # --- No server needed ---
 
@@ -119,9 +151,6 @@ jobs:
 
       - name: Environment check
         run: python scripts/test-env.py
-
-      - name: Install dev tools (for coverage)
-        run: pip install pytest-cov
 
       - name: Pytest
         working-directory: python-backend
@@ -134,6 +163,14 @@ jobs:
           cd python-backend
           uvicorn app.main:app --host 127.0.0.1 --port 8000 &
           echo $! > /tmp/backend.pid
+
+      # Post-deploy verification requires strict processing readiness, and the
+      # business flow must actually consume its analysis job.
+      - name: Start worker
+        run: |
+          cd python-backend
+          python -m app.worker.runner > /tmp/worker.log 2>&1 &
+          echo $! > /tmp/worker.pid
 
       - name: Wait for backend to be ready
         run: |
@@ -148,12 +185,28 @@ jobs:
           echo "Backend did not start in 30s"
           exit 1
 
+      - name: Wait for strict processing readiness
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf 'http://127.0.0.1:8000/api/v1/ready/processing?strict=1' > /dev/null 2>&1; then
+              echo "Processing ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/worker.log
+          echo "Processing did not become ready in 30s"
+          exit 1
+
       # --- Live checks ---
 
       - name: DB connectivity
         run: python scripts/test-db-connection.py
 
       - name: Post-deploy verification bundle
+        env:
+          SMOKE_EMAIL: manager_a@test.local
+          SMOKE_PASSWORD: TestPassA1!
         run: python scripts/verify_deploy.py --base-url http://127.0.0.1:8000
 
       - name: API contracts
@@ -163,14 +216,319 @@ jobs:
         run: python scripts/test-auth-validation.py --url http://127.0.0.1:8000
 
       - name: Business flow (create case → analysis → verify)
+        env:
+          # Created by tests/conftest.py in the disposable CI database.
+          NOVU_TEST_EMAIL: manager_a@test.local
+          NOVU_TEST_PASSWORD: TestPassA1!
         run: python scripts/test-business-flow.py --url http://127.0.0.1:8000
+
+  # Real migration coverage must stay independent of tests/conftest.py, whose
+  # ORM create_all fixture cannot exercise a fresh Alembic installation.
+  postgresql-migrations:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MIGRATION_TEST_ADMIN_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            python-backend/requirements.txt
+            python-backend/requirements-dev.txt
+      - name: Install runtime + dev dependencies
+        run: pip install -r python-backend/requirements.txt -r python-backend/requirements-dev.txt
+      - name: PostgreSQL 16 fresh-install and migration-path regressions
+        working-directory: python-backend
+        run: python -m pytest migration_tests/ -v
+
+  # Production-like Compose contract. MinIO Community is source-built from
+  # pinned upstream refs for disposable CI compatibility testing only. The
+  # resulting local images are never published and do not approve a final
+  # staging/production artifact; final staging storage remains an operator choice.
+  deployment-config:
+    runs-on: ubuntu-latest
+    env:
+      MINIO_SERVER_SOURCE_REPO: https://github.com/minio/minio.git
+      MINIO_SERVER_SOURCE_TAG: RELEASE.2025-10-15T17-29-55Z
+      MINIO_SERVER_SOURCE_SHA: 9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
+      MINIO_SERVER_IMAGE: novu/minio-ce-rehearsal:RELEASE.2025-10-15T17-29-55Z
+      MINIO_MC_SOURCE_REPO: https://github.com/minio/mc.git
+      MINIO_MC_SOURCE_TAG: RELEASE.2025-08-13T08-35-41Z
+      MINIO_MC_SOURCE_SHA: 7394ce0dd2a80935aded936b09fa12cbb3cb8096
+      MINIO_MC_IMAGE: novu/mc-rehearsal:RELEASE.2025-08-13T08-35-41Z
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check executable release operator entrypoints
+        shell: bash
+        run: |
+          test -x scripts/backup.sh
+          test -x ops/restore.sh
+          test -x python-backend/scripts/verify_restore.sh
+          test -x scripts/generate-pilot-cert.sh
+
+      - name: Set up Go 1.24.8
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.8"
+          cache: false
+
+      - name: Fetch and verify pinned MinIO server source
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/minio-server-src"
+          git clone --quiet --depth 1 --branch "$MINIO_SERVER_SOURCE_TAG" "$MINIO_SERVER_SOURCE_REPO" "$src"
+          actual="$(git -C "$src" rev-parse HEAD)"
+          echo "MinIO source repository: $MINIO_SERVER_SOURCE_REPO"
+          echo "MinIO source tag: $MINIO_SERVER_SOURCE_TAG"
+          echo "MinIO source commit: $actual"
+          test "$actual" = "$MINIO_SERVER_SOURCE_SHA"
+
+      - name: Build and verify MinIO server binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/minio-server-src"
+          make -C "$src" build
+          test -x "$src/minio"
+          "$src/minio" --version
+          checksum="$(sha256sum "$src/minio" | awk '{print $1}')"
+          test -n "$checksum"
+          echo "MINIO_SERVER_BINARY_SHA256=$checksum" >> "$GITHUB_ENV"
+          echo "MinIO server binary SHA256: $checksum"
+
+      - name: Fetch and verify pinned mc source
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/minio-mc-src"
+          git clone --quiet --depth 1 --branch "$MINIO_MC_SOURCE_TAG" "$MINIO_MC_SOURCE_REPO" "$src"
+          actual="$(git -C "$src" rev-parse HEAD)"
+          echo "mc source repository: $MINIO_MC_SOURCE_REPO"
+          echo "mc source tag: $MINIO_MC_SOURCE_TAG"
+          echo "mc source commit: $actual"
+          test "$actual" = "$MINIO_MC_SOURCE_SHA"
+
+      - name: Build and verify mc binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/minio-mc-src"
+          make -C "$src" build
+          test -x "$src/mc"
+          "$src/mc" --version
+          checksum="$(sha256sum "$src/mc" | awk '{print $1}')"
+          test -n "$checksum"
+          echo "MINIO_MC_BINARY_SHA256=$checksum" >> "$GITHUB_ENV"
+          echo "mc binary SHA256: $checksum"
+
+      - name: Build disposable local MinIO images
+        shell: bash
+        run: |
+          set -euo pipefail
+          server_src="$RUNNER_TEMP/minio-server-src"
+          mc_src="$RUNNER_TEMP/minio-mc-src"
+          server_ctx="$RUNNER_TEMP/minio-server-image"
+          mc_ctx="$RUNNER_TEMP/minio-mc-image"
+          mkdir -p "$server_ctx" "$mc_ctx"
+
+          cp "$server_src/minio" "$server_ctx/minio"
+          cp "$server_src/LICENSE" "$server_src/CREDITS" "$server_ctx/"
+          cat > "$server_ctx/Dockerfile" <<'EOF'
+          FROM alpine:3.22
+          RUN apk add --no-cache ca-certificates wget
+          COPY minio /usr/local/bin/minio
+          COPY LICENSE /licenses/minio/LICENSE
+          COPY CREDITS /licenses/minio/CREDITS
+          RUN chmod 0755 /usr/local/bin/minio
+          ENTRYPOINT ["/usr/local/bin/minio"]
+          EOF
+
+          cp "$mc_src/mc" "$mc_ctx/mc"
+          cp "$mc_src/LICENSE" "$mc_src/CREDITS" "$mc_ctx/"
+          cat > "$mc_ctx/Dockerfile" <<'EOF'
+          FROM alpine:3.22
+          RUN apk add --no-cache ca-certificates
+          COPY mc /usr/local/bin/mc
+          COPY LICENSE /licenses/minio-mc/LICENSE
+          COPY CREDITS /licenses/minio-mc/CREDITS
+          RUN chmod 0755 /usr/local/bin/mc
+          ENTRYPOINT ["/usr/local/bin/mc"]
+          EOF
+
+          docker build --pull -t "$MINIO_SERVER_IMAGE" "$server_ctx"
+          docker build --pull -t "$MINIO_MC_IMAGE" "$mc_ctx"
+          server_id="$(docker image inspect "$MINIO_SERVER_IMAGE" --format '{{.Id}}')"
+          mc_id="$(docker image inspect "$MINIO_MC_IMAGE" --format '{{.Id}}')"
+          test -n "$server_id"
+          test -n "$mc_id"
+          echo "MinIO local image: $MINIO_SERVER_IMAGE"
+          echo "MinIO local image ID: $server_id"
+          echo "MinIO source commit: $MINIO_SERVER_SOURCE_SHA"
+          echo "MinIO binary SHA256: $MINIO_SERVER_BINARY_SHA256"
+          echo "mc local image: $MINIO_MC_IMAGE"
+          echo "mc local image ID: $mc_id"
+          echo "mc source commit: $MINIO_MC_SOURCE_SHA"
+          echo "mc binary SHA256: $MINIO_MC_BINARY_SHA256"
+          echo "SOURCE-BUILT COMMUNITY IMAGE - DISPOSABLE CI/REHEARSAL ONLY - NOT FINAL STAGING APPROVAL - NOT PRODUCTION APPROVAL"
+
+      - name: Prepare disposable deployment env sources
+        shell: bash
+        run: |
+          cat > .env <<'EOF'
+          POSTGRES_PASSWORD=ci-postgres-password
+          REDIS_PASSWORD=ci-redis-password
+          EOF
+          cat > python-backend/.env.production <<EOF
+          APP_BASE_URL=https://novu-ci.local
+          CORS_ALLOWED_ORIGINS=https://novu-ci.local
+          AI_ANALYSIS_PROVIDER=mock
+          ANTHROPIC_API_KEY=unused-for-mock-provider
+          JWT_SECRET=ci-jwt-secret-00000000000000000000000000000000
+          METRICS_AUTH_TOKEN=ci-metrics-token-0000000000000000000000000000
+          MINIO_SERVER_IMAGE=$MINIO_SERVER_IMAGE
+          MINIO_MC_IMAGE=$MINIO_MC_IMAGE
+          MINIO_ROOT_PASSWORD=ci-minio-password
+          S3_SECRET_ACCESS_KEY=ci-minio-password
+          EOF
+
+      - name: Build Compose env
+        shell: pwsh
+        run: ./scripts/Build-ComposeEnv.ps1 -Write
+
+      - name: Validate rendered Compose configuration and local images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env.production config -q
+          images="$(docker compose --env-file .env.production config --images)"
+          echo "$images"
+          echo "$images" | grep -Fx "$MINIO_SERVER_IMAGE"
+          echo "$images" | grep -Fx "$MINIO_MC_IMAGE"
+          docker image inspect "$MINIO_SERVER_IMAGE" >/dev/null
+          docker image inspect "$MINIO_MC_IMAGE" >/dev/null
+
+      - name: Start source-built MinIO and wait for current healthcheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env.production up -d --pull never minio
+          cid="$(docker compose --env-file .env.production ps -q minio)"
+          test -n "$cid"
+          health=""
+          for i in $(seq 1 90); do
+            health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid")"
+            if [ "$health" = "healthy" ]; then
+              echo "MinIO healthy after ${i}s"
+              break
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' "$cid")" != "true" ]; then
+              docker logs "$cid"
+              exit 1
+            fi
+            sleep 1
+          done
+          test "$health" = "healthy"
+
+      - name: Run current minio-setup and verify bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env.production up --no-deps --pull never --exit-code-from minio-setup minio-setup
+          setup_cid="$(docker compose --env-file .env.production ps -a -q minio-setup)"
+          test -n "$setup_cid"
+          test "$(docker inspect -f '{{.State.ExitCode}}' "$setup_cid")" = "0"
+          docker compose --env-file .env.production run --rm --no-deps --pull never --entrypoint /bin/sh minio-setup -c             'mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc ls "local/$S3_BUCKET" >/dev/null'
+          echo "MinIO setup and bucket verification passed."
+
+      - name: Build production backend and verify direct S3 imports
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env.production build backend
+          docker compose --env-file .env.production run --rm --no-deps --entrypoint python backend             -c "import boto3; from botocore.config import Config; print('s3-runtime-deps-ok')"
+
+      - name: Validate real production S3 backend startup and health
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env.production up -d db redis
+          for service in db redis; do
+            cid="$(docker compose --env-file .env.production ps -q "$service")"
+            test -n "$cid"
+            health=""
+            for i in $(seq 1 90); do
+              health="$(docker inspect -f '{{.State.Health.Status}}' "$cid")"
+              [ "$health" = healthy ] && break
+              sleep 1
+            done
+            test "$health" = healthy
+          done
+          docker compose --env-file .env.production run --rm --no-deps --entrypoint alembic backend upgrade head
+          test "$(docker compose --env-file .env.production exec -T db psql -U novu -d novu_builder -Atc 'SELECT version_num FROM alembic_version')" = 20261003_0056
+          docker compose --env-file .env.production up -d --no-deps backend
+          cid="$(docker compose --env-file .env.production ps -a -q backend)"
+          health=""
+          for i in $(seq 1 120); do
+            health="$(docker inspect -f '{{.State.Health.Status}}' "$cid")"
+            [ "$health" = healthy ] && break
+            test "$(docker inspect -f '{{.RestartCount}}' "$cid")" = 0
+            sleep 1
+          done
+          test "$health" = healthy
+          sleep 10
+          test "$(docker inspect -f '{{.State.Running}}' "$cid")" = true
+          test "$(docker inspect -f '{{.RestartCount}}' "$cid")" = 0
+          echo 'Production S3 backend startup and Docker health: PASSED'
+
+      - name: Capture production startup evidence before cleanup
+        if: always()
+        shell: bash
+        run: |
+          if [ -f .env.production ]; then
+            docker compose --env-file .env.production ps -a
+            docker compose --env-file .env.production logs --no-color backend worker nginx
+            for cid in $(docker compose --env-file .env.production ps -a -q); do
+              docker inspect -f 'Name={{.Name}} Status={{.State.Status}} ExitCode={{.State.ExitCode}} RestartCount={{.RestartCount}} Health={{json .State.Health}} Ports={{json .HostConfig.PortBindings}}' "$cid"
+            done
+          fi
+
+      - name: Cleanup disposable MinIO source-build fixture
+        if: always()
+        shell: bash
+        run: |
+          docker compose --env-file .env.production down -v --rmi local --remove-orphans || true
+          docker image rm -f "$MINIO_SERVER_IMAGE" "$MINIO_MC_IMAGE" || true
+          rm -f .env .env.production python-backend/.env.production
+          rm -rf "$RUNNER_TEMP/minio-server-src" "$RUNNER_TEMP/minio-mc-src"                  "$RUNNER_TEMP/minio-server-image" "$RUNNER_TEMP/minio-mc-image"
 
   # ── Release gate ─────────────────────────────────────────────────────────────
   # Single required status check for branch protection.
-  # Aggregates lint + web-lint + test — fails if any dependency failed or was
+  # Aggregates lint + web-lint + test + migrations + deployment config — fails if any dependency failed or was
   # skipped. Always runs so GitHub always receives a conclusive status.
   orchestration-release-gate:
-    needs: [lint, web-lint, test]
+    needs: [lint, web-lint, test, postgresql-migrations, deployment-config]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -178,11 +536,15 @@ jobs:
         run: |
           if [[ "${{ needs.lint.result }}"     != "success" ||
                 "${{ needs.web-lint.result }}" != "success" ||
-                "${{ needs.test.result }}"     != "success" ]]; then
+                "${{ needs.test.result }}"     != "success" ||
+                "${{ needs.postgresql-migrations.result }}" != "success" ||
+                "${{ needs.deployment-config.result }}" != "success" ]]; then
             echo "orchestration-release-gate: FAILED"
             echo "  lint:     ${{ needs.lint.result }}"
             echo "  web-lint: ${{ needs.web-lint.result }}"
             echo "  test:     ${{ needs.test.result }}"
+            echo "  postgresql-migrations: ${{ needs.postgresql-migrations.result }}"
+            echo "  deployment-config: ${{ needs.deployment-config.result }}"
             exit 1
           fi
           echo "orchestration-release-gate: PASSED"

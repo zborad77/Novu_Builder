@@ -116,6 +116,8 @@ class ProjectFinalProposal(BaseModel):
     summary: str | None = None
     totalPrice: float | None = None
     sections: list[ProposalDraftSection] = Field(default_factory=list)
+    analysisResultId: str | None = None
+    inputVersions: dict | None = None
     createdAt: datetime | None = None
 
 
@@ -129,6 +131,9 @@ class ProjectProposalDraftPatch(BaseModel):
     margin: float | None = None
     recommendedSupplier: str | None = None
     recommendedCompany: str | None = None
+    # Optimistic concurrency token.  When provided, the server rejects the
+    # update with 409 PROPOSAL_STALE if the stored draft has a different version.
+    expectedVersion: int | None = None
 
 
 class ProjectWorkflowPhotoReadiness(BaseModel):

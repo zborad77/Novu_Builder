@@ -164,6 +164,7 @@ class TestExecuteJobCrossTenantBlocked:
         job = _make_job("job_1", "prj_A")
         project = _make_project("prj_A", "org_A")
         session = AsyncMock()
+        session.add = MagicMock()
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
         mock_repo.get_analysis_job = AsyncMock(return_value=job)

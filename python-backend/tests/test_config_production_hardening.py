@@ -5,6 +5,13 @@
 # values of METRICS_AUTH_TOKEN, REDIS_URL, DATABASE_URL and STORAGE_BACKEND
 # in production, and that dev / test environments remain tolerant.
 # =============================================================================
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -755,3 +762,175 @@ def test_cors_localhost_allowed_in_test(monkeypatch):
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
     s = Settings()
     assert "localhost" in s.cors_allowed_origins
+
+
+# ── Pre-staging deployment/config contract regression ─────────────────────────
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_PROD_TEMPLATE = _REPO_ROOT / "python-backend" / ".env.production.example"
+_COMPOSE_FILE = _REPO_ROOT / "docker-compose.yml"
+
+_STRICT_COMPOSE_ALIASES = (
+    "BACKPRESSURE_MAX_CONCURRENT_JOBS",
+    "BACKPRESSURE_MAX_QUEUED_JOBS",
+    "BACKPRESSURE_MAX_RETRY_INFLIGHT",
+    "RATE_LIMIT_MARKER_WRITE",
+    "RATE_LIMIT_READ_LIST",
+    "RATE_LIMIT_READ_DETAIL",
+)
+
+
+def _compose_service_block(compose_text: str, service: str, next_service: str | None = None) -> str:
+    start = compose_text.index(f"  {service}:")
+    end = compose_text.index(f"  {next_service}:", start) if next_service else len(compose_text)
+    return compose_text[start:end]
+
+
+def test_production_template_uses_supported_claude_provider_key():
+    template = _PROD_TEMPLATE.read_text(encoding="utf-8")
+    assert "AI_ANALYSIS_PROVIDER=claude" in template
+    assert "AI_ANALYSIS_PROVIDER=anthropic" not in template
+    assert "# Options: claude | openai | mock" in template
+    assert "# Required when AI_ANALYSIS_PROVIDER=claude" in template
+
+
+def test_production_template_database_name_matches_compose():
+    template = _PROD_TEMPLATE.read_text(encoding="utf-8")
+    compose = _COMPOSE_FILE.read_text(encoding="utf-8")
+    assert "@db:5432/novu_builder" in template
+    assert "POSTGRES_DB: novu_builder" in compose
+    assert "@db:5432/novu_builder" in compose
+
+
+def test_strict_runtime_aliases_are_passed_to_backend_and_worker():
+    compose = _COMPOSE_FILE.read_text(encoding="utf-8")
+    backend = _compose_service_block(compose, "backend", "nginx")
+    worker = _compose_service_block(compose, "worker")
+
+    for alias in _STRICT_COMPOSE_ALIASES:
+        expected = f"      {alias}: ${{{alias}}}"
+        assert expected in backend
+        assert expected in worker
+
+
+# Narrow executable deployment contract exposed by the production-like rehearsal.
+
+
+def test_documented_pilot_admin_invocation_imports_and_renders_help():
+    deploy = (_REPO_ROOT / "DEPLOY.md").read_text(encoding="utf-8")
+    blocks = re.findall(r"```bash\n(.*?)```", deploy, flags=re.DOTALL)
+    command = next(
+        block for block in blocks
+        if "--entrypoint python backend" in block and "create_pilot_admin" in block
+    )
+    argv = shlex.split(command.replace("\\\n", " "))
+    start = argv.index("backend", argv.index("--entrypoint")) + 1
+    invocation = argv[start:argv.index("--email")]
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, *invocation, "--help"],
+        cwd=_REPO_ROOT / "python-backend",
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert invocation == ["-m", "scripts.create_pilot_admin"]
+    assert "--email" in result.stdout and "--password" in result.stdout
+    script = (_REPO_ROOT / "python-backend/scripts/create_pilot_admin.py").read_text(encoding="utf-8")
+    assert "python -m scripts.create_pilot_admin" in script.split('"""', 2)[1]
+
+
+@pytest.mark.parametrize("package", ("boto3", "botocore"))
+def test_production_s3_direct_dependency_pins(package):
+    requirements = (_REPO_ROOT / "python-backend/requirements.txt").read_text(encoding="utf-8")
+    pins = [line.strip() for line in requirements.splitlines() if line.strip() and not line.startswith("#")]
+    assert pins.count(f"{package}==1.43.107") == 1
+
+
+def test_production_s3_runtime_dependencies_import():
+    import boto3
+    import botocore
+    from botocore.config import Config
+
+    assert boto3.__version__ == "1.43.107"
+    assert botocore.__version__ == "1.43.107"
+    assert Config(connect_timeout=3, read_timeout=10).connect_timeout == 3
+
+
+def test_backend_entrypoint_passes_explicit_operator_command_through():
+    entrypoint = _REPO_ROOT / "python-backend/docker-entrypoint.sh"
+    result = subprocess.run(
+        ["sh", str(entrypoint), sys.executable, "-c", "print('entrypoint-command-ok')"],
+        cwd=_REPO_ROOT / "python-backend",
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "entrypoint-command-ok"
+
+
+def test_restore_migration_command_relies_on_backend_command_passthrough():
+    restore = (_REPO_ROOT / "ops/restore.sh").read_text(encoding="utf-8")
+    assert 'docker compose -f "$COMPOSE_FILE" run --rm backend alembic upgrade head' in restore
+
+
+def test_restore_handoff_uses_compose_health_without_host_backend_port():
+    restore = (_REPO_ROOT / "ops/restore.sh").read_text(encoding="utf-8")
+    compose = _COMPOSE_FILE.read_text(encoding="utf-8")
+    backend = _compose_service_block(compose, "backend", "nginx")
+
+    assert 'HEALTH_URL="http://localhost:8000/api/v1/health"' not in restore
+    assert "$HEALTH_URL" not in restore
+    assert 'ps -q backend' in restore
+    assert 'ps -q worker' in restore
+    assert "docker inspect -f '{{.State.Status}}'" in restore
+    assert ".State.Health.Status" in restore
+    assert '"running"' in restore and '"healthy"' in restore
+    assert "    ports:" not in backend
+    assert "http://localhost:8000/api/v1/alive" in backend
+
+
+def test_restore_preserves_db_only_contract_and_production_dr_non_claim():
+    restore = (_REPO_ROOT / "ops/restore.sh").read_text(encoding="utf-8")
+    backup_restore = (_REPO_ROOT / "BACKUP_RESTORE.md").read_text(encoding="utf-8")
+
+    assert "AUTHORITATIVE DB-only restore path" in restore
+    assert 'PRODUCTION_DR_STATUS="NOT VERIFIED"' in restore
+    assert "repo restore = DB-only restore contract" in backup_restore
+    assert "Production DR: NOT VERIFIED" in backup_restore
+    assert "no S3 object recovery automation" in backup_restore
+
+
+def test_production_internal_health_and_proxy_contract():
+    compose = _COMPOSE_FILE.read_text(encoding="utf-8")
+    backend = _compose_service_block(compose, "backend", "nginx")
+    nginx = _compose_service_block(compose, "nginx", "worker")
+    template = _PROD_TEMPLATE.read_text(encoding="utf-8")
+    assert "REQUIRE_HTTPS=true" in template.splitlines()
+    assert "      REQUIRE_HTTPS: ${REQUIRE_HTTPS}" in backend
+    assert '      FORWARDED_ALLOW_IPS: "*"' in backend
+    assert "headers={'X-Forwarded-Proto': 'https'}" in backend
+    assert "    ports:" not in backend
+    assert '      - "80:80"' in nginx
+    assert '      - "443:443"' in nginx
+
+
+def test_nginx_overwrites_untrusted_forwarded_client_chain():
+    nginx = (_REPO_ROOT / "nginx/nginx.conf").read_text(encoding="utf-8")
+    forwarded = [" ".join(line.split()) for line in nginx.splitlines() if " ".join(line.split()).startswith("proxy_set_header X-Forwarded-For ")]
+    assert forwarded
+    assert all(line == "proxy_set_header X-Forwarded-For $remote_addr;" for line in forwarded)
+    assert "proxy_set_header X-Forwarded-Proto $scheme;" in " ".join(nginx.split())
+
+
+def test_nginx_loopback_health_exercises_public_tls_path():
+    compose = _COMPOSE_FILE.read_text(encoding="utf-8")
+    nginx = _compose_service_block(compose, "nginx", "worker")
+    assert "https://127.0.0.1/api/v1/alive" in nginx
+    assert "--no-check-certificate" in nginx  # Only the container-loopback health probe.

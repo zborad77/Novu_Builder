@@ -14,8 +14,14 @@ Human-triggered actions (all require an actor_user_id):
     cancel              any valid      → cancelled
 
 Worker / system-triggered (actor_user_id=None):
-    worker_proposal_ready   analyzing → proposal_ready
-    worker_quote_ready       analyzing → quote_ready
+    worker_proposal_ready   analyzing → proposal_ready   (normal path — manager reviews)
+    worker_quote_ready       analyzing → quote_ready      (fast-path — future use when
+                                                           confidence is high enough to
+                                                           skip the proposal review step)
+
+The fast-path (worker_quote_ready) is NOT currently called by any worker code.
+All analysis completions go through worker_proposal_ready → manager approves →
+quote_ready.  Reserve worker_quote_ready for a future auto-approval policy.
 """
 
 from __future__ import annotations

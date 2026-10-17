@@ -26,6 +26,10 @@ def _load_http_request_log(output: str) -> dict:
 async def _perform_request_with_log(monkeypatch, capsys, request_id: str | None):
     log_path = Path(tempfile.gettempdir()) / f"novu-request-id-{sanitize_request_id(None)}.json"
     monkeypatch.setenv("LOG_FILE", str(log_path))
+    # /alive returns 200, so main.py logs "http.request" at INFO. Pin the level
+    # instead of inheriting it: CI runs with LOG_LEVEL=WARNING, which filters the
+    # record out and leaves nothing for _load_http_request_log to parse.
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
     get_settings.cache_clear()
 
     app = create_app()

@@ -18,6 +18,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import Response
 
+# Anchored to this file, not to a developer's checkout. An absolute Windows path
+# is a plain relative path on Linux ("d:/..." has no drive letter there), so the
+# compose read raised FileNotFoundError in CI and the heartbeat paths silently
+# created a stray "d:" directory.
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]
+_REPO_ROOT = _BACKEND_ROOT.parent
+_HEARTBEAT_TMP = _BACKEND_ROOT / ".tmp_test_runtime"
+
 
 async def _scan_iter(*keys):
     for key in keys:
@@ -136,7 +144,7 @@ async def test_write_local_worker_heartbeat_updates_local_file(monkeypatch):
         write_local_worker_heartbeat,
     )
 
-    heartbeat_path = Path("d:/Novu_Hub/Novu_Builder/python-backend/.tmp_test_runtime/heartbeat-test-current.json")
+    heartbeat_path = (_HEARTBEAT_TMP / "heartbeat-test-current.json")
     heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
     heartbeat_path.unlink(missing_ok=True)
     monkeypatch.setenv("WORKER_HEALTH_PATH", str(heartbeat_path))
@@ -156,7 +164,7 @@ def test_local_worker_heartbeat_stale_when_timestamp_too_old(monkeypatch):
         worker_local_health_path,
     )
 
-    heartbeat_path = Path("d:/Novu_Hub/Novu_Builder/python-backend/.tmp_test_runtime/heartbeat-test-stale.json")
+    heartbeat_path = (_HEARTBEAT_TMP / "heartbeat-test-stale.json")
     heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
     heartbeat_path.unlink(missing_ok=True)
     monkeypatch.setenv("WORKER_HEALTH_PATH", str(heartbeat_path))
@@ -180,7 +188,7 @@ def test_local_worker_heartbeat_rejects_missing_or_dead_worker_pid(monkeypatch):
         worker_local_health_path,
     )
 
-    heartbeat_path = Path("d:/Novu_Hub/Novu_Builder/python-backend/.tmp_test_runtime/heartbeat-test-dead-pid.json")
+    heartbeat_path = (_HEARTBEAT_TMP / "heartbeat-test-dead-pid.json")
     heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
     heartbeat_path.unlink(missing_ok=True)
     monkeypatch.setenv("WORKER_HEALTH_PATH", str(heartbeat_path))
@@ -199,7 +207,7 @@ def test_local_worker_heartbeat_rejects_missing_or_dead_worker_pid(monkeypatch):
 
 
 def test_worker_compose_healthcheck_restarts_stale_worker_via_pid1_signal():
-    compose = Path("d:/Novu_Hub/Novu_Builder/docker-compose.yml").read_text(encoding="utf-8")
+    compose = (_REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
     assert "WORKER_HEALTH_PATH: /tmp/novu-worker-heartbeat.json" in compose
     assert 'python -m app.worker.healthcheck || (echo \'worker unhealthy; terminating PID 1 for restart\'' in compose

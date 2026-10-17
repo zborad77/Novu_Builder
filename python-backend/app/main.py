@@ -12,6 +12,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyPoolTimeoutError
 import structlog
 
 from app.api.router import api_router
+from app.core.api_versioning import ApiVersioningMiddleware
 from app.core.audit import AuditMiddleware
 from app.core.config import get_settings, startup_failure_message
 from app.core.limiter import limiter
@@ -57,18 +58,24 @@ _CORS_ALLOW_HEADERS: tuple[str, ...] = (
     "Authorization",
     "Content-Type",
     "X-Request-ID",
+    "X-Client-Version",
 )
 
-_rate_limit_exceeded_handler: Any
-RateLimitExceeded: Any
+# Optional dependency. The public names are declared and assigned exactly once here;
+# the import binds private aliases instead of rebinding them, so mypy sees no
+# redefinition whether or not slowapi is installed. (Type-checking environments
+# without slowapi previously reported [no-redef] on the import lines.)
+_rate_limit_exceeded_handler: Any = None
+RateLimitExceeded: Any = None
 
 try:
-    from slowapi import _rate_limit_exceeded_handler
-    from slowapi.errors import RateLimitExceeded
+    from slowapi import _rate_limit_exceeded_handler as _slowapi_handler
+    from slowapi.errors import RateLimitExceeded as _SlowapiRateLimitExceeded
 except ModuleNotFoundError as exc:
     logger.warning("rate_limiter.handler_disabled", reason="slowapi_not_installed", error=str(exc))
-    _rate_limit_exceeded_handler = None  # type: ignore[assignment]
-    RateLimitExceeded = None  # type: ignore[misc,assignment]
+else:
+    _rate_limit_exceeded_handler = _slowapi_handler
+    RateLimitExceeded = _SlowapiRateLimitExceeded
 
 
 def verify_runtime_dependency_guards(settings):
@@ -390,6 +397,7 @@ def create_app() -> FastAPI:
     if settings.require_https:
         app.add_middleware(HTTPSRedirectMiddleware)
 
+    app.add_middleware(ApiVersioningMiddleware)
     app.add_middleware(AuditMiddleware)
     # Keep the browser-facing CORS profile explicit and minimal.
     # Extend these allowlists only when a real client method/header is required.

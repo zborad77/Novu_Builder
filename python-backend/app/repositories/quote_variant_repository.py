@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.case_workflow.transitions import TransitionError, apply_transition
+from app.core.events import AGGREGATE_CASE, EVENT_PROPOSAL_READY
 from app.models import AnalysisJob, AnalysisResult, MaterialCatalog, PricingProfile, Project, QuoteItem, QuoteVariant, SupplierMaterialPrice
+from app.offer_processing.outbox import build_outbox_event
 
 logger = structlog.get_logger(__name__)
 
@@ -101,7 +103,7 @@ class QuoteVariantRepository:
         analysis: AnalysisResult | None,
         pricing_profile: PricingProfile,
         variants_payload: list[dict],
-    ) -> list[QuoteVariant]:
+    ) -> tuple[list[QuoteVariant], str | None]:
         existing_variants = await self.list_quote_variants(project.id)
         existing_variant_ids = [variant.id for variant in existing_variants]
         if existing_variant_ids:
@@ -166,23 +168,34 @@ class QuoteVariantRepository:
                     )
                 )
 
-        # Transition project to quote_ready after variants are generated.
-        # Guard: the project might have moved away from a quote-relevant status
-        # (e.g. returned to draft) between the quote request and this callback.
+        # Transition project analyzing → proposal_ready and write the outbox event
+        # in the same transaction as the DELETE + INSERT above.
+        # Invariant: no window where variants are visible but status hasn't advanced
+        # and no window where status advanced but the SSE replay row is missing.
+        proposal_event_id: str | None = None
         try:
             apply_transition(
                 project,
-                "quote_ready",
+                "proposal_ready",
                 actor_user_id=None,
                 reason="Quote variants generated",
                 session=self.session,
             )
+            outbox_event = build_outbox_event(
+                event_type=EVENT_PROPOSAL_READY,
+                aggregate_type=AGGREGATE_CASE,
+                aggregate_id=project.id,
+                organization_id=project.organization_id,
+                payload={"status": "proposal_ready"},
+            )
+            self.session.add(outbox_event)
+            proposal_event_id = outbox_event.id
         except TransitionError:
             logger.warning(
                 "quote_variant.status_transition_skipped",
                 project_id=project.id,
                 current_status=project.status,
-                reason="Cannot transition to quote_ready from current status — status unchanged",
+                reason="Cannot transition to proposal_ready from current status — status unchanged",
             )
         project.updated_at = timestamp
         await self.session.commit()
@@ -193,7 +206,7 @@ class QuoteVariantRepository:
             .where(QuoteVariant.id.in_(created_variant_ids))
             .order_by(QuoteVariant.created_at.asc(), QuoteVariant.id.asc())
         )
-        return list(result.scalars().all())
+        return list(result.scalars().all()), proposal_event_id
 
     async def update_quote_variant(self, variant: QuoteVariant, changes: dict) -> QuoteVariant:
         for key, value in changes.items():

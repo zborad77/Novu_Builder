@@ -10,6 +10,7 @@ from app.api.deps import (
 from app.case_workflow.case_actions import CaseActionError, CaseActionService
 from app.core.config import get_settings
 from app.core.limiter import limiter
+from app.repositories.proposal_draft_repository import ProposalVersionConflictError
 from app.schemas.auth import AuthUserRead
 from app.schemas.project import (
     CaseActionRequest,
@@ -128,7 +129,20 @@ async def patch_case_proposal_draft(
     current_user: AuthUserRead = Depends(require_manager),
 ) -> ProjectDetail:
     org_id = resolve_org_id(current_user)
-    updated = await service.update_proposal_draft(case_id, payload.model_dump(exclude_unset=True), organization_id=org_id)
+    expected_version = payload.expectedVersion
+    changes = payload.model_dump(exclude_unset=True, exclude={"expectedVersion"})
+    try:
+        updated = await service.update_proposal_draft(
+            case_id,
+            changes,
+            organization_id=org_id,
+            expected_version=expected_version,
+        )
+    except ProposalVersionConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "PROPOSAL_STALE", "current_version": exc.current_version},
+        ) from exc
     if not updated:
         raise HTTPException(status_code=404, detail="Case not found.")
     return updated
@@ -294,8 +308,29 @@ async def cancel_case(
 
 
 # ---------------------------------------------------------------------------
-# Timeline (read-only — now pulls real status_history in addition to events)
+# Timeline
 # ---------------------------------------------------------------------------
+
+_TIMELINE_EVENT_TYPES = frozenset({
+    "analysis.started",
+    "analysis.completed",
+    "measurement.confirmed",
+    "proposal.recalculate.started",
+    "proposal.ready",
+    "quote.ready",
+    "export.completed",
+})
+
+_TIMELINE_LABELS: dict[str, str] = {
+    "analysis.started":              "Analýza spuštěna",
+    "analysis.completed":            "AI analýza dokončena",
+    "measurement.confirmed":         "Měření potvrzeno",
+    "proposal.recalculate.started":  "Přepočet kalkulace spuštěn",
+    "proposal.ready":                "Kalkulace připravena",
+    "quote.ready":                   "Nabídka připravena",
+    "export.completed":              "Export dokončen",
+}
+
 
 @router.get("/{case_id}/timeline", response_model=list[dict])
 @limiter.limit(get_settings().rate_limit_read_detail)
@@ -305,15 +340,41 @@ async def get_case_timeline(
     service: ProjectService = Depends(get_project_service),
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> list[dict]:
+    from sqlalchemy import select  # noqa: PLC0415
+    from app.models.offer_processing import OutboxEvent  # noqa: PLC0415
+    from app.core.events import AGGREGATE_CASE  # noqa: PLC0415
+
     org_id = resolve_org_id(current_user)
-    detail = await service.get_project_detail(case_id, organization_id=org_id)
-    if not detail:
+    project = await service.repository.get_project_lean(case_id, organization_id=org_id)
+    if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
-    timeline = [
-        {"type": "case_created", "label": "Pripad zalozen", "at": detail.createdAt},
+
+    stmt = (
+        select(OutboxEvent)
+        .where(
+            OutboxEvent.aggregate_type == AGGREGATE_CASE,
+            OutboxEvent.aggregate_id == case_id,
+            OutboxEvent.event_type.in_(_TIMELINE_EVENT_TYPES),
+        )
+        .order_by(OutboxEvent.seq.asc())
+        .limit(200)
+    )
+    rows = (await service.repository.session.execute(stmt)).scalars().all()
+
+    timeline: list[dict] = [
+        {
+            "eventType": "case.created",
+            "label": "Případ založen",
+            "occurredAt": project.created_at.isoformat() if project.created_at else None,
+            "payload": {},
+        }
     ]
-    if detail.latestAnalysis:
-        timeline.append({"type": "analysis_completed", "label": "Analyza dokoncena", "at": detail.latestAnalysis.get("createdAt")})
-    if detail.quoteVariants:
-        timeline.append({"type": "estimate_ready", "label": "Pripraveny odhad nabidky", "at": detail.quoteVariants[0].get("createdAt")})
+    for row in rows:
+        timeline.append({
+            "seq": row.seq,
+            "eventType": row.event_type,
+            "label": _TIMELINE_LABELS.get(row.event_type, row.event_type),
+            "occurredAt": row.created_at.isoformat() if row.created_at else None,
+            "payload": row.payload,
+        })
     return timeline

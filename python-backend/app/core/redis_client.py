@@ -221,6 +221,10 @@ class FailoverRedisClient:
     def pipeline(self):
         return self._clients[self._active_index].pipeline()
 
+    def pubsub(self, *args, **kwargs):
+        """Return a PubSub bound to the currently active Redis candidate."""
+        return self._clients[self._active_index].pubsub(*args, **kwargs)
+
     async def ping(self):
         return await self._run_read("ping")
 

@@ -13,13 +13,44 @@ from verification_common import CheckResult, all_ok, print_results, request_json
 
 DEFAULT_BASE_URL = os.environ.get("SMOKE_BASE_URL", "http://localhost:8000")
 DEFAULT_TIMEOUT = 5
+ALIVE_PATH = "/api/v1/alive"
 HEALTH_PATH = "/api/v1/health"
 READY_PATH = "/api/v1/ready"
 PROCESSING_READY_PATH = "/api/v1/ready/processing"
-EXPECTED_HEALTH = {"status": "ok", "service": "python-backend"}
-EXPECTED_READY = {"status": "ready", "service": "python-backend"}
-EXPECTED_NOT_READY = {"status": "not_ready", "service": "python-backend"}
+EXPECTED_ALIVE = {"status": "alive"}
+SYSTEM_STATES = ("ready", "degraded", "unavailable")
+SERVABLE_STATES = ("ready", "degraded")
 ACCEPTED_PROCESSING_QUEUE_STATES = {"ready", "degraded"}
+
+
+def _public_probe_payload_valid(body: object) -> bool:
+    """Validate runtime integrity fields while allowing additive diagnostics."""
+    if not isinstance(body, dict) or body.get("service") != "python-backend":
+        return False
+    dependencies = body.get("dependencies")
+    queue = body.get("queue")
+    worker = body.get("worker")
+    security = body.get("security")
+    if not all(isinstance(value, dict) for value in (dependencies, queue, worker, security)):
+        return False
+    auth = security.get("authProtection")
+    if not isinstance(auth, dict) or not isinstance(auth.get("enforced"), bool):
+        return False
+    critical_states = [dependencies.get(key) for key in ("startup", "db", "storage")]
+    states = [
+        *critical_states, dependencies.get("redis"), queue.get("state"),
+        body.get("status"), body.get("apiState"), body.get("processingState"), auth.get("state"),
+    ]
+    if not all(state in SYSTEM_STATES for state in states):
+        return False
+    if worker.get("state") not in ("ready", "missing", "stale", "unknown"):
+        return False
+    if body["apiState"] != max(critical_states, key=SYSTEM_STATES.index):
+        return False
+    if queue["state"] != dependencies["redis"]:
+        return False
+    expected_ready = body["apiState"] in SERVABLE_STATES and queue["state"] in SERVABLE_STATES
+    return isinstance(body.get("ready"), bool) and body["ready"] is expected_ready
 
 
 def run_probe_verification(
@@ -33,25 +64,41 @@ def run_probe_verification(
     base = base_url.rstrip("/")
     results: list[CheckResult] = []
 
-    health_status, health_body = request_json_or_text(
+    alive_status, alive_body = request_json_or_text(
         "GET",
-        f"{base}{HEALTH_PATH}",
+        f"{base}{ALIVE_PATH}",
         timeout=timeout,
     )
     results.append(
         CheckResult(
             "liveness endpoint returns HTTP 200",
-            health_status == 200,
-            f"status={health_status}" if health_status != 200 else "",
+            alive_status == 200,
+            f"status={alive_status}" if alive_status != 200 else "",
         )
     )
     results.append(
         CheckResult(
             "liveness payload stays minimal and stable",
-            health_body == EXPECTED_HEALTH,
-            repr(health_body) if health_body != EXPECTED_HEALTH else "",
+            alive_body == EXPECTED_ALIVE,
+            repr(alive_body) if alive_body != EXPECTED_ALIVE else "",
         )
     )
+
+    health_status, health_body = request_json_or_text("GET", f"{base}{HEALTH_PATH}", timeout=timeout)
+    health_payload_ok = _public_probe_payload_valid(health_body) and (
+        (health_status == 200 and health_body["status"] in SERVABLE_STATES)
+        or (health_status == 503 and health_body["status"] == "unavailable")
+    )
+    results.append(CheckResult(
+        "operational health payload matches its HTTP status",
+        health_payload_ok,
+        repr(health_body) if not health_payload_ok else "",
+    ))
+    results.append(CheckResult(
+        "operational integrity is servable when readiness is required",
+        not require_ready or health_status == 200,
+        f"health status={health_status}" if health_status != 200 else "",
+    ))
 
     ready_status, ready_body = request_json_or_text(
         "GET",
@@ -71,12 +118,18 @@ def run_probe_verification(
         results.append(
             CheckResult(
                 "readiness ready payload is correct",
-                ready_body == EXPECTED_READY,
-                repr(ready_body) if ready_body != EXPECTED_READY else "",
+                _public_probe_payload_valid(ready_body)
+                and ready_body["ready"] is True
+                and ready_body["status"] in SERVABLE_STATES,
+                repr(ready_body),
             )
         )
     elif ready_status == 503:
-        payload_ok = ready_body == EXPECTED_NOT_READY
+        payload_ok = (
+            _public_probe_payload_valid(ready_body)
+            and ready_body["ready"] is False
+            and ready_body["status"] == "unavailable"
+        )
         results.append(
             CheckResult(
                 "readiness not-ready payload is correct",
@@ -88,7 +141,7 @@ def run_probe_verification(
             CheckResult(
                 "service reports ready when readiness is required",
                 not require_ready,
-                "readiness returned 503/not_ready",
+                "readiness returned 503/unavailable",
             )
         )
     else:
@@ -210,7 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--allow-not-ready",
         action="store_true",
-        help="Accept HTTP 503/not_ready on the readiness endpoint instead of failing.",
+        help="Accept HTTP 503/unavailable on the readiness endpoint instead of failing.",
     )
     parser.add_argument(
         "--skip-processing-ready",

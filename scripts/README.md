@@ -6,8 +6,10 @@ Prakticky verification balik je ted postaveny nad temito skripty:
   - lokalni pre-deploy smoke
   - overi import hlavnich backend modulu a reprezentativni production fail-fast config guardy
 - `python scripts/verify_http_probes.py --base-url http://127.0.0.1:8000`
-  - overi liveness `/api/v1/health` a readiness `/api/v1/ready`
-  - pri `503 not_ready` vraci non-zero exit code
+  - overi liveness `/api/v1/alive`, operational health `/api/v1/health` a API readiness `/api/v1/ready`
+  - health/readiness validuje podle runtime integrity kontraktu, vcetne degraded worker stavu
+  - vyzaduje strict processing readiness `/api/v1/ready/processing?strict=1` se zivym workerem
+  - pri API nebo processing readiness `503` vraci non-zero exit code
   - pro kontrolu behem rollout okna lze pouzit `--allow-not-ready`
 - `python scripts/verify_auth_smoke.py --base-url http://127.0.0.1:8000 --email <user> --password <pass>`
   - minimalni auth smoke bez business write flow
