@@ -1,0 +1,20 @@
+# /etc/wireguard/wg-nc-admin.conf on the Private Core (0600 root). TEMPLATE.
+# Administration only: NovuAdmin (NovuConstruct module), SSH, monitoring.
+# Separate from NovuServer's wg-admin (10.40.0.0/24): one compromised admin peer
+# never opens the other system.
+[Interface]
+Address    = 10.51.0.1/24
+ListenPort = 51831
+PrivateKey = <core-wg-nc-admin-private-key>
+
+[Peer]
+# monitoring (Prometheus) – may scrape 8220 /api/v1/metrics and 9100 only
+PublicKey    = <monitoring-public-key>
+PresharedKey = <psk-monitoring>
+AllowedIPs   = 10.51.0.5/32
+
+[Peer]
+# administrator: <name> / <device> / issued <date>
+PublicKey    = <admin1-public-key>
+PresharedKey = <psk-admin1>
+AllowedIPs   = 10.51.0.10/32

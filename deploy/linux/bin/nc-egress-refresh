@@ -1,0 +1,21 @@
+#!/bin/sh
+# Refresh the nftables egress allowlist for the application user from DNS
+# (run from a systemd timer every 30 min). Entries expire after 2 h, so a host
+# that disappears from DNS stops being reachable on its own.
+#   NC_EGRESS_HTTPS="api.anthropic.com"  NC_EGRESS_SMTP="smtp.example.invalid"
+set -eu
+TABLE="inet nc"
+HTTPS_HOSTS=${NC_EGRESS_HTTPS:-api.anthropic.com}
+SMTP_HOSTS=${NC_EGRESS_SMTP:-}
+
+add() {  # add SET HOST...
+  set_name=$1; shift
+  for host in "$@"; do
+    for ip in $(getent ahostsv4 "$host" | awk '{print $1}' | sort -u); do
+      nft add element $TABLE "$set_name" "{ $ip timeout 2h }"
+    done
+  done
+}
+
+add egress_https $HTTPS_HOSTS
+[ -z "$SMTP_HOSTS" ] || add egress_smtp $SMTP_HOSTS

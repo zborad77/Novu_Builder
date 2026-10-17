@@ -1,0 +1,13 @@
+# Administrator tunnel (NovuAdmin embedded tunnel or the official WireGuard app).
+# SSH:   ssh admin@10.51.0.1
+# API:   http://10.51.0.1:8220/api/v1   (admin zone; superadmin login only here)
+[Interface]
+PrivateKey = <generated-on-admin-device>
+Address    = 10.51.0.10/32
+
+[Peer]
+PublicKey    = <core-wg-nc-admin-public-key>
+PresharedKey = <psk-admin1>
+Endpoint     = <core-public-hostname-or-ip>:51831
+AllowedIPs   = 10.51.0.1/32
+PersistentKeepalive = 25

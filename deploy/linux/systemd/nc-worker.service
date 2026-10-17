@@ -1,0 +1,60 @@
+# NovuConstruct worker: AI pipeline, exports, photo cleanup and purge retries.
+# Serves no HTTP traffic and needs no zone; it never opens a listening port
+# except the optional metrics endpoint bound to the admin WireGuard address.
+[Unit]
+Description=NovuConstruct worker
+After=network-online.target postgresql.service redis-server.service minio.service
+Wants=network-online.target
+PartOf=nc-core.target
+
+[Service]
+Type=exec
+User=novuconstruct
+Group=novuconstruct
+UMask=0027
+WorkingDirectory=/opt/novuconstruct/python-backend
+EnvironmentFile=/etc/novuconstruct/core.env
+LoadCredential=JWT_SECRET:/etc/novuconstruct/secrets/JWT_SECRET
+LoadCredential=DATABASE_URL:/etc/novuconstruct/secrets/DATABASE_URL
+LoadCredential=DATABASE_URL_SYNC:/etc/novuconstruct/secrets/DATABASE_URL_SYNC
+LoadCredential=REDIS_URL:/etc/novuconstruct/secrets/REDIS_URL
+LoadCredential=S3_ACCESS_KEY_ID:/etc/novuconstruct/secrets/S3_ACCESS_KEY_ID
+LoadCredential=S3_SECRET_ACCESS_KEY:/etc/novuconstruct/secrets/S3_SECRET_ACCESS_KEY
+LoadCredential=METRICS_AUTH_TOKEN:/etc/novuconstruct/secrets/METRICS_AUTH_TOKEN
+LoadCredential=ANTHROPIC_API_KEY:/etc/novuconstruct/secrets/ANTHROPIC_API_KEY
+StateDirectory=novuconstruct
+StateDirectoryMode=0750
+ExecStart=/opt/novuconstruct/deploy/linux/bin/nc-run \
+    /opt/novuconstruct/python-backend/.venv/bin/python -m app.worker.runner
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/opt/novuconstruct
+
+[Install]
+WantedBy=nc-core.target

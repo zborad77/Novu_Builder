@@ -1,0 +1,24 @@
+# /etc/wireguard/wg-nc.conf on the Private Core (0600 root). TEMPLATE – no real keys.
+# Desktop zone + (F4) gateway. Address plan: docs/security/WG_NETWORK_DESIGN.md §1.1.
+# Range checked against Novusion networks (10.10/24 legacy, 10.20/24 platform,
+# 10.30/24 trade, 10.40/24 admin) – no overlap.
+[Interface]
+Address    = 10.50.0.1/16
+ListenPort = 51830
+PrivateKey = <core-wg-nc-private-key>      # wg genkey on the server, never copied off it
+# No PostUp NAT/forwarding: the core is not a router (nftables forward policy drop).
+
+# One [Peer] per device; minimal AllowedIPs (/32) so a peer can only ever speak
+# with its own address. Desktop peers are added by the operator (pilot) and later
+# by the device reconciler (F6.4/F7).
+[Peer]
+# desktop: <company> / <user> / <device name> / issued <date>
+PublicKey    = <device-public-key>
+PresharedKey = <per-peer-psk>               # wg genpsk, unique per peer
+AllowedIPs   = 10.50.16.10/32
+
+# Two-server variant (F4): the edge/gateway server
+#[Peer]
+#PublicKey    = <edge-public-key>
+#PresharedKey = <psk-edge>
+#AllowedIPs   = 10.50.0.2/32

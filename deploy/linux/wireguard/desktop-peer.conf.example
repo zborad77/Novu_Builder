@@ -1,0 +1,18 @@
+# Desktop client tunnel for the official "WireGuard for Windows" app (pilot,
+# decision 3). The private key is generated in the WireGuard app on the device
+# ("Add empty tunnel") and never leaves it; the operator receives only the public key.
+#
+# NovuConstruct desktop → Settings → Server: http://10.50.0.1:8210/api/v1
+# (plain HTTP inside the tunnel; the API port is not reachable any other way).
+[Interface]
+PrivateKey = <generated-on-device>
+Address    = 10.50.16.10/32
+# No DNS entry: the desktop uses the IP address.
+
+[Peer]
+PublicKey    = <core-wg-nc-public-key>
+PresharedKey = <per-peer-psk>
+Endpoint     = <core-public-hostname-or-ip>:51830
+# Split tunnel: only the core's WireGuard address, never the whole network.
+AllowedIPs   = 10.50.0.1/32
+PersistentKeepalive = 25

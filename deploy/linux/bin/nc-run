@@ -1,0 +1,18 @@
+#!/bin/sh
+# Export systemd credentials (LoadCredential=NAME:/path) as environment variables,
+# then exec the service. Keeps secrets out of unit files, core.env and `ps`.
+set -eu
+
+if [ -n "${CREDENTIALS_DIRECTORY:-}" ] && [ -d "$CREDENTIALS_DIRECTORY" ]; then
+  for credential in "$CREDENTIALS_DIRECTORY"/*; do
+    [ -f "$credential" ] || continue
+    name=$(basename "$credential")
+    case "$name" in
+      *[!A-Z0-9_]*) echo "nc-run: refusing credential name '$name'" >&2; exit 64 ;;
+    esac
+    value=$(cat "$credential")
+    export "$name=$value"
+  done
+fi
+
+exec "$@"

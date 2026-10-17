@@ -1,0 +1,50 @@
+#!/usr/sbin/nft -f
+# NovuConstruct – Public Edge server of the TWO-server production variant (A).
+# Public: 80/443 only. SSH only through the edge's own admin tunnel (wg-edge-admin,
+# D-12) or break-glass. Outbound to the core only on the gateway port (F4).
+
+flush ruleset
+
+table inet nc_edge {
+    set core_wg       { type ipv4_addr; elements = { 10.50.0.1 } }
+    set admin_peers   { type ipv4_addr; flags interval; elements = { 10.52.0.10-10.52.0.99 } }
+    set ssh_emergency { type ipv4_addr; flags timeout; }
+    set core_public   { type ipv4_addr; flags interval; }   # core's public IP (WG endpoint)
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        iif "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+        meta l4proto { icmp, ipv6-icmp } limit rate 10/second accept
+
+        iifname != { "wg-nc", "wg-edge-admin" } tcp dport { 80, 443 } accept
+        iifname != { "wg-nc", "wg-edge-admin" } udp dport 51832 accept
+        iifname != { "wg-nc", "wg-edge-admin" } tcp dport 22 ip saddr @ssh_emergency accept
+        iifname "wg-edge-admin" ip saddr @admin_peers tcp dport 22 accept
+        iifname "wg-nc" ip saddr @core_wg tcp dport 9100 accept   # node_exporter scrape
+
+        limit rate 5/minute log prefix "nc-edge-drop-in " level info
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy drop;
+
+        oif "lo" accept
+        ct state established,related accept
+        meta l4proto { icmp, ipv6-icmp } accept
+        udp dport { 53, 123 } accept
+        tcp dport 53 accept
+        udp dport 51830 ip daddr @core_public accept           # WireGuard to core
+        oifname "wg-nc" ip daddr @core_wg tcp dport 8200 accept  # gateway → core (F4)
+        oifname "wg-edge-admin" accept
+        meta skuid { 0, "_apt" } tcp dport { 80, 443 } accept
+
+        limit rate 5/minute log prefix "nc-edge-drop-out " level info
+    }
+}

@@ -1,0 +1,79 @@
+#!/usr/sbin/nft -f
+# NovuConstruct – pilot, ONE Hetzner server (Public Edge + Private Core, variant B).
+# /etc/nftables.conf includes this file. Validate: nft -c -f nc-single-server.nft
+#
+# Public interface: 80/443 (information website), WireGuard handshakes, nothing else.
+# PostgreSQL, Redis, MinIO and the API sockets are never reachable from outside:
+# they listen on loopback/unix sockets AND are dropped here.
+
+flush ruleset
+
+table inet nc {
+    # ── Peers (WG_NETWORK_DESIGN.md §1.1). Keep nginx allow lists in sync. ──
+    set desktop_peers { type ipv4_addr; flags interval; elements = { 10.50.16.0/20 } }
+    set admin_peers   { type ipv4_addr; flags interval; elements = { 10.51.0.10-10.51.0.99 } }
+    set monitor_peer  { type ipv4_addr; elements = { 10.51.0.5 } }
+
+    # Break-glass SSH from a single public address, added from the Hetzner console:
+    #   nft add element inet nc ssh_emergency { 203.0.113.5 timeout 1h }
+    # Entries expire automatically (EMERGENCY_ACCESS.md).
+    set ssh_emergency { type ipv4_addr; flags timeout; }
+
+    # Outbound HTTPS for the application user (Anthropic API, ...). Filled by
+    # bin/nc-egress-refresh from DNS; empty means no application egress.
+    set egress_https { type ipv4_addr; flags interval, timeout; }
+    set egress_smtp  { type ipv4_addr; flags interval, timeout; }
+    set backup_target { type ipv4_addr; flags interval; }
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        iif "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+        meta l4proto { icmp, ipv6-icmp } limit rate 10/second accept
+
+        # Public: website + ACME, WireGuard handshakes.
+        iifname != { "wg-nc", "wg-nc-admin" } tcp dport { 80, 443 } accept
+        iifname != { "wg-nc", "wg-nc-admin" } udp dport { 51830, 51831 } accept
+        iifname != { "wg-nc", "wg-nc-admin" } tcp dport 22 ip saddr @ssh_emergency accept
+
+        # Desktop zone (wg-nc): only the desktop API port.
+        iifname "wg-nc" ip saddr @desktop_peers tcp dport 8210 accept
+
+        # Admin zone (wg-nc-admin): admin API + SSH; monitoring scrapes.
+        iifname "wg-nc-admin" ip saddr @admin_peers tcp dport { 22, 8220 } accept
+        iifname "wg-nc-admin" ip saddr @monitor_peer tcp dport { 8220, 9100 } accept
+
+        limit rate 5/minute log prefix "nc-drop-in " level info
+    }
+
+    chain forward {
+        # No routing between peers or interfaces: a desktop peer never sees
+        # another peer, and WireGuard is not a path to anything but this host.
+        type filter hook forward priority filter; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy drop;
+
+        oif "lo" accept
+        ct state established,related accept
+        oifname { "wg-nc", "wg-nc-admin" } accept
+        meta l4proto { icmp, ipv6-icmp } accept
+        udp dport { 53, 123 } accept
+        tcp dport 53 accept
+
+        # Package updates and ACME (certbot runs as root).
+        meta skuid { 0, "_apt" } tcp dport { 80, 443 } accept
+
+        # Application processes: only allow-listed destinations.
+        meta skuid "novuconstruct" tcp dport 443 ip daddr @egress_https accept
+        meta skuid "novuconstruct" tcp dport { 465, 587 } ip daddr @egress_smtp accept
+
+        # Backups to the Hetzner Storage Box (SFTP on port 23).
+        meta skuid 0 tcp dport { 22, 23 } ip daddr @backup_target accept
+
+        limit rate 5/minute log prefix "nc-drop-out " level info
+    }
+}

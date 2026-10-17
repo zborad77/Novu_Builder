@@ -1,0 +1,5 @@
+# Files executed or parsed on Linux servers/containers must keep LF endings,
+# also when checked out on Windows (core.autocrlf=true).
+deploy/linux/** text eol=lf
+*.sh text eol=lf
+python-backend/docker-entrypoint.sh text eol=lf

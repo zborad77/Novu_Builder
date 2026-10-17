@@ -1,0 +1,72 @@
+# NovuConstruct Private Core API – one instance per network zone (F3/F6.1).
+#
+#   systemctl enable --now nc-api@desktop nc-api@admin   # pilot
+#   systemctl enable --now nc-api@gateway                 # F4, with the Public Edge gateway
+#
+# The zone is fixed here (NC_ZONE=%i) and never derived from a request. Each
+# instance listens only on its own unix socket; nginx (member of group
+# nc-api-sock) is the only process allowed to connect. No TCP port is opened.
+[Unit]
+Description=NovuConstruct API (%i zone)
+Documentation=file:///opt/novuconstruct/deploy/linux/README.md
+After=network-online.target postgresql.service redis-server.service minio.service
+Wants=network-online.target
+PartOf=nc-core.target
+
+[Service]
+Type=exec
+User=novuconstruct
+Group=nc-api-sock
+UMask=0007
+WorkingDirectory=/opt/novuconstruct/python-backend
+EnvironmentFile=/etc/novuconstruct/core.env
+Environment=NC_ZONE=%i
+# Secrets never live in core.env or the unit; nc-run exports them from here.
+LoadCredential=JWT_SECRET:/etc/novuconstruct/secrets/JWT_SECRET
+LoadCredential=DATABASE_URL:/etc/novuconstruct/secrets/DATABASE_URL
+LoadCredential=DATABASE_URL_SYNC:/etc/novuconstruct/secrets/DATABASE_URL_SYNC
+LoadCredential=REDIS_URL:/etc/novuconstruct/secrets/REDIS_URL
+LoadCredential=S3_ACCESS_KEY_ID:/etc/novuconstruct/secrets/S3_ACCESS_KEY_ID
+LoadCredential=S3_SECRET_ACCESS_KEY:/etc/novuconstruct/secrets/S3_SECRET_ACCESS_KEY
+LoadCredential=METRICS_AUTH_TOKEN:/etc/novuconstruct/secrets/METRICS_AUTH_TOKEN
+LoadCredential=ANTHROPIC_API_KEY:/etc/novuconstruct/secrets/ANTHROPIC_API_KEY
+RuntimeDirectory=novuconstruct/%i
+RuntimeDirectoryMode=0750
+StateDirectory=novuconstruct
+StateDirectoryMode=0750
+ExecStart=/opt/novuconstruct/deploy/linux/bin/nc-run \
+    /opt/novuconstruct/python-backend/.venv/bin/uvicorn app.main:app \
+    --uds /run/novuconstruct/%i/api.sock --no-proxy-headers --workers 2 --timeout-graceful-shutdown 20
+Restart=on-failure
+RestartSec=3
+
+# ── Sandbox (check: systemd-analyze security nc-api@desktop) ─────────────────
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/opt/novuconstruct
+
+[Install]
+WantedBy=nc-core.target
