@@ -1,0 +1,136 @@
+#!/bin/sh
+# Safe database migration for the Private Core (F6.2 / SECURITY_ARCHITECTURE §8.3).
+#
+#   nc-migrate status    current and target revision, nothing changes
+#   nc-migrate upgrade   backup, then `alembic upgrade head` as nc_owner, then grants
+#   nc-migrate check-config   validate the production settings of the API zones
+#
+# Rules:
+#  * Never downgrades and never runs anything but `upgrade head`.
+#  * Refuses when the database is at a revision the code does not know (code older
+#    than the database: deploy the right release instead).
+#  * Takes a pg_dump (custom format, 0600) before touching a non-empty database
+#    and refuses to continue if the backup fails.
+#  * Runs as nc_owner (the only role with DDL); services keep using nc_app.
+#  * Grants the application roles DML on the tables afterwards; audit_logs stays
+#    append-only for them (REVOKE UPDATE, DELETE, SA-14).
+set -eu
+umask 077
+
+APP=/opt/novuconstruct/python-backend
+SECRETS=/etc/novuconstruct/secrets
+BACKUPS=${NC_BACKUP_DIR:-/var/backups/novuconstruct}
+DB=novuconstruct
+CMD=${1:-status}
+
+[ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
+for f in DATABASE_URL_OWNER DATABASE_URL_OWNER_SYNC; do
+  [ -r "$SECRETS/$f" ] || { echo "missing $SECRETS/$f (run nc-gen-secrets)" >&2; exit 1; }
+done
+[ -r /etc/novuconstruct/core.env ] || { echo "missing /etc/novuconstruct/core.env" >&2; exit 1; }
+
+# The service environment: core.env (a systemd EnvironmentFile – values may contain
+# spaces, so it is read literally, not sourced) plus every secret file.
+load_service_env() {
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|\#*) continue ;; esac
+    key=${line%%=*}; value=${line#*=}
+    case "$key" in *[!A-Za-z0-9_]*|'') continue ;; esac
+    case "$value" in
+      \"*\") value=${value#\"}; value=${value%\"} ;;
+      \'*\') value=${value#\'}; value=${value%\'} ;;
+    esac
+    export "$key=$value"
+  done < /etc/novuconstruct/core.env
+  for f in "$SECRETS"/*; do
+    name=$(basename "$f")
+    case "$name" in *[!A-Z0-9_]*) continue ;; esac
+    export "$name=$(cat "$f")"
+  done
+}
+
+# Alembic loads the application settings, which validate the production profile:
+# give it the service environment, with the owner role instead of nc_app.
+run_alembic() {
+  (
+    load_service_env
+    DATABASE_URL=$(cat "$SECRETS/DATABASE_URL_OWNER")
+    DATABASE_URL_SYNC=$(cat "$SECRETS/DATABASE_URL_OWNER_SYNC")
+    export DATABASE_URL DATABASE_URL_SYNC NC_ZONE=admin
+    cd "$APP"
+    "$APP/.venv/bin/alembic" "$@"
+  )
+}
+
+psql_db() { runuser -u postgres -- psql -X -v ON_ERROR_STOP=1 -q -d "$DB" "$@"; }
+
+if [ "$CMD" = check-config ]; then
+  # Validate the production settings as each API zone would load them (no DB access).
+  for zone in desktop admin; do
+    ( load_service_env; export NC_ZONE=$zone; cd "$APP"
+      "$APP/.venv/bin/python" -c "from app.core.config import get_settings; get_settings()" ) || exit 1
+  done
+  echo "configuration valid (desktop, admin)"
+  exit 0
+fi
+
+if ! current_out=$(run_alembic current 2>&1); then
+  echo "cannot determine the database revision; refusing:" >&2
+  printf '%s\n' "$current_out" | grep -vE '^INFO' | tail -n 3 >&2
+  exit 1
+fi
+current=$(printf '%s\n' "$current_out" | awk '/^[0-9]+_[0-9A-Za-z_]+/ {print $1}' | tail -n 1)
+heads=$(run_alembic heads 2>/dev/null | awk '{print $1}')
+[ "$(printf '%s\n' "$heads" | grep -c .)" -eq 1 ] || { echo "the code has $(printf '%s\n' "$heads" | grep -c .) alembic heads; refusing" >&2; exit 1; }
+head=$heads
+echo "database revision: ${current:-<empty database>}"
+echo "code head:         $head"
+
+if [ -n "$current" ] && ! run_alembic history 2>/dev/null | grep -q "$current"; then
+  echo "the database is at $current, unknown to this code (newer release?). Refusing." >&2
+  exit 1
+fi
+
+grants() {
+  psql_db <<'SQL'
+GRANT USAGE ON SCHEMA public TO nc_app, nc_admin;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO nc_app, nc_admin;
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO nc_app, nc_admin;
+DO $$
+BEGIN
+  IF to_regclass('public.audit_logs') IS NOT NULL THEN
+    REVOKE UPDATE, DELETE, TRUNCATE ON public.audit_logs FROM nc_app, nc_admin;
+  END IF;
+  IF to_regclass('public.alembic_version') IS NOT NULL THEN
+    REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.alembic_version FROM nc_app, nc_admin;
+  END IF;
+END $$;
+SQL
+  echo "grants applied (audit_logs append-only for nc_app/nc_admin)"
+}
+
+case "$CMD" in
+  status)
+    [ "$current" = "$head" ] && echo "up to date" || echo "upgrade pending"
+    ;;
+  upgrade)
+    if [ "$current" = "$head" ]; then
+      echo "up to date; re-applying grants only"
+      grants
+      exit 0
+    fi
+    install -d -m 0700 -o root -g root "$BACKUPS"
+    tables=$(psql_db -At -c "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'")
+    if [ "$tables" -gt 0 ]; then
+      dump="$BACKUPS/pre-migrate-$(date -u +%Y%m%dT%H%M%SZ)-${current:-none}.dump"
+      runuser -u postgres -- pg_dump -Fc -d "$DB" > "$dump" || { echo "backup failed; nothing migrated" >&2; rm -f "$dump"; exit 1; }
+      chmod 0600 "$dump"
+      echo "backup: $dump ($(wc -c < "$dump") bytes)"
+    fi
+    run_alembic upgrade head
+    grants
+    echo "migrated to $(run_alembic current 2>/dev/null | awk '/^[0-9a-zA-Z_]+/ {print $1}' | tail -n 1)"
+    ;;
+  *)
+    echo "usage: nc-migrate status|upgrade|check-config" >&2; exit 2 ;;
+esac

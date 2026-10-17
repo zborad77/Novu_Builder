@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh the NovuConstruct egress allowlist every 30 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=30min
+Unit=nc-egress-refresh.service
+
+[Install]
+WantedBy=timers.target

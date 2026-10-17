@@ -1,0 +1,29 @@
+# /etc/novuconstruct/provision.conf – konfigurace pro deploy/linux/provision/nc-provision (F6.2).
+# Čtou se jen řádky NC_*=hodnota; soubor se nevykonává jako skript.
+
+# single = pilot na jednom serveru (varianta B); core / edge = cílová produkce (varianta A).
+NC_VARIANT=single
+
+# Release aplikace (vlastník root, pro služby jen pro čtení) a data MIMO něj.
+NC_APP_DIR=/opt/novuconstruct
+# Data objektového úložiště. Samostatné šifrované volume (F6.7, LUKS), připojené sem.
+NC_DATA_ROOT=/srv/novuconstruct
+
+NC_PG_VERSION=16
+NC_S3_BUCKET=novuconstruct
+NC_REDIS_MAXMEMORY=512mb
+
+# Objektové úložiště: MinIO je archivovaný (dl.min.io 410 Gone); náhrada čeká na
+# rozhodnutí S-1 (docs/security/OBJECT_STORAGE_OPTIONS.md). Instalátor ho neinstaluje.
+# 1 = úložiště provozuje operátor na 127.0.0.1 a core.env.local na něj míří.
+NC_OBJECT_STORAGE_READY=0
+
+# Edge / single: veřejná doména informačního webu a e-mail pro Let's Encrypt.
+NC_DOMAIN=
+NC_ACME_EMAIL=
+
+# Instance nc-api@gateway až s gateway (F4); vyžaduje NC_GATEWAY_HMAC_KEYS (generuje nc-gen-secrets).
+NC_ENABLE_GATEWAY_ZONE=0
+
+# 1 = venv připravil operátor offline (pip se nespouští).
+NC_SKIP_PIP=0

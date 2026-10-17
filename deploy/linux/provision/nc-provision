@@ -1,0 +1,783 @@
+#!/usr/bin/env bash
+# nc-provision – idempotentní provisioning NovuConstruct na Ubuntu 24.04 / Debian 12
+# (F6.2, docs/security/IMPLEMENTATION_PLAN.md). Bez Dockeru.
+#
+#   nc-provision [--config FILE] [--dry-run] <příkaz>
+#
+#   preflight    kontroly před instalací, nic nemění; exit 1 při blokující chybě
+#   plan         preflight + co by `install` změnil (install --dry-run)
+#   install      balíčky, uživatelé, adresáře, secrets, PostgreSQL, Redis,
+#                venv aplikace, core.env, systemd jednotky, nginx, WireGuard klíče
+#                (objektové úložiště: čeká na rozhodnutí S-1, viz níže)
+#   migrate      záloha + `alembic upgrade head` jako nc_owner + práva (bin/nc-migrate)
+#   start        zapne a spustí služby (po migrate)
+#   smoke        ověří běžící stack (služby, naslouchající porty, health přes sockety)
+#   firewall     nasadí nftables – JEN s potvrzením a s automatickým návratem
+#   ssh-harden   SSH drop-in – JEN s potvrzením a s automatickým návratem
+#   breakglass   konzolový nouzový účet nc-breakglass (EMERGENCY_ACCESS.md) – s potvrzením
+#   tls          certifikát Let's Encrypt pro DOMAIN (edge / single)
+#   status       stav služeb a konfigurace
+#
+# Zásady:
+#   * Opakované spuštění nic nerozbije: každý krok zjistí stav a mění jen rozdíl.
+#   * Nic nemaže. Žádné DROP, žádné rm datových adresářů, žádná rotace secrets.
+#   * Cizí konfigurační soubor se nepřepíše: vedle něj vznikne <soubor>.nc-new
+#     a instalátor upozorní. Soubory s hlavičkou "managed-by: nc-provision"
+#     se aktualizují se zálohou <soubor>.nc-bak.<čas>.
+#   * Firewall, SSH a nouzový účet mění jen samostatné příkazy, které vyžadují
+#     zadání potvrzovacího slova (interaktivně, nebo NC_PROVISION_CONFIRM) a které
+#     se samy vrátí do původního stavu, když změnu do 120 s nepotvrdíš.
+#   * Data (PostgreSQL, objektové úložiště, stav aplikace) leží mimo /opt/novuconstruct.
+#
+# Objektové úložiště: open-source MinIO je archivovaný (dl.min.io: 410 Gone).
+# Instalace náhrady je pozastavená do rozhodnutí S-1
+# (docs/security/OBJECT_STORAGE_OPTIONS.md); instalátor úložiště neinstaluje a
+# `start` bez něj API nespustí.
+set -Eeuo pipefail
+umask 022
+
+SELF_DIR=$(cd "$(dirname "$0")" && pwd)
+DEPLOY_DIR=$(dirname "$SELF_DIR")
+MARKER="managed-by: nc-provision"
+# Stav instalátoru (evidence souborů, zálohy pravidel, rollback skripty) patří
+# jen rootovi a NESMÍ ležet ve StateDirectory služeb (/var/lib/novuconstruct):
+# systemd ho při startu služeb předá jejich uživateli, a ten by pak mohl
+# podvrhnout rollback skript, který spouští root.
+STATE=/var/lib/nc-provision
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+CONFIG=/etc/novuconstruct/provision.conf
+DRY_RUN=0
+CMD=""
+
+# ── výchozí konfigurace (přepíše provision.conf) ──────────────────────────────
+NC_VARIANT=single                # single (pilot, varianta B) | core | edge (varianta A)
+NC_APP_DIR=/opt/novuconstruct
+NC_DATA_ROOT=/srv/novuconstruct  # data objektového úložiště; samostatné (LUKS, F6.7) volume
+NC_PG_VERSION=16
+NC_S3_BUCKET=novuconstruct
+# Objektové úložiště (S-1): 1 = operátor ho provozuje sám na 127.0.0.1 a
+# S3_ENDPOINT_URL/S3_BUCKET + S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY míří na něj.
+NC_OBJECT_STORAGE_READY=0
+NC_DOMAIN=""
+NC_ACME_EMAIL=""
+NC_ENABLE_GATEWAY_ZONE=0         # nc-api@gateway až s gateway (F4)
+NC_REDIS_MAXMEMORY=512mb
+NC_SKIP_PIP=0                    # offline: venv připraví operátor
+
+# ── výpis ─────────────────────────────────────────────────────────────────────
+c_info=""; c_warn=""; c_err=""; c_off=""
+if [ -t 1 ]; then c_info=$'\e[36m'; c_warn=$'\e[33m'; c_err=$'\e[31m'; c_off=$'\e[0m'; fi
+info() { printf '%s==>%s %s\n' "$c_info" "$c_off" "$*"; }
+warn() { printf '%sWARN%s %s\n' "$c_warn" "$c_off" "$*"; WARNINGS=$((WARNINGS + 1)); }
+die()  { printf '%sERROR%s %s\n' "$c_err" "$c_off" "$*" >&2; exit 1; }
+WARNINGS=0
+CHANGES=0
+
+trap 'printf "%sERROR%s příkaz selhal na řádku %s: %s\n" "$c_err" "$c_off" "$LINENO" "$BASH_COMMAND" >&2' ERR
+
+run() {  # run CMD...  (v --dry-run jen vypíše)
+  CHANGES=$((CHANGES + 1))
+  if [ "$DRY_RUN" -eq 1 ]; then printf '   would: %s\n' "$*"; return 0; fi
+  "$@"
+}
+
+usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+
+load_config() {
+  [ -f "$CONFIG" ] || { warn "konfigurace $CONFIG neexistuje, používám výchozí hodnoty (vzor: $SELF_DIR/provision.conf.example)"; return 0; }
+  # Jen řádky KEY=VALUE s klíčem NC_*: soubor se nevykonává jako skript.
+  local line key value
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|\#*) continue ;; esac
+    key=${line%%=*}; value=${line#*=}
+    [[ "$key" =~ ^NC_[A-Z0-9_]+$ ]] || die "$CONFIG: neplatný řádek: $line"
+    value=${value%\"}; value=${value#\"}; value=${value%\'}; value=${value#\'}
+    printf -v "$key" '%s' "$value"
+  done < "$CONFIG"
+  case "$NC_VARIANT" in single|core|edge) ;; *) die "NC_VARIANT musí být single, core nebo edge" ;; esac
+}
+
+has_core() { [ "$NC_VARIANT" != edge ]; }
+has_edge() { [ "$NC_VARIANT" != core ]; }
+
+# ── soubory ───────────────────────────────────────────────────────────────────
+
+# Evidence souborů, které instalátor vytvořil: jen ty smí příště aktualizovat.
+MANIFEST=$STATE/managed-files
+is_managed() { [ -f "$MANIFEST" ] && grep -qxF "$1" "$MANIFEST"; }
+mark_managed() { [ "$DRY_RUN" -eq 1 ] || is_managed "$1" || echo "$1" >> "$MANIFEST"; }
+
+# install_file SRC DST MODE OWNER:GROUP – idempotentně; cizí soubor nepřepíše.
+install_file() {
+  local src=$1 dst=$2 mode=$3 owner=$4
+  if [ -e "$dst" ] && cmp -s "$src" "$dst"; then
+    fix_perms "$dst" "$mode" "$owner"; mark_managed "$dst"; return 0
+  fi
+  if [ -e "$dst" ] && ! is_managed "$dst" && ! grep -q "$MARKER" "$dst" 2>/dev/null; then
+    warn "$dst existuje a nespravuje ho nc-provision: nový obsah je v $dst.nc-new, porovnej a slouč ručně"
+    run install -m "$mode" -o "${owner%%:*}" -g "${owner##*:}" "$src" "$dst.nc-new"
+    return 0
+  fi
+  [ -e "$dst" ] && run cp -p "$dst" "$dst.nc-bak.$TS"
+  run install -D -m "$mode" -o "${owner%%:*}" -g "${owner##*:}" "$src" "$dst"
+  mark_managed "$dst"
+  [ "$DRY_RUN" -eq 1 ] || info "zapsáno: $dst"
+}
+
+fix_perms() {
+  local path=$1 mode=$2 owner=$3
+  if [ "$(stat -c '%a %U:%G' "$path")" != "$(printf '%o' "0$mode") $owner" ]; then
+    run chmod "$mode" "$path"; run chown "$owner" "$path"
+  fi
+}
+
+# write_managed DST MODE OWNER:GROUP < obsah – generovaný soubor s hlavičkou
+write_managed() {
+  local dst=$1 mode=$2 owner=$3 tmp
+  tmp=$(mktemp "$WORK/gen.XXXXXX")
+  cat > "$tmp"
+  install_file "$tmp" "$dst" "$mode" "$owner"
+}
+
+enable_unit() {  # systemctl enable, jen když ještě není
+  systemctl is-enabled --quiet "$1" 2>/dev/null || run systemctl enable --quiet "$1"
+}
+
+ensure_dir() {  # ensure_dir PATH MODE OWNER:GROUP
+  local path=$1 mode=$2 owner=$3
+  if [ ! -d "$path" ]; then run install -d -m "$mode" -o "${owner%%:*}" -g "${owner##*:}" "$path"; return 0; fi
+  fix_perms "$path" "$mode" "$owner"
+}
+
+secret() { cat "/etc/novuconstruct/secrets/$1"; }
+
+digest() {  # otisk obsahu souborů (chybějící = prázdné), pro "změnilo se?"
+  local f
+  for f in "$@"; do [ -f "$f" ] && cat "$f"; echo "--$f"; done | sha256sum
+}
+
+confirm() {  # confirm SLOVO POPIS
+  local word=$1 what=$2 answer=""
+  printf '\n%s\n' "$what"
+  if [ -n "${NC_PROVISION_CONFIRM:-}" ]; then
+    answer=$NC_PROVISION_CONFIRM
+  elif [ -t 0 ]; then
+    read -r -p "Pro pokračování napiš $word: " answer
+  else
+    die "chybí terminál pro potvrzení; nastav NC_PROVISION_CONFIRM=$word, pokud změnu opravdu chceš"
+  fi
+  [ "$answer" = "$word" ] || die "nepotvrzeno, nic se nezměnilo"
+}
+
+# ── preflight ─────────────────────────────────────────────────────────────────
+BLOCKERS=0
+block() { printf '%sBLOCK%s %s\n' "$c_err" "$c_off" "$*"; BLOCKERS=$((BLOCKERS + 1)); }
+ok()    { printf '  ok   %s\n' "$*"; }
+
+preflight() {
+  info "preflight ($NC_VARIANT)"
+  [ "$(id -u)" -eq 0 ] && ok "root" || block "spusť jako root"
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  case "${ID}:${VERSION_ID}" in
+    ubuntu:24.04|debian:12) ok "systém $PRETTY_NAME" ;;
+    *) block "nepodporovaný systém $PRETTY_NAME (Ubuntu 24.04 nebo Debian 12)" ;;
+  esac
+  [ "$(cat /proc/1/comm 2>/dev/null)" = systemd ] && ok "systemd jako init" || block "init není systemd"
+  case "$(uname -m)" in x86_64|aarch64) ok "architektura $(uname -m)" ;; *) block "architektura $(uname -m)" ;; esac
+
+  local free_root mem
+  free_root=$(df -Pk / | awk 'NR==2 {print int($4/1024/1024)}')
+  [ "$free_root" -ge 8 ] && ok "volné místo na / ${free_root} GB" || block "na / je jen ${free_root} GB (min. 8 GB)"
+  mem=$(awk '/MemTotal/ {print int($2/1024/1024)}' /proc/meminfo)
+  [ "$mem" -ge 4 ] && ok "RAM ${mem} GB" || warn "RAM ${mem} GB (doporučeno ≥ 4 GB pro tři instance API)"
+
+  if has_core; then
+    [ -f "$NC_APP_DIR/python-backend/requirements.txt" ] && ok "aplikace v $NC_APP_DIR" \
+      || block "release aplikace chybí v $NC_APP_DIR (python-backend/requirements.txt)"
+    [ -x "$NC_APP_DIR/deploy/linux/bin/nc-run" ] || [ -f "$NC_APP_DIR/deploy/linux/bin/nc-run" ] \
+      || block "$NC_APP_DIR/deploy/linux chybí (deploy soubory z téhož release)"
+    if [ "$(stat -c %U "$NC_APP_DIR" 2>/dev/null)" != root ]; then
+      warn "$NC_APP_DIR nevlastní root (kód má být pro služby jen pro čtení)"
+    fi
+    case "$NC_DATA_ROOT" in "$NC_APP_DIR"|"$NC_APP_DIR"/*) block "NC_DATA_ROOT nesmí ležet v adresáři aplikace" ;; esac
+    if mountpoint -q "$NC_DATA_ROOT" 2>/dev/null; then ok "NC_DATA_ROOT $NC_DATA_ROOT je samostatný svazek"
+    else warn "NC_DATA_ROOT $NC_DATA_ROOT není samostatný svazek (F6.7: šifrovaný Hetzner Volume)"; fi
+
+    if [ "$NC_OBJECT_STORAGE_READY" = 1 ]; then ok "objektové úložiště zajišťuje operátor"
+    else warn "objektové úložiště: rozhodnutí S-1 čeká (docs/security/OBJECT_STORAGE_OPTIONS.md); API bez něj nenaběhne"; fi
+    local py
+    py=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo none)
+    case "$py" in 3.1[2-9]) ok "python $py" ;; 3.11) warn "python 3.11 (testováno na 3.12/3.13)" ;; *) block "python3 >= 3.11 chybí ($py)" ;; esac
+
+    # PostgreSQL: nikdy nepřebíráme cluster s cizími databázemi.
+    if command -v pg_lsclusters >/dev/null 2>&1 && pg_lsclusters -h 2>/dev/null | grep -q .; then
+      local foreign
+      foreign=$(runuser -u postgres -- psql -XAtq -c "SELECT datname FROM pg_database WHERE datname NOT IN ('postgres','template0','template1','novuconstruct')" 2>/dev/null || echo "?")
+      if [ -n "$foreign" ]; then block "PostgreSQL obsahuje cizí databáze ($(echo "$foreign" | tr '\n' ' ')); sdílený server instalátor nepřebírá"
+      else ok "PostgreSQL bez cizích databází"; fi
+    fi
+    if command -v redis-cli >/dev/null 2>&1 && [ -f /etc/redis/redis.conf ] && ! grep -q "include /etc/redis/novuconstruct.conf" /etc/redis/redis.conf; then
+      if redis-cli -h 127.0.0.1 ping 2>/dev/null | grep -q PONG && [ "$(redis-cli -h 127.0.0.1 dbsize 2>/dev/null || echo 0)" != 0 ]; then
+        block "Redis už obsahuje data jiné aplikace"
+      fi
+    fi
+  fi
+
+  # Porty 80/443 (nginx) a UDP WireGuard.
+  local busy
+  busy=$(ss -Hltnp 2>/dev/null | awk '$4 ~ /:(80|443)$/' | grep -v nginx || true)
+  [ -z "$busy" ] && ok "porty 80/443 volné nebo patří nginx" || block "porty 80/443 drží jiný proces: $busy"
+
+  # Firewall a SSH: jen informace – mění je samostatné příkazy s potvrzením.
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    warn "ufw je aktivní; příkaz 'firewall' ho nevypíná – vyřeš ručně (konflikt s nftables)"
+  fi
+  if command -v nft >/dev/null 2>&1 && [ "$(nft list ruleset 2>/dev/null | wc -l)" -gt 0 ]; then
+    warn "nftables už obsahuje pravidla; 'firewall' je nahradí jen po potvrzení (záloha + automatický návrat)"
+  fi
+  if sshd -T 2>/dev/null | grep -qi '^passwordauthentication yes'; then
+    warn "SSH povoluje hesla; 'ssh-harden' to vypne (po potvrzení)"
+  fi
+  if [ -z "$(authorized_keys_file)" ]; then
+    warn "žádný authorized_keys – před 'ssh-harden' a 'firewall' nastav přístup klíčem a nouzový postup"
+  fi
+  timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -q yes && ok "čas synchronizovaný" \
+    || warn "čas není synchronizovaný (JWT exp/iat a HMAC gateway mají okno ±30 s)"
+  if [ -n "$NC_DOMAIN" ]; then
+    getent ahosts "$NC_DOMAIN" >/dev/null && ok "DNS $NC_DOMAIN" || warn "DNS $NC_DOMAIN se nepřekládá (certbot selže)"
+  fi
+
+  echo
+  if [ "$BLOCKERS" -gt 0 ]; then
+    printf '%spreflight: %d blokujících chyb, %d varování%s\n' "$c_err" "$BLOCKERS" "$WARNINGS" "$c_off"
+    return 1
+  fi
+  printf 'preflight: OK (%d varování)\n' "$WARNINGS"
+}
+
+authorized_keys_file() {  # první neprázdný authorized_keys (root nebo /home/*)
+  local f
+  for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
+    [ -s "$f" ] && { echo "$f"; return 0; }
+  done
+  return 0
+}
+
+# ── install ───────────────────────────────────────────────────────────────────
+install_packages() {
+  info "balíčky"
+  local pkgs=(nftables wireguard-tools nginx openssl curl ca-certificates acl iproute2)
+  if has_core; then
+    pkgs+=("postgresql-$NC_PG_VERSION" "postgresql-client-$NC_PG_VERSION" redis-server python3-venv python3-dev build-essential)
+  fi
+  has_edge && pkgs+=(certbot)
+  local missing=()
+  for p in "${pkgs[@]}"; do dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q "install ok installed" || missing+=("$p"); done
+  if [ "${#missing[@]}" -eq 0 ]; then echo "   vše nainstalováno"; return 0; fi
+  if has_core && [[ " ${missing[*]} " == *" postgresql-$NC_PG_VERSION "* ]] && ! apt-cache show "postgresql-$NC_PG_VERSION" >/dev/null 2>&1; then
+    die "balíček postgresql-$NC_PG_VERSION není v apt zdrojích (Debian 12: přidej repozitář PGDG apt.postgresql.org)"
+  fi
+  run env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  run env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${missing[@]}"
+}
+
+install_accounts() {
+  info "uživatelé a skupiny"
+  getent group novuconstruct >/dev/null || run groupadd --system novuconstruct
+  getent group nc-api-sock >/dev/null || run groupadd --system nc-api-sock
+  if ! id novuconstruct >/dev/null 2>&1; then
+    run useradd --system -g novuconstruct -G nc-api-sock -d /nonexistent -s /usr/sbin/nologin novuconstruct
+  fi
+  if id www-data >/dev/null 2>&1 && ! id -nG www-data | grep -qw nc-api-sock; then run usermod -aG nc-api-sock www-data; fi
+}
+
+install_dirs() {
+  info "adresáře (data mimo $NC_APP_DIR)"
+  ensure_dir /etc/novuconstruct 0750 root:novuconstruct
+  ensure_dir $STATE 0700 root:root
+  has_core || return 0
+  # /var/lib/novuconstruct spravuje systemd (StateDirectory= služeb), ne instalátor.
+  ensure_dir /var/backups/novuconstruct 0700 root:root
+  ensure_dir "$NC_DATA_ROOT" 0755 root:root
+}
+
+install_secrets() {
+  has_core || return 0
+  info "secrets (/etc/novuconstruct/secrets, existující se nemění)"
+  local name missing=0
+  for name in POSTGRES_PASSWORD POSTGRES_OWNER_PASSWORD POSTGRES_ADMIN_PASSWORD REDIS_PASSWORD REDIS_WORKER_PASSWORD               JWT_SECRET METRICS_AUTH_TOKEN S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY NC_GATEWAY_HMAC_KEYS DATABASE_URL               DATABASE_URL_SYNC DATABASE_URL_OWNER DATABASE_URL_OWNER_SYNC REDIS_URL REDIS_URL_WORKER ANTHROPIC_API_KEY; do
+    [ -f "/etc/novuconstruct/secrets/$name" ] || missing=1
+  done
+  if [ "$missing" -eq 1 ]; then run sh "$DEPLOY_DIR/bin/nc-gen-secrets"; else echo "   všechny secrets existují"; fi
+}
+
+pg_sql() {  # SQL ze stdin, jako postgres přes socket; hesla nikdy v argv. Idempotentní (srovná stav).
+  if [ "$DRY_RUN" -eq 1 ]; then echo "   check: psql $* (srovnání rolí a práv, SQL ze stdin)"; cat >/dev/null; return 0; fi
+  runuser -u postgres -- psql -X -v ON_ERROR_STOP=1 -q "$@"
+}
+
+install_postgres() {
+  has_core || return 0
+  info "PostgreSQL $NC_PG_VERSION (jen unix socket, scram-sha-256)"
+  local etc="/etc/postgresql/$NC_PG_VERSION/main" before after
+  if ! pg_lsclusters -h 2>/dev/null | awk '{print $1" "$2}' | grep -qx "$NC_PG_VERSION main"; then
+    run pg_createcluster "$NC_PG_VERSION" main --start -- --auth-local=peer --auth-host=scram-sha-256
+  fi
+  before=$(digest "$etc/conf.d/10-novuconstruct.conf" "$etc/pg_hba.conf")
+  write_managed "$etc/conf.d/10-novuconstruct.conf" 0644 postgres:postgres <<EOF
+# $MARKER (F6.2) – změny dělej v deploy/linux/provision, ne tady.
+listen_addresses = ''                    # jen unix socket, žádný TCP
+unix_socket_directories = '/var/run/postgresql'
+unix_socket_permissions = 0777            # o přístupu rozhoduje pg_hba + heslo
+password_encryption = 'scram-sha-256'
+log_connections = on
+log_disconnections = on
+log_line_prefix = '%m [%p] %q%u@%d '
+EOF
+  # pg_hba: celý soubor je náš (preflight vyloučil sdílený cluster); originál se zálohuje.
+  if [ -f "$etc/pg_hba.conf" ] && ! grep -q "$MARKER" "$etc/pg_hba.conf" && [ ! -f "$etc/pg_hba.conf.nc-orig" ]; then
+    run cp -p "$etc/pg_hba.conf" "$etc/pg_hba.conf.nc-orig"
+  fi
+  local hba; hba=$(mktemp "$WORK/hba.XXXXXX")
+  cat > "$hba" <<EOF
+# $MARKER (F6.2). Originál: pg_hba.conf.nc-orig
+# TYPE  DATABASE        USER                        METHOD
+local   all             postgres                    peer
+local   novuconstruct   nc_owner,nc_app,nc_admin    scram-sha-256
+local   all             all                         reject
+EOF
+  if ! cmp -s "$hba" "$etc/pg_hba.conf" 2>/dev/null; then
+    run install -m 0640 -o postgres -g postgres "$hba" "$etc/pg_hba.conf"
+  fi
+  after=$(digest "$etc/conf.d/10-novuconstruct.conf" "$etc/pg_hba.conf")
+  if [ "$before" != "$after" ]; then run systemctl restart "postgresql@$NC_PG_VERSION-main"; fi
+  enable_unit postgresql
+  [ "$DRY_RUN" -eq 1 ] || wait_for "PostgreSQL" runuser -u postgres -- pg_isready -q
+
+  local role pw_name
+  for role in nc_owner nc_app nc_admin; do
+    case $role in nc_owner) pw_name=POSTGRES_OWNER_PASSWORD ;; nc_app) pw_name=POSTGRES_PASSWORD ;; nc_admin) pw_name=POSTGRES_ADMIN_PASSWORD ;; esac
+    # Heslo jde přes stdin (ne argv); hex hodnoty není třeba escapovat.
+    [ "$DRY_RUN" -eq 1 ] && { echo "   check: role $role (vytvořit, nebo srovnat atributy a heslo)"; continue; }
+    pg_sql -d postgres <<EOF
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$role') THEN
+    CREATE ROLE $role LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '$(secret $pw_name)';
+  ELSE
+    ALTER ROLE $role LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '$(secret $pw_name)';
+  END IF;
+END \$\$;
+EOF
+  done
+  if [ "$DRY_RUN" -eq 0 ] && ! runuser -u postgres -- psql -XAtq -c "SELECT 1 FROM pg_database WHERE datname='novuconstruct'" | grep -q 1; then
+    run runuser -u postgres -- createdb -O nc_owner -E UTF8 --template=template0 novuconstruct
+  fi
+  local owner
+  owner=$(runuser -u postgres -- psql -XAtq -c "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='novuconstruct'" 2>/dev/null || true)
+  [ -z "$owner" ] || [ "$owner" = nc_owner ] || warn "databáze novuconstruct patří $owner, ne nc_owner (neměním)"
+  pg_sql -d novuconstruct <<'EOF'
+REVOKE ALL ON DATABASE novuconstruct FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE novuconstruct TO nc_owner, nc_app, nc_admin;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+ALTER SCHEMA public OWNER TO nc_owner;
+GRANT USAGE ON SCHEMA public TO nc_app, nc_admin;
+ALTER DEFAULT PRIVILEGES FOR ROLE nc_owner IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO nc_app, nc_admin;
+ALTER DEFAULT PRIVILEGES FOR ROLE nc_owner IN SCHEMA public
+  GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO nc_app, nc_admin;
+EOF
+}
+
+install_redis() {
+  has_core || return 0
+  info "Redis (loopback, ACL: nc-api, nc-worker; default vypnutý)"
+  local conf=/etc/redis/redis.conf before after
+  if [ ! -f "$conf" ]; then
+    [ "$DRY_RUN" -eq 1 ] && { echo "   would: nakonfigurovat Redis po instalaci balíčku"; return 0; }
+    die "$conf chybí (redis-server)"
+  fi
+  before=$(digest /etc/redis/novuconstruct.conf /etc/redis/users.acl "$conf")
+  write_managed /etc/redis/novuconstruct.conf 0640 redis:redis <<EOF
+# $MARKER (F6.2)
+bind 127.0.0.1 -::1
+protected-mode yes
+port 6379
+aclfile /etc/redis/users.acl
+# Fronta a limity nesmí tiše ztrácet klíče.
+maxmemory $NC_REDIS_MAXMEMORY
+maxmemory-policy noeviction
+EOF
+  local api_hash worker_hash
+  if [ -f /etc/novuconstruct/secrets/REDIS_PASSWORD ] && [ -f /etc/novuconstruct/secrets/REDIS_WORKER_PASSWORD ]; then
+    api_hash=$(printf '%s' "$(secret REDIS_PASSWORD)" | sha256sum | awk '{print $1}')
+    worker_hash=$(printf '%s' "$(secret REDIS_WORKER_PASSWORD)" | sha256sum | awk '{print $1}')
+  else
+    api_hash="<po-vygenerovani-secrets>"; worker_hash=$api_hash
+  fi
+  # ACL: hesla jen jako SHA-256 (#…). @dangerous (CONFIG, KEYS, FLUSHALL, DEBUG,
+  # SHUTDOWN, ACL, …) aplikace nepotřebuje.
+  write_managed /etc/redis/users.acl 0640 redis:redis <<EOF
+user default off
+user nc-api on #$api_hash ~* &* +@all -@dangerous
+user nc-worker on #$worker_hash ~* &* +@all -@dangerous
+EOF
+  if ! grep -q "^include /etc/redis/novuconstruct.conf" "$conf"; then
+    run cp -p "$conf" "$conf.nc-bak.$TS"
+    if [ "$DRY_RUN" -eq 0 ]; then printf '\n# %s\ninclude /etc/redis/novuconstruct.conf\n' "$MARKER" >> "$conf"; fi
+  fi
+  after=$(digest /etc/redis/novuconstruct.conf /etc/redis/users.acl "$conf")
+  [ "$before" = "$after" ] || run systemctl restart redis-server
+  enable_unit redis-server
+}
+
+install_app() {
+  has_core || return 0
+  info "aplikace: venv a core.env"
+  local venv="$NC_APP_DIR/python-backend/.venv" stamp="$STATE/requirements.sha256" want
+  want=$(sha256sum "$NC_APP_DIR/python-backend/requirements.txt" | awk '{print $1}')
+  if [ "$NC_SKIP_PIP" = 1 ]; then
+    [ -x "$venv/bin/python" ] || die "NC_SKIP_PIP=1, ale $venv chybí"
+  elif [ ! -x "$venv/bin/python" ] || [ "$(cat "$stamp" 2>/dev/null)" != "$want" ]; then
+    [ -x "$venv/bin/python" ] || run python3 -m venv "$venv"
+    run "$venv/bin/pip" install --quiet --disable-pip-version-check -r "$NC_APP_DIR/python-backend/requirements.txt"
+    [ "$DRY_RUN" -eq 1 ] || echo "$want" > "$stamp"
+  fi
+  build_core_env
+}
+
+# core.env: .env.production.example bez secrets + deploy/linux/env/core.env.overrides.
+build_core_env() {
+  local example="$NC_APP_DIR/python-backend/.env.production.example" out
+  out=$(mktemp "$WORK/core.env.XXXXXX")
+  {
+    echo "# $MARKER (F6.2): generováno z .env.production.example + core.env.overrides."
+    echo "# Secrets tu nejsou (LoadCredential). Vlastní úpravy patří do core.env.local."
+    python3 - "$example" "$DEPLOY_DIR/env/core.env.overrides" "$NC_S3_BUCKET" /etc/novuconstruct/core.env.local <<'PY'
+import os, re, sys
+example, overrides, bucket, local = sys.argv[1:5]
+SECRET = re.compile(r"^(DATABASE_URL|DATABASE_URL_SYNC|REDIS_URL|REDIS_FAILOVER_URLS|JWT_SECRET|S3_ACCESS_KEY_ID|"
+                    r"S3_SECRET_ACCESS_KEY|METRICS_AUTH_TOKEN|ANTHROPIC_API_KEY|POSTGRES_\w+|MINIO_\w+|"
+                    r"NC_GATEWAY_HMAC_KEYS|SENTRY_DSN|SMTP_PASSWORD)$")
+def parse(path):
+    out = {}
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+values = {k: v for k, v in parse(example).items() if not SECRET.match(k)}
+values.update(parse(overrides))
+values["S3_BUCKET"] = bucket
+# Hodnoty operátora (doména, SMTP, …) mají přednost; secrets do core.env.local nepatří.
+if os.path.exists(local):
+    for k, v in parse(local).items():
+        if SECRET.match(k) and k not in ("SENTRY_DSN",):
+            sys.exit(f"core.env.local: {k} je secret, patří do /etc/novuconstruct/secrets")
+        values[k] = v
+for k in sorted(values):
+    print(f"{k}={values[k]}")
+PY
+  } > "$out"
+  install_file "$out" /etc/novuconstruct/core.env 0640 root:novuconstruct
+  local placeholders
+  placeholders=$(grep -iE '=.*(CHANGE_ME|REPLACE_WITH|yourdomain|\.example\.com)' "$out" | cut -d= -f1 | paste -sd' ' || true)
+  [ -z "$placeholders" ] || warn "core.env má zástupné hodnoty ($placeholders): nastav je v /etc/novuconstruct/core.env.local a spusť install znovu"
+  [ "$DRY_RUN" -eq 1 ] || check_app_config
+  if [ "$(secret ANTHROPIC_API_KEY 2>/dev/null)" = REPLACE_WITH_REAL_KEY ]; then
+    warn "secrets/ANTHROPIC_API_KEY je zástupná hodnota (AI analýza nepoběží)"
+  fi
+}
+
+check_app_config() {  # nastavení API zón projde produkční validací backendu?
+  local out
+  if out=$(sh "$DEPLOY_DIR/bin/nc-migrate" check-config 2>&1); then
+    echo "   konfigurace backendu platná (desktop, admin)"
+  else
+    warn "konfigurace backendu neprošla validací: $(printf '%s\n' "$out" | grep -E 'Error|error' | tail -n 1)"
+  fi
+}
+
+install_units() {
+  info "systemd jednotky"
+  local u units_before=$CHANGES
+  if has_core; then
+    for u in nc-api@.service nc-worker.service nc-core.target nc-egress-refresh.service nc-egress-refresh.timer; do
+      install_file "$DEPLOY_DIR/systemd/$u" "/etc/systemd/system/$u" 0644 root:root
+    done
+    install_file "$DEPLOY_DIR/systemd/nc-api@gateway.service.d/10-gateway-hmac.conf" \
+      /etc/systemd/system/nc-api@gateway.service.d/10-gateway-hmac.conf 0644 root:root
+  fi
+  install_file "$DEPLOY_DIR/systemd/nginx.service.d/10-novuconstruct.conf" \
+    /etc/systemd/system/nginx.service.d/10-novuconstruct.conf 0644 root:root
+  if [ "$CHANGES" -gt "$units_before" ]; then run systemctl daemon-reload; fi
+}
+
+install_nginx() {
+  info "nginx"
+  local f
+  for f in "$DEPLOY_DIR"/nginx/snippets/*.conf; do
+    install_file "$f" "/etc/nginx/snippets/$(basename "$f")" 0644 root:root
+  done
+  install_file "$DEPLOY_DIR/nginx/nc-http-common.conf" /etc/nginx/conf.d/00-nc-http-common.conf 0644 root:root
+  has_core && install_file "$DEPLOY_DIR/nginx/nc-core-private.conf" /etc/nginx/conf.d/nc-core-private.conf 0644 root:root
+  has_edge && install_file "$DEPLOY_DIR/nginx/nc-edge-public.conf" /etc/nginx/conf.d/nc-edge-public.conf 0644 root:root
+  ensure_dir /etc/novuconstruct/tls 0750 root:www-data
+  ensure_dir /var/www/novuconstruct/public 0755 root:root
+  ensure_dir /var/www/letsencrypt 0755 root:root
+  if [ -L /etc/nginx/sites-enabled/default ]; then run rm -f /etc/nginx/sites-enabled/default; fi
+  if [ ! -f /etc/novuconstruct/tls/fullchain.pem ] && has_edge; then
+    # Dočasný certifikát, aby nginx -t prošel; `nc-provision tls` ho nahradí.
+    run openssl req -x509 -newkey rsa:2048 -nodes -days 7 -subj "/CN=${NC_DOMAIN:-novuconstruct.invalid}" \
+      -keyout /etc/novuconstruct/tls/privkey.pem -out /etc/novuconstruct/tls/fullchain.pem 2>/dev/null
+    [ "$DRY_RUN" -eq 1 ] || chmod 0640 /etc/novuconstruct/tls/privkey.pem
+  fi
+}
+
+install_wireguard() {
+  info "WireGuard (klíče a konfigurace jen když chybí)"
+  ensure_dir /etc/wireguard 0700 root:root
+  local ifaces=(wg-nc) i
+  has_core && ifaces+=(wg-nc-admin)
+  for i in "${ifaces[@]}"; do
+    if [ ! -f "/etc/wireguard/$i.key" ]; then
+      if [ "$DRY_RUN" -eq 1 ]; then echo "   would: wg genkey > /etc/wireguard/$i.key"; CHANGES=$((CHANGES + 1));
+      else (umask 077; wg genkey > "/etc/wireguard/$i.key"); info "nový klíč /etc/wireguard/$i.key"; fi
+    fi
+    if [ ! -f "/etc/wireguard/$i.conf" ] && [ -f "$DEPLOY_DIR/wireguard/$i.conf.example" ]; then
+      cmp -s "$DEPLOY_DIR/wireguard/$i.conf.example" "/etc/wireguard/$i.conf.nc-new" 2>/dev/null         || run install -m 0600 -o root -g root "$DEPLOY_DIR/wireguard/$i.conf.example" "/etc/wireguard/$i.conf.nc-new"
+      warn "/etc/wireguard/$i.conf chybí: šablona je v $i.conf.nc-new – doplň PrivateKey ($i.key) a peery, pak ji přejmenuj"
+    fi
+    [ "$DRY_RUN" -eq 1 ] || [ ! -f "/etc/wireguard/$i.key" ] || echo "   $i public key: $(wg pubkey < "/etc/wireguard/$i.key")"
+  done
+}
+
+cmd_install() {
+  preflight || die "preflight neprošel; nic se neinstaluje"
+  install_packages
+  install_accounts
+  install_dirs
+  install_secrets
+  install_postgres
+  install_redis
+  install_app
+  install_units
+  install_nginx
+  install_wireguard
+  echo
+  if [ "$DRY_RUN" -eq 1 ]; then info "plan: $CHANGES změn, $WARNINGS varování"; return 0; fi
+  info "install hotový ($WARNINGS varování). Dál: objektové úložiště (S-1), '$0 migrate', '$0 start', '$0 smoke';"
+  info "firewall a SSH: '$0 firewall', '$0 ssh-harden' (s potvrzením)."
+}
+
+wait_for() {  # wait_for POPIS CMD...
+  local what=$1 i; shift
+  for i in $(seq 1 30); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done
+  die "$what nenaběhl do 30 s"
+}
+
+cmd_migrate() {
+  has_core || die "migrate patří na core"
+  run systemctl start "postgresql@$NC_PG_VERSION-main"
+  if [ "$DRY_RUN" -eq 1 ]; then echo "   would: $DEPLOY_DIR/bin/nc-migrate upgrade"; return 0; fi
+  sh "$DEPLOY_DIR/bin/nc-migrate" status
+  sh "$DEPLOY_DIR/bin/nc-migrate" upgrade
+}
+
+cmd_start() {
+  if has_core; then
+    [ "$NC_OBJECT_STORAGE_READY" = 1 ] || die "objektové úložiště není připravené (rozhodnutí S-1, docs/security/OBJECT_STORAGE_OPTIONS.md); API by nenaběhlo"
+    run systemctl enable --now nc-egress-refresh.timer
+    if [ "$DRY_RUN" -eq 0 ] && ! sh "$DEPLOY_DIR/bin/nc-migrate" status | grep -q "up to date"; then
+      die "databáze není na aktuální revizi: nejdřív '$0 migrate'"
+    fi
+    run systemctl enable --now nc-worker.service nc-api@desktop.service nc-api@admin.service
+    [ "$NC_ENABLE_GATEWAY_ZONE" = 1 ] && run systemctl enable --now nc-api@gateway.service
+    run systemctl enable --now nc-core.target
+  fi
+  if ip -br addr 2>/dev/null | grep -q 'wg-nc' || ! has_core; then
+    run nginx -t -q
+    run systemctl enable --now nginx
+    run systemctl reload nginx
+  else
+    warn "WireGuard rozhraní neběží: nginx core (10.50.0.1/10.51.0.1) se spustí až po 'systemctl enable --now wg-quick@wg-nc wg-quick@wg-nc-admin'"
+  fi
+}
+
+cmd_smoke() {
+  info "smoke test"
+  local fail=0 u
+  check() { if "$@" >/dev/null 2>&1; then ok "$DESC"; else printf '%sFAIL%s %s\n' "$c_err" "$c_off" "$DESC"; fail=1; fi; }
+  if has_core; then
+    for u in "postgresql@$NC_PG_VERSION-main" redis-server nc-worker nc-api@desktop nc-api@admin; do
+      DESC="služba $u aktivní"; check systemctl is-active --quiet "$u"
+    done
+    DESC="PostgreSQL bez TCP portu"; check sh -c "! ss -Hltn | awk '{print \$4}' | grep -qE ':5432\$'"
+    DESC="Redis jen na loopbacku"; check sh -c "ss -Hltn | awk '{print \$4}' | grep -E ':6379\$' | grep -qvE '^(127\.0\.0\.1|\[::1\]):6379\$' && exit 1 || exit 0"
+    # Hesla jen v prostředí (ne v argv, které vidí `ps`).
+    export REDISCLI_AUTH PGPASSWORD
+    REDISCLI_AUTH=$(secret REDIS_PASSWORD); PGPASSWORD=$(secret POSTGRES_PASSWORD)
+    DESC="Redis: výchozí uživatel bez přístupu"; check sh -c "env -u REDISCLI_AUTH redis-cli -h 127.0.0.1 ping 2>&1 | grep -qE 'NOAUTH|NOPERM|WRONGPASS|AUTH'"
+    DESC="Redis: nc-api se přihlásí"; check sh -c "redis-cli --no-auth-warning -h 127.0.0.1 --user nc-api ping | grep -q PONG"
+    DESC="Redis: nc-api nesmí FLUSHALL"; check sh -c "redis-cli --no-auth-warning -h 127.0.0.1 --user nc-api flushall 2>&1 | grep -q NOPERM"
+    DESC="PostgreSQL: nc_app nemá DDL"; check sh -c "psql -XAtq -h /var/run/postgresql -U nc_app -d novuconstruct -c 'CREATE TABLE nc_smoke(x int)' 2>&1 | grep -q 'permission denied'"
+    DESC="PostgreSQL: nc_app nesmí mazat audit_logs"; check sh -c "psql -XAtq -h /var/run/postgresql -U nc_app -d novuconstruct -c 'DELETE FROM audit_logs WHERE false' 2>&1 | grep -q 'permission denied'"
+    for z in admin desktop; do
+      DESC="API zóna $z: /api/v1/health přes socket"
+      check curl -fsS --unix-socket "/run/novuconstruct/$z/api.sock" "http://core/api/v1/health"
+    done
+    DESC="API zóna desktop: admin API je 404"
+    check sh -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' --unix-socket /run/novuconstruct/desktop/api.sock http://core/api/v1/admin/users)\" = 404 ]"
+    if [ "$NC_ENABLE_GATEWAY_ZONE" = 1 ]; then
+      DESC="API zóna gateway: nepodepsaný požadavek je 401"
+      check sh -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' --unix-socket /run/novuconstruct/gateway/api.sock http://core/api/v1/auth/me)\" = 401 ]"
+    fi
+  fi
+  if has_edge; then
+    DESC="nginx konfigurace"; check nginx -t -q
+  fi
+  DESC="stav instalátoru jen pro root ($STATE)"
+  check sh -c "[ \"\$(stat -c '%U:%a' '$STATE')\" = root:700 ]"
+  DESC="secrets nejsou čitelné pro ostatní"
+  check sh -c "! find /etc/novuconstruct/secrets -type f -perm /o+r | grep -q ."
+  [ "$fail" -eq 0 ] && info "smoke: OK" || die "smoke: selhalo"
+}
+
+# ── firewall / SSH / nouzový účet: s potvrzením a automatickým návratem ───────
+ROLLBACK_SECONDS=120
+
+guarded_change() {  # guarded_change NAME ROLLBACK_SCRIPT – spustí návrat, pokud nepotvrdíš
+  local name=$1 rollback=$2 answer=""
+  local unit="nc-rollback-$name-$TS"
+  run systemd-run --quiet --unit "$unit" --on-active="$ROLLBACK_SECONDS" /bin/sh "$rollback"
+  [ "$DRY_RUN" -eq 1 ] && return 0
+  printf '\nZměna je aktivní. Ověř z NOVÉHO spojení, že se pořád dostaneš na server.\n'
+  printf 'Bez potvrzení se do %s s automaticky vrátí původní stav.\n' "$ROLLBACK_SECONDS"
+  if [ -n "${NC_PROVISION_KEEP:-}" ]; then answer=$NC_PROVISION_KEEP
+  elif [ -t 0 ]; then read -r -t $((ROLLBACK_SECONDS - 10)) -p "Ponechat změnu? Napiš KEEP: " answer || true
+  fi
+  if [ "$answer" = KEEP ]; then
+    systemctl stop "$unit.timer" 2>/dev/null || true
+    info "změna ponechána"
+    return 0
+  fi
+  warn "nepotvrzeno – návrat proběhne automaticky ($unit)"
+  return 1
+}
+
+cmd_firewall() {
+  local ruleset="$DEPLOY_DIR/nftables/nc-${NC_VARIANT/single/single-server}.nft" backup ssh_ip rollback
+  [ -f "$ruleset" ] || die "$ruleset neexistuje"
+  nft -c -f "$ruleset" || die "pravidla neprošla kontrolou (nft -c)"
+  backup="$STATE/nftables-before-$TS.nft"
+  ssh_ip=${SSH_CLIENT:-}; ssh_ip=${ssh_ip%% *}
+  echo "Nasadí se $ruleset (varianta $NC_VARIANT)."
+  echo "Aktuální pravidla se zálohují do $backup."
+  echo "Veřejné SSH bude zavřené; přístup jen přes wg-nc-admin nebo nouzovou sadu ssh_emergency."
+  [ -n "$ssh_ip" ] && echo "Tvoje aktuální adresa $ssh_ip se dočasně (2 h) přidá do ssh_emergency, aby se spojení neztratilo."
+  confirm APPLY-FIREWALL "Mění se firewall serveru."
+  if [ "$DRY_RUN" -eq 0 ]; then nft list ruleset > "$backup"; chmod 0600 "$backup"; fi
+  rollback=$(mktemp $STATE/rollback-fw.XXXXXX)
+  printf 'nft -f - <<EOF\nflush ruleset\nEOF\nnft -f %s\n' "$backup" > "$rollback"
+  run nft -f "$ruleset"
+  if [ -n "$ssh_ip" ] && [[ "$ssh_ip" =~ ^[0-9.]+$ ]]; then run nft add element inet nc ssh_emergency "{ $ssh_ip timeout 2h }"; fi
+  if guarded_change firewall "$rollback"; then
+    [ -f /etc/nftables.conf ] && run cp -p /etc/nftables.conf "/etc/nftables.conf.nc-bak.$TS"
+    run install -m 0644 -o root -g root "$ruleset" /etc/nftables.conf
+    run systemctl enable --quiet nftables
+    info "firewall uložen jako /etc/nftables.conf. Hetzner Cloud Firewall nastav podle README (TCP 80/443, UDP 51830/51831)."
+  fi
+}
+
+cmd_ssh_harden() {
+  local dropin=/etc/ssh/sshd_config.d/10-novuconstruct.conf rollback keys
+  keys=$(authorized_keys_file)
+  [ -n "$keys" ] || die "žádný authorized_keys: po vypnutí hesel by ses nepřihlásil"
+  local new; new=$(mktemp "$WORK/sshd.XXXXXX")
+  cat > "$new" <<EOF
+# $MARKER (F6.2) – SSH jen klíčem; veřejně ho navíc zavírá nftables (EMERGENCY_ACCESS.md).
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+PermitEmptyPasswords no
+MaxAuthTries 3
+X11Forwarding no
+AllowAgentForwarding no
+# Nouzový účet jen na konzoli Hetzneru, nikdy přes SSH.
+DenyUsers nc-breakglass
+EOF
+  echo "Nový drop-in $dropin:"; sed 's/^/   /' "$new"
+  confirm APPLY-SSH "Mění se konfigurace SSH (hesla vypnuta, root jen klíčem)."
+  rollback=$(mktemp $STATE/rollback-ssh.XXXXXX)
+  if [ -f "$dropin" ]; then
+    cp -p "$dropin" "$dropin.nc-bak.$TS"
+    printf 'cp -p %s %s && systemctl reload ssh\n' "$dropin.nc-bak.$TS" "$dropin" > "$rollback"
+  else
+    printf 'rm -f %s && systemctl reload ssh\n' "$dropin" > "$rollback"
+  fi
+  run install -m 0644 -o root -g root "$new" "$dropin"
+  if ! sshd -t; then sh "$rollback"; die "sshd -t selhalo, vráceno"; fi
+  run systemctl reload ssh
+  guarded_change ssh "$rollback" || true
+}
+
+cmd_breakglass() {
+  if id nc-breakglass >/dev/null 2>&1; then info "nc-breakglass už existuje"; return 0; fi
+  confirm CREATE-BREAKGLASS "Vytvoří se lokální účet nc-breakglass se sudo, jen pro konzoli (SSH zakáže ssh-harden)."
+  run useradd -m -s /bin/bash -G sudo nc-breakglass
+  run passwd -l nc-breakglass
+  info "heslo nastav na konzoli: passwd nc-breakglass (dva správci, offline trezor; EMERGENCY_ACCESS.md)"
+}
+
+cmd_tls() {
+  has_edge || die "tls patří na edge"
+  [ -n "$NC_DOMAIN" ] && [ -n "$NC_ACME_EMAIL" ] || die "nastav NC_DOMAIN a NC_ACME_EMAIL"
+  run certbot certonly --webroot -w /var/www/letsencrypt -d "$NC_DOMAIN" --non-interactive --agree-tos -m "$NC_ACME_EMAIL" --keep-until-expiring
+  run ln -sfn "/etc/letsencrypt/live/$NC_DOMAIN/fullchain.pem" /etc/novuconstruct/tls/fullchain.pem
+  run ln -sfn "/etc/letsencrypt/live/$NC_DOMAIN/privkey.pem" /etc/novuconstruct/tls/privkey.pem
+  run nginx -t -q
+  run systemctl reload nginx
+}
+
+cmd_status() {
+  local u
+  for u in "postgresql@$NC_PG_VERSION-main" redis-server nc-worker nc-api@desktop nc-api@admin nc-api@gateway nginx nftables wg-quick@wg-nc wg-quick@wg-nc-admin; do
+    printf '  %-28s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"
+  done
+  [ -x "$DEPLOY_DIR/bin/nc-migrate" ] || [ -f "$DEPLOY_DIR/bin/nc-migrate" ] && has_core && sh "$DEPLOY_DIR/bin/nc-migrate" status 2>/dev/null || true
+}
+
+# ── main ──────────────────────────────────────────────────────────────────────
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config) CONFIG=$2; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) usage 0 ;;
+    -*) die "neznámý přepínač $1" ;;
+    *) CMD=$1; shift ;;
+  esac
+done
+[ -n "$CMD" ] || usage
+[ "$(id -u)" -eq 0 ] || die "spusť jako root"
+load_config
+install -d -m 0700 -o root -g root "$STATE"
+WORK=$(mktemp -d $STATE/work.XXXXXX)
+trap 'rm -rf "$WORK"' EXIT
+
+case "$CMD" in
+  preflight) preflight ;;
+  plan) DRY_RUN=1; cmd_install ;;
+  install) cmd_install ;;
+  migrate) cmd_migrate ;;
+  start) cmd_start ;;
+  smoke) cmd_smoke ;;
+  firewall) cmd_firewall ;;
+  ssh-harden) cmd_ssh_harden ;;
+  breakglass) cmd_breakglass ;;
+  tls) cmd_tls ;;
+  status) cmd_status ;;
+  *) usage ;;
+esac

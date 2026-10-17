@@ -69,6 +69,35 @@ All notable changes to this project will be documented in this file.
     single-server pilot and two-server production, secrets via LoadCredential,
     break-glass procedure, staging isolation tests; CI job `deploy-linux-config`.
   - Existing sessions must log in again (tokens without `aud`/`iss` are rejected).
+- F3.4 gateway → core service identity (`docs/security/GATEWAY_CORE_CONTRACT.md`):
+  the gateway zone answers 401 to every request without a valid `X-NC-Gateway-Sig`
+  (HMAC-SHA256 over key id, time ±30 s, single-use nonce, method, path, query,
+  body hash, `Authorization` hash and client address), before the exposure guard.
+  The client address comes only from the signed `X-NC-Client-IP`; forwarding
+  headers are dropped there. Other zones drop `X-NC-*` headers. Keys
+  (`NC_GATEWAY_HMAC_KEYS`, rotation by key id) are loaded only by `nc-api@gateway`.
+- F3.6 device ↔ company binding in the desktop zone (`NC_DEVICE_BINDING=off|enforce`,
+  off by default until enrollment in F7): with `enforce`, login, refresh and every
+  token check refuse (403) a user whose company does not own the WireGuard device;
+  missing or unreadable registry fails closed.
+- D-10 decided: company admins manage the users of their own company through the
+  new `/api/v1/org/users*` (gateway and desktop zones): list, create
+  (manager/technician only), rename, role, deactivate/reactivate, password reset.
+  Other companies are invisible, superadmins and other admins untouchable; audited
+  fail-closed. `/admin/*` stays admin-zone only (NovuAdmin over WireGuard).
+- F6.2 bare-metal provisioning (`deploy/linux/provision/nc-provision`, not run on a
+  server): idempotent preflight/plan/install/migrate/start/smoke for Ubuntu 24.04 /
+  Debian 12 without Docker. PostgreSQL 16 on its unix socket only (`nc_owner` DDL,
+  `nc_app`/`nc_admin` DML, scram-sha-256); Redis ACL users with the default user
+  disabled; `bin/nc-migrate` backs up, runs only `alembic upgrade head` as
+  `nc_owner` and keeps `audit_logs` append-only for application roles. Firewall,
+  SSH and the break-glass account change only through separate commands with a
+  typed confirmation and an automatic 120 s rollback. Never deletes data or
+  overwrites foreign configuration. `DATABASE_URL` may now use a unix socket
+  (`?host=/run/postgresql`). The worker uses its own Redis account.
+- Object storage: open-source MinIO is archived (dl.min.io answers 410). The
+  MinIO install step is withdrawn; options and the recommendation are in
+  `docs/security/OBJECT_STORAGE_OPTIONS.md` (decision S-1 pending).
 - F0.3 photo ownership and permanent deletion (`docs/security/PHOTO_DELETION.md`):
   - `project_photos.uploaded_by_user_id` is set by the server from the uploader;
     technicians soft-delete/restore only their own photos, legacy photos (NULL)

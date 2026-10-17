@@ -1,0 +1,10 @@
+# Refresh the nftables egress allowlist for the application user (bin/nc-egress-refresh).
+[Unit]
+Description=NovuConstruct egress allowlist refresh
+After=network-online.target nftables.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/novuconstruct/egress.env
+ExecStart=/opt/novuconstruct/deploy/linux/bin/nc-egress-refresh

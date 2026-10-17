@@ -93,9 +93,11 @@ Odhady jsou orientační, pro jednoho vývojáře, a nezahrnují dokončení web
 
 ## F3 – Zónový model v backendu
 
-> **Stav 17. 10. 2026:** F3.1–F3.3 a F3.5 jsou implementované ve větvi `fix/f0-rbac-tenant-isolation` a nejsou nasazené.
+> **Stav 17. 10. 2026:** F3.1–F3.6 jsou implementované ve větvi `fix/f0-rbac-tenant-isolation` a nejsou nasazené.
 > - Nezařazená route je blokovaná i v zóně admin (upřesnění oproti F3.1).
-> - F3.4 (podepsaná IP z gateway) a F3.6 (vazba zařízení) zůstávají otevřené.
+> - F3.4: kontrakt v [GATEWAY_CORE_CONTRACT.md](GATEWAY_CORE_CONTRACT.md). Nepodepsaný požadavek dostane v zóně gateway 401 ještě před exposure guardem. Podpis navíc pokrývá tělo, `Authorization`, čas a nonce (replay).
+> - F3.6: `NC_DEVICE_BINDING=off|enforce` jen pro zónu desktop. Zařízení se identifikuje WG adresou. Registr je do F7 souborový (`NC_DEVICE_REGISTRY_FILE`) a bez něj platí fail closed.
+> - D-10 rozhodnuto: `/org/users` pro firemního admina v zónách G a D (viz F8.4).
 
 | ID | Úkol | Hotovo, když | Testy |
 |---|---|---|---|
@@ -145,7 +147,9 @@ Odhady jsou orientační, pro jednoho vývojáře, a nezahrnují dokončení web
 > **Stav 17. 10. 2026:** F6.1–F6.3 a F6.5 jsou připravené v [`deploy/linux/`](../../deploy/linux/README.md) a nejsou nasazené.
 > - Pilot běží na jednom serveru (varianta B), cílová produkce na dvou (varianta A).
 > - Konfigurace ověřuje CI job `deploy-linux-config`.
-> - Zbývá provisioning skript F6.2 (kroky jsou zatím ručně v README), F6.4 (reconciler peerů), F6.6 (`deploy.sh`) a F6.7 (LUKS).
+> - F6.2: idempotentní instalátor [`deploy/linux/provision/nc-provision`](../../deploy/linux/provision/nc-provision) (preflight, plan, install, migrate, start, smoke; firewall, SSH a nouzový účet jen s potvrzením a automatickým návratem). PostgreSQL běží jen na unix socketu s rolemi `nc_owner`/`nc_app`/`nc_admin`. Redis má ACL uživatele. Migrace řeší `bin/nc-migrate` (záloha, jen `upgrade head`).
+> - **Objektové úložiště je pozastavené:** open-source MinIO je archivovaný (`dl.min.io` vrací 410 Gone). Doporučení a dopady jsou v [OBJECT_STORAGE_OPTIONS.md](OBJECT_STORAGE_OPTIONS.md), rozhodnutí S-1 až S-4 čekají.
+> - Zbývá F6.4 (reconciler peerů), F6.6 (`deploy.sh`) a F6.7 (LUKS, s volbou úložiště bez SSE-S3 povinné).
 
 | ID | Úkol | Hotovo, když | Testy |
 |---|---|---|---|
@@ -179,7 +183,7 @@ Implementace probíhá v repozitáři NovuAdmin. Zde je jen kontrakt (SECURITY_A
 | F8.1 | Nová admin API: sessions uživatele, filtrovaný audit, system overview, revoke-all-web-sessions | Endpointy v zóně A, security-critical audit | API testy |
 | F8.2 | Kontrakt API (OpenAPI výřez jen pro zónu admin) jako artefakt pro NovuAdmin | Generovaný soubor v `docs/security/` | CI generuje a porovná |
 | F8.3 | Admin peer onboarding runbook (`wg-nc-admin`) | Runbook ověřený na stagingu | N9 |
-| F8.4 | Volitelně `/org/users` pro manažery (D-10) | Scoped na firmu, matice rolí | cross-tenant testy |
+| F8.4 | `/org/users` pro firemního admina (D-10, rozhodnuto 17. 10. 2026) – **hotovo** v zónách G a D | Scoped na firmu, matice rolí | `tests/test_d10_org_users.py` (cross-tenant, role, zóny) |
 
 ---
 

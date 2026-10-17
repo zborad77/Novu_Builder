@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Fáze** | F3.1–F3.3, F3.5 (zóny v backendu) + F6.1–F6.3, F6.5 (infrastruktura) podle [IMPLEMENTATION_PLAN.md](../../docs/security/IMPLEMENTATION_PLAN.md) |
+| **Fáze** | F3.1–F3.6 (zóny v backendu) + F6.1–F6.3, F6.5 a F6.2 bez objektového úložiště (infrastruktura) podle [IMPLEMENTATION_PLAN.md](../../docs/security/IMPLEMENTATION_PLAN.md) |
 | **Stav** | Připraveno a ověřeno staticky (CI). **Nenasazeno.** |
 | **Docker** | Jen lokální vývoj a CI. Produkce Docker nepoužívá. |
 
@@ -23,7 +23,7 @@
 │        │ unix socket            │ unix socket                              │
 │  nc-api@desktop          nc-api@admin         (nc-api@gateway od F4)       │
 │  NC_ZONE=desktop         NC_ZONE=admin                                     │
-│        └──── PostgreSQL 16 · Redis · MinIO jen 127.0.0.1 ── nc-worker      │
+│        └─ PostgreSQL 16 (socket) · Redis · úložiště S3 jen 127.0.0.1 ─ worker │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -39,7 +39,7 @@
 | Deny-by-default: route mimo zónu i nezařazená route vrací 404, a to i v admin zóně | `ExposureGuardMiddleware`, CI `tests/test_route_exposure.py` |
 | JWT: ověřuje se podpis, `exp`, `iat`, `iss` a `aud` zóny. Token z jiné zóny vrací 401 | `auth_service.decode_token`, `tests/test_f3_jwt_zones.py` |
 | Superadmin se přihlásí jen v admin zóně | `AuthService.login` / `get_user_by_token` |
-| PostgreSQL, Redis a MinIO jen na loopbacku a navíc blokované nftables | `env/core.env.overrides`, `nftables/*.nft` |
+| PostgreSQL jen na unix socketu, Redis a objektové úložiště jen na loopbacku, navíc blokované nftables | `provision/nc-provision`, `nftables/*.nft` |
 | WireGuard peer = jedna adresa `/32`, žádný forwarding mezi peery | `wireguard/*.example`, `forward policy drop` |
 | SSH jen přes `wg-nc-admin`. Nouzový přístup přes konzoli a dočasnou IP | [EMERGENCY_ACCESS.md](EMERGENCY_ACCESS.md) |
 | Secrets mimo repo, unit soubory i `core.env` | `bin/nc-gen-secrets`, `LoadCredential` + `bin/nc-run` |
@@ -63,60 +63,41 @@
 
 Rozsahy jsou ověřené proti ostatním sítím Novusion: 10.10/24 (legacy), 10.20/24 (platform), 10.30/24 (trade), 10.40/24 (admin), 10.251/24 (testy NovuAdmin) a výchozí Hetzner Cloud Network 10.0.0.0/16. Nic se nepřekrývá.
 
-## 4. Instalace (pilot, varianta B)
+## 4. Instalace: `provision/nc-provision` (F6.2)
 
-Skripty se spouštějí ručně a ve všech krocích jako root.
+Instalátor je idempotentní a spouští se jako root na čistém Ubuntu 24.04 nebo Debianu 12. Release aplikace musí být v `/opt/novuconstruct`. Konfigurace se zadává v `/etc/novuconstruct/provision.conf` (vzor `provision/provision.conf.example`).
 
-1. **Uživatelé a skupiny:**
-   ```sh
-   groupadd --system novuconstruct; groupadd --system nc-api-sock
-   useradd --system -g novuconstruct -G nc-api-sock -d /nonexistent -s /usr/sbin/nologin novuconstruct
-   usermod -aG nc-api-sock www-data
-   ```
-2. **Kód:** release tag do `/opt/novuconstruct` (vlastník root, jen pro čtení), venv `/opt/novuconstruct/python-backend/.venv`.
-3. **Secrets:** `bin/nc-gen-secrets`. Do `/etc/novuconstruct/secrets/ANTHROPIC_API_KEY` vložit skutečný klíč.
-4. **PostgreSQL 16:**
-   - `listen_addresses = 'localhost'`, `scram-sha-256`,
-   - role `nc_owner` (DDL, migrace) a `nc_app` (heslo z `secrets/POSTGRES_PASSWORD`),
-   - databáze `novuconstruct`.
-5. **Redis 7:** `bind 127.0.0.1 ::1`, `protected-mode yes`, `requirepass` z `secrets/REDIS_PASSWORD`.
-6. **MinIO:**
-   - systemd služba na `127.0.0.1:9000`, konzole `127.0.0.1:9001`,
-   - root heslo z `secrets/MINIO_ROOT_PASSWORD`,
-   - aplikační uživatel `S3_ACCESS_KEY_ID` s policy jen na bucket.
-7. **Konfigurace:**
-   ```sh
-   cp python-backend/.env.production.example /etc/novuconstruct/core.env
-   ```
-   Pak odstranit všechny secrets (jsou v `secrets/`) a doplnit `env/core.env.overrides`. Výsledek: `chmod 0640`, `chown root:novuconstruct`.
-8. **Migrace:** explicitně, jako `nc_owner`:
-   ```sh
-   alembic upgrade head
-   ```
-9. **WireGuard:** `wireguard/wg-nc.conf.example` a `wg-nc-admin.conf.example` → `/etc/wireguard/` (0600).
-   ```sh
-   systemctl enable --now wg-quick@wg-nc wg-quick@wg-nc-admin
-   ```
-10. **nftables:** `nftables/nc-single-server.nft` → `/etc/nftables.conf`.
-    ```sh
-    nft -c -f /etc/nftables.conf && systemctl enable --now nftables
-    ```
-    Pak systemd timer pro `bin/nc-egress-refresh`.
-11. **Hetzner Cloud Firewall:** jen TCP 80/443 a UDP 51830/51831.
-12. **nginx:**
-    - `nginx/snippets/*` → `/etc/nginx/snippets/`,
-    - `nc-http-common.conf` → `/etc/nginx/conf.d/00-nc-http-common.conf`,
-    - `nc-core-private.conf` + `nc-edge-public.conf` → `/etc/nginx/conf.d/`,
-    - certifikát Let's Encrypt do `/etc/novuconstruct/tls/`.
-13. **Služby:**
-    ```sh
-    cp systemd/* /etc/systemd/system/
-    systemctl daemon-reload
-    systemctl enable --now nc-core.target
-    ```
-14. **Ověření:**
-    - `tests/network_isolation.sh` z každého místa (`internet`, `desktop-peer`, `admin-peer`, `core`),
-    - `systemd-analyze security nc-api@desktop`.
+```sh
+P=/opt/novuconstruct/deploy/linux/provision/nc-provision
+$P preflight      # kontroly: systém, místo, porty, cizí PostgreSQL/Redis, firewall, SSH, čas, DNS
+$P plan           # co by install změnil (nic nemění)
+$P install        # balíčky, účty, adresáře, secrets, PostgreSQL, Redis, venv, core.env, systemd, nginx, WG klíče
+$P migrate        # pg_dump záloha + alembic upgrade head jako nc_owner + práva (bin/nc-migrate)
+$P start          # služby; vyžaduje připravené objektové úložiště
+$P smoke          # služby, porty jen na loopbacku/socketu, ACL Redisu, práva v DB, health zón
+$P firewall       # nftables: potvrzení APPLY-FIREWALL + automatický návrat do 120 s
+$P ssh-harden     # SSH jen klíčem: potvrzení APPLY-SSH + automatický návrat
+$P breakglass     # konzolový nouzový účet (EMERGENCY_ACCESS.md): potvrzení CREATE-BREAKGLASS
+```
+
+| Vlastnost | Jak |
+|---|---|
+| Opakovatelnost | Každý krok zjistí stav a mění jen rozdíl. Druhé spuštění `install` nic nezmění. |
+| Nic destruktivního | Žádné `DROP`, žádné mazání dat ani secrets, žádná rotace. Cizí konfigurační soubor se nepřepíše: vznikne `<soubor>.nc-new`. Spravované soubory (evidence v `/var/lib/nc-provision/managed-files`, jen root) se aktualizují se zálohou `.nc-bak.<čas>`. |
+| Firewall a SSH | Mění je jen samostatné příkazy. Je potřeba zadat potvrzovací slovo (terminál nebo `NC_PROVISION_CONFIRM`). Bez `KEEP` do 120 s systemd timer vrátí původní stav. Při nasazení firewallu se aktuální SSH adresa dočasně (2 h) přidá do `ssh_emergency`. |
+| PostgreSQL 16 | Jen unix socket (`listen_addresses = ''`), `scram-sha-256`. Role `nc_owner` (DDL, migrace), `nc_app` (služby), `nc_admin`. `pg_hba` pustí jen tyto role do `novuconstruct`, originál je v `pg_hba.conf.nc-orig`. Cluster s cizími databázemi instalátor nepřebírá. |
+| Redis 7 | `bind 127.0.0.1 -::1`, ACL uživatelé `nc-api` a `nc-worker` (hesla jen jako SHA-256), `default` vypnutý, bez `@dangerous`, `noeviction`. |
+| Migrace | `bin/nc-migrate`: jen `upgrade head`, nikdy downgrade. Odmítne databázi s revizí, kterou kód nezná. Neprázdnou DB před migrací zazálohuje (`/var/backups/novuconstruct`, 0600). `audit_logs` zůstane pro aplikační role jen pro přidávání. |
+| Secrets | `bin/nc-gen-secrets` → `/etc/novuconstruct/secrets/*` (0640). Do služeb jdou jen přes `LoadCredential`. Klíč gateway má jen `nc-api@gateway`. |
+| Data | PostgreSQL `/var/lib/postgresql`, stav aplikace `/var/lib/novuconstruct`, objektové úložiště `NC_DATA_ROOT` (samostatné LUKS volume, F6.7). Nic z toho není v `/opt/novuconstruct`. |
+
+**Objektové úložiště:** open-source MinIO je archivovaný a `dl.min.io` vrací `410 Gone`. Náhrada čeká na rozhodnutí S-1 v [OBJECT_STORAGE_OPTIONS.md](../../docs/security/OBJECT_STORAGE_OPTIONS.md). Do té doby ho instalátor neinstaluje a `start` bez `NC_OBJECT_STORAGE_READY=1` služby API nespustí.
+
+**Ručně zůstává:**
+- WireGuard peery (instalátor vygeneruje klíče a šablony `*.conf.nc-new`),
+- Hetzner Cloud Firewall (jen TCP 80/443 a UDP 51830/51831),
+- skutečný `ANTHROPIC_API_KEY`,
+- `nc-provision tls` s `NC_DOMAIN`.
 
 **Desktop (pilot):** oficiální klient WireGuard pro Windows podle `wireguard/desktop-peer.conf.example`. V aplikaci se jako server nastaví `http://10.50.0.1:8210/api/v1`.
 

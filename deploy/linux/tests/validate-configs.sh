@@ -67,10 +67,14 @@ cp "$D"/systemd/*.service "$D"/systemd/*.target "$units/"
 chmod 0644 "$units"/*
 grep -q 'After=.*nftables.service.*wg-quick@wg-nc' "$D/systemd/nginx.service.d/10-novuconstruct.conf" \
   && ok "nginx ordered after nftables and WireGuard" || bad "nginx drop-in missing ordering"
+cp "$units/nc-api@.service" "$units/nc-api@gateway.service"
+mkdir -p "$units/nc-api@gateway.service.d"
+cp "$D/systemd/nc-api@gateway.service.d/"*.conf "$units/nc-api@gateway.service.d/"
+chmod 0644 "$units/nc-api@gateway.service.d/"*
 cp "$units/nc-api@.service" "$units/nc-api@desktop.service"
 cp "$units/nc-api@.service" "$units/nc-api@admin.service"
 chmod 0644 "$units"/*
-if SYSTEMD_LOG_LEVEL=warning systemd-analyze verify --man=no "$units/nc-api@desktop.service" "$units/nc-api@admin.service" "$units/nc-worker.service" "$units/nc-core.target" 2>&1 | grep -v -E "Failed to (connect|open|create).*bus|Unit.*not found|postgresql|redis-server|minio" | grep . ; then
+if SYSTEMD_LOG_LEVEL=warning systemd-analyze verify --man=no "$units/nc-api@gateway.service" "$units/nc-api@desktop.service" "$units/nc-api@admin.service" "$units/nc-worker.service" "$units/nc-core.target" 2>&1 | grep -v -E "Failed to (connect|open|create).*bus|Unit.*not found|postgresql|redis-server|minio" | grep . ; then
   bad "systemd-analyze verify reported problems"
 else ok "systemd-analyze verify"; fi
 # F6.1: sandbox exposure below 3.0 ("threshold" is exposure x 10).
@@ -84,8 +88,14 @@ done
 grep -q '^Environment=NC_ZONE=%i' "$D/systemd/nc-api@.service" && ok "zone fixed per instance (NC_ZONE=%i)" || bad "NC_ZONE not fixed by the unit"
 grep -q -- '--no-proxy-headers' "$D/systemd/nc-api@.service" && ok "uvicorn --no-proxy-headers" || bad "proxy headers not disabled"
 grep -q -- '--uds ' "$D/systemd/nc-api@.service" && ok "API on unix socket only" || bad "API not on a unix socket"
+# F3.4: only the gateway instance loads the gateway HMAC keys.
+grep -q 'NC_GATEWAY_HMAC_KEYS' "$D/systemd/nc-api@.service" && bad "gateway HMAC key loaded by every zone"   || ok "gateway HMAC key not in the shared unit"
+grep -q '^LoadCredential=NC_GATEWAY_HMAC_KEYS:' "$D/systemd/nc-api@gateway.service.d/10-gateway-hmac.conf"   && ok "gateway HMAC key loaded by nc-api@gateway only" || bad "gateway drop-in missing"
+grep -q 'X-NC-Client-IP     ""' "$D/nginx/snippets/nc-proxy.conf"   && ok "desktop/admin proxies clear X-NC-* headers" || bad "nc-proxy.conf forwards X-NC-* headers"
+grep -q 'X-Forwarded-For   ""' "$D/nginx/snippets/nc-proxy-gateway.conf"   && ok "gateway proxy sends no X-Forwarded-For" || bad "gateway proxy forwards X-Forwarded-For"
 
 # ── shell helpers ────────────────────────────────────────────────────────────
+if bash -n "$D/provision/nc-provision"; then ok "bash -n nc-provision"; else bad "bash -n nc-provision"; fi
 for script in "$D"/bin/* "$D"/tests/*.sh; do
   if sh -n "$script"; then ok "sh -n $(basename "$script")"; else bad "sh -n $(basename "$script")"; fi
 done
