@@ -39,6 +39,22 @@ All notable changes to this project will be documented in this file.
     companies outside their tenant.
   - Login throttle without Redis now fails closed in every environment unless
     `AUTH_THROTTLE_DEV_FAIL_OPEN=true` is set explicitly in development.
+  - SA-06 (variant A): technicians can no longer change materials, suppliers,
+    pricebooks or work-type settings, approve offers or set `auto_send` /
+    `auto_review_bypass`, cancel analysis, read exports, or delete/restore photos.
+  - Photo deletion is an audited soft delete with a restore window
+    (`PHOTO_DELETE_RETENTION_HOURS`, default 168); new
+    `GET /cases/{id}/images/deleted` and `POST /cases/{id}/images/{image_id}/restore`.
+    Revision `20261017_0058` adds `project_photos.deleted_at` / `deleted_by_user_id`.
+  - SA-05: the client address is resolved in the app from `TRUSTED_PROXY_IPS` only
+    (IPv4/IPv6, right-to-left chain walk); `FORWARDED_ALLOW_IPS="*"` removed and
+    rejected in production; uvicorn runs with `--no-proxy-headers`; nginx gets a
+    fixed address on a dedicated Compose network; rate-limit counters are shared
+    through Redis and fail closed (503).
+- Restore the 51 documents removed by the local `docs-cleanup` commit; stop
+  versioning personal editor metadata (`.workspace/`, `.novuai/`, `*.code-workspace`).
+- Tests no longer read a developer's local `python-backend/.env`; the
+  docker-entrypoint passthrough test is documented as Linux-only.
 - `v0.8.5` remains immutable but is unsuitable for a fresh empty-database install.
   Catalog Validation Hardening moves to v0.8.7; Pricing Engine Integration and
   Proposal Generator move to v0.8.8 and v0.8.9 respectively.

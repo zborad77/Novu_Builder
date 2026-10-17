@@ -77,5 +77,22 @@ class DeletePhotoResponse(BaseModel):
     message: str
 
 
+class RestorePhotoResponse(BaseModel):
+    message: str
+
+
+class DeletedPhotoRead(BaseModel):
+    """A soft-deleted photo that can still be restored."""
+
+    id: str
+    originalFilename: str
+    deletedAt: datetime | None
+    deletedByUserId: str | None
+
+
+class DeletedPhotoListResponse(BaseModel):
+    items: list[DeletedPhotoRead]
+
+
 class PhotoMoveRequest(BaseModel):
     direction: Literal["up", "down"]

@@ -227,6 +227,10 @@ class ProjectPhoto(Base):
     is_analysis_reference: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # Soft delete (20261017_0058): a pending_delete photo stays restorable until
+    # PHOTO_DELETE_RETENTION_HOURS after deleted_at, then the worker purges storage.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
     project: Mapped["Project"] = relationship(back_populates="photos")
 

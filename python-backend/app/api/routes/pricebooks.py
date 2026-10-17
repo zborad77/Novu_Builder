@@ -2,7 +2,7 @@ from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.api.deps import get_current_user, get_pricebook_service, get_redis, require_org_id
+from app.api.deps import get_current_user, get_pricebook_service, get_redis, require_manager, require_org_id
 from app.core.config import get_settings
 from app.core.limiter import limiter
 from app.core.cache import delete_cached, get_cache_tag, get_cached, invalidate_cache_tag, set_cached
@@ -76,7 +76,7 @@ async def list_pricebooks(
 @router.post("/pricebooks", response_model=PricebookRead, status_code=status.HTTP_201_CREATED)
 async def create_pricebook(
     payload: PricebookCreate,
-    current_user: AuthUserRead = Depends(get_current_user),
+    current_user: AuthUserRead = Depends(require_manager),
     service: PricebookService = Depends(get_pricebook_service),
     redis=Depends(get_redis),
 ) -> PricebookRead:

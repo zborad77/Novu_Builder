@@ -330,6 +330,10 @@ def _env_files() -> list[Path]:
     Real environment variables always win over both files (pydantic-settings default).
     Example: APP_ENV=production → loads .env then .env.production
     """
+    # The test suite sets this so a developer's local .env cannot leak into
+    # assertions about defaults and strict-profile validation.
+    if os.environ.get("NOVU_IGNORE_ENV_FILES") == "1":
+        return []
     base = _BACKEND_ROOT / ".env"
     app_env = os.environ.get("APP_ENV", "")
     override = _BACKEND_ROOT / f".env.{app_env}" if app_env else None
@@ -361,6 +365,15 @@ class Settings(BaseSettings):
     # Local-only escape hatch: let login work without Redis by skipping the
     # per-account throttle. Off by default; rejected outside development.
     auth_throttle_dev_fail_open: bool = Field(default=False, alias="AUTH_THROTTLE_DEV_FAIL_OPEN")
+    # How long a soft-deleted photo stays restorable before the worker purges
+    # its storage objects. 0 purges on the next cleanup run.
+    photo_delete_retention_hours: int = Field(default=168, ge=0, alias="PHOTO_DELETE_RETENTION_HOURS")
+    # Reverse proxies whose X-Forwarded-For / X-Forwarded-Proto are honoured
+    # (comma-separated IPs or CIDRs). Empty = trust nobody. See app/core/client_ip.py.
+    trusted_proxy_ips: str = Field(default="", alias="TRUSTED_PROXY_IPS")
+    # slowapi counter storage. Empty: Redis (REDIS_URL) in strict environments,
+    # in-process memory in development/test.
+    rate_limit_storage_uri: str = Field(default="", alias="RATE_LIMIT_STORAGE_URI")
     db_pool_size: int = Field(default=10, alias="DB_POOL_SIZE")
     db_max_overflow: int = Field(default=10, alias="DB_MAX_OVERFLOW")
     db_pool_timeout: int = Field(default=30, alias="DB_POOL_TIMEOUT")
@@ -743,6 +756,40 @@ class Settings(BaseSettings):
     @property
     def auth_throttle_fail_open(self) -> bool:
         return self.app_env.lower() == "development" and self.auth_throttle_dev_fail_open
+
+    @model_validator(mode="after")
+    def _check_trusted_proxies(self) -> "Settings":
+        from app.core.client_ip import TrustedProxyConfigError, parse_trusted_proxies
+
+        try:
+            parse_trusted_proxies(self.trusted_proxy_ips)
+        except TrustedProxyConfigError as exc:
+            raise ValueError(str(exc)) from exc
+        # Uvicorn reads FORWARDED_ALLOW_IPS itself; "*" would let any peer spoof
+        # the client address before the application ever sees the request.
+        if (
+            _is_strict_environment(self.app_env)
+            and os.environ.get("FORWARDED_ALLOW_IPS", "").strip() == "*"
+        ):
+            raise ValueError(
+                "FORWARDED_ALLOW_IPS='*' is not allowed outside development. Run uvicorn with "
+                "--no-proxy-headers and list reverse proxies in TRUSTED_PROXY_IPS."
+            )
+        return self
+
+    @property
+    def trusted_proxy_networks(self):
+        from app.core.client_ip import parse_trusted_proxies
+
+        return parse_trusted_proxies(self.trusted_proxy_ips)
+
+    @property
+    def effective_rate_limit_storage_uri(self) -> str:
+        if self.rate_limit_storage_uri.strip():
+            return self.rate_limit_storage_uri.strip()
+        if _is_strict_environment(self.app_env):
+            return self.redis_url
+        return "memory://"
 
     @model_validator(mode="after")
     def _check_strict_runtime_profile_explicitness(self) -> "Settings":

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, stat
 from fastapi.responses import RedirectResponse
 from typing import cast
 
-from app.api.deps import get_current_user, get_photo_service, get_project_service, resolve_org_id
+from app.api.deps import get_current_user, get_photo_service, get_project_service, require_manager, resolve_org_id
 from app.core.audit import log_cross_tenant_denied
 from app.core.config import get_settings
 from app.core.limiter import limiter
@@ -12,11 +12,14 @@ from app.schemas.auth import AuthUserRead
 from app.schemas.photo import (
     AnalysisReferencePhotoResponse,
     DeletePhotoResponse,
+    DeletedPhotoListResponse,
+    DeletedPhotoRead,
     PhotoListResponse,
     PhotoListMeta,
     PhotoMoveRequest,
     PhotoUploadResponse,
     PrimaryPhotoResponse,
+    RestorePhotoResponse,
     UploadedPhotoPayload,
 )
 from app.services.photo_service import PhotoService
@@ -265,7 +268,9 @@ async def move_case_image(
 async def delete_case_image(
     case_id: str,
     image_id: str,
-    current_user: AuthUserRead = Depends(get_current_user),
+    # Technicians may not delete: photos carry no uploader, so "own photo"
+    # cannot be proven yet (SA-06; see docs/security/RBAC_ROLE_MATRIX.md).
+    current_user: AuthUserRead = Depends(require_manager),
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> DeletePhotoResponse:
@@ -273,7 +278,50 @@ async def delete_case_image(
     project = await project_service.get_project_lean(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
-    deleted = await photo_service.delete_photo(case_id, image_id)
+    deleted = await photo_service.delete_photo(case_id, image_id, deleted_by_user_id=current_user.id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Image not found.")
     return DeletePhotoResponse(message="Image removed.")
+
+
+@router.get("/cases/{case_id}/images/deleted", response_model=DeletedPhotoListResponse)
+async def list_deleted_case_images(
+    case_id: str,
+    current_user: AuthUserRead = Depends(require_manager),
+    project_service: ProjectService = Depends(get_project_service),
+    photo_service: PhotoService = Depends(get_photo_service),
+) -> DeletedPhotoListResponse:
+    org_id = resolve_org_id(current_user)
+    project = await project_service.get_project_lean(case_id, organization_id=org_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    photos = await photo_service.list_restorable_photos(case_id)
+    return DeletedPhotoListResponse(
+        items=[
+            DeletedPhotoRead(
+                id=photo.id,
+                originalFilename=photo.original_filename,
+                deletedAt=photo.deleted_at,
+                deletedByUserId=photo.deleted_by_user_id,
+            )
+            for photo in photos
+        ]
+    )
+
+
+@router.post("/cases/{case_id}/images/{image_id}/restore", response_model=RestorePhotoResponse)
+async def restore_case_image(
+    case_id: str,
+    image_id: str,
+    current_user: AuthUserRead = Depends(require_manager),
+    project_service: ProjectService = Depends(get_project_service),
+    photo_service: PhotoService = Depends(get_photo_service),
+) -> RestorePhotoResponse:
+    org_id = resolve_org_id(current_user)
+    project = await project_service.get_project_lean(case_id, organization_id=org_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    restored = await photo_service.restore_photo(case_id, image_id)
+    if not restored:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    return RestorePhotoResponse(message="Image restored.")

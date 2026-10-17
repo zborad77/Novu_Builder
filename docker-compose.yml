@@ -68,6 +68,9 @@ services:
     build:
       context: ./python-backend
     restart: unless-stopped
+    networks:
+      - default
+      - edge
     depends_on:
       db:
         condition: service_healthy
@@ -102,8 +105,10 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
       APP_BASE_URL: ${APP_BASE_URL}
       REQUIRE_HTTPS: ${REQUIRE_HTTPS}
-      # Internal-only backend; nginx is the public TLS boundary.
-      FORWARDED_ALLOW_IPS: "*"
+      # Internal-only backend; nginx is the public TLS boundary. Only nginx's
+      # fixed address on the edge network may supply X-Forwarded-* (SA-05);
+      # loopback is the in-container healthcheck below.
+      TRUSTED_PROXY_IPS: "172.30.250.2,127.0.0.1,::1"
       HSTS_MAX_AGE: ${HSTS_MAX_AGE}
       RATE_LIMIT_LOGIN: ${RATE_LIMIT_LOGIN}
       RATE_LIMIT_ADMIN: ${RATE_LIMIT_ADMIN}
@@ -174,6 +179,9 @@ services:
   nginx:
     image: nginx:alpine
     restart: unless-stopped
+    networks:
+      edge:
+        ipv4_address: 172.30.250.2
     depends_on:
       backend:
         condition: service_healthy
@@ -225,6 +233,7 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
       APP_BASE_URL: ${APP_BASE_URL}
       REQUIRE_HTTPS: ${REQUIRE_HTTPS}
+      TRUSTED_PROXY_IPS: ""
       HSTS_MAX_AGE: ${HSTS_MAX_AGE}
       RATE_LIMIT_LOGIN: ${RATE_LIMIT_LOGIN}
       RATE_LIMIT_ADMIN: ${RATE_LIMIT_ADMIN}
@@ -291,6 +300,15 @@ services:
       timeout: 5s
       retries: 3
       start_period: 45s
+
+networks:
+  # nginx <-> backend only. nginx gets a fixed address so the backend can trust
+  # exactly that peer for X-Forwarded-For. Change the subnet if it collides
+  # with a host network, and update TRUSTED_PROXY_IPS to match.
+  edge:
+    ipam:
+      config:
+        - subnet: 172.30.250.0/29
 
 volumes:
   postgres_data:

@@ -35,6 +35,9 @@ tempfile.tempdir = str(_PYTEST_TEMP_ROOT)
 if _USING_LOCAL_SQLITE and _TEST_DB_PATH.exists():
     _TEST_DB_PATH.unlink(missing_ok=True)
 
+# Tests configure everything through the environment; never read a developer's
+# python-backend/.env (it silently overrode deleted variables in config tests).
+os.environ["NOVU_IGNORE_ENV_FILES"] = "1"
 os.environ["DATABASE_URL"] = _TEST_DB_URL
 os.environ["DB_SEED_ON_STARTUP"] = "false"
 os.environ["APP_ENV"] = "development"

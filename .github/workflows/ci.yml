@@ -35,6 +35,7 @@ jobs:
           alembic/versions/20260318_0001_initial_schema.py
           alembic/versions/20261003_0056_add_users_is_superadmin.py
           alembic/versions/20261017_0057_harden_rbac_roles.py
+          alembic/versions/20261017_0058_photo_soft_delete_audit.py
 
       - name: Mypy (type check — full app/)
         working-directory: python-backend
@@ -487,7 +488,7 @@ jobs:
             test "$health" = healthy
           done
           docker compose --env-file .env.production run --rm --no-deps --entrypoint alembic backend upgrade head
-          test "$(docker compose --env-file .env.production exec -T db psql -U novu -d novu_builder -Atc 'SELECT version_num FROM alembic_version')" = 20261017_0057
+          test "$(docker compose --env-file .env.production exec -T db psql -U novu -d novu_builder -Atc 'SELECT version_num FROM alembic_version')" = 20261017_0058
           docker compose --env-file .env.production up -d --no-deps backend
           cid="$(docker compose --env-file .env.production ps -a -q backend)"
           health=""

@@ -702,7 +702,9 @@ class Env:
                 is_primary INTEGER NOT NULL,
                 is_analysis_reference INTEGER NOT NULL,
                 sort_order INTEGER NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TEXT,
+                deleted_by_user_id TEXT
             );
             CREATE TABLE project_exports (
                 id TEXT PRIMARY KEY,

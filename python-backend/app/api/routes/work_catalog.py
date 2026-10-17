@@ -4,7 +4,7 @@ from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.api.deps import get_current_user, get_redis, get_work_catalog_service, require_org_id
+from app.api.deps import get_current_user, get_redis, get_work_catalog_service, require_manager, require_org_id
 from app.core.config import get_settings
 from app.core.limiter import limiter
 from app.core.cache import get_cache_tag, get_cached, set_cached
@@ -255,7 +255,7 @@ async def get_effective_work_type(
 async def upsert_tenant_work_type_setting(
     work_type_code: str,
     payload: TenantWorkTypeSettingWithParametersUpsert,
-    current_user: AuthUserRead = Depends(get_current_user),
+    current_user: AuthUserRead = Depends(require_manager),
     service: WorkCatalogService = Depends(get_work_catalog_service),
     redis=Depends(get_redis),
 ):

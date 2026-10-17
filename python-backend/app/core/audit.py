@@ -69,6 +69,7 @@ _PATH_ACTIONS: dict[tuple[str, str], str] = {
     ("POST", "/cases/{id}/exports/quote-docx"): "export.quote_docx",
     ("POST", "/cases/{id}/exports/case-zip"): "export.case_zip",
     ("DELETE", "/cases/{id}/images/{id}"): "image.delete",
+    ("POST", "/cases/{id}/images/{id}/restore"): "image.restore",
     ("PATCH", "/cases/{id}/images/{id}/primary"): "image.set_primary",
     ("PATCH", "/cases/{id}/images/{id}/analysis-reference"): "image.set_analysis_reference",
     ("POST", "/admin/users"): "admin.user.create",
@@ -179,13 +180,13 @@ def _classify(method: str, path: str) -> tuple[str, str | None, str | None]:
         if len(pat_parts) != len(parts):
             continue
         if all(pp == p or pp.startswith("{") for pp, p in zip(pat_parts, parts)):
-            # Extract resource id (second segment if it looks like an id)
+            # The innermost id names the affected resource: for
+            # /cases/{id}/images/{id} that is the image, not the case.
             resource_type = pat_parts[0] if pat_parts else None
-            resource_id = parts[1] if len(parts) > 1 and pat_parts[1].endswith("}") is not False else None
-            # Simpler: just grab second part if it's not a keyword
             rid = None
             for i, (pp, p) in enumerate(zip(pat_parts, parts)):
-                if pp.startswith("{") and i == 1:
+                if pp.startswith("{") and i >= 1:
+                    resource_type = pat_parts[i - 1]
                     rid = p
             return action, resource_type, rid
 

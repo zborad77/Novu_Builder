@@ -89,7 +89,18 @@ except ModuleNotFoundError as exc:
 
     limiter: Any = _NoopLimiter()
 else:
+    from app.core.config import get_settings
+
     # Single shared limiter instance - registered on app.state in main.py.
     # key_func: per-org for authenticated requests, per-user for superadmins,
     # per-IP for unauthenticated.
-    limiter = Limiter(key_func=_rate_limit_key, default_limits=[])
+    # Counters live in Redis outside development/test so every worker process
+    # shares them (SA-05). No in-memory fallback: if Redis is unreachable the
+    # check raises and the request fails closed (503 via main.py).
+    limiter = Limiter(
+        key_func=_rate_limit_key,
+        default_limits=[],
+        storage_uri=get_settings().effective_rate_limit_storage_uri,
+        in_memory_fallback_enabled=False,
+        swallow_errors=False,
+    )

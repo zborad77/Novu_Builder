@@ -122,7 +122,7 @@ async def get_analysis_job(
 @router.post("/analysis-jobs/{job_id}/cancel", response_model=dict)
 async def cancel_analysis_job(
     job_id: str,
-    current_user: AuthUserRead = Depends(get_current_user),
+    current_user: AuthUserRead = Depends(require_manager),
     analysis_service: AnalysisService = Depends(get_analysis_service),
     project_service: ProjectService = Depends(get_project_service),
 ) -> dict:

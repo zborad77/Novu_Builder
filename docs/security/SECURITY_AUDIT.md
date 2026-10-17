@@ -51,6 +51,9 @@
 | SA-02 | Opraveno, navíc stejná chyba u `POST /offer-requests` | `project_service.update_project`, `offer_processing/service.py` |
 | SA-03 | Opraveno | `core/limiter.py` (`client_ip_rate_limit_key`) |
 | B2 | Fail-open jen s explicitním `AUTH_THROTTLE_DEV_FAIL_OPEN=true` v developmentu | `core/config.py`, `api/routes/auth.py` |
+| SA-05 | Opraveno pro současné prostředí: IP klienta jen od `TRUSTED_PROXY_IPS`, uvicorn `--no-proxy-headers`, rate limit v Redisu (fail-closed 503). Podepsaná identita z Gateway je samostatná fáze. | `core/client_ip.py`, `core/limiter.py`, `docker-compose.yml`, `DEPLOY.md` |
+| SA-06 | Opraveno podle varianty A, včetně soft delete fotek s obnovou | [RBAC_ROLE_MATRIX.md](RBAC_ROLE_MATRIX.md) §2.5, migrace `20261017_0058` |
+| B1 | Obnoveno všech 51 dokumentů z `origin/master` | |
 | Ostatní | Otevřené, viz [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | |
 
 ---

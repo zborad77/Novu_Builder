@@ -13,7 +13,7 @@ The application performs a schema-version guard and fails fast if the database i
 not at the expected Alembic head. For v0.8.6 the expected head is:
 
 ```text
-20261017_0057
+20261017_0058
 ```
 
 Use the explicit Compose entrypoint override shown below. Do not rely on the
@@ -143,7 +143,7 @@ docker compose --env-file .env.production run --rm --no-deps --entrypoint alembi
 For v0.8.6, both `current` and `heads` must report:
 
 ```text
-20261017_0057
+20261017_0058
 ```
 
 Verify the database directly:
@@ -161,7 +161,7 @@ docker compose --env-file .env.production exec db \
 
 Expected:
 
-- `alembic_version.version_num = 20261017_0057`
+- `alembic_version.version_num = 20261017_0058`
 - `revoked_tokens` exists
 - `users.is_superadmin` exists and is `BOOLEAN NOT NULL`
 - `users` has CHECK constraints `ck_users_role_valid` and `ck_users_superadmin_requires_flag`
@@ -214,6 +214,46 @@ docker compose --env-file .env.production ps
 
 The backend startup guard must fail if the schema is not at Alembic head.
 A healthy backend therefore proves that the explicit migration step completed.
+
+### Client IP and rate limiting (SA-05)
+
+The backend resolves the client address itself (`app/core/client_ip.py`):
+`X-Forwarded-For` / `X-Forwarded-Proto` are honoured only from peers listed in
+`TRUSTED_PROXY_IPS`. Uvicorn must run with `--no-proxy-headers`, and
+`FORWARDED_ALLOW_IPS='*'` is rejected at startup outside development. Rate-limit
+counters live in Redis (`REDIS_URL`, override with `RATE_LIMIT_STORAGE_URI`).
+If Redis is unreachable, rate-limited requests fail with 503.
+
+| Deployment | `TRUSTED_PROXY_IPS` |
+|---|---|
+| Docker Compose (this file) | set in `docker-compose.yml`: nginx's fixed edge address `172.30.250.2` plus container loopback for the healthcheck |
+| Ubuntu/Debian + systemd, nginx on the same host | `127.0.0.1,::1` (template default) |
+| nginx on another host (e.g. over WireGuard) | that host's address only, e.g. `10.50.0.2` |
+
+nginx must overwrite, not append, the chain: `proxy_set_header X-Forwarded-For $remote_addr;`
+(already the case in `nginx/nginx.conf`). Example systemd service for bare metal:
+
+```ini
+# /etc/systemd/system/novu-backend.service
+[Service]
+User=novu
+WorkingDirectory=/opt/novu/python-backend
+EnvironmentFile=/etc/novu/backend.env   # APP_ENV=production, TRUSTED_PROXY_IPS=127.0.0.1,::1, ...
+ExecStart=/opt/novu/python-backend/.venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 --port 8000 --no-proxy-headers
+Restart=on-failure
+```
+
+Do not put an unvalidated public address range in `TRUSTED_PROXY_IPS`; `*` and
+`0.0.0.0/0` are refused. The future Public Gateway → Core hop will carry a
+signed client identity instead (docs/security/SECURITY_ARCHITECTURE.md §4.5, §6),
+which is a separate phase.
+
+### Photo deletion retention
+
+`PHOTO_DELETE_RETENTION_HOURS` (default 168) keeps soft-deleted photo files in
+storage so a manager or company admin can restore them. The worker purges them
+afterwards.
 
 ---
 

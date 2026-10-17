@@ -1,7 +1,7 @@
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.api.deps import get_export_service, get_current_user, get_project_service, require_manager, resolve_org_id
+from app.api.deps import get_export_service, get_project_service, require_manager, resolve_org_id
 from app.core.config import get_settings
 from app.core.limiter import limiter
 from app.core.audit import log_cross_tenant_denied
@@ -101,7 +101,7 @@ async def create_case_zip(
 async def get_export(
     export_id: str,
     request: Request,
-    current_user: AuthUserRead = Depends(get_current_user),
+    current_user: AuthUserRead = Depends(require_manager),
     project_service: ProjectService = Depends(get_project_service),
     export_service: ExportService = Depends(get_export_service),
 ) -> ExportRead:

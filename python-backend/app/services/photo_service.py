@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import structlog
@@ -446,17 +447,43 @@ class PhotoService:
         await self.repository.save_changes()
         return await self.list_photos(project_id)
 
-    async def delete_photo(self, project_id: str, photo_id: str) -> bool:
+    async def delete_photo(
+        self,
+        project_id: str,
+        photo_id: str,
+        *,
+        deleted_by_user_id: str | None = None,
+    ) -> bool:
+        """Soft delete: hide the photo; storage is purged after the restore window."""
         photo = await self.repository.get_photo(project_id, photo_id)
         if not photo:
             return False
         photo.is_primary = False
         photo.is_analysis_reference = False
+        photo.deleted_at = datetime.now(UTC)
+        photo.deleted_by_user_id = deleted_by_user_id
         await self.repository.update_status(photo, "pending_delete")
         return True
 
+    async def restore_photo(self, project_id: str, photo_id: str) -> bool:
+        """Undo a soft delete while the storage objects still exist."""
+        photo = await self.repository.get_restorable_photo(project_id, photo_id)
+        if not photo:
+            return False
+        photo.deleted_at = None
+        photo.deleted_by_user_id = None
+        await self.repository.update_status(photo, "active")
+        return True
+
+    async def list_restorable_photos(self, project_id: str) -> list[ProjectPhoto]:
+        return list(await self.repository.list_restorable_photos(project_id))
+
     async def cleanup_pending_deletes(self, *, limit: int = 100) -> int:
-        pending_photos = await self.repository.list_pending_delete(limit=limit)
+        retention = timedelta(hours=get_settings().photo_delete_retention_hours)
+        pending_photos = await self.repository.list_pending_delete(
+            limit=limit,
+            deleted_before=datetime.now(UTC) - retention,
+        )
         if not pending_photos:
             return 0
 

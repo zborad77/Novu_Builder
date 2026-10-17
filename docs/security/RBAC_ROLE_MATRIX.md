@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Datum** | 17. 10. 2026 |
-| **Stav** | Implementováno ve větvi `fix/f0-rbac-tenant-isolation` (F0), **zatím nevydáno**. |
+| **Stav** | Implementováno ve větvi `fix/f0-rbac-tenant-isolation` (F0 + SA-06 varianta A), **zatím nevydáno**. |
 | **Zdroj pravdy v kódu** | [`app/core/rbac.py`](../../python-backend/app/core/rbac.py), závislosti v [`app/api/deps.py`](../../python-backend/app/api/deps.py), migrace `20261017_0057` |
 | **Související** | [SECURITY_AUDIT.md](SECURITY_AUDIT.md) (SA-01 až SA-04) · [API_EXPOSURE_MATRIX.md](API_EXPOSURE_MATRIX.md) |
 
@@ -75,7 +75,41 @@ Role `USER` ze zadání odpovídá stávající roli **`technician`**. Ponechali
 | Přístup k datům cizí firmy | ✅ | 🔒 | 🔒 | 🔒 |
 | Přiřazení klienta zakázce nebo nabídce | ✅ jen klient firmy zakázky | ✅ jen klient vlastní firmy | ✅ jen klient vlastní firmy | — |
 
-Doplnění chybějících kontrol rolí u zápisů do katalogů, ceníků a schvalování nabídek (SA-06) je samostatný úkol F2.1 v [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+### 2.5 Firemní konfigurace, nabídky, exporty a fotky (SA-06, varianta A)
+
+Schváleno 17. 10. 2026. Všechny operace navíc kontrolují firmu na backendu: cizí záznam vrací 🔒 404.
+
+| Operace | Endpoint | superadmin | admin | manager | technician |
+|---|---|---|---|---|---|
+| Úprava materiálu (cena, výchozí dodavatel) | `PATCH /material-catalog/{id}` | ✅ | ✅ | ✅ | ❌ |
+| Úprava dodavatele | `PATCH /suppliers/{id}` | ✅ | ✅ | ✅ | ❌ |
+| Založení ceníku | `POST /pricebooks` | ✅ | ✅ | ✅ | ❌ |
+| Nastavení typů prací pro firmu | `PUT /work-catalog/work-types/{code}/settings` | ✅ | ✅ | ✅ | ❌ |
+| Schválení nabídky | `PATCH /offer-requests/{id}` | ✅ | ✅ | ✅ | ❌ |
+| Nabídka s `auto_send` / `auto_review_bypass` | `POST /offer-requests` | ✅ | ✅ | ✅ | ❌ (bez příznaků ✅) |
+| Zrušení, doplnění nabídky | `/offer-requests/{id}/cancel`, `/more-info` | ✅ | ✅ | ✅ | ✅ |
+| Zrušení AI analýzy | `POST /analysis-jobs/{id}/cancel` | ✅ | ✅ | ✅ | ❌ |
+| Detail / stažení exportu | `GET /exports/{id}` | ✅ | ✅ | ✅ | ❌ |
+| Nahrání fotky, přesun, primární, referenční | `/cases/{id}/images*` | ✅ | ✅ | ✅ | ✅ |
+| Měření, markery | `/measurements*`, `/markers*` | ✅ | ✅ | ✅ | ✅ |
+| Smazání fotky (soft delete) | `DELETE /cases/{id}/images/{image_id}` | ✅ | ✅ | ✅ | ❌ (viz níže) |
+| Koš a obnova fotky | `GET /cases/{id}/images/deleted`, `POST …/images/{image_id}/restore` | ✅ | ✅ | ✅ | ❌ |
+| Správa uživatelů a profilu firmy | `/admin/users*`, `/admin/companies/{id}` | ✅ | ✅ | ❌ | ❌ |
+
+**Mazání fotek:**
+- Smazání je soft delete. Fotka přejde do `pending_delete` a uloží se `deleted_at` a `deleted_by_user_id` (migrace `20261017_0058`).
+- Fotka zmizí z API, detailu zakázky i exportů.
+- Akce se auditují jako `image.delete` a `image.restore`, `resource_id` je ID fotky.
+- Objekty v úložišti (MinIO/lokální disk) smaže worker až po `PHOTO_DELETE_RETENTION_HOURS` (výchozí 168 h). Do té doby jde fotka obnovit.
+- Fotky smazané před migrací `0058` nemají `deleted_at`, a proto se smažou hned jako dřív.
+
+**Proč technik zatím nesmí mazat ani vlastní fotky:**
+- `project_photos` nemá autora nahrání, takže „vlastní fotku“ nejde spolehlivě určit.
+- Návrh řešení:
+  1. sloupec `uploaded_by_user_id` vyplňovaný při uploadu,
+  2. technik smí smazat fotku jen tehdy, když `uploaded_by_user_id = jeho id` a zakázka není zamčená,
+  3. starší fotky bez autora smaže jen manager nebo admin.
+- Implementace čeká na schválení.
 
 ## 3. Databázové pojistky
 
@@ -94,5 +128,9 @@ Doplnění chybějících kontrol rolí u zápisů do katalogů, ceníků a schv
 | `GET/PATCH /admin/companies/{id}`, `/admin/users*` | jen superadmin (a omylem manager) | navíc firemní admin pro vlastní firmu |
 | `PATCH /cases/{id}`, `POST /offer-requests` | cizí `clientId` se uložil | 400 `Client does not belong to this organization.` (stejně jako `POST /cases`) |
 | `POST /auth/login`, `/refresh`, `/logout`, `/forgot-password`, `/reset-password` | rate limit podle neověřeného JWT | rate limit jen podle IP klienta |
+| Endpointy v 2.5 označené ❌ pro technika | technik prošel | 403 `Manager access required.` |
+| `DELETE /cases/{id}/images/{image_id}` | technik smazal, úložiště se vyčistilo do 30 s | jen manager/admin; obnova možná po dobu retence |
+| `GET /cases/{id}/images/deleted`, `POST /cases/{id}/images/{image_id}/restore` | neexistovalo | nové (aditivní) |
+| Výpadek Redisu u rate limitu (produkce) | — (počítadla v paměti procesu) | 503 (fail-closed), počítadla sdílená v Redisu |
 
 Tvar odpovědí se nemění.

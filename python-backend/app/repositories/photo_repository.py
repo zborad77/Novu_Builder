@@ -1,6 +1,7 @@
 from collections.abc import Sequence
+from datetime import datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Project, ProjectPhoto
@@ -93,12 +94,41 @@ class PhotoRepository:
         )
         return result.scalars().all()
 
-    async def list_pending_delete(self, *, limit: int = 100) -> Sequence[ProjectPhoto]:
+    async def list_pending_delete(
+        self,
+        *,
+        limit: int = 100,
+        deleted_before: datetime | None = None,
+    ) -> Sequence[ProjectPhoto]:
+        """Photos whose restore window has ended (or that predate the window)."""
+        query = select(ProjectPhoto).where(ProjectPhoto.status == "pending_delete")
+        if deleted_before is not None:
+            query = query.where(
+                or_(ProjectPhoto.deleted_at.is_(None), ProjectPhoto.deleted_at <= deleted_before)
+            )
+        result = await self.session.execute(
+            query.order_by(ProjectPhoto.created_at.asc(), ProjectPhoto.id.asc()).limit(limit)
+        )
+        return result.scalars().all()
+
+    async def get_restorable_photo(self, project_id: str, photo_id: str) -> ProjectPhoto | None:
+        result = await self.session.execute(
+            select(ProjectPhoto).where(
+                ProjectPhoto.project_id == project_id,
+                ProjectPhoto.id == photo_id,
+                ProjectPhoto.status == "pending_delete",
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_restorable_photos(self, project_id: str) -> Sequence[ProjectPhoto]:
         result = await self.session.execute(
             select(ProjectPhoto)
-            .where(ProjectPhoto.status == "pending_delete")
-            .order_by(ProjectPhoto.created_at.asc(), ProjectPhoto.id.asc())
-            .limit(limit)
+            .where(
+                ProjectPhoto.project_id == project_id,
+                ProjectPhoto.status == "pending_delete",
+            )
+            .order_by(ProjectPhoto.deleted_at.desc(), ProjectPhoto.id.asc())
         )
         return result.scalars().all()
 

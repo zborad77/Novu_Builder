@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.api.deps import get_current_user, get_material_catalog_service, resolve_org_id
+from app.api.deps import get_current_user, get_material_catalog_service, require_manager, resolve_org_id
 from app.core.config import get_settings
 from app.core.limiter import limiter
 from app.schemas.auth import AuthUserRead
@@ -45,7 +45,7 @@ async def list_supplier_prices(
 async def patch_material(
     material_id: str,
     payload: MaterialCatalogPatch,
-    current_user: AuthUserRead = Depends(get_current_user),
+    current_user: AuthUserRead = Depends(require_manager),
     service: MaterialCatalogService = Depends(get_material_catalog_service),
 ):
     org_id = resolve_org_id(current_user)

@@ -9,11 +9,13 @@ from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, text
 from sqlalchemy.exc import TimeoutError as SQLAlchemyPoolTimeoutError
+from redis.exceptions import RedisError
 import structlog
 
 from app.api.router import api_router
 from app.core.api_versioning import ApiVersioningMiddleware
 from app.core.audit import AuditMiddleware
+from app.core.client_ip import TrustedProxyMiddleware
 from app.core.config import get_settings, startup_failure_message
 from app.core.limiter import limiter
 from app.core.logging import configure_logging
@@ -218,6 +220,14 @@ async def lifespan(app: FastAPI):
         "schema": "pending",
         "storage": "pending",
     }
+
+    if not settings.trusted_proxy_ips.strip() and not settings.is_development:
+        # Safe (headers cannot be spoofed) but every client behind the reverse
+        # proxy then shares the proxy's address for rate limiting and audit.
+        logger.warning(
+            "security.trusted_proxies_unset",
+            hint="Set TRUSTED_PROXY_IPS to the reverse proxy address (e.g. 127.0.0.1,::1).",
+        )
 
     if settings.should_auto_create_schema:
         logger.info("db.schema_bootstrap", mode="create_all", environment=settings.app_env)
@@ -506,6 +516,24 @@ def create_app() -> FastAPI:
         if effective_csp_policy:
             response.headers["Content-Security-Policy"] = effective_csp_policy
         return response
+
+    @app.exception_handler(RedisError)
+    async def redis_unavailable_handler(request: Request, exc: RedisError) -> JSONResponse:
+        """Fail closed when a Redis-backed control (e.g. shared rate limits) is unreachable."""
+        logger.error(
+            "redis.unavailable",
+            exc_type=type(exc).__name__,
+            method=request.method,
+            path=request.url.path,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Service temporarily unavailable. Please retry in a moment."},
+        )
+
+    # Outermost: resolve the real client address/scheme before rate limiting,
+    # audit, HTTPS redirect and logging read them (SA-05).
+    app.add_middleware(TrustedProxyMiddleware, trusted_proxies=settings.trusted_proxy_networks)
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 

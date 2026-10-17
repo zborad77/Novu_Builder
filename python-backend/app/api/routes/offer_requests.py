@@ -7,7 +7,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_org_id
+from app.api.deps import get_current_user, require_manager, require_org_id
+from app.core.rbac import is_tenant_operator
 from app.db.session import get_db_session
 from app.offer_processing.domain import InvalidOfferTransitionError
 from app.offer_processing.service import (
@@ -75,6 +76,9 @@ async def submit_offer_request(
     offer_svc: OfferService = Depends(get_offer_service),
 ) -> OfferSubmitResponse:
     org_id = require_org_id(current_user)
+    # Skipping review or auto-sending is an approval decision (SA-06).
+    if (payload.auto_send or payload.auto_review_bypass) and not is_tenant_operator(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Manager access required.")
     try:
         offer = await offer_svc.submit_offer_request(
             organization_id=org_id,
@@ -217,7 +221,7 @@ async def submit_more_info(
 async def approve_offer(
     offer_id: str,
     payload: OfferApprove,
-    current_user: AuthUserRead = Depends(get_current_user),
+    current_user: AuthUserRead = Depends(require_manager),
     offer_svc: OfferService = Depends(get_offer_service),
 ) -> OfferStatusRead:
     org_id = require_org_id(current_user)

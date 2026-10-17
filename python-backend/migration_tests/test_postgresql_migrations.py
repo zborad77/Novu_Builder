@@ -21,7 +21,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-HEAD = "20261017_0057"
+HEAD = "20261017_0058"
+RBAC_REVISION = "20261017_0057"
 SUPERADMIN_FLAG_REVISION = "20261003_0056"
 PREVIOUS_HEAD = "20260527_0055"
 BASELINE_TABLES = {
@@ -534,3 +535,49 @@ def test_rbac_downgrade_drops_constraints_but_never_regrants_manager_permissions
     assert _users(database)["u_escalated"].role == "technician"
     _cli(database, "upgrade", "head")
     assert _version(database) == [HEAD]
+
+
+def test_photo_soft_delete_columns_keep_existing_pending_deletes(database):
+    _cli(database, "upgrade", RBAC_REVISION)
+    with database.begin() as connection:
+        connection.execute(
+            sa.text("INSERT INTO organizations (id, name, default_currency) VALUES ('org', 'Migration fixture', 'CZK')")
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO users (id, organization_id, email, password_hash, full_name, role, is_active,"
+                " is_superadmin) VALUES ('usr', 'org', 'usr@migration.test', 'x', 'Fixture', 'manager', true, false)"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO projects (id, organization_id, created_by_user_id, title, status)"
+                " VALUES ('prj', 'org', 'usr', 'Fixture', 'draft')"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO project_photos (id, project_id, status, storage_key, original_filename, mime_type,"
+                " file_size, processing_status, is_primary, is_analysis_reference, sort_order)"
+                " VALUES ('pho', 'prj', 'pending_delete', 'k', 'a.jpg', 'image/jpeg', 1, 'ready', false, false, 1)"
+            )
+        )
+    _cli(database, "upgrade", "head")
+    with database.connect() as connection:
+        columns = _columns(sa.inspect(connection), "project_photos")
+        assert columns["deleted_at"]["nullable"] and columns["deleted_by_user_id"]["nullable"]
+        assert any(
+            fk["constrained_columns"] == ["deleted_by_user_id"]
+            and fk["referred_table"] == "users"
+            and fk["options"].get("ondelete") == "SET NULL"
+            for fk in sa.inspect(connection).get_foreign_keys("project_photos")
+        )
+        # Legacy pending deletes keep NULL and are purged by the worker as before.
+        row = connection.execute(
+            sa.text("SELECT status, deleted_at, deleted_by_user_id FROM project_photos WHERE id = 'pho'")
+        ).one()
+        assert tuple(row) == ("pending_delete", None, None)
+    _cli(database, "downgrade", RBAC_REVISION)
+    with database.connect() as connection:
+        assert "deleted_at" not in _columns(sa.inspect(connection), "project_photos")
+        assert connection.scalar(sa.text("SELECT status FROM project_photos WHERE id = 'pho'")) == "pending_delete"

@@ -861,6 +861,14 @@ def test_production_s3_runtime_dependencies_import():
     assert Config(connect_timeout=3, read_timeout=10).connect_timeout == 3
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "docker-entrypoint.sh is a POSIX sh contract for the Linux image and is verified "
+        "on Linux (CI). On Windows there is no sh on PATH, and Git/MSYS sh rewrites argv "
+        "quoting, so the passthrough cannot be observed faithfully."
+    ),
+)
 def test_backend_entrypoint_passes_explicit_operator_command_through():
     entrypoint = _REPO_ROOT / "python-backend/docker-entrypoint.sh"
     result = subprocess.run(
@@ -914,7 +922,11 @@ def test_production_internal_health_and_proxy_contract():
     template = _PROD_TEMPLATE.read_text(encoding="utf-8")
     assert "REQUIRE_HTTPS=true" in template.splitlines()
     assert "      REQUIRE_HTTPS: ${REQUIRE_HTTPS}" in backend
-    assert '      FORWARDED_ALLOW_IPS: "*"' in backend
+    # SA-05: only nginx's fixed edge address and the in-container healthcheck
+    # (loopback) may supply X-Forwarded-*; never every peer.
+    assert "FORWARDED_ALLOW_IPS" not in backend
+    assert '      TRUSTED_PROXY_IPS: "172.30.250.2,127.0.0.1,::1"' in backend
+    assert "        ipv4_address: 172.30.250.2" in nginx
     assert "headers={'X-Forwarded-Proto': 'https'}" in backend
     assert "    ports:" not in backend
     assert '      - "80:80"' in nginx

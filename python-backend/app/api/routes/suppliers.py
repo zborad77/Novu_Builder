@@ -2,7 +2,7 @@ from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.api.deps import get_current_user, get_redis, get_supplier_service, require_org_id
+from app.api.deps import get_current_user, get_redis, get_supplier_service, require_manager, require_org_id
 from app.core.config import get_settings
 from app.core.limiter import limiter
 from app.core.cache import delete_cached, get_cache_tag, get_cached, invalidate_cache_tag, set_cached
@@ -63,7 +63,7 @@ async def list_suppliers(
 async def patch_supplier(
     supplier_id: str,
     payload: SupplierPatch,
-    current_user: AuthUserRead = Depends(get_current_user),
+    current_user: AuthUserRead = Depends(require_manager),
     service: SupplierService = Depends(get_supplier_service),
     redis=Depends(get_redis),
 ):
