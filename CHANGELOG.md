@@ -62,7 +62,14 @@ All notable changes to this project will be documented in this file.
     exports, removes original and derived files, retried by the worker when storage
     is down (202 `purge_pending`).
   - `scripts/reapply_photo_purges.py` re-applies permanent deletions after a
-    backup restore.
+    backup restore, reading the out-of-database ledger (`PHOTO_PURGE_LEDGER_PATH`,
+    written with fsync before commit; required outside development).
+  - Photo responses gain optional `uploadedByUserId` and `canDelete`.
+  - Permanent deletion removes markers drawn on the photo; analysis results keep
+    their historical reference. New references (markers, measurement
+    `referenceImageId`, vision detections) must point at an active photo of the case.
+  - Fix: `POST /markers` and `DELETE /markers/{id}` never committed, so markers
+    created or deleted through the API were silently rolled back.
 - Restore the 51 documents removed by the local `docs-cleanup` commit; stop
   versioning personal editor metadata (`.workspace/`, `.novuai/`, `*.code-workspace`).
 - Tests no longer read a developer's local `python-backend/.env`; the

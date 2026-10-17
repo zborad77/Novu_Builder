@@ -121,11 +121,14 @@ def can_soft_delete_photo(actor: AuthUserRead, photo: ProjectPhoto) -> Decision:
     only handles photos the server recorded as uploaded by them; photos with an
     unknown author (NULL) are never a technician's.
     """
+    return "allow" if may_soft_delete_photo_of(actor, photo.uploaded_by_user_id) else "forbidden"
+
+
+def may_soft_delete_photo_of(actor: AuthUserRead, uploaded_by_user_id: str | None) -> bool:
+    """Same rule as can_soft_delete_photo, for read models that carry only the author id."""
     if is_tenant_operator(actor):
-        return "allow"
-    if photo.uploaded_by_user_id is not None and photo.uploaded_by_user_id == actor.id:
-        return "allow"
-    return "forbidden"
+        return True
+    return uploaded_by_user_id is not None and uploaded_by_user_id == actor.id
 
 
 def can_purge_photo_in_tenant(actor: AuthUserRead) -> Decision:

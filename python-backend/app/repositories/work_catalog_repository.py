@@ -123,6 +123,8 @@ class WorkCatalogRepository:
                 ProjectPhoto.id == photo_id,
                 ProjectPhoto.project_id == project_id,
                 Project.organization_id == organization_id,
+                # New references must point at a photo that still exists for users.
+                ProjectPhoto.status == "active",
             )
         )
         return result.scalar_one_or_none()

@@ -1,10 +1,10 @@
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Project, ProjectExport, ProjectPhoto
+from app.models import Marker, Project, ProjectExport, ProjectPhoto
 
 
 class PhotoRepository:
@@ -156,6 +156,11 @@ class PhotoRepository:
             query = query.where(ProjectPhoto.project_id == project_id)
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
+
+    async def delete_markers_for_photo(self, photo_id: str) -> int:
+        """Remove annotations drawn on a permanently deleted photo. Does not commit."""
+        result = await self.session.execute(delete(Marker).where(Marker.image_id == photo_id))
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def expire_project_exports(self, project_id: str, *, now: datetime) -> int:
         """Make every export of the case unreachable now (they may embed the photo).

@@ -1,13 +1,14 @@
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.api.deps import get_analysis_service, get_current_user, get_project_service, resolve_org_id
+from app.api.deps import get_analysis_service, get_current_user, get_photo_service, get_project_service, resolve_org_id
 from app.core.audit import log_cross_tenant_denied
 from app.core.config import get_settings
 from app.core.limiter import limiter
 from app.schemas.auth import AuthUserRead
 from app.schemas.measurement import MeasurementPolygonPoint, MeasurementRead, MeasurementUpsert
 from app.services.analysis_service import AnalysisService
+from app.services.photo_service import PhotoService
 from app.services.project_service import ProjectService
 
 logger = structlog.get_logger(__name__)
@@ -53,6 +54,13 @@ def _to_measurement(result) -> MeasurementRead:
     )
 
 
+async def _require_live_reference_photo(photo_service: PhotoService, case_id: str, changes: dict) -> None:
+    """A new reference must be an active photo of the same case (never a deleted one)."""
+    photo_id = changes.get("referencePhotoId")
+    if photo_id is not None and await photo_service.get_active_photo(case_id, photo_id) is None:
+        raise HTTPException(status_code=422, detail="referenceImageId does not reference an active photo of this case.")
+
+
 @router.post("/cases/{case_id}/measurements", response_model=MeasurementRead, status_code=status.HTTP_201_CREATED)
 @limiter.limit(get_settings().rate_limit_marker_write)
 async def create_or_update_measurement(
@@ -62,6 +70,7 @@ async def create_or_update_measurement(
     current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
+    photo_service: PhotoService = Depends(get_photo_service),
 ) -> MeasurementRead:
     org_id = resolve_org_id(current_user)
     project = await project_service.get_project_lean(case_id, organization_id=org_id)
@@ -70,6 +79,7 @@ async def create_or_update_measurement(
     changes = payload.model_dump(exclude_unset=True)
     if "referenceImageId" in changes:
         changes["referencePhotoId"] = changes.pop("referenceImageId")
+    await _require_live_reference_photo(photo_service, case_id, changes)
     updated = await analysis_service.update_manual_selection(case_id, changes)
     if not updated:
         raise HTTPException(status_code=404, detail="No analysis result found.")
@@ -85,6 +95,7 @@ async def patch_measurement(
     current_user: AuthUserRead = Depends(get_current_user),
     analysis_service: AnalysisService = Depends(get_analysis_service),
     project_service: ProjectService = Depends(get_project_service),
+    photo_service: PhotoService = Depends(get_photo_service),
 ) -> MeasurementRead:
     org_id = resolve_org_id(current_user)
     existing = await analysis_service.get_analysis_result_by_id(measurement_id, organization_id=org_id)
@@ -111,6 +122,7 @@ async def patch_measurement(
     changes = payload.model_dump(exclude_unset=True)
     if "referenceImageId" in changes:
         changes["referencePhotoId"] = changes.pop("referenceImageId")
+    await _require_live_reference_photo(photo_service, existing.projectId, changes)
     updated = await analysis_service.update_manual_selection_by_result_id(
         measurement_id,
         changes,

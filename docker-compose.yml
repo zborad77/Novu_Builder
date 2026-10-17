@@ -109,6 +109,7 @@ services:
       # fixed address on the edge network may supply X-Forwarded-* (SA-05);
       # loopback is the in-container healthcheck below.
       TRUSTED_PROXY_IPS: "172.30.250.2,127.0.0.1,::1"
+      PHOTO_PURGE_LEDGER_PATH: /data/ledger/photo-purge-ledger.jsonl
       HSTS_MAX_AGE: ${HSTS_MAX_AGE}
       RATE_LIMIT_LOGIN: ${RATE_LIMIT_LOGIN}
       RATE_LIMIT_ADMIN: ${RATE_LIMIT_ADMIN}
@@ -167,6 +168,8 @@ services:
       # Kept only for local/non-prod compatibility. Production media storage is
       # expected to use STORAGE_BACKEND=s3, in which case this volume is ignored.
       - storage_data:/data/storage
+      # Permanent photo deletion ledger; must outlive DB restores (PHOTO_DELETION.md §5).
+      - purge_ledger:/data/ledger
     healthcheck:
       # python:3.12-slim has no curl; use stdlib urllib instead
       test: ["CMD", "python", "-c",
@@ -312,6 +315,7 @@ networks:
 
 volumes:
   postgres_data:
+  purge_ledger:
   storage_data:
   redis_data:
   minio_data:

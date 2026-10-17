@@ -9,7 +9,13 @@ from app.core.audit import log_cross_tenant_denied, mark_request_audited
 from app.core.config import get_settings
 from app.core.limiter import limiter
 from app.core.metrics import UPLOAD_REJECTIONS_TOTAL, metric_labels
-from app.core.rbac import Decision, can_purge_photo_in_tenant, can_soft_delete_photo, is_tenant_operator
+from app.core.rbac import (
+    Decision,
+    can_purge_photo_in_tenant,
+    can_soft_delete_photo,
+    is_tenant_operator,
+    may_soft_delete_photo_of,
+)
 from app.schemas.auth import AuthUserRead
 from app.schemas.photo import (
     AnalysisReferencePhotoResponse,
@@ -21,6 +27,7 @@ from app.schemas.photo import (
     PhotoMoveRequest,
     PhotoUploadResponse,
     PrimaryPhotoResponse,
+    ProjectPhotoRead,
     PurgePhotoRequest,
     PurgePhotoResponse,
     RestorePhotoResponse,
@@ -86,7 +93,10 @@ async def list_case_images(
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
     items, meta = await photo_service.list_photos(case_id)
-    return PhotoListResponse(items=items, meta=PhotoListMeta.model_validate(meta))
+    return PhotoListResponse(
+        items=_with_delete_permission(items, current_user),
+        meta=PhotoListMeta.model_validate(meta),
+    )
 
 
 @router.post("/cases/{case_id}/images", response_model=PhotoUploadResponse, status_code=status.HTTP_201_CREATED)
@@ -267,7 +277,18 @@ async def move_case_image(
         raise HTTPException(status_code=404, detail="Image not found.")
 
     items, meta = moved
-    return PhotoListResponse(items=items, meta=PhotoListMeta.model_validate(meta))
+    return PhotoListResponse(
+        items=_with_delete_permission(items, current_user),
+        meta=PhotoListMeta.model_validate(meta),
+    )
+
+
+def _with_delete_permission(items: list[ProjectPhotoRead], user: AuthUserRead) -> list[ProjectPhotoRead]:
+    """Annotate each photo with whether *this* user may soft-delete/restore it."""
+    return [
+        item.model_copy(update={"canDelete": may_soft_delete_photo_of(user, item.uploadedByUserId)})
+        for item in items
+    ]
 
 
 def _enforce_photo_decision(decision: Decision, *, current_user: AuthUserRead, image_id: str, operation: str) -> None:

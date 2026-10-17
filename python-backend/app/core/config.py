@@ -368,6 +368,9 @@ class Settings(BaseSettings):
     # How long a soft-deleted photo stays restorable before the worker purges
     # its storage objects. 0 purges on the next cleanup run.
     photo_delete_retention_hours: int = Field(default=168, ge=0, alias="PHOTO_DELETE_RETENTION_HOURS")
+    # Append-only file recording permanent photo deletions outside the database
+    # (app/core/purge_ledger.py). Required for permanent deletion outside development.
+    photo_purge_ledger_path: str = Field(default="", alias="PHOTO_PURGE_LEDGER_PATH")
     # Reverse proxies whose X-Forwarded-For / X-Forwarded-Proto are honoured
     # (comma-separated IPs or CIDRs). Empty = trust nobody. See app/core/client_ip.py.
     trusted_proxy_ips: str = Field(default="", alias="TRUSTED_PROXY_IPS")

@@ -75,6 +75,11 @@ def _is_terminal_processing_status(status: str) -> bool:
     return status in {"ready", "failed"}
 
 
+def _author_id(photo: ProjectPhoto) -> str | None:
+    value = getattr(photo, "uploaded_by_user_id", None)
+    return value if isinstance(value, str) else None
+
+
 def to_read_model(photo: ProjectPhoto) -> ProjectPhotoRead:
     original_url = generate_presigned_url(photo.storage_key)
     preview_url = (
@@ -103,6 +108,7 @@ def to_read_model(photo: ProjectPhoto) -> ProjectPhotoRead:
         isPrimary=photo.is_primary,
         isAnalysisReference=photo.is_analysis_reference,
         sortOrder=photo.sort_order,
+        uploadedByUserId=_author_id(photo),
         url=original_url,
         variants=PhotoVariants(
             original=PhotoVariant(
@@ -502,12 +508,15 @@ class PhotoService:
     async def get_photo_any_status(self, photo_id: str, *, project_id: str | None = None) -> ProjectPhoto | None:
         return await self.repository.get_photo_any_status(photo_id, project_id=project_id)
 
-    async def stage_purge(self, photo: ProjectPhoto, *, actor_user_id: str | None) -> int:
+    async def stage_purge(self, photo: ProjectPhoto, *, actor_user_id: str | None) -> dict[str, int]:
         """Phase 1 of permanent deletion; the caller commits it with the audit row.
 
         From this point the photo is never served (only ``active`` photos are) and
         cannot be restored. Every export of the case is expired because it may
-        embed the photo. Returns the number of exports expired.
+        embed the photo, and markers drawn on the photo are removed because they
+        annotate erased content. Analysis results and vision detections keep their
+        historical reference_photo_id (measurements stay valid without the image;
+        the photo itself answers 404). Returns counts for the audit row.
         """
         now = datetime.now(UTC)
         photo.status = "purge_pending"
@@ -516,7 +525,10 @@ class PhotoService:
         if photo.deleted_at is None:
             photo.deleted_at = now
             photo.deleted_by_user_id = actor_user_id
-        return await self.repository.expire_project_exports(photo.project_id, now=now)
+        return {
+            "exports_expired": await self.repository.expire_project_exports(photo.project_id, now=now),
+            "markers_deleted": await self.repository.delete_markers_for_photo(photo.id),
+        }
 
     async def complete_purge(self, photo: ProjectPhoto) -> bool:
         """Phase 2: remove the original and every derived object, then mark deleted.

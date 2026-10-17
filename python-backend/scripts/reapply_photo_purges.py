@@ -3,10 +3,11 @@
 Re-apply permanent photo deletions after restoring a database/storage backup.
 
 A backup taken before a permanent deletion still contains the photo row and its
-files. After a restore, collect every ``photo.purge_authorized`` log event newer
-than the backup timestamp from the log archive (see
-docs/security/PHOTO_DELETION.md) and purge those photos again:
+files. After a restore, purge again every photo recorded in the off-database purge
+ledger (PHOTO_PURGE_LEDGER_PATH) since the backup was taken
+(docs/security/PHOTO_DELETION.md §5):
 
+    python -m scripts.reapply_photo_purges --confirm --ledger /var/lib/novu/photo-purge-ledger.jsonl         --since 2026-10-17T02:00:00+00:00
     python -m scripts.reapply_photo_purges --confirm pho_ab12cd34 pho_ef56ab78
     python -m scripts.reapply_photo_purges --confirm --from-file purged_ids.txt
 
@@ -18,12 +19,14 @@ storage removal fails stay ``purge_pending`` and the worker finishes them.
 import argparse
 import asyncio
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.audit import commit_security_critical_audit
 from app.core.config import get_settings
+from app.core.purge_ledger import read_purged_photo_ids
 from app.models.domain import Project
 from app.repositories.photo_repository import PhotoRepository
 from app.services.photo_service import PhotoService
@@ -50,7 +53,7 @@ async def _reapply(photo_ids: list[str]) -> int:
                 if photo.status != "purge_pending":
                     previous_status = photo.status
                     project = await session.get(Project, photo.project_id)
-                    exports_expired = await service.stage_purge(photo, actor_user_id=None)
+                    staged = await service.stage_purge(photo, actor_user_id=None)
                     await commit_security_critical_audit(
                         session,
                         current_user_id=SYSTEM_ACTOR,
@@ -61,7 +64,7 @@ async def _reapply(photo_ids: list[str]) -> int:
                             "case_id": photo.project_id,
                             "target_org": project.organization_id if project else None,
                             "previous_status": previous_status,
-                            "exports_expired": exports_expired,
+                            **staged,
                             "reason": "re-applied after backup restore",
                         },
                     )
@@ -79,12 +82,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("photo_ids", nargs="*", help="Photo ids to purge permanently.")
     parser.add_argument("--from-file", type=Path, help="File with one photo id per line.")
+    parser.add_argument("--ledger", type=Path, help="Purge ledger (PHOTO_PURGE_LEDGER_PATH) to read ids from.")
+    parser.add_argument(
+        "--since",
+        type=datetime.fromisoformat,
+        help="With --ledger: only entries at/after this ISO-8601 time (the backup timestamp, with offset).",
+    )
     parser.add_argument("--confirm", action="store_true", help="Required: permanent deletion cannot be undone.")
     args = parser.parse_args()
 
     photo_ids = list(args.photo_ids)
     if args.from_file:
         photo_ids += [line.strip() for line in args.from_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if args.ledger:
+        photo_ids += read_purged_photo_ids(args.ledger, since=args.since)
+    elif args.since:
+        parser.error("--since requires --ledger")
     photo_ids = list(dict.fromkeys(photo_ids))
     if not photo_ids:
         parser.error("no photo ids given")

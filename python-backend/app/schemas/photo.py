@@ -36,6 +36,12 @@ class ProjectPhotoRead(BaseModel):
     sortOrder: int
     url: str
     variants: PhotoVariants
+    # Additive (F0.3): optional so existing clients and fixtures stay valid.
+    # Author recorded by the server; None for legacy photos or a removed account.
+    uploadedByUserId: str | None = None
+    # Whether the requesting user may soft-delete/restore this photo. None where
+    # the response is not tied to a requesting user.
+    canDelete: bool | None = None
 
 
 class PhotoListMeta(BaseModel):

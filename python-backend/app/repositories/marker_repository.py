@@ -41,7 +41,10 @@ class MarkerRepository:
             created_by=created_by,
         )
         self.session.add(marker)
-        await self.session.flush()
+        # The request session is not committed by get_db_session; without this the
+        # marker was rolled back when the request ended.
+        await self.session.commit()
+        await self.session.refresh(marker)
         return marker
 
     async def list_by_case(self, case_id: str) -> Sequence[Marker]:
@@ -70,5 +73,6 @@ class MarkerRepository:
         result = await self.session.execute(
             delete(Marker).where(Marker.id == marker_id)
         )
+        await self.session.commit()
         rowcount = getattr(result, "rowcount", None)
         return bool(rowcount and rowcount > 0)

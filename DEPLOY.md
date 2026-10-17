@@ -256,12 +256,15 @@ storage so a manager or company admin can restore them. The worker purges them
 afterwards. Permanent deletions (`purge_pending`) are retried by the worker on
 every cleanup run until storage confirms removal.
 
-After restoring a backup, re-apply permanent photo deletions made after the
-backup was taken before reopening the application:
-`python -m scripts.reapply_photo_purges --confirm --from-file purged_ids.txt`.
-Keep the application log archive (`photo.purge_authorized` events) at least one
-month longer than the longest backup retention. Full procedure:
-docs/security/PHOTO_DELETION.md §5.
+Permanent deletions are first appended to `PHOTO_PURGE_LEDGER_PATH`, a file outside
+the database (Compose: volume `purge_ledger`; bare metal: e.g.
+`/var/lib/novu/photo-purge-ledger.jsonl`). Without it, permanent deletion is refused
+outside development. Ship the file off-host and keep it at least one month longer
+than the longest backup retention. After restoring a backup taken at time T, run
+`python -m scripts.reapply_photo_purges --confirm --ledger <path> --since <T>` before
+reopening the application. Full procedure: docs/security/PHOTO_DELETION.md §5.
+Recommended: `STORAGE_SIGNED_URL_TTL_SECONDS=300` so URLs of soft-deleted photos
+expire within five minutes (§5b).
 
 ---
 

@@ -94,28 +94,63 @@ Kontroly na každém požadavku: tenant (cizí zakázka 404) → zakázka (fotka
 
 Trvale smazaná fotka tak může v zálohách přežít **nejvýše ~6 měsíců**. Zálohy jsou šifrované, přístupné jen správcům a slouží jen k obnově po havárii. Jednotlivé soubory se z nich nevyřezávají, protože by to porušilo integritu a ověřitelnost záloh. Výmaz je úplný, když vyprší poslední záloha, která fotku obsahuje. Tuto lhůtu je potřeba uvést v informacích o zpracování osobních údajů.
 
-**Ledger trvalých smazání:**
-- Každé trvalé smazání zapíše strukturovaný řádek `photo.purge_authorized` (s `photo_id`, `case_id`, `org_id`, `actor_id` a `action`) a audit v DB.
-- Archiv logů se zálohuje **odděleně od DB** a musí mít retenci **alespoň o měsíc delší, než je nejdelší retence záloh (≥ 7 měsíců)**. Jinak by se po obnově staré zálohy nevědělo, co znovu smazat.
+**Ledger trvalých smazání** (`app/core/purge_ledger.py`):
+- Je to append-only soubor JSONL **mimo databázi** (`PHOTO_PURGE_LEDGER_PATH`, např. `/var/lib/novu/photo-purge-ledger.jsonl`).
+- Každé trvalé smazání se do něj zapíše **před** commitem DB transakce, s `flush` a `fsync`. Záznam obsahuje `ts`, `photo_id`, `case_id`, `org_id`, `actor_id` a `action`.
+- Když zápis selže, smazání se neprovede (503). Mimo development bez nastaveného ledgeru se trvalé smazání odmítne (503).
+- Pokud DB commit po zápisu do ledgeru selže, zůstane v ledgeru jen záznam o autorizovaném záměru. Jeho opakované provedení po obnově je neškodné.
+- Druhou nezávislou kopií je řádek `photo.purge_authorized` v aplikačním logu.
+- Obnova DB vrátí zpět i `audit_logs`, ledger ale ne. Proto podle něj jde smazání zopakovat. Ověřeno testem `test_purge_ledger_survives_database_restore_and_drives_reapply`, který simuluje obnovu (fotka znovu `active`, audit pryč) a spouští re-apply.
+- **Ledger musí přežít ztrátu serveru:** soubor se průběžně kopíruje mimo server (log shipping nebo samostatný restic snapshot častěji než záloha DB). Retence ledgeru a archivu logů musí být **alespoň o měsíc delší, než je nejdelší retence záloh (≥ 7 měsíců)**.
 
 **Postup po obnově ze zálohy pořízené v čase T:**
 1. Nechat aplikaci v údržbě (backend a worker zastavené).
-2. Z archivu logů vybrat ID smazaných fotek novější než T, například:
+2. Smazání znovu provést podle ledgeru (nejnovější kopie mimo server):
    ```bash
-   journalctl -u novu-backend --since "<T>" -o cat \
-     | grep '"photo.purge_authorized"' | jq -r .photo_id | sort -u > purged_ids.txt
-   ```
-3. Smazání znovu provést:
-   ```bash
-   python -m scripts.reapply_photo_purges --confirm --from-file purged_ids.txt
+   python -m scripts.reapply_photo_purges --confirm      --ledger /var/lib/novu/photo-purge-ledger.jsonl --since "<T jako ISO 8601 s offsetem>"
    ```
    Skript je idempotentní, audituje (`system.image.purge`) a používá stejný dvoufázový postup. Fotky, které v obnovené DB nejsou, přeskočí.
-4. Spustit worker. Ten dokončí případné `purge_pending` i soft delete, kterým během výpadku vypršela retence (`deleted_at` se zálohou zachová).
-5. Zkontrolovat, že `SELECT count(*) FROM project_photos WHERE status = 'purge_pending'` vrací 0, a teprve pak aplikaci otevřít.
+
+   Když ledger chybí, ID se vyberou z archivu logů:
+   ```bash
+   journalctl -u novu-backend --since "<T>" -o cat | grep '"photo.purge_authorized"' | jq -r .photo_id | sort -u > purged_ids.txt
+   python -m scripts.reapply_photo_purges --confirm --from-file purged_ids.txt
+   ```
+3. Spustit worker. Ten dokončí případné `purge_pending` i soft delete, kterým během výpadku vypršela retence (`deleted_at` se zálohou zachová).
+4. Zkontrolovat, že `SELECT count(*) FROM project_photos WHERE status = 'purge_pending'` vrací 0, a teprve pak aplikaci otevřít.
+
+## 5a. Odkazy na trvale smazanou fotku
+
+| Kde | Chování |
+|---|---|
+| Markery (`markers.image_id`) | **smažou se** ve stejné transakci jako trvalé smazání, protože jsou to anotace vymazaného obsahu. Počet je v auditu (`markers_deleted`). Soft delete markery nemaže (obnova je vrátí v původní podobě). |
+| Výsledky analýzy a měření (`analysis_results.reference_photo_id`) | **nemění se**. Historická měření a rozpočty zůstávají platné i bez obrázku, ID fotky zůstává jako auditní stopa. Fotka sama vrací 404. |
+| Vision detekce (`vision_detections.reference_photo_id`) | historické se nemění |
+| Nové odkazy (marker, `referenceImageId` u měření, `referencePhotoId` u detekce) | jen na **aktivní** fotku stejné zakázky. Smazaná nebo trvale smazaná fotka vrací 422 nebo 404. |
+| Odpověď fotky | aditivní pole `uploadedByUserId` a `canDelete` (oprávnění aktuálního uživatele ke smazání/obnově). Stávající klienti je mohou ignorovat. |
+
+## 5b. Podepsané URL a soft delete: rozbor a návrh
+
+**Stav:**
+- Odpovědi se seznamem fotek obsahují presigned URL na MinIO (originál, náhled, AI varianta) s platností `STORAGE_SIGNED_URL_TTL_SECONDS` (výchozí 3600 s).
+- S3 presigned URL nejde odvolat. Po soft delete objekty v úložišti zůstávají kvůli obnově, takže dříve vydaná URL funguje až do konce TTL.
+- Trvalé smazání URL zneplatní tím, že smaže objekty.
+
+**Zamítnuté varianty:**
+- Veřejný MinIO endpoint s krátkým TTL zakazuje architektura (MinIO jen na loopbacku nebo v privátní síti).
+- Přesouvat objekty při soft delete do karanténního prefixu znamená dvojité zápisy a nové chybové stavy. Navíc to neřeší aktivní fotky a odebraná práva.
+
+**Návrh:**
+1. **Hned (jen konfigurace):** v produkci `STORAGE_SIGNED_URL_TTL_SECONDS=300`. Okno po soft delete se zkrátí na ≤ 5 min. Klienti si URL znovu obnoví načtením seznamu, platnost stažení exportu je pro běžný workflow dostatečná.
+2. **Cíl (plánovaná fáze D-03 / F4.6 v [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)):** URL v odpovědích ukazují na autentizovaný endpoint backendu `GET /api/v1/files/images/{id}/{variant}`.
+   - Ten při **každém** požadavku ověří token, firmu, roli a `status = active`.
+   - Data posílá nginx přes interní `X-Accel-Redirect` na `internal` location, která proxuje na MinIO (127.0.0.1 nebo WireGuard) s podpisem platným 60 s. Ten podpis klient nikdy nevidí.
+   - Výsledek: soft delete, trvalé smazání i odebrání práv platí **okamžitě**, MinIO zůstává neveřejné a návrh funguje stejně přes Public Gateway i WireGuard.
+   - Tvar polí `url` a `variants.*.url` zůstane stejný, změní se jen hodnota.
 
 ## 6. Zbývající rizika
 
 - **Snímky odeslané AI providerovi** (Anthropic) před smazáním smazat nelze. Řídí je retenční politika providera.
-- **Podepsané odkazy vydané před soft delete** fungují do vypršení TTL (≤ 1 h). Pro okamžité zneplatnění je potřeba použít trvalé smazání.
+- **Podepsané odkazy vydané před soft delete** fungují do vypršení TTL (≤ 1 h, s doporučeným nastavením ≤ 5 min). Okamžité zneplatnění zajistí jen trvalé smazání, dokud nebude hotový autentizovaný endpoint (§5b).
 - **Kopie u uživatelů:** fotky stažené nebo exportované před smazáním (ZIP, PDF u uživatele) jsou mimo systém.
-- **Ledger je jen tak spolehlivý jako archiv logů.** Pokud se logy ztratí, dá se pro obnovu použít audit z nejnovější dostupné zálohy DB, ale smazání novější než ta záloha se tím nepokryjí.
+- **Ledger je jen tak spolehlivý jako jeho kopie mimo server.** Když se ztratí ledger i archiv logů, smazání novější než obnovená záloha nejde dohledat.
