@@ -154,11 +154,16 @@ class TestRBACFoundation:
         assert 'require_admin_capability("admin:impersonate")' in src
 
     def test_write_routes_use_write_capability(self):
-        for fn in (create_company, patch_company, create_user, patch_user):
+        # Creating companies is system administration (superadmin only).
+        assert 'require_admin_capability("admin:write")' in _src(create_company)
+        # F0: tenant-scoped administration is shared with company admins and
+        # authorised per target by app.core.rbac.
+        for fn in (patch_company, create_user, patch_user):
             src = _src(fn)
-            assert 'require_admin_capability("admin:write")' in src, (
-                f"{fn.__name__} must use admin:write capability"
+            assert "Depends(require_user_admin)" in src, (
+                f"{fn.__name__} must use require_user_admin"
             )
+            assert "_enforce(" in src, f"{fn.__name__} must enforce per-target RBAC"
 
 
 # ── 3. Audit enforcement ───────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ from app.db.session import get_db_session
 from app.offer_processing.domain import InvalidOfferTransitionError
 from app.offer_processing.service import (
     OfferAlreadyExistsError,
+    OfferClientNotInOrganizationError,
     OfferLockedError,
     OfferNotFoundError,
     OfferService,
@@ -94,6 +95,8 @@ async def submit_offer_request(
         existing = exc.existing
         response.status_code = status.HTTP_200_OK
         return OfferSubmitResponse(id=existing.id, status=existing.status, created=False)
+    except OfferClientNotInOrganizationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get(

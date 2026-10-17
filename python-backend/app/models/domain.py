@@ -39,6 +39,18 @@ class Organization(TimestampMixin, Base):
 
 class User(TimestampMixin, Base):
     __tablename__ = "users"
+    __table_args__ = (
+        # Mirrors app.core.rbac.ALL_ROLES; added by migration 20261017_0057.
+        CheckConstraint(
+            "role IN ('superadmin', 'admin', 'manager', 'technician')",
+            name="ck_users_role_valid",
+        ),
+        # The role string alone never grants platform administration.
+        CheckConstraint(
+            "role <> 'superadmin' OR is_superadmin",
+            name="ck_users_superadmin_requires_flag",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)

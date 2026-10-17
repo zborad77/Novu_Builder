@@ -70,9 +70,13 @@ async def test_reset_user_password_returns_503_when_security_audit_enforcement_f
         password_hash="old-hash",
         tokens_valid_after=None,
         token_version=0,
+        role="technician",
+        is_superadmin=False,
     )
     session = AsyncMock()
     session.get = AsyncMock(return_value=target)
+    # F0: only a superadmin or the target's own company admin may reset passwords.
+    company_admin = _current_user(user_id="admin-1").model_copy(update={"role": "admin"})
 
     with patch(
         "app.api.routes.admin.commit_security_critical_audit",
@@ -86,7 +90,7 @@ async def test_reset_user_password_returns_503_when_security_audit_enforcement_f
                 request=_request(),
                 user_id="usr-target",
                 payload=ResetPasswordPayload(password="NewPass123!"),
-                current_user=_current_user(user_id="admin-1"),
+                current_user=company_admin,
                 session=session,
                 auth_redis=None,
             )

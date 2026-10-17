@@ -6,11 +6,18 @@ from typing import Annotated, Deque
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_analysis_service, get_auth_redis, get_job_queue, require_admin_capability, require_superadmin
+from app.api.deps import (
+    get_analysis_service,
+    get_auth_redis,
+    get_job_queue,
+    require_admin_capability,
+    require_superadmin,
+    require_user_admin,
+)
 from app.worker.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
 from app.core.config import get_settings
 from app.db.session import get_db_session
@@ -30,6 +37,14 @@ from app.core.limiter import limiter
 from app.core.sql_like import LIKE_ESCAPE_CHAR, build_contains_ilike_pattern
 from app.core.security import enforce_password_strength
 from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit, write_audit_log
+from app.core.rbac import (
+    Decision,
+    assignable_roles,
+    can_manage_company,
+    can_manage_user,
+    can_view_user,
+    user_admin_org_scope,
+)
 from app.repositories.token_repository import SessionTokenRevocation, TokenRepository
 from app.services.analysis_service import AnalysisService, to_job_read
 from app.services.company_service import CompanyService
@@ -44,6 +59,73 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 def get_company_service(session: AsyncSession = Depends(get_db_session)) -> CompanyService:
     return CompanyService(session)
+
+
+# ── Authorization helpers ─────────────────────────────────────────────────────
+
+_PERMISSION_DENIED = "Permission denied."
+_AUDIT_UNAVAILABLE = "Security audit subsystem unavailable. Retry later."
+
+
+def _enforce(
+    decision: Decision,
+    *,
+    current_user: AuthUserRead,
+    operation: str,
+    resource_id: str,
+    not_found_detail: str = "Not found.",
+) -> None:
+    """Translate an app.core.rbac decision into an HTTP error.
+
+    Targets outside the caller's tenant (or superadmin accounts seen by a company
+    admin) answer 404 exactly like a missing record, so the response never
+    confirms that another company's user or organization exists.
+    """
+    if decision == "allow":
+        return
+    logger.warning(
+        "SECURITY_EVENT: admin_operation_denied",
+        operation=operation,
+        decision=decision,
+        user_id=current_user.id,
+        role=current_user.role,
+        org_id=current_user.organizationId,
+        resource_id=resource_id,
+    )
+    if decision == "not_found":
+        raise HTTPException(status_code=404, detail=not_found_detail)
+    raise HTTPException(status_code=403, detail=_PERMISSION_DENIED)
+
+
+async def _commit_security_critical_audit(
+    session: AsyncSession,
+    *,
+    current_user: AuthUserRead,
+    action: str,
+    resource_type: str,
+    resource_id: str,
+    detail: dict,
+) -> None:
+    """Commit staged changes together with their audit row, or roll both back."""
+    try:
+        await commit_security_critical_audit(
+            session,
+            current_user_id=current_user.id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            detail=detail,
+        )
+    except SecurityAuditWriteError as exc:
+        await session.rollback()
+        logger.error(
+            "admin.security_audit_enforcement_failed",
+            action=action,
+            admin_id=current_user.id,
+            resource_id=resource_id,
+            error=str(exc),
+        )
+        raise HTTPException(status_code=503, detail=_AUDIT_UNAVAILABLE) from exc
 
 
 # ── Companies ──────────────────────────────────────────────────────────────────
@@ -94,8 +176,15 @@ async def get_company(
     request: Request,
     company_id: str,
     service: CompanyService = Depends(get_company_service),
-    _: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_user_admin),
 ) -> CompanyRead:
+    _enforce(
+        can_manage_company(current_user, company_id),
+        current_user=current_user,
+        operation="admin.company.get",
+        resource_id=company_id,
+        not_found_detail="Company not found.",
+    )
     company = await service.get_company(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found.")
@@ -109,8 +198,15 @@ async def patch_company(
     company_id: str,
     payload: CompanyPatch,
     service: CompanyService = Depends(get_company_service),
-    current_user: AuthUserRead = Depends(require_admin_capability("admin:write")),
+    current_user: AuthUserRead = Depends(require_user_admin),
 ) -> CompanyRead:
+    _enforce(
+        can_manage_company(current_user, company_id),
+        current_user=current_user,
+        operation="admin.company.patch",
+        resource_id=company_id,
+        not_found_detail="Company not found.",
+    )
     updated = await service.patch_company(company_id, payload)
     if not updated:
         raise HTTPException(status_code=404, detail="Company not found.")
@@ -125,6 +221,11 @@ async def patch_company(
 
 
 # ── Users ──────────────────────────────────────────────────────────────────────
+#
+# Superadmin: every tenant. Company admin (role "admin"): own tenant only, never
+# superadmin accounts, never another company admin's credentials, role or
+# activation. Rules live in app.core.rbac; superadmin accounts are managed only
+# with the server CLI.
 
 @router.get("/users", response_model=AdminUserListResponse)
 @limiter.limit(get_settings().rate_limit_admin)
@@ -134,10 +235,22 @@ async def list_users(
     limit: int = Query(default=100, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     service: CompanyService = Depends(get_company_service),
-    _: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_user_admin),
 ) -> AdminUserListResponse:
+    scope = user_admin_org_scope(current_user)
+    if scope is not None:
+        if org_id is not None and org_id != scope:
+            _enforce(
+                "not_found",
+                current_user=current_user,
+                operation="admin.user.list",
+                resource_id=org_id,
+                not_found_detail="Organization not found.",
+            )
+        org_id = scope
     items, total = await service.list_users(
         organization_id=org_id,
+        exclude_superadmins=scope is not None,
         limit=limit,
         offset=offset,
     )
@@ -156,21 +269,38 @@ async def create_user(
     request: Request,
     payload: AdminUserCreate,
     service: CompanyService = Depends(get_company_service),
-    current_user: AuthUserRead = Depends(require_admin_capability("admin:write")),
+    current_user: AuthUserRead = Depends(require_user_admin),
 ) -> AdminUserRead:
-    if payload.password:
-        try:
-            enforce_password_strength(payload.password)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    scope = user_admin_org_scope(current_user)
+    if scope is not None and payload.organizationId != scope:
+        _enforce(
+            "not_found",
+            current_user=current_user,
+            operation="admin.user.create",
+            resource_id=payload.organizationId,
+            not_found_detail="Organization not found.",
+        )
+    if payload.role not in assignable_roles(current_user):
+        _enforce(
+            "forbidden",
+            current_user=current_user,
+            operation="admin.user.create.role",
+            resource_id=payload.role,
+        )
     try:
-        user = await service.create_user(payload)
+        enforce_password_strength(payload.password)
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        user = await service.create_user(payload, commit=False)
+    except ValueError as exc:
+        await service.session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not user:
         raise HTTPException(status_code=404, detail="Organization not found.")
-    await service.write_audit_log(
-        current_user_id=current_user.id,
+    await _commit_security_critical_audit(
+        service.session,
+        current_user=current_user,
         action="admin.user.create",
         resource_type="user",
         resource_id=user.id,
@@ -185,8 +315,18 @@ async def get_user(
     request: Request,
     user_id: str,
     service: CompanyService = Depends(get_company_service),
-    _: AuthUserRead = Depends(require_superadmin),
+    current_user: AuthUserRead = Depends(require_user_admin),
 ) -> AdminUserRead:
+    target = await service.get_user_model(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    _enforce(
+        can_view_user(current_user, target),
+        current_user=current_user,
+        operation="admin.user.get",
+        resource_id=user_id,
+        not_found_detail="User not found.",
+    )
     user = await service.get_user(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
@@ -200,22 +340,70 @@ async def patch_user(
     user_id: str,
     payload: AdminUserPatch,
     service: CompanyService = Depends(get_company_service),
-    current_user: AuthUserRead = Depends(require_admin_capability("admin:write")),
+    current_user: AuthUserRead = Depends(require_user_admin),
+    auth_redis: Annotated[object | None, Depends(get_auth_redis)] = None,
 ) -> AdminUserRead:
-    updated = await service.patch_user(user_id, payload)
-    if not updated:
+    target = await service.get_user_model(user_id)
+    if not target:
         raise HTTPException(status_code=404, detail="User not found.")
-    await service.write_audit_log(
-        current_user_id=current_user.id,
+    sensitive = any(
+        value is not None for value in (payload.role, payload.isActive, payload.password)
+    )
+    _enforce(
+        can_manage_user(current_user, target, sensitive=sensitive),
+        current_user=current_user,
+        operation="admin.user.patch",
+        resource_id=user_id,
+        not_found_detail="User not found.",
+    )
+    if payload.role is not None and payload.role not in assignable_roles(current_user):
+        _enforce(
+            "forbidden",
+            current_user=current_user,
+            operation="admin.user.patch.role",
+            resource_id=user_id,
+        )
+    if payload.password is not None:
+        try:
+            enforce_password_strength(payload.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    service.apply_user_patch(target, payload, now=now)
+    token_repository = TokenRepository(service.session, redis=auth_redis)
+    revocations: list[SessionTokenRevocation] = []
+    if payload.password is not None or payload.isActive is False:
+        revocations = await token_repository.revoke_all_user_sessions(
+            target.id,
+            now=now,
+            commit=False,
+        )
+    await _commit_security_critical_audit(
+        service.session,
+        current_user=current_user,
         action="admin.user.patch",
         resource_type="user",
         resource_id=user_id,
-        detail={"changes": payload.model_dump(exclude_unset=True, exclude={"password"})},
+        detail={
+            "changes": payload.model_dump(exclude_unset=True, exclude={"password"}),
+            "password_changed": payload.password is not None,
+            "sessions_revoked": len(revocations),
+            "target_org": target.organization_id,
+        },
     )
+    for record in revocations:
+        await token_repository.cache_revoked_token(record.jti, record.expires_at)
+
+    updated = await service.get_user(user_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found.")
     return updated
 
 
 class ResetPasswordPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     password: str
 
 
@@ -225,18 +413,24 @@ async def reset_user_password(
     request: Request,
     user_id: str,
     payload: ResetPasswordPayload,
-    current_user: AuthUserRead = Depends(require_admin_capability("admin:write")),
+    current_user: AuthUserRead = Depends(require_user_admin),
     session: AsyncSession = Depends(get_db_session),
     auth_redis: Annotated[object | None, Depends(get_auth_redis)] = None,
 ) -> None:
+    target = await session.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    _enforce(
+        can_manage_user(current_user, target, sensitive=True),
+        current_user=current_user,
+        operation="admin.user.reset_password",
+        resource_id=user_id,
+        not_found_detail="User not found.",
+    )
     try:
         enforce_password_strength(payload.password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    target = await session.get(User, user_id)
-    if not target:
-        raise HTTPException(status_code=404, detail="User not found.")
 
     target.password_hash = hash_password(payload.password)
     reset_timestamp = datetime.now(UTC).replace(microsecond=0)
@@ -255,24 +449,14 @@ async def reset_user_password(
         target_email=target.email,
     )
 
-    try:
-        await commit_security_critical_audit(
-            session,
-            current_user_id=current_user.id,
-            action="admin.user.reset_password",
-            resource_type="user",
-            resource_id=user_id,
-            detail={"target_email": target.email, "target_org": target.organization_id},
-        )
-    except SecurityAuditWriteError as exc:
-        await session.rollback()
-        logger.error(
-            "admin.user.reset_password_audit_enforcement_failed",
-            admin_id=current_user.id,
-            target_user_id=user_id,
-            error=str(exc),
-        )
-        raise HTTPException(status_code=503, detail="Security audit subsystem unavailable. Retry later.") from exc
+    await _commit_security_critical_audit(
+        session,
+        current_user=current_user,
+        action="admin.user.reset_password",
+        resource_type="user",
+        resource_id=user_id,
+        detail={"target_email": target.email, "target_org": target.organization_id},
+    )
 
     for record in revocations:
         await token_repository.cache_revoked_token(record.jti, record.expires_at)

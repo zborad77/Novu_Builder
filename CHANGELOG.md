@@ -18,6 +18,27 @@ All notable changes to this project will be documented in this file.
   mutable `:latest` tags, and gate rendered Docker Compose configuration in CI.
 - Refresh deployment and release-readiness documentation to the v0.8.6 migration,
   readiness, staging, backup/restore and rollback contracts.
+- **Security (F0 — RBAC & tenant isolation, `docs/security/RBAC_ROLE_MATRIX.md`):**
+  - Fix SA-01: tenant managers could reset the superadmin's password, administer
+    other tenants and set their own role to `superadmin`. System administration is
+    now superadmin-only; `role_permissions` is no longer consulted.
+  - Add tenant role `admin` (company administrator, own tenant only). Superadmin
+    accounts can no longer be created, modified or reset through any HTTP API.
+  - Add revision `20261017_0057`: removes the `manager → admin:*` permission rows,
+    demotes users holding an impossible role to `technician` with token
+    invalidation and audit rows, and adds `users` role CHECK constraints.
+  - Admin password changes (PATCH and reset) enforce the password policy and revoke
+    every session; deactivation revokes sessions; user create/patch is audited
+    fail-closed.
+  - Fix SA-02: a case or offer request can only reference a client of its own tenant.
+  - Fix SA-03: unauthenticated auth routes rate-limit by client IP only, so a forged
+    `Authorization` header can no longer pick a fresh bucket.
+  - API contract changes: admin write payloads reject unknown fields (422);
+    `role` accepts only `admin | manager | technician` and defaults to
+    `technician` instead of `dispatcher`; company admins get 404 for users and
+    companies outside their tenant.
+  - Login throttle without Redis now fails closed in every environment unless
+    `AUTH_THROTTLE_DEV_FAIL_OPEN=true` is set explicitly in development.
 - `v0.8.5` remains immutable but is unsuitable for a fresh empty-database install.
   Catalog Validation Hardening moves to v0.8.7; Pricing Engine Integration and
   Proposal Generator move to v0.8.8 and v0.8.9 respectively.

@@ -43,6 +43,8 @@ AUDIT_POLICY_SECURITY_CRITICAL = "security_critical"
 # These must fail closed if their audit trail cannot be persisted.
 SECURITY_CRITICAL_AUDIT_ACTIONS: frozenset[str] = frozenset({
     "admin.impersonate",
+    "admin.user.create",
+    "admin.user.patch",
     "admin.user.reset_password",
     "auth.change_password",
 })

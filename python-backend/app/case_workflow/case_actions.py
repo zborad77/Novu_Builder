@@ -107,7 +107,10 @@ class CaseActionService:
             actor_user_id=actor_user_id,
             actor_role=actor_role,
             organization_id=organization_id,
-            is_superadmin_context=actor_role == "superadmin",
+            # For human actions resolve_org_id() yields None only for a verified
+            # superadmin (users.is_superadmin); the role string alone must not
+            # widen scope. Worker transitions have no actor and stay non-superadmin.
+            is_superadmin_context=organization_id is None and actor_user_id is not None,
             session=self.repository.session,
             work_queue=self.work_queue,
         )

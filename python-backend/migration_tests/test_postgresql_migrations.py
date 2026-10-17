@@ -21,7 +21,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-HEAD = "20261003_0056"
+HEAD = "20261017_0057"
+SUPERADMIN_FLAG_REVISION = "20261003_0056"
 PREVIOUS_HEAD = "20260527_0055"
 BASELINE_TABLES = {
     "organizations",
@@ -191,6 +192,11 @@ def _flags(engine):
         return list(connection.scalars(sa.text("SELECT is_superadmin FROM users ORDER BY id")))
 
 
+def _roles(engine):
+    with engine.connect() as connection:
+        return list(connection.scalars(sa.text("SELECT role FROM users ORDER BY id")))
+
+
 def test_empty_database_upgrade_head_and_repeat_is_noop(database):
     _cli(database, "upgrade", "head")
     assert _cli(database, "heads").strip() == f"{HEAD} (head)"
@@ -280,15 +286,18 @@ def test_empty_database_upgrade_head_and_repeat_is_noop(database):
             number = _columns(inspector, table)[field]["type"]
             assert isinstance(number, sa.Numeric) and (number.precision, number.scale) == (14, 4)
         permissions = set(connection.execute(sa.text("SELECT role, capability FROM role_permissions")))
+        # 0057 removes the manager rows seeded by 0018 (SA-01).
         assert permissions == {
             ("superadmin", "admin:read"),
             ("superadmin", "admin:write"),
             ("superadmin", "admin:jobs"),
             ("superadmin", "admin:impersonate"),
-            ("manager", "admin:read"),
-            ("manager", "admin:write"),
         }
         assert _assert_superadmin(inspector)["default"] is None
+        assert {
+            "ck_users_role_valid",
+            "ck_users_superadmin_requires_flag",
+        } <= {check["name"] for check in inspector.get_check_constraints("users")}
 
     # Exercise the actual GENERATED ALWAYS contract, not only reflected metadata.
     with database.begin() as connection:
@@ -340,6 +349,8 @@ def test_previous_head_missing_flag_backfills_false(database):
     _cli(database, "upgrade", "head")
     assert _version(database) == [HEAD]
     assert _flags(database) == [False, False]
+    # A "superadmin" role without the flag is never promoted; 0057 demotes it.
+    assert _roles(database) == ["technician", "manager"]
     with database.connect() as connection:
         assert _assert_superadmin(sa.inspect(connection))["default"] is None
 
@@ -355,6 +366,7 @@ def test_previous_head_existing_valid_flag_preserves_values(database, default):
     _cli(database, "upgrade", "head")
     assert _version(database) == [HEAD]
     assert _flags(database) == [False, True]
+    assert _roles(database) == ["technician", "manager"]
     with database.connect() as connection:
         assert _assert_superadmin(sa.inspect(connection)) == before
 
@@ -402,7 +414,8 @@ def test_frozen_baseline_owns_only_historical_objects(database):
 
 
 def test_superadmin_downgrade_drops_flag_and_reupgrade_does_not_restore_privileges(database):
-    _cli(database, "upgrade", "head")
+    # Seed at 0056: from 0057 on the role/flag mismatch below is rejected.
+    _cli(database, "upgrade", SUPERADMIN_FLAG_REVISION)
     _seed_users(database, flags=[False, True])
     _cli(database, "downgrade", PREVIOUS_HEAD)
     assert _version(database) == [PREVIOUS_HEAD]
@@ -411,3 +424,113 @@ def test_superadmin_downgrade_drops_flag_and_reupgrade_does_not_restore_privileg
         assert connection.scalar(sa.text("SELECT count(*) FROM users")) == 2
     _cli(database, "upgrade", "head")
     assert _flags(database) == [False, False]
+    assert _roles(database) == ["technician", "manager"]
+
+
+def _seed_rbac_fixture(engine):
+    """Users as an existing 0056 database may hold them, including the SA-01 escalation."""
+    rows = [
+        # id, role, is_superadmin, token_version
+        ("u_admin_flag", "superadmin", True, 0),  # legitimate CLI-created superadmin
+        ("u_escalated", "superadmin", False, 3),  # manager that PATCHed itself to "superadmin"
+        ("u_manager", "manager", False, 0),
+        ("u_dispatcher", "dispatcher", False, 1),  # former AdminUserCreate default
+        ("u_technician", "technician", False, 0),
+    ]
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text("INSERT INTO organizations (id, name, default_currency) VALUES ('org', 'Migration fixture', 'CZK')")
+        )
+        for user_id, role, flag, version in rows:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO users (id, organization_id, email, password_hash, full_name, role, is_active,"
+                    " is_superadmin, token_version)"
+                    " VALUES (:id, 'org', :email, 'unused-fixture-hash', 'Fixture', :role, true, :flag, :version)"
+                ),
+                {"id": user_id, "email": f"{user_id}@migration.test", "role": role, "flag": flag, "version": version},
+            )
+
+
+def _users(engine):
+    with engine.connect() as connection:
+        return {
+            row.id: row
+            for row in connection.execute(
+                sa.text("SELECT id, role, is_superadmin, token_version, tokens_valid_after FROM users")
+            )
+        }
+
+
+def test_rbac_repair_on_existing_database(database):
+    _cli(database, "upgrade", SUPERADMIN_FLAG_REVISION)
+    _seed_rbac_fixture(database)
+    with database.connect() as connection:
+        assert ("manager", "admin:write") in set(
+            connection.execute(sa.text("SELECT role, capability FROM role_permissions"))
+        )
+
+    _cli(database, "upgrade", "head")
+    assert _version(database) == [HEAD]
+
+    users = _users(database)
+    # Legitimate superadmin and valid tenant roles are untouched.
+    assert (users["u_admin_flag"].role, users["u_admin_flag"].is_superadmin) == ("superadmin", True)
+    assert users["u_admin_flag"].token_version == 0
+    assert users["u_manager"].role == "manager" and users["u_manager"].token_version == 0
+    assert users["u_technician"].role == "technician"
+    # Escalated and unknown roles drop to the least-privileged role; tokens die.
+    for user_id, version in (("u_escalated", 4), ("u_dispatcher", 2)):
+        assert users[user_id].role == "technician"
+        assert users[user_id].is_superadmin is False
+        assert users[user_id].token_version == version
+        assert users[user_id].tokens_valid_after is not None
+
+    with database.connect() as connection:
+        assert {row.role for row in connection.execute(sa.text("SELECT role FROM role_permissions"))} == {"superadmin"}
+        repairs = {
+            row.resource_id: row.detail
+            for row in connection.execute(
+                sa.text("SELECT resource_id, detail FROM audit_logs WHERE action = 'migration.rbac_role_repair'")
+            )
+        }
+        assert set(repairs) == {"u_escalated", "u_dispatcher"}
+        assert repairs["u_escalated"]["previous_role"] == "superadmin"
+        assert repairs["u_dispatcher"]["previous_role"] == "dispatcher"
+        revoked = connection.scalar(
+            sa.text("SELECT detail FROM audit_logs WHERE action = 'migration.rbac_permissions_revoked'")
+        )
+        assert {"role": "manager", "capability": "admin:write"} in revoked["revoked"]
+
+    # The database itself now refuses both escalation shapes.
+    for role, flag in (("superadmin", False), ("dispatcher", False)):
+        with database.connect() as connection:
+            with pytest.raises(sa.exc.IntegrityError):
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO users (id, organization_id, email, password_hash, full_name, role, is_active,"
+                        " is_superadmin) VALUES ('u_new', 'org', 'new@migration.test', 'x', 'X', :role, true, :flag)"
+                    ),
+                    {"role": role, "flag": flag},
+                )
+    with database.connect() as connection:
+        with pytest.raises(sa.exc.IntegrityError):
+            connection.execute(sa.text("UPDATE users SET role = 'superadmin' WHERE id = 'u_manager'"))
+
+    # Re-running upgrade is a no-op.
+    assert "Running upgrade" not in _cli(database, "upgrade", "head")
+
+
+def test_rbac_downgrade_drops_constraints_but_never_regrants_manager_permissions(database):
+    _cli(database, "upgrade", SUPERADMIN_FLAG_REVISION)
+    _seed_rbac_fixture(database)
+    _cli(database, "upgrade", "head")
+    _cli(database, "downgrade", SUPERADMIN_FLAG_REVISION)
+    assert _version(database) == [SUPERADMIN_FLAG_REVISION]
+    with database.connect() as connection:
+        names = {check["name"] for check in sa.inspect(connection).get_check_constraints("users")}
+        assert not names & {"ck_users_role_valid", "ck_users_superadmin_requires_flag"}
+        assert {row.role for row in connection.execute(sa.text("SELECT role FROM role_permissions"))} == {"superadmin"}
+    assert _users(database)["u_escalated"].role == "technician"
+    _cli(database, "upgrade", "head")
+    assert _version(database) == [HEAD]

@@ -13,7 +13,7 @@ The application performs a schema-version guard and fails fast if the database i
 not at the expected Alembic head. For v0.8.6 the expected head is:
 
 ```text
-20261003_0056
+20261017_0057
 ```
 
 Use the explicit Compose entrypoint override shown below. Do not rely on the
@@ -143,7 +143,7 @@ docker compose --env-file .env.production run --rm --no-deps --entrypoint alembi
 For v0.8.6, both `current` and `heads` must report:
 
 ```text
-20261003_0056
+20261017_0057
 ```
 
 Verify the database directly:
@@ -161,9 +161,29 @@ docker compose --env-file .env.production exec db \
 
 Expected:
 
-- `alembic_version.version_num = 20261003_0056`
+- `alembic_version.version_num = 20261017_0057`
 - `revoked_tokens` exists
 - `users.is_superadmin` exists and is `BOOLEAN NOT NULL`
+- `users` has CHECK constraints `ck_users_role_valid` and `ck_users_superadmin_requires_flag`
+- `role_permissions` contains only `superadmin` rows
+
+### RBAC repair in `20261017_0057` (existing databases)
+
+Upgrading an existing database removes the historical `manager → admin:*`
+permission rows and repairs any user whose role cannot be legitimate:
+`role = 'superadmin'` without `is_superadmin`, or a role outside
+`superadmin | admin | manager | technician` (for example `dispatcher`). Those
+users become `technician` and all of their tokens are invalidated. Nobody is
+promoted. Review what was repaired before handing the environment over:
+
+```bash
+docker compose --env-file .env.production exec db \
+  psql -U novu -d novu_builder -c "SELECT resource_id, detail FROM audit_logs \
+  WHERE action IN ('migration.rbac_role_repair', 'migration.rbac_permissions_revoked');"
+```
+
+Company administrators use the new tenant role `admin`. Only a superadmin can
+appoint one (`PATCH /api/v1/admin/users/{id}` with `{"role": "admin"}`).
 
 Never use `alembic stamp` to bypass a failed migration during a normal deploy.
 
@@ -286,6 +306,11 @@ superadmin assignments are therefore lost by that downgrade and cannot be
 reconstructed automatically on a later upgrade.
 
 Never downgrade this revision casually.
+
+Revision `20261017_0057` drops only its two `users` CHECK constraints on
+downgrade. It intentionally does not restore the removed manager permissions or
+the repaired roles, because restoring them would reopen the privilege escalation
+it fixes (SECURITY_AUDIT SA-01).
 
 ---
 

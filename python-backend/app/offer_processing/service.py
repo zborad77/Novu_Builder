@@ -13,8 +13,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.domain import Client
 from app.models.offer_processing import OfferRequest
 from app.offer_processing.domain import (
     OFFER_STATUS_CANCELLED,
@@ -45,6 +47,10 @@ class OfferAlreadyExistsError(Exception):
     def __init__(self, existing: OfferRequest) -> None:
         super().__init__(f"Offer request {existing.id} already exists.")
         self.existing = existing
+
+
+class OfferClientNotInOrganizationError(ValueError):
+    """client_id does not reference a client of the submitting organization."""
 
 
 class OfferLockedError(Exception):
@@ -96,6 +102,13 @@ class OfferService:
         )
         if existing is not None:
             raise OfferAlreadyExistsError(existing)
+
+        if client_id is not None:
+            owned = await self._session.scalar(
+                select(Client.id).where(Client.id == client_id, Client.organization_id == organization_id)
+            )
+            if owned is None:
+                raise OfferClientNotInOrganizationError("Client does not belong to this organization.")
 
         offer = await self._repo.create_offer_request(
             organization_id=organization_id,

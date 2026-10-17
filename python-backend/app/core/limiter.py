@@ -16,6 +16,19 @@ def _is_strict_environment() -> bool:
     return app_env not in _NON_STRICT_ENVIRONMENTS
 
 
+def client_ip_rate_limit_key(request) -> str:
+    """Bucket by client address only, ignoring any Authorization header.
+
+    Mandatory for routes that do not authenticate the caller (login, refresh,
+    logout, password reset): there the bearer token is never verified, so keying
+    on its claims would let a forged header pick a fresh bucket per request and
+    bypass the per-IP limit (SA-03).
+    """
+    if request.client:
+        return request.client.host
+    return "unknown"
+
+
 def _rate_limit_key(request) -> str:
     """Per-tenant (or per-user) rate limit key for authenticated requests; falls back to IP.
 
@@ -23,13 +36,12 @@ def _rate_limit_key(request) -> str:
       1. org:<org_id>  -- regular users; all users of the same tenant share one bucket,
                           which matches billing/enforcement semantics.
       2. user:<sub>    -- superadmins (no org claim); independent per-user bucket.
-      3. <remote IP>   -- unauthenticated or unparseable token (login, health, etc.)
+      3. <remote IP>   -- unauthenticated or unparseable token.
 
     The JWT signature is NOT validated here -- the function only reads claims to
-    derive a stable bucket key.  An attacker who forges an org/sub claim merely
-    isolates themselves to a bucket of their own choosing, which is harmless for
-    rate-limiting purposes.  Full auth validation happens independently in
-    get_current_user().
+    derive a stable bucket key. That is acceptable only on routes whose
+    dependencies reject a forged token before the handler does any work. Routes
+    that accept unauthenticated callers must use client_ip_rate_limit_key.
     """
     try:
         authorization = request.headers.get("Authorization", "")

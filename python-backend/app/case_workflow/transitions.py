@@ -110,7 +110,9 @@ _ACTION_SORT: dict[str, int] = {
 }
 
 # Roles allowed to trigger human-facing transitions.
-_MANAGER_ROLES: frozenset[str] = frozenset({"manager", "superadmin"})
+# "superadmin" is only ever held together with users.is_superadmin (enforced by
+# ck_users_superadmin_requires_flag), so the role string is safe to list here.
+_MANAGER_ROLES: frozenset[str] = frozenset({"admin", "manager", "superadmin"})
 
 
 def get_available_transitions(project: "Project", actor_role: str) -> list[TransitionMeta]:

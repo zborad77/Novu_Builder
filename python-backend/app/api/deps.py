@@ -5,6 +5,7 @@ import structlog.contextvars
 
 from app.core.audit import bind_request_audit_actor
 from app.core.config import get_settings
+from app.core.rbac import is_system_admin, is_tenant_admin, is_tenant_operator
 from app.db.session import get_db_session
 from app.case_workflow.case_actions import CaseActionService
 from app.repositories.analysis_repository import AnalysisRepository
@@ -234,11 +235,12 @@ async def require_superadmin(
     return current_user
 
 
-# Granular RBAC foundation
+# System (platform) capabilities.
 #
-# All capabilities currently map to superadmin-only. When per-role permissions
-# are introduced (for example from a DB permission table), extend _check() here
-# without changing any route signature.
+# These are held exclusively by superadmins. The role_permissions table is no
+# longer consulted: its historical manager rows granted cross-tenant platform
+# administration (SA-01) and migration 20261017_0057 removes them. Tenant-level
+# administration uses require_user_admin / app.core.rbac instead.
 ADMIN_CAPABILITIES: frozenset[str] = frozenset({
     "admin:read",
     "admin:write",
@@ -248,13 +250,9 @@ ADMIN_CAPABILITIES: frozenset[str] = frozenset({
 
 
 def require_admin_capability(capability: str):
-    """Return a FastAPI dependency that enforces the given admin capability.
+    """Return a FastAPI dependency that enforces the given system capability.
 
-    C8: checks the role_permissions table so non-superadmin roles (for example
-    manager) can be granted specific capabilities without becoming full
-    superadmin.
-
-    Superadmin always has all capabilities (enforced before the DB lookup).
+    Deny by default: only a superadmin acting as themselves passes.
     Impersonated tokens are never allowed on admin routes.
     """
     if capability not in ADMIN_CAPABILITIES:
@@ -262,7 +260,6 @@ def require_admin_capability(capability: str):
 
     async def _check(
         current_user: AuthUserRead = Depends(get_current_user),
-        session: AsyncSession = Depends(get_db_session),
     ) -> AuthUserRead:
         if current_user.impersonatedBy:
             logger.warning(
@@ -276,28 +273,41 @@ def require_admin_capability(capability: str):
         if current_user.isSuperAdmin:
             return current_user
 
-        from sqlalchemy import select as _select
-        from app.models import RolePermission
-
-        result = await session.execute(
-            _select(RolePermission).where(
-                RolePermission.role == current_user.role,
-                RolePermission.capability == capability,
-            )
+        logger.warning(
+            "SECURITY_EVENT: admin_capability_denied",
+            user_id=current_user.id,
+            role=current_user.role,
+            capability=capability,
         )
-        if result.scalar_one_or_none() is None:
-            logger.warning(
-                "SECURITY_EVENT: admin_capability_denied",
-                user_id=current_user.id,
-                role=current_user.role,
-                capability=capability,
-            )
-            raise HTTPException(status_code=403, detail=f"Permission denied: {capability!r} required.")
-
-        return current_user
+        raise HTTPException(status_code=403, detail=f"Permission denied: {capability!r} required.")
 
     _check.__name__ = f"require_{capability.replace(':', '_')}"
     return _check
+
+
+async def require_user_admin(
+    current_user: AuthUserRead = Depends(get_current_user),
+) -> AuthUserRead:
+    """Superadmin (all tenants) or company admin (own tenant only).
+
+    Which targets the caller may touch is decided per request by app.core.rbac;
+    this dependency only rejects callers with no administration role at all.
+    """
+    if current_user.impersonatedBy:
+        logger.warning(
+            "SECURITY_EVENT: impersonated_admin_access_denied",
+            user_id=current_user.id,
+            impersonated_by=current_user.impersonatedBy,
+        )
+        raise HTTPException(status_code=403, detail="Impersonated tokens cannot access admin routes.")
+    if is_system_admin(current_user) or is_tenant_admin(current_user):
+        return current_user
+    logger.warning(
+        "SECURITY_EVENT: user_admin_access_denied",
+        user_id=current_user.id,
+        role=current_user.role,
+    )
+    raise HTTPException(status_code=403, detail="Administrator access required.")
 
 
 def resolve_org_id(current_user: AuthUserRead) -> str | None:
@@ -331,8 +341,12 @@ def require_org_id(current_user: AuthUserRead) -> str:
 async def require_manager(
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> AuthUserRead:
-    """Manager or superadmin. Technician access is not allowed."""
-    if current_user.role not in ("manager", "superadmin"):
+    """Company admin, manager or superadmin. Technician access is not allowed.
+
+    Superadmin is recognised by the users.is_superadmin flag, never by the role
+    string alone.
+    """
+    if not is_tenant_operator(current_user):
         raise HTTPException(status_code=403, detail="Manager access required.")
     return current_user
 

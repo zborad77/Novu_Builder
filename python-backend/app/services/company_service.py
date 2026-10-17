@@ -1,9 +1,11 @@
+from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import write_audit_log
+from app.core.rbac import SUPERADMIN_ROLE
 from app.models import Organization, User
 from app.schemas.company import (
     AdminUserCreate,
@@ -13,7 +15,7 @@ from app.schemas.company import (
     CompanyPatch,
     CompanyRead,
 )
-from app.services.auth_service import hash_password
+from app.services.auth_service import AuthService, hash_password
 
 
 def _org_to_read(org: Organization, user_count: int = 0) -> CompanyRead:
@@ -149,18 +151,26 @@ class CompanyService:
         self,
         *,
         organization_id: str | None = None,
+        exclude_superadmins: bool = False,
         limit: int,
         offset: int,
     ) -> tuple[list[AdminUserRead], int]:
-        count_query = select(func.count(User.id)).select_from(User)
+        filters = []
         if organization_id:
-            count_query = count_query.where(User.organization_id == organization_id)
+            filters.append(User.organization_id == organization_id)
+        if exclude_superadmins:
+            filters.append(User.is_superadmin.is_(False))
+            filters.append(User.role != SUPERADMIN_ROLE)
+
+        count_query = select(func.count(User.id)).select_from(User).where(*filters)
         total_result = await self.session.execute(count_query)
         total = int(total_result.scalar_one() or 0)
 
-        query = select(User, Organization.name).join(Organization, User.organization_id == Organization.id)
-        if organization_id:
-            query = query.where(User.organization_id == organization_id)
+        query = (
+            select(User, Organization.name)
+            .join(Organization, User.organization_id == Organization.id)
+            .where(*filters)
+        )
         query = query.order_by(Organization.name, User.full_name, User.id).offset(offset).limit(limit)
         result = await self.session.execute(query)
         return [_user_to_admin_read(user, org_name) for user, org_name in result.all()], total
@@ -177,7 +187,10 @@ class CompanyService:
         user, org_name = row
         return _user_to_admin_read(user, org_name)
 
-    async def create_user(self, payload: AdminUserCreate) -> AdminUserRead | None:
+    async def get_user_model(self, user_id: str) -> User | None:
+        return await self.session.get(User, user_id)
+
+    async def create_user(self, payload: AdminUserCreate, *, commit: bool = True) -> AdminUserRead | None:
         org = await self.session.get(Organization, payload.organizationId)
         if not org:
             return None
@@ -193,17 +206,23 @@ class CompanyService:
             full_name=payload.fullName.strip(),
             role=payload.role,
             is_active=payload.isActive,
+            # Superadmins are created only with the server CLI, never via API.
             is_superadmin=False,
         )
         self.session.add(user)
-        await self.session.commit()
-        await self.session.refresh(user)
+        if commit:
+            await self.session.commit()
+            await self.session.refresh(user)
+        else:
+            await self.session.flush()
         return _user_to_admin_read(user, org.name)
 
-    async def patch_user(self, user_id: str, payload: AdminUserPatch) -> AdminUserRead | None:
-        user = await self.session.get(User, user_id)
-        if not user:
-            return None
+    def apply_user_patch(self, user: User, payload: AdminUserPatch, *, now: datetime) -> None:
+        """Stage profile/role/activation/password changes without committing.
+
+        Authorization is the caller's job (app.core.rbac). A password change
+        always invalidates every token issued before ``now``.
+        """
         if payload.fullName is not None:
             user.full_name = payload.fullName.strip()
         if payload.role is not None:
@@ -212,6 +231,4 @@ class CompanyService:
             user.is_active = payload.isActive
         if payload.password is not None:
             user.password_hash = hash_password(payload.password)
-        await self.session.commit()
-        await self.session.refresh(user)
-        return await self.get_user(user_id)
+            AuthService.invalidate_user_token_state(user, now=now)

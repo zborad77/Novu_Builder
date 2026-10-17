@@ -24,7 +24,7 @@ def _mock_request() -> StarletteRequest:
     return StarletteRequest({"type": "http", "method": "GET", "path": "/", "headers": []})
 
 import app.api.routes.admin as admin_module
-from app.api.deps import ADMIN_CAPABILITIES, require_admin_capability, require_superadmin
+from app.api.deps import ADMIN_CAPABILITIES, require_admin_capability, require_superadmin, require_user_admin
 from app.api.routes.admin import (
     admin_retry_job,
     create_company,
@@ -55,7 +55,9 @@ def _has_admin_access_dep(endpoint) -> bool:
         dep = getattr(param.default, "dependency", None)
         if dep is None:
             continue
-        if dep is require_superadmin:
+        # F0: user/company administration is shared by superadmin and company
+        # admins; per-target rules are enforced in app.core.rbac.
+        if dep is require_superadmin or dep is require_user_admin:
             return True
         # require_admin_capability returns a closure whose name starts with require_admin_
         name = getattr(dep, "__name__", "")
@@ -95,13 +97,14 @@ class TestAdminRoutesRequireSuperadmin:
 
     @pytest.mark.parametrize("endpoint", _read_routes)
     def test_read_route_depends_on_require_superadmin(self, endpoint):
+        # F0: list_users is open to company admins, scoped to their tenant.
         sig = inspect.signature(endpoint)
         found = any(
-            getattr(param.default, "dependency", None) is require_superadmin
+            getattr(param.default, "dependency", None) in (require_superadmin, require_user_admin)
             for param in sig.parameters.values()
         )
         assert found, (
-            f"{endpoint.__name__} must depend on require_superadmin"
+            f"{endpoint.__name__} must depend on require_superadmin or require_user_admin"
         )
 
 
@@ -143,12 +146,12 @@ class TestAdminWriteAuditLogs:
     def test_create_user_writes_audit_log(self):
         src = _source(create_user)
         assert "admin.user.create" in src
-        assert "write_audit_log(" in src
+        assert "commit_security_critical_audit(" in src
 
     def test_patch_user_writes_audit_log(self):
         src = _source(patch_user)
         assert "admin.user.patch" in src
-        assert "write_audit_log(" in src
+        assert "commit_security_critical_audit(" in src
 
     def test_admin_retry_job_writes_audit_log(self):
         src = _source(admin_retry_job)
@@ -168,6 +171,15 @@ class TestAdminWriteAuditLogs:
 
 # ── 4. list_users passes org_id filter ─────────────────────────────────────────
 
+def _superadmin():
+    from app.schemas.auth import AuthUserRead
+
+    return AuthUserRead(
+        id="sa-1", email="sa@test.com", fullName="SA", role="superadmin",
+        isActive=True, organizationId="org-1", isSuperAdmin=True,
+    )
+
+
 class TestListUsersOrgFilter:
 
     def test_list_users_passes_org_id_to_service_source(self):
@@ -180,10 +192,14 @@ class TestListUsersOrgFilter:
         mock_service = MagicMock()
         mock_service.list_users = AsyncMock(return_value=([], 0))
 
-        result = await list_users(request=_mock_request(), org_id="org-abc", limit=100, offset=0, service=mock_service, _=MagicMock())
+        result = await list_users(
+            request=_mock_request(), org_id="org-abc", limit=100, offset=0,
+            service=mock_service, current_user=_superadmin(),
+        )
 
         mock_service.list_users.assert_called_once_with(
             organization_id="org-abc",
+            exclude_superadmins=False,
             limit=100,
             offset=0,
         )
@@ -197,10 +213,14 @@ class TestListUsersOrgFilter:
         mock_service = MagicMock()
         mock_service.list_users = AsyncMock(return_value=([], 0))
 
-        result = await list_users(request=_mock_request(), org_id=None, limit=100, offset=25, service=mock_service, _=MagicMock())
+        result = await list_users(
+            request=_mock_request(), org_id=None, limit=100, offset=25,
+            service=mock_service, current_user=_superadmin(),
+        )
 
         mock_service.list_users.assert_called_once_with(
             organization_id=None,
+            exclude_superadmins=False,
             limit=100,
             offset=25,
         )
@@ -346,6 +366,8 @@ class TestAdminPasswordResetInvalidatesTokens:
         mock_user.id = "user-1"
         mock_user.email = "user@test.com"
         mock_user.organization_id = "org-1"
+        mock_user.is_superadmin = False
+        mock_user.role = "technician"
         mock_user.tokens_valid_after = None
         mock_user.token_version = 0
 
@@ -403,6 +425,8 @@ class TestAdminPasswordResetInvalidatesTokens:
         mock_user.id = "user-1"
         mock_user.email = "user@test.com"
         mock_user.organization_id = "org-1"
+        mock_user.is_superadmin = False
+        mock_user.role = "technician"
         mock_user.tokens_valid_after = None
         mock_user.token_version = 0
 

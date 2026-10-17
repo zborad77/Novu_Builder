@@ -1,7 +1,7 @@
 # NOVU Builder — Release Readiness Checklist
 
 **Applies to:** v0.8.6 release candidate  
-**Alembic HEAD:** `20261003_0056`
+**Alembic HEAD:** `20261017_0057`
 
 Use this checklist for the final staging acceptance before tagging a release.
 
@@ -44,10 +44,12 @@ Use this checklist for the final staging acceptance before tagging a release.
 | 2.2 | Backup exists before upgrading a non-empty environment | MUST |
 | 2.3 | Backend and worker are stopped before upgrade migration | MUST |
 | 2.4 | Migration is run explicitly with `--entrypoint alembic` | MUST |
-| 2.5 | `alembic current` = `20261003_0056` | MUST |
-| 2.6 | `alembic heads` = one head, `20261003_0056` | MUST |
+| 2.5 | `alembic current` = `20261017_0057` | MUST |
+| 2.6 | `alembic heads` = one head, `20261017_0057` | MUST |
 | 2.7 | `revoked_tokens` exists | MUST |
 | 2.8 | `users.is_superadmin` is `BOOLEAN NOT NULL` | MUST |
+| 2.8a | `users` has `ck_users_role_valid` and `ck_users_superadmin_requires_flag`; `role_permissions` holds only `superadmin` rows | MUST |
+| 2.8b | `migration.rbac_role_repair` audit rows reviewed and every repaired user confirmed or re-assigned by a superadmin | MUST |
 | 2.9 | Re-running `alembic upgrade head` is a no-op | MUST |
 
 The backend container must **not** apply migrations automatically on startup.

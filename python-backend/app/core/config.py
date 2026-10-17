@@ -358,6 +358,9 @@ class Settings(BaseSettings):
     database_url_sync_override: str | None = Field(default=None, alias="DATABASE_URL_SYNC")
     db_auto_create_schema: bool = Field(default=True, alias="DB_AUTO_CREATE_SCHEMA")
     db_seed_on_startup: bool = Field(default=False, alias="DB_SEED_ON_STARTUP")
+    # Local-only escape hatch: let login work without Redis by skipping the
+    # per-account throttle. Off by default; rejected outside development.
+    auth_throttle_dev_fail_open: bool = Field(default=False, alias="AUTH_THROTTLE_DEV_FAIL_OPEN")
     db_pool_size: int = Field(default=10, alias="DB_POOL_SIZE")
     db_max_overflow: int = Field(default=10, alias="DB_MAX_OVERFLOW")
     db_pool_timeout: int = Field(default=30, alias="DB_POOL_TIMEOUT")
@@ -727,6 +730,19 @@ class Settings(BaseSettings):
                 "Disable startup seeding outside development; production must never seed default accounts."
             )
         return self
+
+    @model_validator(mode="after")
+    def _check_auth_throttle_fail_open_guard(self) -> "Settings":
+        if self.auth_throttle_dev_fail_open and self.app_env.lower() != "development":
+            raise ValueError(
+                "AUTH_THROTTLE_DEV_FAIL_OPEN=true is allowed only in APP_ENV='development'. "
+                "Login throttling must fail closed when Redis is unavailable."
+            )
+        return self
+
+    @property
+    def auth_throttle_fail_open(self) -> bool:
+        return self.app_env.lower() == "development" and self.auth_throttle_dev_fail_open
 
     @model_validator(mode="after")
     def _check_strict_runtime_profile_explicitness(self) -> "Settings":

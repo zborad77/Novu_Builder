@@ -647,5 +647,14 @@ class ProjectService:
             if payload_field in payload:
                 changes[model_field] = payload[payload_field]
 
+        # The client must belong to the case's own tenant (checked against the
+        # project row, so it also holds for superadmin calls with no org scope).
+        new_client_id = changes.get("client_id")
+        if new_client_id is not None and not await self.repository.client_belongs_to_org(
+            new_client_id, project.organization_id
+        ):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="Client does not belong to this organization.")
+
         updated = await self.repository.update_project(project, changes)
         return build_project_detail(updated)

@@ -12,7 +12,7 @@ from app.core.account_limiter import (
 )
 from app.core.audit import SecurityAuditWriteError
 from app.core.config import get_settings
-from app.core.limiter import limiter
+from app.core.limiter import client_ip_rate_limit_key, limiter
 from app.core.metrics import AUTH_FAILURES_TOTAL, metric_labels, normalize_tenant_metric_label
 from app.core.security import enforce_password_strength
 from app.repositories.token_repository import TokenStateBackendUnavailableError
@@ -186,7 +186,7 @@ async def _enforce_account_throttle(
             redis_client=shared_redis,
         )
     except AccountThrottleBackendUnavailableError as exc:
-        if settings.app_env == "development":
+        if settings.auth_throttle_fail_open:
             logger.warning(
                 "auth.throttle_check_skipped_no_redis",
                 endpoint=endpoint,
@@ -227,7 +227,7 @@ async def _enforce_account_throttle(
 
 
 @router.post("/login", response_model=LoginResponse)
-@limiter.limit(get_settings().rate_limit_login)
+@limiter.limit(get_settings().rate_limit_login, key_func=client_ip_rate_limit_key)
 async def login(
     request: Request,
     payload: LoginRequest,
@@ -245,7 +245,7 @@ async def login(
         try:
             await record_login_failure(payload.email, settings.redis_url, redis_client=shared_redis)
         except AccountThrottleBackendUnavailableError as exc:
-            if settings.app_env != "development":
+            if not settings.auth_throttle_fail_open:
                 _raise_auth_protection_unavailable(
                     request,
                     endpoint="login",
@@ -265,7 +265,7 @@ async def login(
     try:
         await reset_login_failures(payload.email, settings.redis_url, redis_client=shared_redis)
     except AccountThrottleBackendUnavailableError as exc:
-        if settings.app_env != "development":
+        if not settings.auth_throttle_fail_open:
             await _revoke_login_result(
                 service,
                 result,
@@ -293,7 +293,7 @@ async def login(
 
 
 @router.post("/refresh", response_model=LoginResponse)
-@limiter.limit(get_settings().rate_limit_login)
+@limiter.limit(get_settings().rate_limit_login, key_func=client_ip_rate_limit_key)
 async def refresh(
     request: Request,
     payload: RefreshRequest,
@@ -332,7 +332,7 @@ async def refresh(
 
 
 @router.post("/logout", response_model=LogoutResponse)
-@limiter.limit(get_settings().rate_limit_login)
+@limiter.limit(get_settings().rate_limit_login, key_func=client_ip_rate_limit_key)
 async def logout(
     request: Request,
     payload: LogoutRequest,
@@ -561,7 +561,7 @@ _RESET_RETIRED_DETAIL = (
 
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
-@limiter.limit(_RESET_RATE)
+@limiter.limit(_RESET_RATE, key_func=client_ip_rate_limit_key)
 async def forgot_password(
     request: Request,
 ) -> ForgotPasswordResponse:
@@ -575,7 +575,7 @@ async def forgot_password(
 
 
 @router.post("/reset-password", response_model=ResetPasswordResponse)
-@limiter.limit(_RESET_RATE)
+@limiter.limit(_RESET_RATE, key_func=client_ip_rate_limit_key)
 async def reset_password(
     request: Request,
 ) -> ResetPasswordResponse:
