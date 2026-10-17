@@ -3,3 +3,4 @@
 deploy/linux/** text eol=lf
 *.sh text eol=lf
 python-backend/docker-entrypoint.sh text eol=lf
+docs/security/gateway-allowlist.json text eol=lf
