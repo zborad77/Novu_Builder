@@ -51,6 +51,18 @@ All notable changes to this project will be documented in this file.
     rejected in production; uvicorn runs with `--no-proxy-headers`; nginx gets a
     fixed address on a dedicated Compose network; rate-limit counters are shared
     through Redis and fail closed (503).
+- F0.3 photo ownership and permanent deletion (`docs/security/PHOTO_DELETION.md`):
+  - `project_photos.uploaded_by_user_id` is set by the server from the uploader;
+    technicians soft-delete/restore only their own photos, legacy photos (NULL)
+    stay with managers/company admins. Revision `20261017_0059` also adds the
+    `purge_pending` photo status.
+  - Permanent deletion with confirmation: company admins via
+    `POST /cases/{id}/images/{image_id}/purge`, superadmins only via
+    `POST /admin/photos/{photo_id}/purge`. Audited fail-closed, expires the case's
+    exports, removes original and derived files, retried by the worker when storage
+    is down (202 `purge_pending`).
+  - `scripts/reapply_photo_purges.py` re-applies permanent deletions after a
+    backup restore.
 - Restore the 51 documents removed by the local `docs-cleanup` commit; stop
   versioning personal editor metadata (`.workspace/`, `.novuai/`, `*.code-workspace`).
 - Tests no longer read a developer's local `python-backend/.env`; the

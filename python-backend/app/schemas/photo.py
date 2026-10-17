@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class PhotoVariant(BaseModel):
@@ -92,6 +92,21 @@ class DeletedPhotoRead(BaseModel):
 
 class DeletedPhotoListResponse(BaseModel):
     items: list[DeletedPhotoRead]
+
+
+class PurgePhotoRequest(BaseModel):
+    """Permanent deletion must be confirmed by repeating the photo id."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    confirmImageId: str
+
+
+class PurgePhotoResponse(BaseModel):
+    imageId: str
+    # "purged": storage removed. "purge_pending": authorised and hidden; the
+    # worker finishes storage removal (storage was unavailable).
+    status: Literal["purged", "purge_pending"]
 
 
 class PhotoMoveRequest(BaseModel):

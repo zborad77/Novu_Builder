@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Project, ProjectPhoto
+from app.models import Project, ProjectExport, ProjectPhoto
 
 
 class PhotoRepository:
@@ -100,12 +100,18 @@ class PhotoRepository:
         limit: int = 100,
         deleted_before: datetime | None = None,
     ) -> Sequence[ProjectPhoto]:
-        """Photos whose restore window has ended (or that predate the window)."""
-        query = select(ProjectPhoto).where(ProjectPhoto.status == "pending_delete")
+        """Photos whose storage must be removed now.
+
+        Soft-deleted photos qualify once their restore window has ended (or when
+        they predate the window); purge_pending photos always qualify, so a
+        permanent deletion interrupted by a storage outage is retried.
+        """
+        soft_deleted = ProjectPhoto.status == "pending_delete"
         if deleted_before is not None:
-            query = query.where(
-                or_(ProjectPhoto.deleted_at.is_(None), ProjectPhoto.deleted_at <= deleted_before)
+            soft_deleted = soft_deleted & or_(
+                ProjectPhoto.deleted_at.is_(None), ProjectPhoto.deleted_at <= deleted_before
             )
+        query = select(ProjectPhoto).where(or_(soft_deleted, ProjectPhoto.status == "purge_pending"))
         result = await self.session.execute(
             query.order_by(ProjectPhoto.created_at.asc(), ProjectPhoto.id.asc()).limit(limit)
         )
@@ -121,16 +127,48 @@ class PhotoRepository:
         )
         return result.scalar_one_or_none()
 
-    async def list_restorable_photos(self, project_id: str) -> Sequence[ProjectPhoto]:
+    async def list_restorable_photos(
+        self,
+        project_id: str,
+        *,
+        uploaded_by_user_id: str | None = None,
+    ) -> Sequence[ProjectPhoto]:
+        query = select(ProjectPhoto).where(
+            ProjectPhoto.project_id == project_id,
+            ProjectPhoto.status == "pending_delete",
+        )
+        if uploaded_by_user_id is not None:
+            query = query.where(ProjectPhoto.uploaded_by_user_id == uploaded_by_user_id)
         result = await self.session.execute(
-            select(ProjectPhoto)
-            .where(
-                ProjectPhoto.project_id == project_id,
-                ProjectPhoto.status == "pending_delete",
-            )
-            .order_by(ProjectPhoto.deleted_at.desc(), ProjectPhoto.id.asc())
+            query.order_by(ProjectPhoto.deleted_at.desc(), ProjectPhoto.id.asc())
         )
         return result.scalars().all()
+
+    async def get_photo_any_status(
+        self,
+        photo_id: str,
+        *,
+        project_id: str | None = None,
+    ) -> ProjectPhoto | None:
+        """Lookup for permanent deletion, which must also reach soft-deleted rows."""
+        query = select(ProjectPhoto).where(ProjectPhoto.id == photo_id)
+        if project_id is not None:
+            query = query.where(ProjectPhoto.project_id == project_id)
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def expire_project_exports(self, project_id: str, *, now: datetime) -> int:
+        """Make every export of the case unreachable now (they may embed the photo).
+
+        GET /exports/{id} rejects expired exports immediately; the worker's export
+        cleanup removes their files and rows. Does not commit.
+        """
+        result = await self.session.execute(
+            update(ProjectExport)
+            .where(ProjectExport.project_id == project_id, ProjectExport.expires_at > now)
+            .values(expires_at=now)
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def clear_primary(self, project_id: str) -> None:
         await self.session.execute(

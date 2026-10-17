@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from app.models import User
+    from app.models import ProjectPhoto, User
     from app.schemas.auth import AuthUserRead
 
 
@@ -112,6 +112,29 @@ def can_manage_user(actor: AuthUserRead, target: User, *, sensitive: bool) -> De
     if is_tenant_admin(actor) and target.role == TENANT_ADMIN_ROLE:
         return "forbidden"
     return "allow"
+
+
+def can_soft_delete_photo(actor: AuthUserRead, photo: ProjectPhoto) -> Decision:
+    """Soft delete / restore / see in trash. Tenant scope is checked by the caller.
+
+    Managers and company admins handle every photo of their tenant. A technician
+    only handles photos the server recorded as uploaded by them; photos with an
+    unknown author (NULL) are never a technician's.
+    """
+    if is_tenant_operator(actor):
+        return "allow"
+    if photo.uploaded_by_user_id is not None and photo.uploaded_by_user_id == actor.id:
+        return "allow"
+    return "forbidden"
+
+
+def can_purge_photo_in_tenant(actor: AuthUserRead) -> Decision:
+    """Permanent deletion through the tenant API: company admins only.
+
+    Superadmins must use the system administration endpoint, which audits the
+    cross-tenant action separately; managers and technicians are refused.
+    """
+    return "allow" if is_tenant_admin(actor) else "forbidden"
 
 
 def can_manage_company(actor: AuthUserRead, company_id: str) -> Decision:

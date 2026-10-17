@@ -92,24 +92,12 @@ Schváleno 17. 10. 2026. Všechny operace navíc kontrolují firmu na backendu: 
 | Detail / stažení exportu | `GET /exports/{id}` | ✅ | ✅ | ✅ | ❌ |
 | Nahrání fotky, přesun, primární, referenční | `/cases/{id}/images*` | ✅ | ✅ | ✅ | ✅ |
 | Měření, markery | `/measurements*`, `/markers*` | ✅ | ✅ | ✅ | ✅ |
-| Smazání fotky (soft delete) | `DELETE /cases/{id}/images/{image_id}` | ✅ | ✅ | ✅ | ❌ (viz níže) |
-| Koš a obnova fotky | `GET /cases/{id}/images/deleted`, `POST …/images/{image_id}/restore` | ✅ | ✅ | ✅ | ❌ |
+| Smazání fotky (soft delete) | `DELETE /cases/{id}/images/{image_id}` | ✅ | ✅ | ✅ | ✅ jen vlastní (F0.3) |
+| Koš a obnova fotky | `GET /cases/{id}/images/deleted`, `POST …/images/{image_id}/restore` | ✅ | ✅ | ✅ | ✅ jen vlastní (F0.3) |
+| Trvalé smazání fotky | `POST /cases/{id}/images/{image_id}/purge` | ❌ → `POST /admin/photos/{id}/purge` | ✅ | ❌ | ❌ |
 | Správa uživatelů a profilu firmy | `/admin/users*`, `/admin/companies/{id}` | ✅ | ✅ | ❌ | ❌ |
 
-**Mazání fotek:**
-- Smazání je soft delete. Fotka přejde do `pending_delete` a uloží se `deleted_at` a `deleted_by_user_id` (migrace `20261017_0058`).
-- Fotka zmizí z API, detailu zakázky i exportů.
-- Akce se auditují jako `image.delete` a `image.restore`, `resource_id` je ID fotky.
-- Objekty v úložišti (MinIO/lokální disk) smaže worker až po `PHOTO_DELETE_RETENTION_HOURS` (výchozí 168 h). Do té doby jde fotka obnovit.
-- Fotky smazané před migrací `0058` nemají `deleted_at`, a proto se smažou hned jako dřív.
-
-**Proč technik zatím nesmí mazat ani vlastní fotky:**
-- `project_photos` nemá autora nahrání, takže „vlastní fotku“ nejde spolehlivě určit.
-- Návrh řešení:
-  1. sloupec `uploaded_by_user_id` vyplňovaný při uploadu,
-  2. technik smí smazat fotku jen tehdy, když `uploaded_by_user_id = jeho id` a zakázka není zamčená,
-  3. starší fotky bez autora smaže jen manager nebo admin.
-- Implementace čeká na schválení.
+**Mazání fotek:** životní cyklus, vlastnictví (`uploaded_by_user_id`), trvalé smazání, chování při výpadku úložiště a zálohy jsou popsané v [PHOTO_DELETION.md](PHOTO_DELETION.md).
 
 ## 3. Databázové pojistky
 
@@ -130,7 +118,8 @@ Schváleno 17. 10. 2026. Všechny operace navíc kontrolují firmu na backendu: 
 | `POST /auth/login`, `/refresh`, `/logout`, `/forgot-password`, `/reset-password` | rate limit podle neověřeného JWT | rate limit jen podle IP klienta |
 | Endpointy v 2.5 označené ❌ pro technika | technik prošel | 403 `Manager access required.` |
 | `DELETE /cases/{id}/images/{image_id}` | technik smazal, úložiště se vyčistilo do 30 s | jen manager/admin; obnova možná po dobu retence |
-| `GET /cases/{id}/images/deleted`, `POST /cases/{id}/images/{image_id}/restore` | neexistovalo | nové (aditivní) |
+| `GET /cases/{id}/images/deleted`, `POST /cases/{id}/images/{image_id}/restore` | neexistovalo | nové (aditivní); technik jen vlastní fotky |
+| `POST /cases/{id}/images/{image_id}/purge`, `POST /admin/photos/{photo_id}/purge` | neexistovalo | nové (aditivní), potvrzení `confirmImageId`, 200/202 |
 | Výpadek Redisu u rate limitu (produkce) | — (počítadla v paměti procesu) | 503 (fail-closed), počítadla sdílená v Redisu |
 
 Tvar odpovědí se nemění.

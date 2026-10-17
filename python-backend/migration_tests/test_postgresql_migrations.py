@@ -21,7 +21,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-HEAD = "20261017_0058"
+HEAD = "20261017_0059"
+SOFT_DELETE_REVISION = "20261017_0058"
 RBAC_REVISION = "20261017_0057"
 SUPERADMIN_FLAG_REVISION = "20261003_0056"
 PREVIOUS_HEAD = "20260527_0055"
@@ -581,3 +582,86 @@ def test_photo_soft_delete_columns_keep_existing_pending_deletes(database):
     with database.connect() as connection:
         assert "deleted_at" not in _columns(sa.inspect(connection), "project_photos")
         assert connection.scalar(sa.text("SELECT status FROM project_photos WHERE id = 'pho'")) == "pending_delete"
+
+
+def test_photo_ownership_and_purge_state_on_existing_database(database):
+    _cli(database, "upgrade", SOFT_DELETE_REVISION)
+    with database.begin() as connection:
+        connection.execute(
+            sa.text("INSERT INTO organizations (id, name, default_currency) VALUES ('org', 'Migration fixture', 'CZK')")
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO users (id, organization_id, email, password_hash, full_name, role, is_active,"
+                " is_superadmin) VALUES ('usr', 'org', 'usr@migration.test', 'x', 'Fixture', 'manager', true, false)"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO projects (id, organization_id, created_by_user_id, title, status)"
+                " VALUES ('prj', 'org', 'usr', 'Fixture', 'draft')"
+            )
+        )
+        for photo_id, status in (("pho_active", "active"), ("pho_soft", "pending_delete")):
+            connection.execute(
+                sa.text(
+                    "INSERT INTO project_photos (id, project_id, status, storage_key, original_filename, mime_type,"
+                    " file_size, processing_status, is_primary, is_analysis_reference, sort_order)"
+                    " VALUES (:id, 'prj', :status, 'k', 'a.jpg', 'image/jpeg', 1, 'ready', false, false, 1)"
+                ),
+                {"id": photo_id, "status": status},
+            )
+        with pytest.raises(sa.exc.IntegrityError):
+            with connection.begin_nested():
+                connection.execute(sa.text("UPDATE project_photos SET status = 'purge_pending' WHERE id = 'pho_active'"))
+
+    _cli(database, "upgrade", "head")
+    assert _version(database) == [HEAD]
+    with database.begin() as connection:
+        # Existing photos keep an unknown author; nothing is inferred.
+        assert set(connection.execute(sa.text("SELECT id, uploaded_by_user_id FROM project_photos"))) == {
+            ("pho_active", None),
+            ("pho_soft", None),
+        }
+        connection.execute(sa.text("UPDATE project_photos SET uploaded_by_user_id = 'usr' WHERE id = 'pho_soft'"))
+        connection.execute(sa.text("UPDATE project_photos SET status = 'purge_pending' WHERE id = 'pho_active'"))
+        with pytest.raises(sa.exc.IntegrityError):
+            with connection.begin_nested():
+                connection.execute(sa.text("UPDATE project_photos SET status = 'gone' WHERE id = 'pho_active'"))
+
+    # Downgrade refuses while a permanent deletion is unfinished.
+    output = _cli(database, "downgrade", SOFT_DELETE_REVISION, succeeds=False)
+    assert "purge_pending" in output
+    assert _version(database) == [HEAD]
+
+    with database.begin() as connection:
+        connection.execute(sa.text("UPDATE project_photos SET status = 'deleted' WHERE id = 'pho_active'"))
+        connection.execute(sa.text("DELETE FROM projects WHERE id = 'prj'"))  # cascade: photos
+        connection.execute(
+            sa.text(
+                "INSERT INTO projects (id, organization_id, created_by_user_id, title, status)"
+                " VALUES ('prj2', 'org', 'usr', 'Fixture', 'draft')"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO users (id, organization_id, email, password_hash, full_name, role, is_active,"
+                " is_superadmin) VALUES ('tech', 'org', 'tech@migration.test', 'x', 'T', 'technician', true, false)"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO project_photos (id, project_id, status, storage_key, original_filename, mime_type,"
+                " file_size, processing_status, is_primary, is_analysis_reference, sort_order, uploaded_by_user_id)"
+                " VALUES ('pho_tech', 'prj2', 'active', 'k', 'a.jpg', 'image/jpeg', 1, 'ready', false, false, 1, 'tech')"
+            )
+        )
+        # Removing the author keeps the photo and clears ownership.
+        connection.execute(sa.text("DELETE FROM users WHERE id = 'tech'"))
+        assert connection.execute(
+            sa.text("SELECT status, uploaded_by_user_id FROM project_photos WHERE id = 'pho_tech'")
+        ).one() == ("active", None)
+
+    _cli(database, "downgrade", SOFT_DELETE_REVISION)
+    with database.connect() as connection:
+        assert "uploaded_by_user_id" not in _columns(sa.inspect(connection), "project_photos")

@@ -1,13 +1,15 @@
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
 from typing import cast
 
-from app.api.deps import get_current_user, get_photo_service, get_project_service, require_manager, resolve_org_id
-from app.core.audit import log_cross_tenant_denied
+from app.api.deps import get_current_user, get_photo_service, get_project_service, resolve_org_id
+from app.api.photo_purge import purge_photo_with_audit
+from app.core.audit import log_cross_tenant_denied, mark_request_audited
 from app.core.config import get_settings
 from app.core.limiter import limiter
 from app.core.metrics import UPLOAD_REJECTIONS_TOTAL, metric_labels
+from app.core.rbac import Decision, can_purge_photo_in_tenant, can_soft_delete_photo, is_tenant_operator
 from app.schemas.auth import AuthUserRead
 from app.schemas.photo import (
     AnalysisReferencePhotoResponse,
@@ -19,6 +21,8 @@ from app.schemas.photo import (
     PhotoMoveRequest,
     PhotoUploadResponse,
     PrimaryPhotoResponse,
+    PurgePhotoRequest,
+    PurgePhotoResponse,
     RestorePhotoResponse,
     UploadedPhotoPayload,
 )
@@ -123,6 +127,8 @@ async def upload_case_images(
                         project,
                         cast(UploadFile, file),
                         is_primary=is_primary and index == 0,
+                        # Author comes from the verified identity only, never the form.
+                        uploaded_by_user_id=current_user.id,
                     )
                 )
             except UploadValidationError as exc:
@@ -264,13 +270,24 @@ async def move_case_image(
     return PhotoListResponse(items=items, meta=PhotoListMeta.model_validate(meta))
 
 
+def _enforce_photo_decision(decision: Decision, *, current_user: AuthUserRead, image_id: str, operation: str) -> None:
+    if decision == "allow":
+        return
+    logger.warning(
+        "SECURITY_EVENT: photo_operation_denied",
+        operation=operation,
+        user_id=current_user.id,
+        role=current_user.role,
+        image_id=image_id,
+    )
+    raise HTTPException(status_code=403, detail="Permission denied.")
+
+
 @router.delete("/cases/{case_id}/images/{image_id}", response_model=DeletePhotoResponse)
 async def delete_case_image(
     case_id: str,
     image_id: str,
-    # Technicians may not delete: photos carry no uploader, so "own photo"
-    # cannot be proven yet (SA-06; see docs/security/RBAC_ROLE_MATRIX.md).
-    current_user: AuthUserRead = Depends(require_manager),
+    current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> DeletePhotoResponse:
@@ -278,6 +295,16 @@ async def delete_case_image(
     project = await project_service.get_project_lean(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
+    photo = await photo_service.get_active_photo(case_id, image_id)
+    if not photo:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    # Managers/company admins: any photo of the tenant. Technicians: own uploads only.
+    _enforce_photo_decision(
+        can_soft_delete_photo(current_user, photo),
+        current_user=current_user,
+        image_id=image_id,
+        operation="image.delete",
+    )
     deleted = await photo_service.delete_photo(case_id, image_id, deleted_by_user_id=current_user.id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Image not found.")
@@ -287,7 +314,7 @@ async def delete_case_image(
 @router.get("/cases/{case_id}/images/deleted", response_model=DeletedPhotoListResponse)
 async def list_deleted_case_images(
     case_id: str,
-    current_user: AuthUserRead = Depends(require_manager),
+    current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> DeletedPhotoListResponse:
@@ -295,7 +322,9 @@ async def list_deleted_case_images(
     project = await project_service.get_project_lean(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
-    photos = await photo_service.list_restorable_photos(case_id)
+    # A technician's trash shows only photos they uploaded themselves.
+    own_only = None if is_tenant_operator(current_user) else current_user.id
+    photos = await photo_service.list_restorable_photos(case_id, uploaded_by_user_id=own_only)
     return DeletedPhotoListResponse(
         items=[
             DeletedPhotoRead(
@@ -313,7 +342,7 @@ async def list_deleted_case_images(
 async def restore_case_image(
     case_id: str,
     image_id: str,
-    current_user: AuthUserRead = Depends(require_manager),
+    current_user: AuthUserRead = Depends(get_current_user),
     project_service: ProjectService = Depends(get_project_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> RestorePhotoResponse:
@@ -321,7 +350,59 @@ async def restore_case_image(
     project = await project_service.get_project_lean(case_id, organization_id=org_id)
     if not project:
         raise HTTPException(status_code=404, detail="Case not found.")
+    photo = await photo_service.get_restorable_photo(case_id, image_id)
+    if not photo:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    _enforce_photo_decision(
+        can_soft_delete_photo(current_user, photo),
+        current_user=current_user,
+        image_id=image_id,
+        operation="image.restore",
+    )
     restored = await photo_service.restore_photo(case_id, image_id)
     if not restored:
         raise HTTPException(status_code=404, detail="Image not found.")
     return RestorePhotoResponse(message="Image restored.")
+
+
+@router.post("/cases/{case_id}/images/{image_id}/purge", response_model=PurgePhotoResponse)
+async def purge_case_image(
+    request: Request,
+    response: Response,
+    case_id: str,
+    image_id: str,
+    payload: PurgePhotoRequest,
+    current_user: AuthUserRead = Depends(get_current_user),
+    project_service: ProjectService = Depends(get_project_service),
+    photo_service: PhotoService = Depends(get_photo_service),
+) -> PurgePhotoResponse:
+    """Permanently delete a photo and its derived files (company admin only).
+
+    Irreversible. Superadmins use POST /admin/photos/{image_id}/purge instead.
+    """
+    _enforce_photo_decision(
+        can_purge_photo_in_tenant(current_user),
+        current_user=current_user,
+        image_id=image_id,
+        operation="image.purge",
+    )
+    org_id = resolve_org_id(current_user)
+    project = await project_service.get_project_lean(case_id, organization_id=org_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    if payload.confirmImageId != image_id:
+        raise HTTPException(status_code=400, detail="confirmImageId must repeat the image id.")
+    photo = await photo_service.get_photo_any_status(image_id, project_id=case_id)
+    if not photo:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    result = await purge_photo_with_audit(
+        photo_service,
+        photo,
+        actor=current_user,
+        audit_action="image.purge",
+        organization_id=project.organization_id,
+    )
+    mark_request_audited(request)
+    if result.status == "purge_pending":
+        response.status_code = status.HTTP_202_ACCEPTED
+    return result

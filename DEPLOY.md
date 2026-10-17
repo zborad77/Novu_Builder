@@ -13,7 +13,7 @@ The application performs a schema-version guard and fails fast if the database i
 not at the expected Alembic head. For v0.8.6 the expected head is:
 
 ```text
-20261017_0058
+20261017_0059
 ```
 
 Use the explicit Compose entrypoint override shown below. Do not rely on the
@@ -143,7 +143,7 @@ docker compose --env-file .env.production run --rm --no-deps --entrypoint alembi
 For v0.8.6, both `current` and `heads` must report:
 
 ```text
-20261017_0058
+20261017_0059
 ```
 
 Verify the database directly:
@@ -161,7 +161,7 @@ docker compose --env-file .env.production exec db \
 
 Expected:
 
-- `alembic_version.version_num = 20261017_0058`
+- `alembic_version.version_num = 20261017_0059`
 - `revoked_tokens` exists
 - `users.is_superadmin` exists and is `BOOLEAN NOT NULL`
 - `users` has CHECK constraints `ck_users_role_valid` and `ck_users_superadmin_requires_flag`
@@ -253,7 +253,15 @@ which is a separate phase.
 
 `PHOTO_DELETE_RETENTION_HOURS` (default 168) keeps soft-deleted photo files in
 storage so a manager or company admin can restore them. The worker purges them
-afterwards.
+afterwards. Permanent deletions (`purge_pending`) are retried by the worker on
+every cleanup run until storage confirms removal.
+
+After restoring a backup, re-apply permanent photo deletions made after the
+backup was taken before reopening the application:
+`python -m scripts.reapply_photo_purges --confirm --from-file purged_ids.txt`.
+Keep the application log archive (`photo.purge_authorized` events) at least one
+month longer than the longest backup retention. Full procedure:
+docs/security/PHOTO_DELETION.md §5.
 
 ---
 

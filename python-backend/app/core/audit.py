@@ -42,11 +42,14 @@ AUDIT_POLICY_SECURITY_CRITICAL = "security_critical"
 # Security-critical actions either mint cross-user access or rotate credentials.
 # These must fail closed if their audit trail cannot be persisted.
 SECURITY_CRITICAL_AUDIT_ACTIONS: frozenset[str] = frozenset({
+    "admin.image.purge",
     "admin.impersonate",
     "admin.user.create",
     "admin.user.patch",
     "admin.user.reset_password",
     "auth.change_password",
+    "image.purge",
+    "system.image.purge",
 })
 
 # Actions we want to name explicitly instead of showing raw paths
@@ -497,6 +500,14 @@ async def _persist_http_audit_log(
         )
 
 
+_EXPLICITLY_AUDITED = "audit_recorded_by_route"
+
+
+def mark_request_audited(request: Request) -> None:
+    """Tell AuditMiddleware the route already wrote a richer audit row."""
+    setattr(request.state, _EXPLICITLY_AUDITED, True)
+
+
 class AuditMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -525,6 +536,9 @@ class AuditMiddleware:
             await self.app(scope, receive, send_wrapper)
 
             if status_code is None or status_code < 200 or status_code >= 300:
+                return
+            if scope.get("state", {}).get(_EXPLICITLY_AUDITED):
+                # The route committed its own (security-critical) audit row.
                 return
 
             action, resource_type, resource_id = _classify(method, path)

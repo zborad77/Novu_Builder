@@ -704,7 +704,8 @@ class Env:
                 sort_order INTEGER NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 deleted_at TEXT,
-                deleted_by_user_id TEXT
+                deleted_by_user_id TEXT,
+                uploaded_by_user_id TEXT
             );
             CREATE TABLE project_exports (
                 id TEXT PRIMARY KEY,

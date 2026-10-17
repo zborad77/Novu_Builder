@@ -285,7 +285,14 @@ class PhotoService:
         )
         ensure_heavy_intake_capacity(snapshot, settings=settings, surface=surface)
 
-    async def create_multipart_photo(self, project: Project, file: UploadFile, *, is_primary: bool) -> ProjectPhotoRead:
+    async def create_multipart_photo(
+        self,
+        project: Project,
+        file: UploadFile,
+        *,
+        is_primary: bool,
+        uploaded_by_user_id: str | None = None,
+    ) -> ProjectPhotoRead:
         settings = get_settings()
         max_upload_size_mb = settings.max_upload_size_mb
         validated_upload = await validate_photo_upload(
@@ -349,6 +356,7 @@ class PhotoService:
                 is_primary=should_be_primary,
                 is_analysis_reference=photo_count == 0,
                 sort_order=await self.repository.get_next_sort_order(project.id),
+                uploaded_by_user_id=uploaded_by_user_id,
             )
             created_photo = await self.repository.add_photo(photo)
         except Exception as exc:
@@ -475,8 +483,65 @@ class PhotoService:
         await self.repository.update_status(photo, "active")
         return True
 
-    async def list_restorable_photos(self, project_id: str) -> list[ProjectPhoto]:
-        return list(await self.repository.list_restorable_photos(project_id))
+    async def list_restorable_photos(
+        self,
+        project_id: str,
+        *,
+        uploaded_by_user_id: str | None = None,
+    ) -> list[ProjectPhoto]:
+        return list(
+            await self.repository.list_restorable_photos(project_id, uploaded_by_user_id=uploaded_by_user_id)
+        )
+
+    async def get_active_photo(self, project_id: str, photo_id: str) -> ProjectPhoto | None:
+        return await self.repository.get_photo(project_id, photo_id)
+
+    async def get_restorable_photo(self, project_id: str, photo_id: str) -> ProjectPhoto | None:
+        return await self.repository.get_restorable_photo(project_id, photo_id)
+
+    async def get_photo_any_status(self, photo_id: str, *, project_id: str | None = None) -> ProjectPhoto | None:
+        return await self.repository.get_photo_any_status(photo_id, project_id=project_id)
+
+    async def stage_purge(self, photo: ProjectPhoto, *, actor_user_id: str | None) -> int:
+        """Phase 1 of permanent deletion; the caller commits it with the audit row.
+
+        From this point the photo is never served (only ``active`` photos are) and
+        cannot be restored. Every export of the case is expired because it may
+        embed the photo. Returns the number of exports expired.
+        """
+        now = datetime.now(UTC)
+        photo.status = "purge_pending"
+        photo.is_primary = False
+        photo.is_analysis_reference = False
+        if photo.deleted_at is None:
+            photo.deleted_at = now
+            photo.deleted_by_user_id = actor_user_id
+        return await self.repository.expire_project_exports(photo.project_id, now=now)
+
+    async def complete_purge(self, photo: ProjectPhoto) -> bool:
+        """Phase 2: remove the original and every derived object, then mark deleted.
+
+        Storage deletes are idempotent, so this is safe to repeat. On failure the
+        row stays ``purge_pending`` and the worker retries (cleanup_pending_deletes);
+        no row is marked deleted while one of its objects may remain.
+        """
+        try:
+            await self._delete_storage_keys_fail_closed(
+                photo.storage_key,
+                photo.preview_storage_key,
+                photo.ai_input_storage_key,
+            )
+        except Exception as exc:
+            logger.warning(
+                "photo.purge_storage_failed",
+                photo_id=photo.id,
+                project_id=photo.project_id,
+                error=str(exc),
+            )
+            return False
+        await self.repository.update_status(photo, "deleted")
+        logger.info("photo.purged", photo_id=photo.id, project_id=photo.project_id)
+        return True
 
     async def cleanup_pending_deletes(self, *, limit: int = 100) -> int:
         retention = timedelta(hours=get_settings().photo_delete_retention_hours)

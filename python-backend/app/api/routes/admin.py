@@ -5,11 +5,12 @@ from pathlib import Path
 from typing import Annotated, Deque
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.photo_purge import purge_photo_with_audit
 from app.api.deps import (
     get_analysis_service,
     get_auth_redis,
@@ -48,6 +49,9 @@ from app.core.rbac import (
 from app.repositories.token_repository import SessionTokenRevocation, TokenRepository
 from app.services.analysis_service import AnalysisService, to_job_read
 from app.services.company_service import CompanyService
+from app.services.photo_service import PhotoService
+from app.repositories.photo_repository import PhotoRepository
+from app.schemas.photo import PurgePhotoRequest, PurgePhotoResponse
 from app.services.auth_service import AuthService, hash_password
 
 import structlog
@@ -460,6 +464,38 @@ async def reset_user_password(
 
     for record in revocations:
         await token_repository.cache_revoked_token(record.jti, record.expires_at)
+
+
+# ── Photos (system administration) ────────────────────────────────────────────
+
+@router.post("/photos/{photo_id}/purge", response_model=PurgePhotoResponse)
+@limiter.limit(get_settings().rate_limit_admin_sensitive)
+async def admin_purge_photo(
+    request: Request,
+    response: Response,
+    photo_id: str,
+    payload: PurgePhotoRequest,
+    current_user: AuthUserRead = Depends(require_admin_capability("admin:write")),
+    session: AsyncSession = Depends(get_db_session),
+) -> PurgePhotoResponse:
+    """Permanently delete any tenant's photo (superadmin, audited as admin.image.purge)."""
+    if payload.confirmImageId != photo_id:
+        raise HTTPException(status_code=400, detail="confirmImageId must repeat the image id.")
+    photo_service = PhotoService(PhotoRepository(session))
+    photo = await photo_service.get_photo_any_status(photo_id)
+    if not photo:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    project = await session.get(Project, photo.project_id)
+    result = await purge_photo_with_audit(
+        photo_service,
+        photo,
+        actor=current_user,
+        audit_action="admin.image.purge",
+        organization_id=project.organization_id if project else "",
+    )
+    if result.status == "purge_pending":
+        response.status_code = status.HTTP_202_ACCEPTED
+    return result
 
 
 # ── Analysis Jobs (all orgs) ───────────────────────────────────────────────────

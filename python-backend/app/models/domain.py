@@ -186,7 +186,7 @@ class ProjectPhoto(Base):
     __tablename__ = "project_photos"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('active', 'pending_delete', 'deleted')",
+            "status IN ('active', 'pending_delete', 'purge_pending', 'deleted')",
             name="ck_project_photos_status",
         ),
         CheckConstraint(
@@ -231,6 +231,10 @@ class ProjectPhoto(Base):
     # PHOTO_DELETE_RETENTION_HOURS after deleted_at, then the worker purges storage.
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    # Set by the server from the authenticated uploader (20261017_0059). NULL for
+    # photos uploaded before then or whose author account was removed; such
+    # photos are managed by managers/company admins only.
+    uploaded_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
     project: Mapped["Project"] = relationship(back_populates="photos")
 

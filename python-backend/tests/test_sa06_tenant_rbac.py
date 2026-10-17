@@ -207,7 +207,11 @@ async def test_technician_can_still_submit_a_reviewed_offer(app_client, sa06_use
 # ── Photos: audited soft delete with restore ──────────────────────────────────
 
 
-async def test_technician_cannot_delete_or_restore_photos(app_client, sa06_users, db_session_factory):
+async def test_technician_cannot_delete_or_restore_photos_of_unknown_author(
+    app_client, sa06_users, db_session_factory
+):
+    # _new_photo leaves uploaded_by_user_id NULL (legacy photo): never a technician's.
+    # Ownership rules for photos with a known author: tests/test_f03_photo_ownership_purge.py.
     manager = await _token(app_client, "sa06_manager_a")
     technician = await _token(app_client, "sa06_technician_a")
     case_id = await _new_case(app_client, manager)
@@ -223,7 +227,7 @@ async def test_technician_cannot_delete_or_restore_photos(app_client, sa06_users
     )
     listing = await app_client.get(f"/api/v1/cases/{case_id}/images/deleted", headers=_auth(technician))
     assert restore.status_code == 403
-    assert listing.status_code == 403
+    assert listing.status_code == 200 and listing.json()["items"] == []
     assert (await _photo(db_session_factory, photo_id)).status == "pending_delete"
 
 

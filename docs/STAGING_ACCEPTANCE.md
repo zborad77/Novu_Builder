@@ -59,7 +59,7 @@ docker compose --env-file .env.production run --rm --no-deps --entrypoint alembi
 For v0.8.6, expected revision:
 
 ```text
-20261017_0058
+20261017_0059
 ```
 
 Verify directly:
