@@ -410,6 +410,25 @@ def test_database_requires_async_driver_in_production(monkeypatch):
         Settings()
 
 
+def test_database_unix_socket_url_is_accepted_in_production(monkeypatch):
+    # F6.2: bare-metal core reaches PostgreSQL only over its unix socket.
+    _set_valid_prod_env(
+        monkeypatch,
+        DATABASE_URL="postgresql+asyncpg://nc_app:Str0ngP%40ssw0rd!@/novuconstruct?host=/run/postgresql",
+        DATABASE_URL_SYNC="postgresql+psycopg://nc_app:Str0ngP%40ssw0rd!@/novuconstruct?host=/run/postgresql",
+    )
+    s = Settings()
+    assert "host=/run/postgresql" in s.database_url
+
+
+def test_database_relative_socket_host_is_not_a_host(monkeypatch):
+    _set_valid_prod_env(
+        monkeypatch, DATABASE_URL="postgresql+asyncpg://nc_app:Str0ngP%40ssw0rd!@/novuconstruct?host=run/postgresql"
+    )
+    with pytest.raises(ValidationError, match="DATABASE_URL must include a database host"):
+        Settings()
+
+
 def test_database_requires_host_in_production(monkeypatch):
     _set_valid_prod_env(monkeypatch, DATABASE_URL="postgresql+asyncpg://novu:Str0ngP%40ssw0rd!@:5432/novu_prod")
     with pytest.raises(ValidationError, match="DATABASE_URL must include a database host"):

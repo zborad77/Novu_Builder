@@ -17,6 +17,7 @@ from app.api.routes.suppliers import router as suppliers_router
 from app.api.routes.system import router as system_router
 from app.api.routes.offer_events import router as offer_events_router
 from app.api.routes.offer_requests import router as offer_requests_router
+from app.api.routes.org_users import router as org_users_router
 from app.api.routes.work_catalog import router as work_catalog_router
 
 # Canonical API uses the /cases/* surface shared by the current clients.
@@ -43,5 +44,7 @@ api_router.include_router(material_catalog_router, dependencies=_protected["depe
 api_router.include_router(suppliers_router, dependencies=_protected["dependencies"])
 api_router.include_router(work_catalog_router, dependencies=_protected["dependencies"])
 api_router.include_router(admin_router, dependencies=_protected["dependencies"])
+# D-10: firemní admin spravuje uživatele vlastní firmy (zóny gateway a desktop).
+api_router.include_router(org_users_router, dependencies=_protected["dependencies"])
 api_router.include_router(offer_requests_router, dependencies=_protected["dependencies"])
 api_router.include_router(offer_events_router, dependencies=_protected["dependencies"])

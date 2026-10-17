@@ -12,6 +12,7 @@ from app.core.account_limiter import (
 )
 from app.core.audit import SecurityAuditWriteError
 from app.core.config import get_settings
+from app.core.device_binding import check_device_binding
 from app.core.limiter import client_ip_rate_limit_key, limiter
 from app.core.metrics import AUTH_FAILURES_TOTAL, metric_labels, normalize_tenant_metric_label
 from app.core.security import enforce_password_strength
@@ -125,6 +126,26 @@ def _raise_token_state_unavailable(
         status_code=503,
         detail="Authentication token validation unavailable. Retry later.",
     )
+
+
+_DEVICE_DENIED_DETAIL = "This device is not authorized for your organization."
+
+
+async def _enforce_device_binding(
+    request: Request,
+    service: AuthService,
+    result: tuple[str, str, AuthUserRead],
+    *,
+    endpoint: str,
+) -> None:
+    """F3.6: zone desktop with NC_DEVICE_BINDING=enforce. Issued tokens are revoked again."""
+    user = result[2]
+    if check_device_binding(_client_ip(request), user.organizationId) == "allow":
+        return
+    await _revoke_login_result(
+        service, result, endpoint=endpoint, user_id=user.id, organization_id=user.organizationId
+    )
+    raise HTTPException(status_code=403, detail=_DEVICE_DENIED_DETAIL)
 
 
 async def _revoke_login_result(
@@ -283,6 +304,7 @@ async def login(
                 organization_id=result[2].organizationId,
                 is_superadmin_context=result[2].isSuperAdmin,
             )
+    await _enforce_device_binding(request, service, result, endpoint="login")
     access_token, refresh_token, user = result
     return LoginResponse(
         accessToken=access_token,
@@ -322,6 +344,7 @@ async def refresh(
             client_ip=_client_ip(request),
         )
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token.")
+    await _enforce_device_binding(request, service, refresh_result.tokens, endpoint="refresh")
     access_token, refresh_token, user = refresh_result.tokens
     return LoginResponse(
         accessToken=access_token,

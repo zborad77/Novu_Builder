@@ -202,7 +202,15 @@ Vše ostatní na edge vrací 404: `/api/*`, `/docs`, `/openapi.json`, `/metrics`
 
 ## 10. Administrace
 
-**Aktualizace F0 (17. 10. 2026):** systémové routy (`/admin/companies` výpis a založení, `/admin/jobs*`, `/admin/logs`, `/admin/audit`, `/admin/impersonate`) jsou jen pro `sa`. Správa uživatelů (`/admin/users*`) a profil vlastní firmy (`GET/PATCH /admin/companies/{id}`) jsou nově dostupné i firemnímu adminovi (role `admin`), a to jen v rámci jeho firmy. Pravidla jsou v [RBAC_ROLE_MATRIX.md](RBAC_ROLE_MATRIX.md). Síťové zařazení firemní správy uživatelů (zóna G/D, nebo jen A) je otevřené rozhodnutí D-10. Do té doby platí sloupec Zóna níže.
+**Aktualizace F0 (17. 10. 2026):** systémové routy (`/admin/companies` výpis a založení, `/admin/jobs*`, `/admin/logs`, `/admin/audit`, `/admin/impersonate`) jsou jen pro `sa`. Správa uživatelů (`/admin/users*`) a profil vlastní firmy (`GET/PATCH /admin/companies/{id}`) jsou nově dostupné i firemnímu adminovi (role `admin`), a to jen v rámci jeho firmy. Pravidla jsou v [RBAC_ROLE_MATRIX.md](RBAC_ROLE_MATRIX.md). **Rozhodnutí D-10 (17. 10. 2026):** firemní admin spravuje uživatele své firmy přes nové tenant-scoped `/org/users` v zónách G a D (tabulka níže). Celé `/admin/*` zůstává jen v zóně A pro NovuAdmin přes WG, gateway z něj neodkrývá nic.
+
+| Metoda | Cesta | Zóna | Role | Poznámka |
+|---|---|---|---|---|
+| GET | `/api/v1/org/users` | G, D | admin (firma) | jen uživatelé vlastní firmy, superadmini neviditelní |
+| POST | `/api/v1/org/users` | G, D | admin (firma) | firma = firma admina (pole `organizationId` → 422), role jen `manager`/`technician` |
+| GET | `/api/v1/org/users/{user_id}` | G, D | admin (firma) | cizí firma / superadmin → 404 |
+| PATCH | `/api/v1/org/users/{user_id}` | G, D | admin (firma) | jméno, role, aktivace; deaktivace odvolá sessions; jiný admin a vlastní účet → 403 |
+| POST | `/api/v1/org/users/{user_id}/reset-password` | G, D | admin (firma) | nové heslo dle politiky, odvolá sessions; jiný admin → 403 |
 
 | Metoda | Cesta | Dnes | Zóna | Role | Poznámka |
 |---|---|---|---|---|---|
@@ -238,7 +246,6 @@ Vše ostatní na edge vrací 404: `/api/*`, `/docs`, `/openapi.json`, `/metrics`
 | GET | `/api/v1/files/images/{image_id}/{variant}` | G, D | any | streamování náhledu nebo originálu (D-03) | F4 |
 | GET | `/api/v1/files/exports/{export_id}` | G, D | mgr | streamování exportu + audit | F4 |
 | POST | `/api/v1/devices/enroll` | G | – (enrollment kód) | registrace veřejného WG klíče zařízení (D-07) | F6 |
-| GET/POST/DELETE | `/api/v1/org/users` | G, D | mgr | správa uživatelů vlastní firmy (D-10) | F7 |
 | GET/DELETE | `/api/v1/admin/users/{user_id}/sessions` | A | sa | sessions uživatele | F7 |
 | GET/POST/DELETE | `/api/v1/admin/devices` | A | sa | správa WG peerů | F6 |
 | GET | `/api/v1/admin/system/overview` | A | sa | verze, migrace, fronta, úložiště, certifikáty | F7 |

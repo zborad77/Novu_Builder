@@ -258,7 +258,7 @@ Správu uživatelů vlastní firmy manažerem (dnes chybí) navrhujeme jako **no
 - alert na anomálie (počet sessions, allowlist miss, 404 z core),
 - runbook: zneplatnit WG klíč gateway, `token_version++` pro všechny uživatele s webovou session, rotovat klíč session store a service secret gateway.
 
-**Service identita gateway vůči core:** WG peer (síťová vrstva) + HMAC hlavička `X-NC-Gateway-Sig` (sdílený secret, rotace 90 dní) na každém požadavku. Core instance `gateway` ji vyžaduje. Ochrana pro případ, že by se na socket dostal jiný lokální proces (varianta s jedním serverem).
+**Service identita gateway vůči core:** WG peer (síťová vrstva) + HMAC hlavička `X-NC-Gateway-Sig` (sdílený secret, rotace 90 dní) na každém požadavku. Core instance `gateway` ji vyžaduje. Ochrana pro případ, že by se na socket dostal jiný lokální proces (varianta s jedním serverem). Implementováno v F3.4, přesný kontrakt (hlavičky, kanonický řetězec, testovací vektor, rotace) je v [GATEWAY_CORE_CONTRACT.md](GATEWAY_CORE_CONTRACT.md).
 
 ---
 
@@ -405,5 +405,5 @@ Gateway navíc `IPAddressDeny=any` + `IPAddressAllow=10.50.0.1 127.0.0.1`.
 | **D-07** | Enrollment desktopu do WG | Klíč se generuje na zařízení. Manažer firmy nebo superadmin zařízení schválí v NovuAdminu. Jednorázový enrollment kód přes gateway (`/bff/device-enrollment`). Detail v WG_NETWORK_DESIGN kap. 4. |
 | **D-08** | Adresní rozsahy WG | `10.50.0.0/16` (wg-nc) a `10.51.0.0/24` (wg-nc-admin). Nekolidují s NovuServerem (`10.20.0.0/24`, `10.40.0.0/24`). Ověřit proti dalším sítím správce. |
 | **D-09** | Monitoring | Prometheus na core vs. samostatný monitoring server |
-| **D-10** | Správa uživatelů vlastní firmy manažerem | Nové `/org/users` (scoped), nebo jen přes NovuAdmin |
+| **D-10** | Správa uživatelů vlastní firmy | **Rozhodnuto 17. 10. 2026:** firemní admin (role `admin`) přes nové `/org/users` v zónách gateway a desktop, jen vlastní firma, bez superadminů a bez přidělení role `admin`. Systémová administrace jen NovuAdmin přes WG (zóna admin). |
 | **D-11** | Webový admin `web/src/pages/Admin*` | Odstranit. Admin bude výhradně v NovuAdminu přes WG. |

@@ -70,7 +70,13 @@ EXPOSURE: Final[dict[tuple[str, str], frozenset[str]]] = {
     # Retired (410); public self-service reset arrives with the gateway in F4 (D-05).
     ("POST", f"{_P}/auth/forgot-password"): NOWHERE,
     ("POST", f"{_P}/auth/reset-password"): NOWHERE,
-    # ── Administration (superadmin; company admins per RBAC) — D-10 open ──
+    # ── Company user administration (D-10): company admin, own company only ──
+    ("GET", f"{_P}/org/users"): TENANT,
+    ("POST", f"{_P}/org/users"): TENANT,
+    ("GET", f"{_P}/org/users/{{user_id}}"): TENANT,
+    ("PATCH", f"{_P}/org/users/{{user_id}}"): TENANT,
+    ("POST", f"{_P}/org/users/{{user_id}}/reset-password"): TENANT,
+    # ── System administration: NovuAdmin over WireGuard only (zone admin) ──
     ("GET", f"{_P}/admin/audit"): SYSTEM,
     ("GET", f"{_P}/admin/companies"): SYSTEM,
     ("POST", f"{_P}/admin/companies"): SYSTEM,

@@ -49,6 +49,10 @@ os.environ["RATE_LIMIT_LOGIN"] = "1000/minute"
 os.environ["RATE_LIMIT_ADMIN"] = "1000/minute"
 os.environ["METRICS_AUTH_ENABLED"] = "false"
 os.environ["WORKER_HEAVY_CONCURRENCY"] = "1"
+# F3.4: test key of the gateway service identity (zone gateway only).
+TEST_GATEWAY_KEY_ID = "test-gw"
+TEST_GATEWAY_SECRET = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+os.environ["NC_GATEWAY_HMAC_KEYS"] = f"{TEST_GATEWAY_KEY_ID}:{TEST_GATEWAY_SECRET}"
 
 from app.core.config import get_settings  # noqa: E402
 
@@ -430,10 +434,53 @@ async def app_client(test_tenants):
         auth_token_store = _InMemoryAuthRedis()
         original_auth_token_store = getattr(fastapi_app.state, "auth_token_store", None)
         fastapi_app.state.auth_token_store = auth_token_store
+        # The lifespan Redis client belongs to another event loop than the tests;
+        # gateway nonces (F3.4) use a per-session in-memory store here. The Redis
+        # path is exercised on a real deployment (deploy/linux provisioning smoke).
+        from app.core.gateway_auth import InMemoryNonceStore  # noqa: PLC0415
+
+        fastapi_app.state.gateway_nonce_store = InMemoryNonceStore()
         transport = ASGITransport(app=fastapi_app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            event_hooks={"request": [_sign_like_the_gateway]},
+        ) as client:
             yield client
         fastapi_app.state.auth_token_store = original_auth_token_store
+
+
+# Header a test sets to send a request to the gateway zone exactly as given
+# (unsigned, or with its own forged X-NC-* headers). Removed before sending.
+UNSIGNED_MARKER = "X-Test-Unsigned"
+TEST_GATEWAY_CLIENT_IP = "203.0.113.10"
+
+
+async def _sign_like_the_gateway(request) -> None:
+    """In zone gateway every request reaches core signed by the gateway (F3.4)."""
+    import secrets  # noqa: PLC0415
+
+    from app.core.config import get_settings  # noqa: PLC0415
+    from app.core.gateway_auth import sign_request  # noqa: PLC0415
+
+    if UNSIGNED_MARKER in request.headers:
+        del request.headers[UNSIGNED_MARKER]
+        return
+    if get_settings().effective_nc_zone != "gateway" or "X-NC-Gateway-Sig" in request.headers:
+        return
+    body = await request.aread()
+    signed = sign_request(
+        key_id=TEST_GATEWAY_KEY_ID,
+        secret=TEST_GATEWAY_SECRET.encode(),
+        method=request.method,
+        raw_path=request.url.raw_path.split(b"?")[0].decode("latin-1"),
+        query_string=request.url.query.decode("latin-1"),
+        client_ip=TEST_GATEWAY_CLIENT_IP,
+        body=body,
+        authorization=request.headers.get("Authorization"),
+        nonce=secrets.token_urlsafe(24),
+    )
+    request.headers.update(signed)
 
 
 @pytest.fixture(autouse=True)

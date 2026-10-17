@@ -17,6 +17,7 @@ from app.core.api_versioning import ApiVersioningMiddleware
 from app.core.audit import AuditMiddleware
 from app.core.client_ip import TrustedProxyMiddleware, trusts_unix_socket
 from app.core.exposure import PRODUCTION_ZONES, ExposureGuardMiddleware
+from app.core.gateway_auth import GatewaySignatureMiddleware
 from app.core.config import get_settings, startup_failure_message
 from app.core.limiter import limiter
 from app.core.logging import configure_logging
@@ -551,6 +552,11 @@ def create_app() -> FastAPI:
         trusted_proxies=settings.trusted_proxy_networks,
         trust_unix_socket=trusts_unix_socket(settings.trusted_proxy_ips),
     )
+    # Úplně venku (F3.4): v zóně gateway ověří HMAC podpis gateway a adresu
+    # klienta vezme jen z podepsané X-NC-Client-IP (X-Forwarded-For odstraní
+    # dřív, než ho TrustedProxyMiddleware uvidí); nepodepsaný požadavek = 401
+    # ještě před exposure guardem. V ostatních zónách jen zahodí X-NC-* hlavičky.
+    app.add_middleware(GatewaySignatureMiddleware)
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 

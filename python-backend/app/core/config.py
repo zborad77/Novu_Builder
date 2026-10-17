@@ -201,6 +201,23 @@ def _url_hostname(url: str) -> str | None:
         return None
 
 
+def _url_unix_socket_host(url: str) -> str | None:
+    """Unix socket directory given as ``?host=/run/postgresql`` (libpq/asyncpg form), or None.
+
+    The bare-metal core reaches PostgreSQL only through its unix socket (F6.2);
+    such a URL has no network host, only this query parameter.
+    """
+    try:
+        from urllib.parse import parse_qs
+
+        hosts = parse_qs(urlparse(url).query).get("host", [])
+    except Exception:
+        return None
+    if len(hosts) == 1 and hosts[0].startswith("/"):
+        return hosts[0]
+    return None
+
+
 def _url_path(url: str) -> str:
     """Extract the URL path component, or an empty string on parse failure."""
     try:
@@ -373,6 +390,18 @@ class Settings(BaseSettings):
     # API outside development; never derived from a request.
     nc_zone: str = Field(default="", alias="NC_ZONE")
     jwt_issuer: str = Field(default="novuconstruct-core", alias="JWT_ISSUER")
+    # F3.4 – service identita gateway vůči core (docs/security/GATEWAY_CORE_CONTRACT.md).
+    # "kid:secret[,kid:secret]"; víc klíčů = rotace bez výpadku. Secret přichází
+    # přes LoadCredential (nc-gen-secrets), nikdy z core.env.
+    nc_gateway_hmac_keys: str = Field(default="", alias="NC_GATEWAY_HMAC_KEYS")
+    nc_gateway_sig_max_skew_seconds: int = Field(default=30, ge=5, le=300, alias="NC_GATEWAY_SIG_MAX_SKEW_SECONDS")
+    nc_gateway_max_body_bytes: int = Field(
+        default=26 * 1024 * 1024, ge=1024, le=64 * 1024 * 1024, alias="NC_GATEWAY_MAX_BODY_BYTES"
+    )
+    # F3.6 – vazba zařízení ↔ firma v zóně desktop (aktivní až s enrollmentem F7).
+    # "off" (výchozí) | "enforce". Registr zařízení zatím souborový (JSON).
+    nc_device_binding: str = Field(default="off", alias="NC_DEVICE_BINDING")
+    nc_device_registry_file: str = Field(default="", alias="NC_DEVICE_REGISTRY_FILE")
     # Append-only file recording permanent photo deletions outside the database
     # (app/core/purge_ledger.py). Required for permanent deletion outside development.
     photo_purge_ledger_path: str = Field(default="", alias="PHOTO_PURGE_LEDGER_PATH")
@@ -778,7 +807,35 @@ class Settings(BaseSettings):
             raise ValueError("JWT_ALGORITHM must be one of HS256, HS384, HS512.")
         if not self.jwt_issuer.strip():
             raise ValueError("JWT_ISSUER must not be empty.")
+
+        from app.core.gateway_auth import GatewayKeyConfigError, parse_gateway_keys
+
+        try:
+            gateway_keys = parse_gateway_keys(self.nc_gateway_hmac_keys)
+        except GatewayKeyConfigError as exc:
+            raise ValueError(str(exc)) from exc
+        if zone == "gateway" and not gateway_keys and self.app_env.lower() != "development":
+            raise ValueError(
+                "NC_ZONE=gateway requires NC_GATEWAY_HMAC_KEYS: the gateway instance accepts only "
+                "requests signed by the gateway (F3.4, docs/security/GATEWAY_CORE_CONTRACT.md)."
+            )
+
+        binding = self.nc_device_binding.strip().lower()
+        if binding not in {"off", "enforce"}:
+            raise ValueError("NC_DEVICE_BINDING must be 'off' or 'enforce'.")
+        if binding == "enforce":
+            if zone not in {"", "desktop", "dev"}:
+                raise ValueError("NC_DEVICE_BINDING=enforce applies only to the desktop zone.")
+            if not self.nc_device_registry_file.strip():
+                raise ValueError(
+                    "NC_DEVICE_BINDING=enforce requires NC_DEVICE_REGISTRY_FILE (fail closed; "
+                    "the database registry arrives with enrollment in F7)."
+                )
         return self
+
+    @property
+    def device_binding_enforced(self) -> bool:
+        return self.nc_device_binding.strip().lower() == "enforce"
 
     @property
     def effective_nc_zone(self) -> str:
@@ -1033,9 +1090,10 @@ class Settings(BaseSettings):
                     f"{label} must use a PostgreSQL sync driver "
                     f"(postgresql+psycopg://... or postgresql://...) in APP_ENV={self.app_env!r}."
                 )
-            if not _url_hostname(candidate):
+            if not _url_hostname(candidate) and not _url_unix_socket_host(candidate):
                 raise ValueError(
-                    f"{label} must include a database host in APP_ENV={self.app_env!r}."
+                    f"{label} must include a database host (or ?host=/unix/socket/dir) "
+                    f"in APP_ENV={self.app_env!r}."
                 )
             if not _url_path(candidate).lstrip("/"):
                 raise ValueError(

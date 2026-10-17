@@ -49,6 +49,9 @@ SECURITY_CRITICAL_AUDIT_ACTIONS: frozenset[str] = frozenset({
     "admin.user.reset_password",
     "auth.change_password",
     "image.purge",
+    "org.user.create",
+    "org.user.patch",
+    "org.user.reset_password",
     "system.image.purge",
 })
 

@@ -155,10 +155,17 @@ async def test_middleware_rewrites_client_and_scheme_only_for_trusted_proxy():
 
 
 async def test_application_resolves_client_before_rate_limiting_and_audit():
-    """create_app() installs the resolver as the outermost middleware."""
+    """create_app() resolves the client before rate limiting and audit.
+
+    Outermost is the gateway signature check (F3.4): in zone gateway it replaces
+    the address with the signed X-NC-Client-IP and drops X-Forwarded-For; in the
+    other zones it only drops X-NC-* headers. TrustedProxyMiddleware comes next.
+    """
+    from app.core.gateway_auth import GatewaySignatureMiddleware
     from app.main import app
 
-    assert app.user_middleware[0].cls is TrustedProxyMiddleware
+    assert app.user_middleware[0].cls is GatewaySignatureMiddleware
+    assert app.user_middleware[1].cls is TrustedProxyMiddleware
 
 
 # ── Shared rate limits across processes (Redis) ───────────────────────────────

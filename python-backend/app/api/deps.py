@@ -5,6 +5,7 @@ import structlog.contextvars
 
 from app.core.audit import bind_request_audit_actor
 from app.core.config import get_settings
+from app.core.device_binding import check_device_binding
 from app.core.rbac import is_system_admin, is_tenant_admin, is_tenant_operator
 from app.db.session import get_db_session
 from app.case_workflow.case_actions import CaseActionService
@@ -207,6 +208,9 @@ async def get_current_user(
             client_ip=request.client.host if request.client else None,
         )
         raise HTTPException(status_code=401, detail="Invalid or expired token.")
+    # F3.6: in the desktop zone the device (WireGuard address) must belong to the user's company.
+    if check_device_binding(request.client.host if request.client else None, user.organizationId) != "allow":
+        raise HTTPException(status_code=403, detail="This device is not authorized for your organization.")
     bind_request_audit_actor(request, user)
     structlog.contextvars.bind_contextvars(
         tenant_id=str(user.organizationId) if user.organizationId else "superadmin",

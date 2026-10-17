@@ -50,6 +50,21 @@ Role `USER` ze zadání odpovídá stávající roli **`technician`**. Ponechali
 - operace se audituje fail-closed (bez zápisu do auditu se nic neuloží),
 - heslo se nikdy neloguje.
 
+### 2.1a Firemní správa uživatelů (`/api/v1/org/users*`, D-10)
+
+Rozhodnutí D-10 z 17. 10. 2026: firemní admin spravuje uživatele své firmy z webu (zóna gateway) a desktopu (zóna desktop) přes `/org/users`. `/admin/users*` (2.1) je dostupné jen v zóně admin, tedy pro NovuAdmin přes WG.
+
+| Operace | superadmin | admin (firma) | manager | technician |
+|---|---|---|---|---|
+| Seznam, detail | ❌ (403, systémová správa jde přes NovuAdmin) | ✅ jen své firmy · 🔒 cizí firma · 🔒 superadmin | ❌ | ❌ |
+| Vytvořit | ❌ | ✅ role `manager`/`technician`, firma vždy vlastní (poslat `organizationId` → 422) · ❌ role `admin` (403) · `superadmin` (422) | ❌ | ❌ |
+| Jméno, role `manager` ↔ `technician` | ❌ | ✅ své firmy · ❌ jinému adminovi a sobě (role) | ❌ | ❌ |
+| Deaktivovat / znovu aktivovat | ❌ | ✅ své firmy · ❌ jiného admina · ❌ sebe | ❌ | ❌ |
+| Reset hesla | ❌ | ✅ uživatelům své firmy · ❌ jinému adminovi · ❌ sobě | ❌ | ❌ |
+| Impersonované tokeny | ❌ | ❌ | ❌ | ❌ |
+
+Platí stejná pravidla jako v 2.1 (`app.core.rbac`): politika hesel, revokace sessions při resetu i deaktivaci, fail-closed audit akcí `org.user.create`, `org.user.patch` a `org.user.reset_password`. Firma má vždy aspoň jednoho admina, protože admin nemůže deaktivovat sebe ani jiného admina. Testy: `tests/test_d10_org_users.py`.
+
 ### 2.2 Správa firem (`/api/v1/admin/companies*`)
 
 | Operace | superadmin | admin (firma) | manager | technician |

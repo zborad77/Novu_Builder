@@ -1,7 +1,7 @@
 {
   "generatedFrom": "python-backend/app/core/exposure.py",
   "zone": "gateway",
-  "count": 86,
+  "count": 91,
   "routes": [
     {
       "method": "GET",
@@ -294,6 +294,26 @@
     {
       "method": "GET",
       "path": "/api/v1/offer-requests/{offer_id}/status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/org/users"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/org/users"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/org/users/{user_id}"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/org/users/{user_id}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/org/users/{user_id}/reset-password"
     },
     {
       "method": "GET",
