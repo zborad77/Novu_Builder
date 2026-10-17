@@ -34,6 +34,7 @@ from app.schemas.company import (
     CompanyPatch,
     CompanyRead,
 )
+from app.core.exposure import AUDIENCE_BY_ZONE, ZONE_DEV, ZONE_GATEWAY, current_audience, current_zone
 from app.core.limiter import limiter
 from app.core.sql_like import LIKE_ESCAPE_CHAR, build_contains_ilike_pattern
 from app.core.security import enforce_password_strength
@@ -870,6 +871,11 @@ async def impersonate_user(
             "exp": exp,
             "ver": AuthService._user_token_version(target),
             "impersonated_by": current_user.id,
+            # F3.3: usable only through the web gateway (F4), never in the
+            # admin or desktop zone; dev zone keeps its own audience.
+            "iss": settings.jwt_issuer,
+            "aud": current_audience() if current_zone() == ZONE_DEV else AUDIENCE_BY_ZONE[ZONE_GATEWAY],
+            "iat": datetime.now(UTC),
         },
         settings.jwt_secret,
         algorithm=settings.jwt_algorithm,

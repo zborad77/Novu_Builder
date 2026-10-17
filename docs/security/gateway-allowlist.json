@@ -1,0 +1,351 @@
+{
+  "generatedFrom": "python-backend/app/core/exposure.py",
+  "zone": "gateway",
+  "count": 86,
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/v1/analysis-jobs/{job_id}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/analysis-jobs/{job_id}/cancel"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/analysis-jobs/{job_id}/retry"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/change-password"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/login"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/logout"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/refresh"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/sessions"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/auth/sessions/{session_id}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/activity/stream"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/analysis-jobs"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/analysis-jobs"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/analysis-results/{result_id}/selection"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/approve-proposal"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/archive"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/cancel"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/duplicate"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/estimates"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/estimates/recalculate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/case-zip"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/proposal-docx"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/quote-docx"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/quote-pdf"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/report-pdf"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/final-proposal"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/images"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/images"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/images/deleted"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/analysis-reference"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/move"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/primary"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/purge"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/restore"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/measurements"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/proposal-draft"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/return-to-draft"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/send"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/start-analysis"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/submit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/timeline"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/work-items"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/work-items"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/detections"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values/confirm"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values/merge"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/work-types/{work_type_code}/effective-configuration"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exports/{export_id}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/images/{image_id}/preview"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/markers"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/markers"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/markers/{marker_id}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/material-catalog"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/material-catalog/{material_id}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/material-catalog/{material_id}/supplier-prices"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/measurements/{measurement_id}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/measurements/{measurement_id}/confirm"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/offer-requests"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/offer-requests/{offer_id}"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/offer-requests/{offer_id}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/offer-requests/{offer_id}/cancel"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/offer-requests/{offer_id}/events"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/offer-requests/{offer_id}/more-info"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/offer-requests/{offer_id}/result"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/offer-requests/{offer_id}/status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pricebooks"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/pricebooks"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pricebooks/{pricebook_id}/items"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/suppliers"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/suppliers/{supplier_id}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/categories"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/grouped"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/work-types"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/work-types/{work_type_code}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/work-types/{work_type_code}/parameters/{parameter_code}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/work-types"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/work-types/{work_type_code}/effective"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/work-catalog/work-types/{work_type_code}/settings"
+    }
+  ]
+}

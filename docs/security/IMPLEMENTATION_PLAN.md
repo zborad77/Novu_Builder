@@ -93,6 +93,10 @@ Odhady jsou orientační, pro jednoho vývojáře, a nezahrnují dokončení web
 
 ## F3 – Zónový model v backendu
 
+> **Stav 17. 10. 2026:** F3.1–F3.3 a F3.5 jsou implementované ve větvi `fix/f0-rbac-tenant-isolation` a nejsou nasazené.
+> - Nezařazená route je blokovaná i v zóně admin (upřesnění oproti F3.1).
+> - F3.4 (podepsaná IP z gateway) a F3.6 (vazba zařízení) zůstávají otevřené.
+
 | ID | Úkol | Hotovo, když | Testy |
 |---|---|---|---|
 | F3.1 | `app/core/exposure.py`: tabulka (metoda, šablona) → zóny, default `admin` | Všech 113 rout je zařazeno | `test_route_exposure.py`: žádná nezařazená route; množina G se rovná schválenému seznamu |
@@ -137,6 +141,11 @@ Odhady jsou orientační, pro jednoho vývojáře, a nezahrnují dokončení web
 ---
 
 ## F6 – Infrastruktura Hetzner (bez Dockeru)
+
+> **Stav 17. 10. 2026:** F6.1–F6.3 a F6.5 jsou připravené v [`deploy/linux/`](../../deploy/linux/README.md) a nejsou nasazené.
+> - Pilot běží na jednom serveru (varianta B), cílová produkce na dvou (varianta A).
+> - Konfigurace ověřuje CI job `deploy-linux-config`.
+> - Zbývá provisioning skript F6.2 (kroky jsou zatím ručně v README), F6.4 (reconciler peerů), F6.6 (`deploy.sh`) a F6.7 (LUKS).
 
 | ID | Úkol | Hotovo, když | Testy |
 |---|---|---|---|

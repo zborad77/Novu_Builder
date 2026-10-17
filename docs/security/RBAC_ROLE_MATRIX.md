@@ -19,7 +19,8 @@
 - Tabulku `role_permissions` aplikace pro jiné role než superadmin **nepoužívá**. Migrace `0057` odstranila historické řádky `manager → admin:read/admin:write`.
 - Role `superadmin` **nelze přidělit, upravit, deaktivovat ani resetovat přes žádné HTTP API**. Nový superadmin a obnova jeho přístupu jdou jen přes serverový CLI `scripts/create_pilot_admin.py`.
 - `organization_id` (tenant) se vždy bere z ověřené identity, nikdy z parametru klienta. Pokus poslat `organizationId`, `organization_id`, `tenant_id` nebo `isSuperAdmin` do admin PATCH skončí **422**.
-- Impersonační token se do žádné administrace nedostane (403).
+- Impersonační token se do žádné administrace nedostane (403). Od F3 má `aud=nc-web`, takže ho přijme jen budoucí gateway zóna.
+- **Superadmin se přihlásí jen v zóně `admin`** (F3.3). V zónách `gateway` a `desktop` dostane stejnou odpověď jako při špatném heslu.
 
 Role `USER` ze zadání odpovídá stávající roli **`technician`**. Ponechali jsme ji kvůli kompatibilitě s existujícími daty a klienty.
 

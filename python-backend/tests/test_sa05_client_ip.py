@@ -237,3 +237,52 @@ def test_uvicorn_proxy_header_handling_is_disabled_in_the_image():
     entrypoint = (Path(__file__).resolve().parents[1] / "docker-entrypoint.sh").read_text(encoding="utf-8")
     command = next(line for line in entrypoint.splitlines() if line.startswith("exec uvicorn"))
     assert "--no-proxy-headers" in command
+
+
+# ── Unix-domain socket behind nginx (deploy/linux, F6) ────────────────────────
+
+
+def test_unix_token_is_accepted_and_not_a_network():
+    from app.core.client_ip import trusts_unix_socket
+
+    assert trusts_unix_socket("unix") and trusts_unix_socket("127.0.0.1, UNIX")
+    assert not trusts_unix_socket("127.0.0.1,::1")
+    assert parse_trusted_proxies("unix") == ()
+
+
+def test_unix_socket_peer_uses_forwarded_chain_only_when_trusted():
+    assert resolve_client_ip(None, ["203.0.113.7"], (), trust_unix_socket=True) == "203.0.113.7"
+    assert resolve_client_ip(None, ["6.6.6.6, 203.0.113.7"], (), trust_unix_socket=True) == "203.0.113.7"
+    assert resolve_client_ip(None, ["garbage"], (), trust_unix_socket=True) is None
+    assert resolve_client_ip(None, ["203.0.113.7"], (), trust_unix_socket=False) is None
+
+
+async def test_middleware_resolves_client_for_unix_socket_requests():
+    seen = {}
+
+    async def app(scope, receive, send):
+        seen["client"], seen["scheme"] = scope.get("client"), scope.get("scheme")
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        return None
+
+    def scope():
+        return {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "scheme": "http",
+            "client": None,  # uvicorn --uds
+            "headers": [(b"x-forwarded-for", b"203.0.113.7"), (b"x-forwarded-proto", b"https")],
+        }
+
+    await TrustedProxyMiddleware(app, trusted_proxies=(), trust_unix_socket=True)(scope(), receive, send)
+    assert seen == {"client": ("203.0.113.7", 0), "scheme": "https"}
+
+    await TrustedProxyMiddleware(app, trusted_proxies=(), trust_unix_socket=False)(scope(), receive, send)
+    assert seen == {"client": None, "scheme": "http"}

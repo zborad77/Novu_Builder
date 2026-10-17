@@ -34,11 +34,23 @@ class TrustedProxyConfigError(ValueError):
     pass
 
 
+UNIX_SOCKET_TOKEN = "unix"
+
+
+def trusts_unix_socket(raw: str) -> bool:
+    """``unix`` in TRUSTED_PROXY_IPS: trust the peer of a unix-domain socket.
+
+    Uvicorn reports no client address for ``--uds``; only processes allowed by
+    the socket's file permissions (nginx) can connect, so that peer is the proxy.
+    """
+    return any(part.strip().lower() == UNIX_SOCKET_TOKEN for part in raw.split(","))
+
+
 def parse_trusted_proxies(raw: str) -> tuple[IPNetwork, ...]:
-    """Parse ``TRUSTED_PROXY_IPS`` (comma separated IPs/CIDRs). Empty = trust nobody."""
+    """Parse ``TRUSTED_PROXY_IPS`` (comma separated IPs/CIDRs, plus ``unix``). Empty = trust nobody."""
     networks: list[IPNetwork] = []
     for entry in (part.strip() for part in raw.split(",")):
-        if not entry:
+        if not entry or entry.lower() == UNIX_SOCKET_TOKEN:
             continue
         if entry == "*":
             raise TrustedProxyConfigError("TRUSTED_PROXY_IPS must list explicit proxies; '*' is not allowed.")
@@ -83,30 +95,42 @@ def _is_trusted(address: IPAddress, trusted: Iterable[IPNetwork]) -> bool:
     return any(address.version == network.version and address in network for network in trusted)
 
 
+def _walk_forwarded_chain(forwarded_for: list[str], trusted: tuple[IPNetwork, ...]) -> str | None:
+    """Rightmost address that is not a trusted proxy; None if the chain is unusable."""
+    hops = [hop for header in forwarded_for for hop in header.split(",")]
+    if not hops or len(hops) > _MAX_FORWARDED_HOPS:
+        return None
+    for hop in reversed(hops):
+        address = parse_ip(hop)
+        if address is None:
+            # A malformed element breaks the chain of trust: stop at the proxy.
+            return None
+        if not _is_trusted(address, trusted):
+            return str(address)
+    return None
+
+
 def resolve_client_ip(
     peer: str | None,
     forwarded_for: list[str],
     trusted: tuple[IPNetwork, ...],
+    *,
+    trust_unix_socket: bool = False,
 ) -> str | None:
-    """Return the client address for a request arriving from ``peer``."""
+    """Return the client address for a request arriving from ``peer``.
+
+    ``peer`` is None for a unix-domain socket; with ``trust_unix_socket`` that peer
+    is the reverse proxy and its X-Forwarded-For decides (None if unusable).
+    """
+    if peer is None:
+        return _walk_forwarded_chain(forwarded_for, trusted) if trust_unix_socket else None
     peer_address = parse_ip(peer)
     if peer_address is None:
         return peer
     if not trusted or not _is_trusted(peer_address, trusted):
         return str(peer_address)
-
-    hops = [hop for header in forwarded_for for hop in header.split(",")]
-    if not hops or len(hops) > _MAX_FORWARDED_HOPS:
-        return str(peer_address)
-    for hop in reversed(hops):
-        address = parse_ip(hop)
-        if address is None:
-            # A malformed element breaks the chain of trust: stop at the proxy.
-            return str(peer_address)
-        if not _is_trusted(address, trusted):
-            return str(address)
-    # Every hop is a trusted proxy (e.g. health check from the proxy itself).
-    return str(peer_address)
+    # Every hop a trusted proxy (e.g. health check from the proxy itself) → the proxy.
+    return _walk_forwarded_chain(forwarded_for, trusted) or str(peer_address)
 
 
 def client_ip(connection: HTTPConnection) -> str | None:
@@ -125,9 +149,16 @@ class TrustedProxyMiddleware:
     audit, HTTPS redirect, logging) sees the resolved values.
     """
 
-    def __init__(self, app: ASGIApp, *, trusted_proxies: tuple[IPNetwork, ...]) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        trusted_proxies: tuple[IPNetwork, ...],
+        trust_unix_socket: bool = False,
+    ) -> None:
         self.app = app
         self.trusted_proxies = trusted_proxies
+        self.trust_unix_socket = trust_unix_socket
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in ("http", "websocket"):
@@ -142,14 +173,19 @@ class TrustedProxyMiddleware:
                     forwarded_proto = value.decode("latin-1").strip().lower()
 
             peer_address = parse_ip(peer_host)
-            from_trusted_proxy = (
+            from_trusted_proxy = (peer is None and self.trust_unix_socket) or (
                 peer_address is not None
                 and bool(self.trusted_proxies)
                 and _is_trusted(peer_address, self.trusted_proxies)
             )
-            resolved = resolve_client_ip(peer_host, forwarded_for, self.trusted_proxies)
-            if resolved is not None and peer is not None:
-                scope["client"] = (resolved, peer[1])
+            resolved = resolve_client_ip(
+                peer_host,
+                forwarded_for,
+                self.trusted_proxies,
+                trust_unix_socket=self.trust_unix_socket,
+            )
+            if resolved is not None:
+                scope["client"] = (resolved, peer[1] if peer else 0)
             if from_trusted_proxy and forwarded_proto in _FORWARDED_PROTOS and scope["type"] == "http":
                 scope["scheme"] = forwarded_proto
         await self.app(scope, receive, send)

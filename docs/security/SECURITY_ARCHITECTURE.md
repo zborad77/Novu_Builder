@@ -15,7 +15,7 @@
 1. **Private-first.** Backend API, PostgreSQL, Redis a MinIO nemají žádný port na veřejném rozhraní. Z internetu je dosažitelné jen nginx na edge (443/80) a handshake WireGuardu (UDP).
 2. **WireGuard je síťová hranice, ne autorizace.** Každý požadavek v privátní zóně dál vyžaduje platný token, roli a kontrolu firmy, stejně jako dnes.
 3. **Obrana ve více vrstvách.** Každé omezení platí na síti (nftables a Hetzner Cloud Firewall), v nginx (bind a allowlist) a v aplikaci (zónový guard). Selhání jedné vrstvy samo nic neotevře.
-4. **Default-deny.** Route, kterou nikdo nezařadil do zóny, je dostupná jen z admin zóny. CI selže na každé nezařazené route.
+4. **Default-deny.** Route, kterou nikdo nezařadil do zóny, je blokovaná ve **všech** produkčních zónách včetně admin (upřesněno při implementaci F3, 17. 10. 2026). CI selže na každé nezařazené route.
 5. **Gateway není proxy.** Pouští jen explicitní seznam operací (metoda + šablona cesty) z [API_EXPOSURE_MATRIX.md](API_EXPOSURE_MATRIX.md). Nemá JWT signing secret ani přístup k DB, Redisu core ani MinIO.
 6. **Token je vázaný na kanál.** Token vydaný přes web nefunguje na desktopu ani v adminu a naopak (claim `aud`).
 7. **Browser nikdy nevidí JWT.** Dostane jen opaque session cookie (HttpOnly, Secure, SameSite=Strict).
@@ -113,7 +113,7 @@ Tím se obejde slabé místo modelu podle hlaviček: i kdyby se útočník dosta
 
 - `app/core/exposure.py` obsahuje tabulku `(metoda, šablona cesty) → množina zón`, generovanou a kontrolovanou proti [API_EXPOSURE_MATRIX.md](API_EXPOSURE_MATRIX.md).
 - Middleware `exposure_guard` je **nejvnější** vrstva. Rozhodne ještě před autentizací, dependencies a rate limitem a nepovolenou route vrátí jako **404**, ne 403.
-- Nezařazená route spadne do zóny `admin` (default-deny).
+- Nezařazená route je blokovaná ve všech produkčních zónách, i v `admin` (default-deny). Dostupná je jen v zóně `dev` (lokální vývoj).
 - `tests/test_route_exposure.py` selže na:
   - jakékoli nezařazené route,
   - změně množiny `gateway` bez úpravy schváleného seznamu v testu.

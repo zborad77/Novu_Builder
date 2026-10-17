@@ -33,7 +33,16 @@ def _encode_refresh_token(user_id: str, issued_offset_seconds: int = 0, *, versi
     now = datetime.now(UTC)
     iat = now + timedelta(seconds=issued_offset_seconds)
     exp = iat + timedelta(days=_REFRESH_TTL_DAYS)
-    payload = {"sub": user_id, "jti": "test-jti-1", "type": "refresh", "exp": exp}
+    # F3.3: issuer, the dev zone's audience and issue time are required claims.
+    payload = {
+        "sub": user_id,
+        "jti": "test-jti-1",
+        "type": "refresh",
+        "exp": exp,
+        "iat": iat,
+        "iss": "novuconstruct-core",
+        "aud": "nc-dev",
+    }
     if version is not None:
         payload["ver"] = version
     return jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALGO)
@@ -43,6 +52,7 @@ def _make_settings(refresh_days: int = _REFRESH_TTL_DAYS) -> MagicMock:
     s = MagicMock()
     s.jwt_secret = _JWT_SECRET
     s.jwt_algorithm = _JWT_ALGO
+    s.jwt_issuer = "novuconstruct-core"
     s.jwt_refresh_token_expire_days = refresh_days
     s.jwt_access_token_expire_minutes = 15
     return s
@@ -57,6 +67,7 @@ def _make_user(*, tokens_valid_after=None, token_version: int = 0) -> MagicMock:
     u.email = "test@test.local"
     u.full_name = "Test User"
     u.role = "manager"
+    u.is_superadmin = False
     u.organization_id = "org_test"
     u.is_superadmin = False
     return u

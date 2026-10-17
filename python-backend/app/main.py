@@ -15,7 +15,8 @@ import structlog
 from app.api.router import api_router
 from app.core.api_versioning import ApiVersioningMiddleware
 from app.core.audit import AuditMiddleware
-from app.core.client_ip import TrustedProxyMiddleware
+from app.core.client_ip import TrustedProxyMiddleware, trusts_unix_socket
+from app.core.exposure import PRODUCTION_ZONES, ExposureGuardMiddleware
 from app.core.config import get_settings, startup_failure_message
 from app.core.limiter import limiter
 from app.core.logging import configure_logging
@@ -220,6 +221,15 @@ async def lifespan(app: FastAPI):
         "schema": "pending",
         "storage": "pending",
     }
+
+    if settings.effective_nc_zone not in PRODUCTION_ZONES and not settings.is_development:
+        raise RuntimeError(
+            startup_failure_message(
+                "network_zone",
+                "NC_ZONE must be gateway, desktop or admin outside development; "
+                "run one API process per zone (deploy/linux/systemd/nc-api@.service).",
+            )
+        )
 
     if not settings.trusted_proxy_ips.strip() and not settings.is_development:
         # Safe (headers cannot be spoofed) but every client behind the reverse
@@ -531,9 +541,16 @@ def create_app() -> FastAPI:
             content={"detail": "Service temporarily unavailable. Please retry in a moment."},
         )
 
+    # Zone guard (F3.2): 404 for every route this process's NC_ZONE does not
+    # expose, before audit, rate limiting, authentication and handlers.
+    app.add_middleware(ExposureGuardMiddleware)
     # Outermost: resolve the real client address/scheme before rate limiting,
     # audit, HTTPS redirect and logging read them (SA-05).
-    app.add_middleware(TrustedProxyMiddleware, trusted_proxies=settings.trusted_proxy_networks)
+    app.add_middleware(
+        TrustedProxyMiddleware,
+        trusted_proxies=settings.trusted_proxy_networks,
+        trust_unix_socket=trusts_unix_socket(settings.trusted_proxy_ips),
+    )
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 

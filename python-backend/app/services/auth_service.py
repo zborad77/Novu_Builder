@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import commit_security_critical_audit
 from app.core.config import get_settings
+from app.core.exposure import SUPERADMIN_ZONES, current_audience, current_zone
 from app.core.security import enforce_password_strength
 from app.models import User, UserSession
 from app.repositories.token_repository import (
@@ -79,8 +80,9 @@ class AuthService:
     ) -> tuple[str, str, datetime]:
         """Returns (encoded_token, jti, expires_at)."""
         jti = uuid4().hex
-        exp = datetime.now(UTC) + timedelta(minutes=self._settings.jwt_access_token_expire_minutes)
-        payload = {"sub": user_id, "jti": jti, "type": "access", "exp": exp, "ver": token_version}
+        now = datetime.now(UTC)
+        exp = now + timedelta(minutes=self._settings.jwt_access_token_expire_minutes)
+        payload = {"sub": user_id, "jti": jti, "type": "access", "exp": exp, "ver": token_version, **self._zone_claims(now)}
         if session_id is not None:
             payload["sid"] = session_id
         # org claim enables per-tenant rate limit bucketing (see limiter.py _rate_limit_key).
@@ -103,8 +105,9 @@ class AuthService:
     ) -> tuple[str, str, datetime]:
         """Returns (encoded_token, jti, expires_at)."""
         jti = uuid4().hex
-        exp = datetime.now(UTC) + timedelta(days=self._settings.jwt_refresh_token_expire_days)
-        payload = {"sub": user_id, "jti": jti, "type": "refresh", "exp": exp, "ver": token_version}
+        now = datetime.now(UTC)
+        exp = now + timedelta(days=self._settings.jwt_refresh_token_expire_days)
+        payload = {"sub": user_id, "jti": jti, "type": "refresh", "exp": exp, "ver": token_version, **self._zone_claims(now)}
         if session_id is not None:
             payload["sid"] = session_id
         token = jwt.encode(
@@ -113,6 +116,14 @@ class AuthService:
             algorithm=self._settings.jwt_algorithm,
         )
         return token, jti, exp
+
+    def _zone_claims(self, issued_at: datetime) -> dict:
+        """Issuer, zone audience and issue time (F3.3): a token never leaves its zone."""
+        return {"iss": self._settings.jwt_issuer, "aud": current_audience(), "iat": issued_at}
+
+    @staticmethod
+    def superadmin_allowed_in_zone() -> bool:
+        return current_zone() in SUPERADMIN_ZONES
 
     @staticmethod
     def _normalize_encoded_token(token: str | None) -> str | None:
@@ -232,7 +243,14 @@ class AuthService:
         if normalized_token is None:
             return None
         try:
-            payload = jwt.decode(normalized_token, self._settings.jwt_secret, algorithms=[self._settings.jwt_algorithm])
+            payload = jwt.decode(
+                normalized_token,
+                self._settings.jwt_secret,
+                algorithms=[self._settings.jwt_algorithm],
+                audience=current_audience(),
+                issuer=self._settings.jwt_issuer,
+                options={"require": ["exp", "iat", "iss", "aud", "sub", "jti"]},
+            )
         except jwt.PyJWTError:
             return None
         if not isinstance(payload, dict):
@@ -304,6 +322,10 @@ class AuthService:
         password_matches = _verify_password(password, password_hash)
         if not user or not user.is_active or not password_matches:
             return None
+        if user.is_superadmin and not self.superadmin_allowed_in_zone():
+            # Superadmins authenticate only in the admin zone; same answer as bad credentials.
+            logger.warning("SECURITY_EVENT: superadmin_login_outside_admin_zone", user_id=user.id, zone=current_zone())
+            return None
         token_version = self._user_token_version(user)
         for _ in range(2):
             session_id = f"sess_{uuid4().hex}"
@@ -353,6 +375,8 @@ class AuthService:
         user = await self.session.get(User, payload["sub"])
         if not user or not user.is_active:
             return None
+        if user.is_superadmin and not self.superadmin_allowed_in_zone():
+            return None
         if not self._token_version_matches_user(payload, user):
             return None
         if payload.get("ver") is None and self._legacy_token_is_invalidated(
@@ -387,6 +411,8 @@ class AuthService:
                 return RefreshResult(tokens=None, failure_reason="revoked_or_reused_token")
         user = await self.session.get(User, payload["sub"])
         if not user or not user.is_active:
+            return RefreshResult(tokens=None, failure_reason="invalid_or_expired_token")
+        if user.is_superadmin and not self.superadmin_allowed_in_zone():
             return RefreshResult(tokens=None, failure_reason="invalid_or_expired_token")
         if not self._token_version_matches_user(payload, user):
             return RefreshResult(tokens=None, failure_reason="token_invalidated")

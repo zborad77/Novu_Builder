@@ -7,6 +7,20 @@
 | **Zdroj** | Inventář vygenerovaný importem `app.main:app` a průchodem `route.dependant.dependencies`: 113 rout, z toho 108 pod `/api/v1`. |
 | **Související** | [SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md) kap. 3 · [SECURITY_AUDIT.md](SECURITY_AUDIT.md) |
 
+## Stav implementace (17. 10. 2026)
+
+Zóny jsou implementované ve větvi `fix/f0-rbac-tenant-isolation` (F3.1–F3.3, F3.5), **zatím nenasazené**.
+
+- **Zdroj pravdy je kód:** [`python-backend/app/core/exposure.py`](../../python-backend/app/core/exposure.py). Tato tabulka ho popisuje.
+- **Zóna se určuje jen z procesu:** `NC_ZONE` v `deploy/linux/systemd/nc-api@.service`.
+- **Nezařazená route** je blokovaná ve všech produkčních zónách, i v admin.
+- **Odchylky od původního návrhu:**
+  - `GET /api/v1/health` je navíc v zóně D, protože ho volá desktop při nastavení serveru,
+  - `POST /api/v1/offer-requests/{offer_id}/more-info` je v zónách G/D,
+  - routy z F0.3 (koš, obnova a trvalé smazání fotek, `/admin/photos/{id}/purge`) odpovídají tabulce v kap. 5 a 10.
+- **Allowlist pro gateway** je generovaný soubor [gateway-allowlist.json](gateway-allowlist.json) (86 rout). Hlídá ho test `tests/test_gateway_allowlist.py`.
+- **JWT** nese `aud` podle zóny (`nc-web`, `nc-desktop`, `nc-admin`), dále `iss` a `iat`. Token z jiné zóny vrací 401. Superadmin se přihlásí jen v zóně A.
+
 ## Legenda
 
 | Zóna | Význam |

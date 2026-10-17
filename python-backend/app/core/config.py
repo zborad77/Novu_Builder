@@ -368,6 +368,11 @@ class Settings(BaseSettings):
     # How long a soft-deleted photo stays restorable before the worker purges
     # its storage objects. 0 purges on the next cleanup run.
     photo_delete_retention_hours: int = Field(default=168, ge=0, alias="PHOTO_DELETE_RETENTION_HOURS")
+    # Network zone served by this API process (app/core/exposure.py): gateway |
+    # desktop | admin, or dev (development only, every route). Required for the
+    # API outside development; never derived from a request.
+    nc_zone: str = Field(default="", alias="NC_ZONE")
+    jwt_issuer: str = Field(default="novuconstruct-core", alias="JWT_ISSUER")
     # Append-only file recording permanent photo deletions outside the database
     # (app/core/purge_ledger.py). Required for permanent deletion outside development.
     photo_purge_ledger_path: str = Field(default="", alias="PHOTO_PURGE_LEDGER_PATH")
@@ -759,6 +764,29 @@ class Settings(BaseSettings):
     @property
     def auth_throttle_fail_open(self) -> bool:
         return self.app_env.lower() == "development" and self.auth_throttle_dev_fail_open
+
+    @model_validator(mode="after")
+    def _check_network_zone(self) -> "Settings":
+        from app.core.exposure import ALL_ZONES, ZONE_DEV
+
+        zone = self.nc_zone.strip().lower()
+        if zone and zone not in ALL_ZONES:
+            raise ValueError(f"NC_ZONE={self.nc_zone!r} is not one of: {', '.join(sorted(ALL_ZONES))}.")
+        if zone == ZONE_DEV and self.app_env.lower() != "development":
+            raise ValueError("NC_ZONE=dev exposes every route and is allowed only in APP_ENV='development'.")
+        if self.jwt_algorithm not in {"HS256", "HS384", "HS512"}:
+            raise ValueError("JWT_ALGORITHM must be one of HS256, HS384, HS512.")
+        if not self.jwt_issuer.strip():
+            raise ValueError("JWT_ISSUER must not be empty.")
+        return self
+
+    @property
+    def effective_nc_zone(self) -> str:
+        """Zone of this process; development defaults to 'dev', otherwise '' (unset)."""
+        zone = self.nc_zone.strip().lower()
+        if zone:
+            return zone
+        return "dev" if self.app_env.lower() == "development" else ""
 
     @model_validator(mode="after")
     def _check_trusted_proxies(self) -> "Settings":

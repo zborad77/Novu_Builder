@@ -207,10 +207,14 @@ def _decode_user(authorization: str | None) -> tuple[str | None, str | None]:
     token = authorization[7:]
     try:
         settings = get_settings()
+        from app.core.exposure import current_audience
+
         payload = jwt.decode(
             token,
             settings.jwt_secret,
             algorithms=[settings.jwt_algorithm],
+            audience=current_audience(),
+            issuer=settings.jwt_issuer,
         )
         return payload.get("sub"), payload.get("impersonated_by")
     except Exception:

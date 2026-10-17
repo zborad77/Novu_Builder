@@ -621,9 +621,16 @@ async def test_purge_fails_closed_without_a_writable_ledger(app_client, f03_user
     body = {"confirmImageId": photo_id}
 
     # Production without a configured ledger: refused before anything changes.
+    # A production API process always has a zone (F3); purge lives in the tenant zones.
+    # The token was issued in the dev zone, so authenticate again in the desktop zone.
+    monkeypatch.setattr(get_settings(), "nc_zone", "desktop")
+    desktop_admin = await _token(app_client, "f03_admin_a")
     monkeypatch.setattr(get_settings(), "app_env", "production")
-    refused = await app_client.post(f"/api/v1/cases/{case_id}/images/{photo_id}/purge", json=body, headers=_auth(admin))
+    refused = await app_client.post(
+        f"/api/v1/cases/{case_id}/images/{photo_id}/purge", json=body, headers=_auth(desktop_admin)
+    )
     monkeypatch.setattr(get_settings(), "app_env", "development")
+    monkeypatch.setattr(get_settings(), "nc_zone", "")
     assert refused.status_code == 503
 
     # Ledger configured but not writable (a directory sits at its path).

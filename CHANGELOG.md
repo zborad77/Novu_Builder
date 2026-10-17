@@ -51,6 +51,24 @@ All notable changes to this project will be documented in this file.
     rejected in production; uvicorn runs with `--no-proxy-headers`; nginx gets a
     fixed address on a dedicated Compose network; rate-limit counters are shared
     through Redis and fail closed (503).
+- F3 network zones + F6 bare-metal deployment (`deploy/linux/`, not deployed):
+  - One API process per zone (`NC_ZONE=gateway|desktop|admin`, set by systemd
+    `nc-api@.service`, never by a request); `dev` zone only in development; the API
+    refuses to start without a production zone outside development.
+  - `app/core/exposure.py`: every route classified; unclassified or foreign-zone
+    routes answer 404 before authentication in every production zone, admin included.
+    CI fails on unclassified routes; `docs/security/gateway-allowlist.json` is
+    generated from it (F3.5).
+  - JWT carries `iss`, zone `aud` and `iat`; issuer, audience, signature, expiry and
+    required claims are verified; tokens never cross zones; superadmins authenticate
+    only in the admin zone; impersonation tokens target the web gateway only.
+  - `TRUSTED_PROXY_IPS=unix` trusts nginx on the API's unix socket.
+  - `deploy/linux/`: systemd units (sandbox exposure 1.2), nginx core (WireGuard
+    addresses only) and edge (information site only), WireGuard templates
+    (10.50.0.0/16, 10.51.0.0/24, no overlap with Novusion networks), nftables for
+    single-server pilot and two-server production, secrets via LoadCredential,
+    break-glass procedure, staging isolation tests; CI job `deploy-linux-config`.
+  - Existing sessions must log in again (tokens without `aud`/`iss` are rejected).
 - F0.3 photo ownership and permanent deletion (`docs/security/PHOTO_DELETION.md`):
   - `project_photos.uploaded_by_user_id` is set by the server from the uploader;
     technicians soft-delete/restore only their own photos, legacy photos (NULL)
