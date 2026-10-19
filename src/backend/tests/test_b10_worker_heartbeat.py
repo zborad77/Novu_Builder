@@ -239,20 +239,20 @@ class TestHealthInternalWorkerSection:
 
     def test_health_internal_source_reads_per_instance_heartbeat_pattern(self):
         """health_internal must scan the per-instance heartbeat keyspace."""
-        from app.api.routes.system import health_internal
+        from app.composition.api.system import health_internal
         src = inspect.getsource(health_internal)
         assert '"worker"' in src or "'worker'" in src
 
     def test_health_internal_source_returns_worker_section(self):
         """health_internal response must include a 'worker' key."""
-        from app.api.routes.system import health_internal
+        from app.composition.api.system import health_internal
         src = inspect.getsource(health_internal)
         assert '"worker"' in src or "'worker'" in src
 
     @pytest.mark.asyncio
     async def test_worker_alive_when_any_recent_per_instance_heartbeat_exists(self):
         """Returns worker.alive=True when at least one worker instance heartbeat is fresh."""
-        from app.api.routes.system import health_internal
+        from app.composition.api.system import health_internal
         from app.modules.identity.schemas.auth import AuthUserRead
 
         fresh_ts = datetime.now(UTC).isoformat().encode()
@@ -275,7 +275,7 @@ class TestHealthInternalWorkerSection:
             isActive=True, organizationId="org-1", isSuperAdmin=True, impersonatedBy=None,
         )
 
-        with patch("app.api.routes.system.AsyncSessionFactory") as mock_factory:
+        with patch("app.composition.api.system.AsyncSessionFactory") as mock_factory:
             mock_factory.return_value = _mock_health_internal_session()
             response = Response()
 
@@ -295,7 +295,7 @@ class TestHealthInternalWorkerSection:
     @pytest.mark.asyncio
     async def test_worker_dead_when_no_heartbeat_key(self):
         """Returns worker.alive=False when no heartbeat key exists in Redis."""
-        from app.api.routes.system import health_internal
+        from app.composition.api.system import health_internal
         from app.modules.identity.schemas.auth import AuthUserRead
 
         mock_redis = _redis_with_heartbeats({})
@@ -311,7 +311,7 @@ class TestHealthInternalWorkerSection:
             isActive=True, organizationId="org-1", isSuperAdmin=True, impersonatedBy=None,
         )
 
-        with patch("app.api.routes.system.AsyncSessionFactory") as mock_factory:
+        with patch("app.composition.api.system.AsyncSessionFactory") as mock_factory:
             mock_factory.return_value = _mock_health_internal_session()
             response = Response()
 
@@ -327,7 +327,7 @@ class TestHealthInternalWorkerSection:
 
     @pytest.mark.asyncio
     async def test_health_internal_reports_auth_protection_unavailable_when_redis_monitoring_is_missing(self):
-        from app.api.routes.system import health_internal
+        from app.composition.api.system import health_internal
         from app.modules.identity.schemas.auth import AuthUserRead
 
         mock_request = MagicMock()
@@ -341,7 +341,7 @@ class TestHealthInternalWorkerSection:
             isActive=True, organizationId="org-1", isSuperAdmin=True, impersonatedBy=None,
         )
 
-        with patch("app.api.routes.system.AsyncSessionFactory") as mock_factory:
+        with patch("app.composition.api.system.AsyncSessionFactory") as mock_factory:
             mock_factory.return_value = _mock_health_internal_session()
             response = Response()
 
@@ -357,7 +357,7 @@ class TestHealthInternalWorkerSection:
     @pytest.mark.asyncio
     async def test_worker_alive_with_legacy_single_worker_heartbeat_key(self):
         """Legacy single-worker heartbeat key remains readable during rollout."""
-        from app.api.routes.system import health_internal
+        from app.composition.api.system import health_internal
         from app.modules.identity.schemas.auth import AuthUserRead
 
         fresh_ts = datetime.now(UTC).isoformat().encode()
@@ -373,7 +373,7 @@ class TestHealthInternalWorkerSection:
             isActive=True, organizationId="org-1", isSuperAdmin=True, impersonatedBy=None,
         )
 
-        with patch("app.api.routes.system.AsyncSessionFactory") as mock_factory:
+        with patch("app.composition.api.system.AsyncSessionFactory") as mock_factory:
             mock_factory.return_value = _mock_health_internal_session()
             response = Response()
 
@@ -390,7 +390,7 @@ class TestHealthInternalWorkerSection:
     @pytest.mark.asyncio
     async def test_worker_unknown_when_redis_unavailable(self):
         """Returns worker.alive=None when Redis is unavailable (app state has no client)."""
-        from app.api.routes.system import health_internal
+        from app.composition.api.system import health_internal
         from app.modules.identity.schemas.auth import AuthUserRead
 
         mock_request = MagicMock()
@@ -404,7 +404,7 @@ class TestHealthInternalWorkerSection:
             isActive=True, organizationId="org-1", isSuperAdmin=True, impersonatedBy=None,
         )
 
-        with patch("app.api.routes.system.AsyncSessionFactory") as mock_factory:
+        with patch("app.composition.api.system.AsyncSessionFactory") as mock_factory:
             mock_factory.return_value = _mock_health_internal_session()
             response = Response()
 

@@ -7,7 +7,7 @@ from fastapi import Response
 
 @pytest.mark.asyncio
 async def test_health_internal_exposes_retry_dlq_and_queue_depth_details():
-    from app.api.routes.system import (
+    from app.composition.api.system import (
         _DatabaseJobSnapshot,
         _WorkerHeartbeatSnapshot,
         health_internal,
@@ -48,9 +48,9 @@ async def test_health_internal_exposes_retry_dlq_and_queue_depth_details():
     )
 
     with (
-        patch("app.api.routes.system.AsyncSessionFactory", return_value=session_ctx),
+        patch("app.composition.api.system.AsyncSessionFactory", return_value=session_ctx),
         patch(
-            "app.api.routes.system._query_job_counts",
+            "app.composition.api.system._query_job_counts",
             new=AsyncMock(
                 return_value=_DatabaseJobSnapshot(
                     jobs_running=2,
@@ -62,10 +62,10 @@ async def test_health_internal_exposes_retry_dlq_and_queue_depth_details():
                 )
             ),
         ),
-        patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(6, 2))),
-        patch("app.api.routes.system._query_queue_operational_counts", new=AsyncMock(return_value=(4, 2, 1))),
+        patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(6, 2))),
+        patch("app.composition.api.system._query_queue_operational_counts", new=AsyncMock(return_value=(4, 2, 1))),
         patch(
-            "app.api.routes.system._get_worker_heartbeat_snapshot",
+            "app.composition.api.system._get_worker_heartbeat_snapshot",
             new=AsyncMock(
                 return_value=_WorkerHeartbeatSnapshot(
                     alive=True,
@@ -76,7 +76,7 @@ async def test_health_internal_exposes_retry_dlq_and_queue_depth_details():
             ),
         ),
         patch(
-            "app.api.routes.system._queue_runtime_details",
+            "app.composition.api.system._queue_runtime_details",
             return_value={
                 "state": "degraded",
                 "mode": "failover",
@@ -87,8 +87,8 @@ async def test_health_internal_exposes_retry_dlq_and_queue_depth_details():
                 "lastFailoverAt": "2026-04-01T10:00:00+00:00",
             },
         ),
-        patch("app.api.routes.system._queue_runtime_state", return_value="degraded"),
-        patch("app.api.routes.system._storage_ready_cached", new=AsyncMock(return_value=True)),
+        patch("app.composition.api.system._queue_runtime_state", return_value="degraded"),
+        patch("app.composition.api.system._storage_ready_cached", new=AsyncMock(return_value=True)),
     ):
         body = await health_internal(
             request=request,

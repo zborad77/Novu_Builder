@@ -49,7 +49,7 @@ def _metric_labels_fragment(line: str) -> str | None:
 
 @pytest.fixture(autouse=True)
 def _reset_metrics_state():
-    from app.api.routes.system import (
+    from app.composition.api.system import (
         _clear_operational_metrics_cache,
         _clear_readiness_db_cache,
         _clear_readiness_storage_cache,
@@ -600,7 +600,7 @@ class TestOperationalMetricsExported:
 
     @pytest.mark.asyncio
     async def test_operational_metrics_cache_hits_within_ttl(self):
-        from app.api.routes.system import (
+        from app.composition.api.system import (
             _WorkerHeartbeatSnapshot,
             _get_operational_metrics_snapshot_cached,
         )
@@ -620,14 +620,14 @@ class TestOperationalMetricsExported:
         queue_counts = AsyncMock(return_value=(7, 1))
 
         with (
-            patch("app.api.routes.system.AsyncSessionFactory", return_value=session_ctx),
-            patch("app.api.routes.system._query_job_counts", new=query_counts),
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=queue_counts),
+            patch("app.composition.api.system.AsyncSessionFactory", return_value=session_ctx),
+            patch("app.composition.api.system._query_job_counts", new=query_counts),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=queue_counts),
             patch(
-                "app.api.routes.system._get_worker_heartbeat_snapshot",
+                "app.composition.api.system._get_worker_heartbeat_snapshot",
                 new=AsyncMock(return_value=worker_snapshot),
             ),
-            patch("app.api.routes.system._readiness_now", side_effect=[100.0, 100.0, 101.0, 101.0]),
+            patch("app.composition.api.system._readiness_now", side_effect=[100.0, 100.0, 101.0, 101.0]),
         ):
             first = await _get_operational_metrics_snapshot_cached(request)
             second = await _get_operational_metrics_snapshot_cached(request)
@@ -644,7 +644,7 @@ class TestOperationalMetricsExported:
 
     @pytest.mark.asyncio
     async def test_operational_metrics_cache_refreshes_after_ttl_expiry(self):
-        from app.api.routes.system import (
+        from app.composition.api.system import (
             _WorkerHeartbeatSnapshot,
             _get_operational_metrics_snapshot_cached,
         )
@@ -664,15 +664,15 @@ class TestOperationalMetricsExported:
         queue_counts = AsyncMock(side_effect=[(2, 1), (9, 3)])
 
         with (
-            patch("app.api.routes.system.AsyncSessionFactory", return_value=session_ctx),
-            patch("app.api.routes.system._query_job_counts", new=query_counts),
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=queue_counts),
+            patch("app.composition.api.system.AsyncSessionFactory", return_value=session_ctx),
+            patch("app.composition.api.system._query_job_counts", new=query_counts),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=queue_counts),
             patch(
-                "app.api.routes.system._get_worker_heartbeat_snapshot",
+                "app.composition.api.system._get_worker_heartbeat_snapshot",
                 new=AsyncMock(return_value=worker_snapshot),
             ),
             patch(
-                "app.api.routes.system._readiness_now",
+                "app.composition.api.system._readiness_now",
                 side_effect=[200.0, 200.0, 201.0, 206.0, 206.0, 207.0],
             ),
         ):

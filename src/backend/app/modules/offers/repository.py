@@ -11,8 +11,8 @@ from uuid import uuid4
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.offer_processing import AgentRun, OfferJob, OfferRequest
-from app.offer_processing.domain import (
+from app.modules.offers.models import AgentRun, OfferJob, OfferRequest
+from app.modules.offers.domain import (
     JOB_STATUS_QUEUED,
     JOB_STATUS_RUNNING,
     OFFER_STATUS_SUBMITTED,

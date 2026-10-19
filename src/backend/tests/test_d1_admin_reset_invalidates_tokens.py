@@ -148,7 +148,7 @@ class TestAdminResetInvalidatesOldTokens:
 
         with (
             patch("app.modules.identity.auth_service.datetime", FrozenDateTime),
-            patch("app.api.routes.admin.datetime", FrozenDateTime),
+            patch("app.modules.admin.api.admin.datetime", FrozenDateTime),
         ):
             login_resp = await app_client.post(
                 "/api/v1/auth/login",

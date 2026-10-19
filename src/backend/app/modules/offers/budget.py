@@ -29,7 +29,7 @@ import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.offer_processing.domain import ERROR_BUDGET_EXHAUSTED
+from app.modules.offers.domain import ERROR_BUDGET_EXHAUSTED
 
 logger = structlog.get_logger(__name__)
 

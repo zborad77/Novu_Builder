@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.media.photo_purge import purge_photo_with_audit
-from app.api.deps import (
+from app.composition.deps import (
     get_analysis_service,
     get_auth_redis,
     get_job_queue,

@@ -12,7 +12,7 @@ import inspect
 
 import pytest
 
-from app.api.routes.admin import (
+from app.modules.admin.api.admin import (
     _ADMIN_JOB_MAX_ERROR_LEN,
     _sanitize_admin_job,
     _sanitize_payload,

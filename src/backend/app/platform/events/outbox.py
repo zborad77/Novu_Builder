@@ -29,7 +29,7 @@ from app.platform.events.types import (
     EVENT_OFFER_STATUS_CHANGED,
     build_outbox_message,
 )
-from app.models.offer_processing import OutboxEvent
+from app.platform.events.models import OutboxEvent
 
 logger = structlog.get_logger(__name__)
 

@@ -60,7 +60,7 @@ async def test_change_password_returns_503_when_security_audit_enforcement_fails
 
 @pytest.mark.asyncio
 async def test_reset_user_password_returns_503_when_security_audit_enforcement_fails():
-    from app.api.routes.admin import ResetPasswordPayload, reset_user_password
+    from app.modules.admin.api.admin import ResetPasswordPayload, reset_user_password
     from app.modules.audit.audit_log import SecurityAuditWriteError
 
     target = SimpleNamespace(
@@ -79,10 +79,10 @@ async def test_reset_user_password_returns_503_when_security_audit_enforcement_f
     company_admin = _current_user(user_id="admin-1").model_copy(update={"role": "admin"})
 
     with patch(
-        "app.api.routes.admin.commit_security_critical_audit",
+        "app.modules.admin.api.admin.commit_security_critical_audit",
         new=AsyncMock(side_effect=SecurityAuditWriteError("audit unavailable")),
     ), patch(
-        "app.api.routes.admin.TokenRepository.revoke_all_user_sessions",
+        "app.modules.admin.api.admin.TokenRepository.revoke_all_user_sessions",
         new=AsyncMock(return_value=[]),
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -100,7 +100,7 @@ async def test_reset_user_password_returns_503_when_security_audit_enforcement_f
 
 @pytest.mark.asyncio
 async def test_impersonate_user_returns_503_when_security_audit_enforcement_fails():
-    from app.api.routes.admin import impersonate_user
+    from app.modules.admin.api.admin import impersonate_user
     from app.modules.audit.audit_log import SecurityAuditWriteError
 
     target = SimpleNamespace(
@@ -115,7 +115,7 @@ async def test_impersonate_user_returns_503_when_security_audit_enforcement_fail
     session.get = AsyncMock(return_value=target)
 
     with patch(
-        "app.api.routes.admin.commit_security_critical_audit",
+        "app.modules.admin.api.admin.commit_security_critical_audit",
         new=AsyncMock(side_effect=SecurityAuditWriteError("audit unavailable")),
     ):
         with pytest.raises(HTTPException) as exc_info:

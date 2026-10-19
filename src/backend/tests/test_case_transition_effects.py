@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.modules.workflow.case_actions import CaseActionService
 from app.platform.events.types import AGGREGATE_CASE, EVENT_ANALYSIS_STARTED
 from app.modules.analysis.models import AnalysisJob
-from app.models import OutboxEvent
+from app.platform.events.models import OutboxEvent
 from app.modules.quoting.models import ProjectFinalProposal
 from app.modules.cases.models import Project
 from app.modules.exports.models import ProjectExport

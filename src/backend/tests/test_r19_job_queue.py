@@ -808,7 +808,7 @@ class TestExecuteJobStatusGuard:
 
 class TestCreateAnalysisJobRoute:
     def test_enqueues_when_queue_available(self):
-        from app.api.deps import get_job_queue
+        from app.composition.deps import get_job_queue
 
         mock_redis = AsyncMock()
         mock_request = MagicMock()
@@ -817,7 +817,7 @@ class TestCreateAnalysisJobRoute:
         assert result is mock_redis
 
     def test_get_job_queue_returns_none_when_not_set(self):
-        from app.api.deps import get_job_queue
+        from app.composition.deps import get_job_queue
 
         mock_request = MagicMock()
         del mock_request.app.state.job_queue
@@ -826,7 +826,7 @@ class TestCreateAnalysisJobRoute:
         assert result is None
 
     def test_framework_runtime_helpers_return_none_without_app_context(self):
-        from app.api.deps import get_auth_redis, get_job_queue, get_redis
+        from app.composition.deps import get_auth_redis, get_job_queue, get_redis
 
         request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
 

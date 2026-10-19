@@ -131,7 +131,7 @@ async def _fresh_client():
 
 
 def _clear_readiness_caches_for(app) -> None:
-    from app.api.routes.system import (
+    from app.composition.api.system import (
         _clear_operational_metrics_cache,
         _clear_readiness_db_cache,
         _clear_readiness_storage_cache,
@@ -147,7 +147,7 @@ def _reset_readiness_caches_before_each_test():
     doesn't make a healthy-mock test appear healthy and vice-versa."""
     from app.platform.config import get_settings
     from app.main import app as fastapi_app
-    from app.api.routes.system import (
+    from app.composition.api.system import (
         _clear_operational_metrics_cache,
         _clear_readiness_db_cache,
         _clear_readiness_storage_cache,
@@ -223,20 +223,20 @@ class TestC1RedisOutage:
         fastapi_app.state.job_queue = object()  # non-None so counts are attempted
         try:
             with patch(
-                "app.api.routes.system.get_analysis_job_queue_counts",
+                "app.composition.api.system.get_analysis_job_queue_counts",
                 new=AsyncMock(side_effect=OSError("redis connection reset")),
             ), patch(
-                "app.api.routes.system._get_worker_heartbeat_snapshot",
+                "app.composition.api.system._get_worker_heartbeat_snapshot",
                 new=AsyncMock(return_value=worker_snap),
             ):
                 degraded = await app_client.get("/api/v1/ready/processing?strict=1")
 
             _clear_readiness_caches_for(fastapi_app)
             with patch(
-                "app.api.routes.system.get_analysis_job_queue_counts",
+                "app.composition.api.system.get_analysis_job_queue_counts",
                 new=AsyncMock(return_value=(0, 0)),
             ), patch(
-                "app.api.routes.system._get_worker_heartbeat_snapshot",
+                "app.composition.api.system._get_worker_heartbeat_snapshot",
                 new=AsyncMock(return_value=worker_snap),
             ):
                 recovered = await app_client.get("/api/v1/ready/processing?strict=1")
@@ -290,8 +290,8 @@ class TestC2DatabaseOutage:
             alive=True, last_seen_at="2026-04-06T10:00:00+00:00",
             alive_instances=1, seen_instances=1,
         )
-        with patch("app.api.routes.system.AsyncSessionFactory", return_value=failing_ctx), \
-             patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=alive_worker)):
+        with patch("app.composition.api.system.AsyncSessionFactory", return_value=failing_ctx), \
+             patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=alive_worker)):
             response = await app_client.get("/api/v1/ready")
 
         assert response.status_code == 503
@@ -307,8 +307,8 @@ class TestC2DatabaseOutage:
             alive=True, last_seen_at="2026-04-06T10:00:00+00:00",
             alive_instances=1, seen_instances=1,
         )
-        with patch("app.api.routes.system.AsyncSessionFactory", return_value=failing_ctx), \
-             patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=alive_worker)):
+        with patch("app.composition.api.system.AsyncSessionFactory", return_value=failing_ctx), \
+             patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=alive_worker)):
             health = await app_client.get("/api/v1/health")
 
         assert health.status_code == 503
@@ -328,13 +328,13 @@ class TestC2DatabaseOutage:
             alive=True, last_seen_at="2026-04-06T10:00:00+00:00",
             alive_instances=1, seen_instances=1,
         )
-        with patch("app.api.routes.system.AsyncSessionFactory", return_value=failing_ctx), \
-             patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=alive_worker)):
+        with patch("app.composition.api.system.AsyncSessionFactory", return_value=failing_ctx), \
+             patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=alive_worker)):
             degraded = await app_client.get("/api/v1/ready")
         assert degraded.status_code == 503
 
         _clear_readiness_caches_for(fastapi_app)
-        with patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=alive_worker)):
+        with patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=alive_worker)):
             recovered = await app_client.get("/api/v1/ready")
         assert recovered.status_code == 200
 
@@ -499,7 +499,7 @@ class TestC4BackendRestart:
         """Fresh app instance must be /ready without requiring any warm-up."""
         async with _fresh_client() as (app, client):
             with patch(
-                "app.api.routes.system._get_worker_heartbeat_snapshot",
+                "app.composition.api.system._get_worker_heartbeat_snapshot",
                 new=AsyncMock(return_value=SimpleNamespace(
                     alive=True, last_seen_at="2026-04-06T10:00:00+00:00",
                     alive_instances=1, seen_instances=1,
@@ -516,7 +516,7 @@ class TestC4BackendRestart:
 
         async with _fresh_client() as (_, client):
             with patch(
-                "app.api.routes.system._get_worker_heartbeat_snapshot",
+                "app.composition.api.system._get_worker_heartbeat_snapshot",
                 new=AsyncMock(return_value=SimpleNamespace(
                     alive=True, last_seen_at="2026-04-06T10:00:00+00:00",
                     alive_instances=1, seen_instances=1,
@@ -545,7 +545,7 @@ class TestC4BackendRestart:
         """Caches that span requests (readiness DB/storage cache) must live on app.state,
         not on module-level globals, so a fresh app instance starts with a clean cache."""
         import inspect
-        from app.api.routes.system import (
+        from app.composition.api.system import (
             _clear_readiness_db_cache,
             _clear_readiness_storage_cache,
         )
@@ -576,7 +576,7 @@ class TestC5StorageFailure:
     async def test_c5_1_storage_failure_flips_ready_to_503(self, app_client):
         """Storage outage → /ready 503."""
         with patch(
-            "app.api.routes.system.verify_storage_health",
+            "app.composition.api.system.verify_storage_health",
             new=AsyncMock(side_effect=RuntimeError("S3 connection timeout")),
         ):
             response = await app_client.get("/api/v1/ready")
@@ -586,7 +586,7 @@ class TestC5StorageFailure:
     async def test_c5_2_storage_failure_sets_health_to_degraded_not_500(self, app_client):
         """/health is never 500 during a storage outage."""
         with patch(
-            "app.api.routes.system.verify_storage_health",
+            "app.composition.api.system.verify_storage_health",
             new=AsyncMock(side_effect=RuntimeError("bucket unreachable")),
         ):
             health = await app_client.get("/api/v1/health")
@@ -602,10 +602,10 @@ class TestC5StorageFailure:
             alive_instances=1, seen_instances=1,
         )
         with patch(
-            "app.api.routes.system.verify_storage_health",
+            "app.composition.api.system.verify_storage_health",
             new=AsyncMock(side_effect=RuntimeError("timeout")),
         ), patch(
-            "app.api.routes.system._get_worker_heartbeat_snapshot",
+            "app.composition.api.system._get_worker_heartbeat_snapshot",
             new=AsyncMock(return_value=alive_worker),
         ):
             degraded = await app_client.get("/api/v1/ready")
@@ -613,7 +613,7 @@ class TestC5StorageFailure:
 
         _clear_readiness_caches_for(fastapi_app)
         with patch(
-            "app.api.routes.system._get_worker_heartbeat_snapshot",
+            "app.composition.api.system._get_worker_heartbeat_snapshot",
             new=AsyncMock(return_value=alive_worker),
         ):
             recovered = await app_client.get("/api/v1/ready")
@@ -922,7 +922,7 @@ class TestC9PartialDependencyOutage:
         """Storage outage must not prevent users from logging in."""
         async with _fresh_client() as (app, client):
             with patch(
-                "app.api.routes.system.verify_storage_health",
+                "app.composition.api.system.verify_storage_health",
                 new=AsyncMock(side_effect=RuntimeError("storage offline")),
             ):
                 login = await client.post(
@@ -985,7 +985,7 @@ class TestC9PartialDependencyOutage:
         """Worker liveness failure must update only the worker-related readiness field,
         not flip the DB-alive flag."""
         from app.main import app as fastapi_app
-        from app.api.routes.system import _clear_readiness_db_cache
+        from app.composition.api.system import _clear_readiness_db_cache
 
         # Simulate worker dead, DB alive
         dead_worker = SimpleNamespace(
@@ -994,7 +994,7 @@ class TestC9PartialDependencyOutage:
         )
 
         with patch(
-            "app.api.routes.system._get_worker_heartbeat_snapshot",
+            "app.composition.api.system._get_worker_heartbeat_snapshot",
             new=AsyncMock(return_value=dead_worker),
         ):
             health = await app_client.get("/api/v1/health")
@@ -1021,7 +1021,7 @@ class TestC10AntiDomino:
 
         try:
             with patch(
-                "app.api.routes.system.verify_storage_health",
+                "app.composition.api.system.verify_storage_health",
                 new=AsyncMock(side_effect=RuntimeError("S3 down")),
             ):
                 health = await app_client.get("/api/v1/health")
@@ -1044,7 +1044,7 @@ class TestC10AntiDomino:
         failing_ctx.__aexit__ = AsyncMock(return_value=False)
 
         try:
-            with patch("app.api.routes.system.AsyncSessionFactory", return_value=failing_ctx):
+            with patch("app.composition.api.system.AsyncSessionFactory", return_value=failing_ctx):
                 health = await app_client.get("/api/v1/health")
         finally:
             fastapi_app.state.job_queue = original_queue

@@ -63,7 +63,7 @@ def _make_runtime():
 
 @pytest.fixture(autouse=True)
 def _reset_runtime_caches():
-    from app.api.routes.system import (
+    from app.composition.api.system import (
         _clear_operational_metrics_cache,
         _clear_readiness_db_cache,
         _clear_readiness_storage_cache,
@@ -81,7 +81,7 @@ def _reset_runtime_caches():
 
 
 def _clear_readiness_caches_for(app) -> None:
-    from app.api.routes.system import (
+    from app.composition.api.system import (
         _clear_operational_metrics_cache,
         _clear_readiness_db_cache,
         _clear_readiness_storage_cache,
@@ -205,15 +205,15 @@ async def test_redis_restart_transitions_processing_readiness_to_not_ready_then_
     fastapi_app.state.job_queue = object()
     try:
         with (
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(side_effect=OSError("redis down"))),
-            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(side_effect=OSError("redis down"))),
+            patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
         ):
             degraded = await app_client.get("/api/v1/ready/processing?strict=1")
 
         _clear_readiness_caches_for(fastapi_app)
         with (
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
         ):
             recovered = await app_client.get("/api/v1/ready/processing?strict=1")
     finally:
@@ -238,7 +238,7 @@ async def test_postgres_restart_flips_api_readiness_and_recovers(app_client):
 
     degraded_ready = None
     degraded_health = None
-    with patch("app.api.routes.system.AsyncSessionFactory", return_value=failing_ctx):
+    with patch("app.composition.api.system.AsyncSessionFactory", return_value=failing_ctx):
         degraded_health = await app_client.get("/api/v1/health")
         degraded_ready = await app_client.get("/api/v1/ready")
 
@@ -258,7 +258,7 @@ async def test_storage_dependency_outage_keeps_health_alive_but_blocks_readiness
 
     degraded_health = None
     degraded_ready = None
-    with patch("app.api.routes.system.verify_storage_health", new=AsyncMock(side_effect=RuntimeError("s3 timeout"))):
+    with patch("app.composition.api.system.verify_storage_health", new=AsyncMock(side_effect=RuntimeError("s3 timeout"))):
         degraded_health = await app_client.get("/api/v1/health")
         degraded_ready = await app_client.get("/api/v1/ready")
 

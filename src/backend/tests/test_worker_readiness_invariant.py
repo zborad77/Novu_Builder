@@ -52,7 +52,7 @@ class _ReadyRuntime:
 
 @pytest.fixture(autouse=True)
 def _reset_caches():
-    from app.api.routes.system import (
+    from app.composition.api.system import (
         _clear_operational_metrics_cache,
         _clear_readiness_db_cache,
         _clear_readiness_storage_cache,
@@ -79,8 +79,8 @@ async def test_ready_returns_200_when_worker_has_no_heartbeat(app_client):
     fastapi_app.state.auth_token_store = _ReadyRuntime()
     try:
         with (
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
         ):
             response = await app_client.get("/api/v1/ready")
     finally:
@@ -104,8 +104,8 @@ async def test_ready_returns_200_when_worker_is_alive(app_client):
     fastapi_app.state.job_queue = _ReadyRuntime()
     try:
         with (
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
         ):
             response = await app_client.get("/api/v1/ready")
     finally:
@@ -129,8 +129,8 @@ async def test_ready_returns_200_when_worker_heartbeat_is_stale(app_client):
     fastapi_app.state.auth_token_store = _ReadyRuntime()
     try:
         with (
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
         ):
             response = await app_client.get("/api/v1/ready")
     finally:
@@ -174,8 +174,8 @@ async def test_health_returns_200_degraded_when_worker_is_down(app_client):
     fastapi_app.state.auth_token_store = _ReadyRuntime()
     try:
         with (
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
         ):
             response = await app_client.get("/api/v1/health")
     finally:
@@ -197,8 +197,8 @@ async def test_processing_ready_api_ready_reflects_api_state_not_worker_state(ap
     fastapi_app.state.job_queue = _ReadyRuntime()
     try:
         with (
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
         ):
             response = await app_client.get("/api/v1/ready/processing?strict=1")
     finally:

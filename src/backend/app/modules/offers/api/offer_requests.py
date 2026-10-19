@@ -7,11 +7,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_manager, require_org_id
+from app.composition.deps import get_current_user, require_manager, require_org_id
 from app.modules.identity.rbac import is_tenant_operator
 from app.platform.db.session import get_db_session
-from app.offer_processing.domain import InvalidOfferTransitionError
-from app.offer_processing.service import (
+from app.modules.offers.domain import InvalidOfferTransitionError
+from app.modules.offers.service import (
     OfferAlreadyExistsError,
     OfferClientNotInOrganizationError,
     OfferLockedError,
@@ -20,7 +20,7 @@ from app.offer_processing.service import (
     OfferTerminalError,
 )
 from app.modules.identity.schemas.auth import AuthUserRead
-from app.schemas.offer_requests import (
+from app.modules.offers.schemas import (
     MoreInfoSubmit,
     OfferApprove,
     OfferRequestCreate,

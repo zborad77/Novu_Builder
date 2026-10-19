@@ -1,0 +1,11 @@
+{
+ "source": "app/models/offer_processing.py",
+ "moves": {
+  "app/platform/events/models.py": [
+   "OutboxEvent"
+  ]
+ },
+ "headers": {
+  "app/platform/events/models.py": "\"\"\"ORM model transak\u010dn\u00edho outboxu \u2013 sd\u00edlen\u00e1 infrastruktura ud\u00e1lost\u00ed (SSE, timeline, offers).\"\"\"\n"
+ }
+}

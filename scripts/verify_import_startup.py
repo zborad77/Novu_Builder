@@ -21,8 +21,8 @@ IMPORT_CHECKS = [
     ("app.platform.logging", "logging configuration"),
     ("app.platform.db.base", "SQLAlchemy declarative base"),
     ("app.platform.db.session", "engine and session factory"),
-    ("app.models", "domain models"),
-    ("app.api.router", "routes, services, repositories and schemas"),
+    ("app.composition.models", "ORM model registry of all modules"),
+    ("app.composition.router", "routes, services, repositories and schemas"),
     ("app.main", "application entrypoint"),
 ]
 

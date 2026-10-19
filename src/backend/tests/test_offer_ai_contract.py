@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.offer_processing.provider import (
+from app.modules.offers.provider import (
     AnthropicAdapter,
     MockAdapter,
     ProviderRequest,
@@ -20,7 +20,7 @@ from app.offer_processing.provider import (
     _extract_tool_output,
     _OFFER_TOOLS,
 )
-from app.offer_processing.validation import (
+from app.modules.offers.validation import (
     InsufficientDataResult,
     OfferOutputValidator,
     OfferValidationError,

@@ -585,7 +585,7 @@ class ProjectService:
         # Snapshot the timeline up to this moment for the immutable archive.
         # Events emitted after finalization (e.g. export.completed) are intentionally excluded.
         from sqlalchemy import select as _sa_select  # noqa: PLC0415
-        from app.models.offer_processing import OutboxEvent  # noqa: PLC0415
+        from app.platform.events.models import OutboxEvent  # noqa: PLC0415
         from app.platform.events.types import AGGREGATE_CASE  # noqa: PLC0415
         _ARCHIVE_EVENT_TYPES = frozenset({
             "analysis.started", "analysis.completed", "measurement.confirmed",

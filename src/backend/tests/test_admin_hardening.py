@@ -23,9 +23,9 @@ def _mock_request() -> StarletteRequest:
     """Minimal Starlette Request for direct handler calls (bypasses slowapi key lookup)."""
     return StarletteRequest({"type": "http", "method": "GET", "path": "/", "headers": []})
 
-import app.api.routes.admin as admin_module
-from app.api.deps import ADMIN_CAPABILITIES, require_admin_capability, require_superadmin, require_user_admin
-from app.api.routes.admin import (
+import app.modules.admin.api.admin as admin_module
+from app.composition.deps import ADMIN_CAPABILITIES, require_admin_capability, require_superadmin, require_user_admin
+from app.modules.admin.api.admin import (
     admin_retry_job,
     create_company,
     create_user,
@@ -33,7 +33,7 @@ from app.api.routes.admin import (
     patch_company,
     patch_user,
 )
-from app.api.deps import require_superadmin
+from app.composition.deps import require_superadmin
 
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
@@ -237,7 +237,7 @@ class TestImpersonatedTokenBlocked:
     @pytest.mark.asyncio
     async def test_require_superadmin_blocks_impersonated_token(self):
         """A token with impersonated_by set must be rejected even if user is superadmin."""
-        from app.api.deps import require_superadmin
+        from app.composition.deps import require_superadmin
         from app.modules.identity.schemas.auth import AuthUserRead
 
         impersonated_superadmin = AuthUserRead(
@@ -259,7 +259,7 @@ class TestImpersonatedTokenBlocked:
     @pytest.mark.asyncio
     async def test_require_superadmin_allows_real_superadmin(self):
         """A normal superadmin token (no impersonation) passes through."""
-        from app.api.deps import require_superadmin
+        from app.composition.deps import require_superadmin
         from app.modules.identity.schemas.auth import AuthUserRead
 
         real_superadmin = AuthUserRead(
@@ -308,7 +308,7 @@ class TestSuperadminBypassExplicitFlag:
 
     def test_admin_retry_job_passes_true_flag(self):
         """admin_retry_job passes is_superadmin_context=True to both service calls."""
-        from app.api.routes.admin import admin_retry_job
+        from app.modules.admin.api.admin import admin_retry_job
         src = inspect.getsource(admin_retry_job)
         assert "is_superadmin_context=True" in src
 
@@ -334,7 +334,7 @@ class TestAdminPasswordResetInvalidatesTokens:
 
     def test_reset_password_sets_tokens_valid_after_in_source(self):
         """reset_user_password must call the shared global invalidation helper."""
-        from app.api.routes.admin import reset_user_password
+        from app.modules.admin.api.admin import reset_user_password
         src = inspect.getsource(reset_user_password)
         assert "invalidate_user_token_state" in src, (
             "reset_user_password must invalidate the target user's global token state"
@@ -342,7 +342,7 @@ class TestAdminPasswordResetInvalidatesTokens:
 
     def test_reset_password_commits_after_invalidation(self):
         """The audited commit path must follow the shared invalidation helper."""
-        from app.api.routes.admin import reset_user_password
+        from app.modules.admin.api.admin import reset_user_password
         src = inspect.getsource(reset_user_password)
         invalidation_pos = src.find("invalidate_user_token_state")
         commit_pos = src.find("commit_security_critical_audit(", invalidation_pos)
@@ -358,7 +358,7 @@ class TestAdminPasswordResetInvalidatesTokens:
 
         from fastapi import Request
 
-        from app.api.routes.admin import ResetPasswordPayload, reset_user_password
+        from app.modules.admin.api.admin import ResetPasswordPayload, reset_user_password
         from app.modules.identity.schemas.auth import AuthUserRead
 
         # Minimal User mock with a mutable tokens_valid_after attribute
@@ -386,9 +386,9 @@ class TestAdminPasswordResetInvalidatesTokens:
         # Strip microseconds to match .replace(microsecond=0) in the implementation
         before = datetime.now(UTC).replace(microsecond=0)
 
-        with patch("app.api.routes.admin.commit_security_critical_audit", new_callable=AsyncMock):
-            with patch("app.api.routes.admin.TokenRepository.revoke_all_user_sessions", new=AsyncMock(return_value=[])):
-                with patch("app.api.routes.admin.logger"):
+        with patch("app.modules.admin.api.admin.commit_security_critical_audit", new_callable=AsyncMock):
+            with patch("app.modules.admin.api.admin.TokenRepository.revoke_all_user_sessions", new=AsyncMock(return_value=[])):
+                with patch("app.modules.admin.api.admin.logger"):
                     await reset_user_password(
                         request=mock_request,
                         user_id="user-1",
@@ -417,7 +417,7 @@ class TestAdminPasswordResetInvalidatesTokens:
 
         from fastapi import Request
 
-        from app.api.routes.admin import ResetPasswordPayload, reset_user_password
+        from app.modules.admin.api.admin import ResetPasswordPayload, reset_user_password
         from app.modules.identity.token_repository import SessionTokenRevocation
         from app.modules.identity.schemas.auth import AuthUserRead
 
@@ -465,10 +465,10 @@ class TestAdminPasswordResetInvalidatesTokens:
         ]
 
         with (
-            patch("app.api.routes.admin.commit_security_critical_audit", new_callable=AsyncMock),
-            patch("app.api.routes.admin.TokenRepository.revoke_all_user_sessions", new=AsyncMock(return_value=revocations)),
+            patch("app.modules.admin.api.admin.commit_security_critical_audit", new_callable=AsyncMock),
+            patch("app.modules.admin.api.admin.TokenRepository.revoke_all_user_sessions", new=AsyncMock(return_value=revocations)),
             patch(
-                "app.api.routes.admin.TokenRepository.cache_revoked_token",
+                "app.modules.admin.api.admin.TokenRepository.cache_revoked_token",
                 new=AsyncMock(return_value=False),
             ),
         ):

@@ -3,7 +3,7 @@ from typing import Annotated, NoReturn
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
-from app.api.deps import get_auth_redis, get_auth_service, get_current_user
+from app.composition.deps import get_auth_redis, get_auth_service, get_current_user
 from app.modules.identity.account_limiter import (
     AccountThrottleBackendUnavailableError,
     is_account_throttled,

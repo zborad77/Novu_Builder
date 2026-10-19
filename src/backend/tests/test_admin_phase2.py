@@ -13,8 +13,8 @@ import inspect
 import pytest
 from fastapi import HTTPException
 
-from app.api.deps import ADMIN_CAPABILITIES, require_admin_capability, require_superadmin
-from app.api.routes.admin import (
+from app.composition.deps import ADMIN_CAPABILITIES, require_admin_capability, require_superadmin
+from app.modules.admin.api.admin import (
     admin_retry_job,
     create_company,
     create_user,

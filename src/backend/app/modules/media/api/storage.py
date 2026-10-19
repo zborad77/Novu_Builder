@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from app.api.deps import get_current_user, get_project_service, resolve_org_id
+from app.composition.deps import get_current_user, get_project_service, resolve_org_id
 from app.platform.config import get_settings
 from app.modules.identity.schemas.auth import AuthUserRead
 from app.modules.workflow.project_service import ProjectService

@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 from starlette.requests import Request as StarletteRequest
 
-from app.api.routes.admin import get_audit_log
+from app.modules.admin.api.admin import get_audit_log
 
 
 def _mock_request() -> StarletteRequest:

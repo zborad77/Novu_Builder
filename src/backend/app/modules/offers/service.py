@@ -17,8 +17,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.cases.models import Client
-from app.models.offer_processing import OfferRequest
-from app.offer_processing.domain import (
+from app.modules.offers.models import OfferRequest
+from app.modules.offers.domain import (
     OFFER_STATUS_CANCELLED,
     OFFER_STATUS_COMPLETED,
     OFFER_STATUS_NEEDS_MORE_INFO,
@@ -28,7 +28,7 @@ from app.offer_processing.domain import (
     require_offer_transition,
 )
 from app.platform.events.outbox import build_offer_status_changed_event
-from app.offer_processing.repository import OfferRepository
+from app.modules.offers.repository import OfferRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -289,7 +289,7 @@ class OfferService:
 
         # Update offer with merged data + transition back to queued
         from sqlalchemy import update  # noqa: PLC0415
-        from app.models.offer_processing import OfferRequest as _OR  # noqa: PLC0415
+        from app.modules.offers.models import OfferRequest as _OR  # noqa: PLC0415
         await self._session.execute(
             update(_OR)
             .where(_OR.id == offer_request_id)

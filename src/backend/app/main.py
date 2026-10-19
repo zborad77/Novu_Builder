@@ -12,7 +12,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyPoolTimeoutError
 from redis.exceptions import RedisError
 import structlog
 
-from app.api.router import api_router
+from app.composition.router import api_router
 from app.platform.http.api_versioning import ApiVersioningMiddleware
 from app.modules.audit.audit_log import AuditMiddleware
 from app.platform.http.client_ip import TrustedProxyMiddleware, trusts_unix_socket

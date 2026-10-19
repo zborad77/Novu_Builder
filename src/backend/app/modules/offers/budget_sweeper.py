@@ -21,7 +21,7 @@ import asyncio
 import structlog
 from sqlalchemy import text
 
-from app.offer_processing.budget import RESERVATION_EXPIRY_MINUTES
+from app.modules.offers.budget import RESERVATION_EXPIRY_MINUTES
 
 logger = structlog.get_logger(__name__)
 

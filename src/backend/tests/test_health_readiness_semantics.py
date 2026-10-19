@@ -24,7 +24,7 @@ class _ReadyRuntime:
 
 @pytest.fixture(autouse=True)
 def _reset_readiness_cache():
-    from app.api.routes.system import (
+    from app.composition.api.system import (
         _clear_operational_metrics_cache,
         _clear_readiness_db_cache,
         _clear_readiness_storage_cache,
@@ -46,7 +46,7 @@ async def test_health_returns_unavailable_when_integrity_dependencies_fail(app_c
     failing_ctx.__aenter__.side_effect = RuntimeError("db unavailable")
     failing_ctx.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("app.api.routes.system.AsyncSessionFactory", return_value=failing_ctx):
+    with patch("app.composition.api.system.AsyncSessionFactory", return_value=failing_ctx):
         response = await app_client.get("/api/v1/health")
 
     assert response.status_code == 503
@@ -70,8 +70,8 @@ async def test_ready_returns_200_when_worker_is_not_alive_but_critical_dependenc
     fastapi_app.state.auth_token_store = _ReadyRuntime()
     try:
         with (
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
         ):
             response = await app_client.get("/api/v1/ready")
     finally:
@@ -122,8 +122,8 @@ async def test_health_reports_degraded_when_worker_is_down_but_api_is_servable(a
     fastapi_app.state.auth_token_store = _ReadyRuntime()
     try:
         with (
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
         ):
             response = await app_client.get("/api/v1/health")
     finally:
@@ -151,8 +151,8 @@ async def test_processing_ready_returns_strict_ready_when_worker_path_is_healthy
     fastapi_app.state.job_queue = object()
     try:
         with (
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
         ):
             response = await app_client.get("/api/v1/ready/processing?strict=1")
     finally:
@@ -198,8 +198,8 @@ async def test_processing_ready_surfaces_degraded_queue_state_when_failover_is_a
     fastapi_app.state.job_queue = _DegradedQueue()
     try:
         with (
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
         ):
             response = await app_client.get("/api/v1/ready/processing?strict=1")
     finally:
@@ -226,9 +226,9 @@ async def test_processing_ready_uses_grace_window_for_short_worker_gap(app_clien
     fastapi_app.state.job_queue = object()
     try:
         with (
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
-            patch("app.api.routes.system._readiness_now", return_value=120.0),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.composition.api.system._readiness_now", return_value=120.0),
         ):
             response = await app_client.get("/api/v1/ready/processing")
     finally:
@@ -264,9 +264,9 @@ async def test_processing_ready_strict_mode_rejects_stale_worker_even_during_gra
     fastapi_app.state.job_queue = object()
     try:
         with (
-            patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-            patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
-            patch("app.api.routes.system._readiness_now", return_value=120.0),
+            patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+            patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+            patch("app.composition.api.system._readiness_now", return_value=120.0),
         ):
             response = await app_client.get("/api/v1/ready/processing?strict=1")
     finally:
@@ -312,7 +312,7 @@ async def test_ready_returns_503_when_database_probe_fails(app_client):
     failing_ctx.__aenter__.side_effect = RuntimeError("db unavailable")
     failing_ctx.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("app.api.routes.system.AsyncSessionFactory", return_value=failing_ctx):
+    with patch("app.composition.api.system.AsyncSessionFactory", return_value=failing_ctx):
         response = await app_client.get("/api/v1/ready")
 
     assert response.status_code == 503
@@ -322,7 +322,7 @@ async def test_ready_returns_503_when_database_probe_fails(app_client):
 
 @pytest.mark.asyncio
 async def test_ready_returns_503_when_storage_probe_fails(app_client):
-    with patch("app.api.routes.system.verify_storage_health", new=AsyncMock(side_effect=RuntimeError("s3 down"))):
+    with patch("app.composition.api.system.verify_storage_health", new=AsyncMock(side_effect=RuntimeError("s3 down"))):
         response = await app_client.get("/api/v1/ready")
 
     assert response.status_code == 503
@@ -354,7 +354,7 @@ async def test_health_returns_503_when_startup_integrity_is_not_ready(app_client
 
 @pytest.mark.asyncio
 async def test_internal_health_returns_503_when_service_is_not_ready():
-    from app.api.routes.system import health_internal
+    from app.composition.api.system import health_internal
     from app.modules.identity.schemas.auth import AuthUserRead
 
     mock_request = AsyncMock()
@@ -379,7 +379,7 @@ async def test_internal_health_returns_503_when_service_is_not_ready():
         impersonatedBy=None,
     )
 
-    with patch("app.api.routes.system.AsyncSessionFactory") as mock_factory:
+    with patch("app.composition.api.system.AsyncSessionFactory") as mock_factory:
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
@@ -407,7 +407,7 @@ async def test_internal_health_returns_503_when_service_is_not_ready():
 
 @pytest.mark.asyncio
 async def test_internal_health_omits_debug_flag_and_keeps_internal_details():
-    from app.api.routes.system import health_internal
+    from app.composition.api.system import health_internal
     from app.modules.identity.schemas.auth import AuthUserRead
 
     mock_request = AsyncMock()
@@ -439,9 +439,9 @@ async def test_internal_health_omits_debug_flag_and_keeps_internal_details():
     )
 
     with (
-        patch("app.api.routes.system.AsyncSessionFactory") as mock_factory,
-        patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-        patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+        patch("app.composition.api.system.AsyncSessionFactory") as mock_factory,
+        patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+        patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
     ):
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -470,7 +470,7 @@ async def test_internal_health_omits_debug_flag_and_keeps_internal_details():
 
 @pytest.mark.asyncio
 async def test_internal_health_keeps_api_ready_true_when_worker_processing_is_down():
-    from app.api.routes.system import health_internal
+    from app.composition.api.system import health_internal
     from app.modules.identity.schemas.auth import AuthUserRead
 
     mock_request = AsyncMock()
@@ -503,9 +503,9 @@ async def test_internal_health_keeps_api_ready_true_when_worker_processing_is_do
     )
 
     with (
-        patch("app.api.routes.system.AsyncSessionFactory") as mock_factory,
-        patch("app.api.routes.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
-        patch("app.api.routes.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
+        patch("app.composition.api.system.AsyncSessionFactory") as mock_factory,
+        patch("app.composition.api.system.get_analysis_job_queue_counts", new=AsyncMock(return_value=(0, 0))),
+        patch("app.composition.api.system._get_worker_heartbeat_snapshot", new=AsyncMock(return_value=worker_snapshot)),
     ):
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -532,14 +532,14 @@ async def test_internal_health_keeps_api_ready_true_when_worker_processing_is_do
 
 @pytest.mark.asyncio
 async def test_readiness_db_cache_hits_within_ttl():
-    from app.api.routes.system import _database_ready_cached
+    from app.composition.api.system import _database_ready_cached
 
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
     db_probe = AsyncMock(side_effect=[True, False])
 
     with (
-        patch("app.api.routes.system._database_ready", db_probe),
-        patch("app.api.routes.system._readiness_now", side_effect=[100.0, 100.0, 101.0]),
+        patch("app.composition.api.system._database_ready", db_probe),
+        patch("app.composition.api.system._readiness_now", side_effect=[100.0, 100.0, 101.0]),
     ):
         first = await _database_ready_cached(request)
         second = await _database_ready_cached(request)
@@ -551,14 +551,14 @@ async def test_readiness_db_cache_hits_within_ttl():
 
 @pytest.mark.asyncio
 async def test_readiness_db_cache_refreshes_after_ttl_expiry():
-    from app.api.routes.system import _database_ready_cached
+    from app.composition.api.system import _database_ready_cached
 
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
     db_probe = AsyncMock(side_effect=[True, True])
 
     with (
-        patch("app.api.routes.system._database_ready", db_probe),
-        patch("app.api.routes.system._readiness_now", side_effect=[200.0, 200.0, 202.5, 202.5]),
+        patch("app.composition.api.system._database_ready", db_probe),
+        patch("app.composition.api.system._readiness_now", side_effect=[200.0, 200.0, 202.5, 202.5]),
     ):
         first = await _database_ready_cached(request)
         second = await _database_ready_cached(request)
@@ -570,14 +570,14 @@ async def test_readiness_db_cache_refreshes_after_ttl_expiry():
 
 @pytest.mark.asyncio
 async def test_readiness_db_cache_returns_non_ready_after_expiry_when_db_fails():
-    from app.api.routes.system import _database_ready_cached
+    from app.composition.api.system import _database_ready_cached
 
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
     db_probe = AsyncMock(side_effect=[True, False])
 
     with (
-        patch("app.api.routes.system._database_ready", db_probe),
-        patch("app.api.routes.system._readiness_now", side_effect=[300.0, 300.0, 302.5, 302.5]),
+        patch("app.composition.api.system._database_ready", db_probe),
+        patch("app.composition.api.system._readiness_now", side_effect=[300.0, 300.0, 302.5, 302.5]),
     ):
         first = await _database_ready_cached(request)
         second = await _database_ready_cached(request)
@@ -589,7 +589,7 @@ async def test_readiness_db_cache_returns_non_ready_after_expiry_when_db_fails()
 
 @pytest.mark.asyncio
 async def test_ready_reuses_fresh_operational_snapshot_without_extra_db_probe():
-    from app.api.routes.system import (
+    from app.composition.api.system import (
         _OperationalMetricsSnapshot,
         _WorkerHeartbeatSnapshot,
         _database_ready_cached,
@@ -617,8 +617,8 @@ async def test_ready_reuses_fresh_operational_snapshot_without_extra_db_probe():
     db_probe = AsyncMock(return_value=False)
 
     with (
-        patch("app.api.routes.system._database_ready", db_probe),
-        patch("app.api.routes.system._readiness_now", side_effect=[100.0, 100.0]),
+        patch("app.composition.api.system._database_ready", db_probe),
+        patch("app.composition.api.system._readiness_now", side_effect=[100.0, 100.0]),
     ):
         ready = await _database_ready_cached(request)
 
@@ -628,14 +628,14 @@ async def test_ready_reuses_fresh_operational_snapshot_without_extra_db_probe():
 
 @pytest.mark.asyncio
 async def test_storage_ready_cache_returns_failed_after_expiry():
-    from app.api.routes.system import _storage_ready_cached
+    from app.composition.api.system import _storage_ready_cached
 
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
     storage_probe = AsyncMock(side_effect=[True, False])
 
     with (
-        patch("app.api.routes.system._storage_ready", storage_probe),
-        patch("app.api.routes.system._readiness_now", side_effect=[400.0, 400.0, 402.5, 402.5]),
+        patch("app.composition.api.system._storage_ready", storage_probe),
+        patch("app.composition.api.system._readiness_now", side_effect=[400.0, 400.0, 402.5, 402.5]),
     ):
         first = await _storage_ready_cached(request)
         second = await _storage_ready_cached(request)

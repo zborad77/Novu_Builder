@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from app.api.deps import (
+from app.composition.deps import (
     get_case_action_service,
     get_current_user,
     get_project_service,
@@ -333,7 +333,7 @@ async def get_case_timeline(
     current_user: AuthUserRead = Depends(get_current_user),
 ) -> list[dict]:
     from sqlalchemy import select  # noqa: PLC0415
-    from app.models.offer_processing import OutboxEvent  # noqa: PLC0415
+    from app.platform.events.models import OutboxEvent  # noqa: PLC0415
     from app.platform.events.types import AGGREGATE_CASE  # noqa: PLC0415
 
     org_id = resolve_org_id(current_user)

@@ -21,7 +21,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.offer_processing.domain import AGENT_OUTCOME_INSUFFICIENT_DATA
+from app.modules.offers.domain import AGENT_OUTCOME_INSUFFICIENT_DATA
 
 # ---------------------------------------------------------------------------
 # Constants

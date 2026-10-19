@@ -367,7 +367,7 @@ class TestDeadLetterReprocess:
 
     @pytest.mark.asyncio
     async def test_admin_reprocess_route_returns_429_when_queue_is_full(self):
-        from app.api.routes.admin import admin_reprocess_dead_letter_job
+        from app.modules.admin.api.admin import admin_reprocess_dead_letter_job
         from app.platform.jobs.queue import AnalysisJobQueueCapacityExceededError
 
         request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})

@@ -1,7 +1,7 @@
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.api.deps import get_analysis_service, get_current_user, get_job_queue, get_project_service, require_manager, resolve_org_id
+from app.composition.deps import get_analysis_service, get_current_user, get_job_queue, get_project_service, require_manager, resolve_org_id
 from app.modules.audit.audit_log import log_cross_tenant_denied
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter

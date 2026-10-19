@@ -1,0 +1,26 @@
+{
+ "modules": {
+  "app.offer_processing": "app.modules.offers",
+  "app.models.offer_processing": "app.modules.offers.models",
+  "app.api.routes.offer_requests": "app.modules.offers.api.offer_requests",
+  "app.api.routes.offer_events": "app.modules.offers.api.offer_events",
+  "app.schemas.offer_requests": "app.modules.offers.schemas",
+  "app.api.routes.admin": "app.modules.admin.api.admin",
+  "app.api.routes.system": "app.composition.api.system",
+  "app.api.router": "app.composition.router",
+  "app.api.deps": "app.composition.deps"
+ },
+ "symbols": {
+  "app.models": {
+   "OfferRequest": "app.modules.offers.models",
+   "OfferJob": "app.modules.offers.models",
+   "AgentRun": "app.modules.offers.models",
+   "AiBudgetReservation": "app.modules.offers.models",
+   "OrganizationAiBudget": "app.modules.offers.models",
+   "OutboxEvent": "app.platform.events.models"
+  },
+  "app.models.offer_processing": {
+   "OutboxEvent": "app.platform.events.models"
+  }
+ }
+}

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, Upload
 from fastapi.responses import RedirectResponse
 from typing import cast
 
-from app.api.deps import get_current_user, get_photo_service, get_project_service, resolve_org_id
+from app.composition.deps import get_current_user, get_photo_service, get_project_service, resolve_org_id
 from app.modules.media.photo_purge import purge_photo_with_audit
 from app.modules.audit.audit_log import log_cross_tenant_denied, mark_request_audited
 from app.platform.config import get_settings

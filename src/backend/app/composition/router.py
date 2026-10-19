@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_current_user
-from app.api.routes.admin import router as admin_router
+from app.composition.deps import get_current_user
+from app.modules.admin.api.admin import router as admin_router
 from app.modules.analysis.api.analysis_jobs import router as analysis_jobs_router
 from app.modules.identity.api.auth import router as auth_router
 from app.modules.workflow.api.case_events import router as case_events_router
@@ -14,9 +14,9 @@ from app.modules.catalog.api.material_catalog import router as material_catalog_
 from app.modules.analysis.api.measurements import router as measurements_router
 from app.modules.catalog.api.pricebooks import router as pricebooks_router
 from app.modules.catalog.api.suppliers import router as suppliers_router
-from app.api.routes.system import router as system_router
-from app.api.routes.offer_events import router as offer_events_router
-from app.api.routes.offer_requests import router as offer_requests_router
+from app.composition.api.system import router as system_router
+from app.modules.offers.api.offer_events import router as offer_events_router
+from app.modules.offers.api.offer_requests import router as offer_requests_router
 from app.modules.identity.api.org_users import router as org_users_router
 from app.modules.catalog.api.work_catalog import router as work_catalog_router
 

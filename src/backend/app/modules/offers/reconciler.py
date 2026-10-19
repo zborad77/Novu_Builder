@@ -58,7 +58,7 @@ from uuid import uuid4
 import structlog
 from sqlalchemy import text
 
-from app.offer_processing.domain import (
+from app.modules.offers.domain import (
     JOB_STATUS_RUNNING,
     OFFER_STATUS_FAILED,
     RETRY_BACKOFF_SECONDS,
