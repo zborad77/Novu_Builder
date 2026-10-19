@@ -285,6 +285,12 @@ class FailoverRedisClient:
     async def srem(self, *args, **kwargs):
         return await self._run_write("srem", *args, **kwargs)
 
+    async def publish(self, *args, **kwargs):
+        # Pub/sub zpráva (živé SSE události, outbox publisher). Zápis: po chybě
+        # transportu se neopakuje automaticky – volající publikují best-effort
+        # a trvalé doručení zajišťuje outbox.
+        return await self._run_write("publish", *args, **kwargs)
+
     async def smembers(self, *args, **kwargs):
         return await self._run_read("smembers", *args, **kwargs)
 

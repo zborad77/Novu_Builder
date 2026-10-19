@@ -262,6 +262,35 @@ async def test_failover_client_does_not_retry_mutating_commands_after_transport_
     assert client.runtime_status().state == "degraded"
 
 
+@pytest.mark.asyncio
+async def test_failover_client_publish_delegates_to_active_candidate():
+    # N12: API (ctx.work_queue), worker i offer worker publikují živé SSE události
+    # přes FailoverRedisClient; bez publish() selhala každá publikace AttributeError.
+    primary = AsyncMock()
+    primary.publish = AsyncMock(return_value=2)
+    client = FailoverRedisClient(urls=("redis://:secret@primary:6379/0",), clients=(primary,))
+
+    assert await client.publish("case:events:prj_1", "{}") == 2
+    primary.publish.assert_awaited_once_with("case:events:prj_1", "{}")
+
+
+@pytest.mark.asyncio
+async def test_failover_client_publish_is_not_retried_after_transport_failure():
+    primary = AsyncMock()
+    primary.publish = AsyncMock(side_effect=OSError("primary down"))
+    secondary = AsyncMock()
+    secondary.ping = AsyncMock(return_value=True)
+    secondary.publish = AsyncMock(return_value=1)
+    client = FailoverRedisClient(
+        urls=("redis://:secret@primary:6379/0", "redis://:secret@secondary:6379/0"),
+        clients=(primary, secondary),
+    )
+
+    with pytest.raises(RedisFailoverWriteError):
+        await client.publish("case:events:prj_1", "{}")
+    secondary.publish.assert_not_awaited()
+
+
 def test_build_redis_client_from_settings_uses_settings_values():
     settings = SimpleNamespace(
         redis_url="redis://:secret@localhost:6379/0",
