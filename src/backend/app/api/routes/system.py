@@ -51,7 +51,7 @@ from app.platform.metrics import (
     WORKER_SEEN_INSTANCES,
 )
 from app.platform.db.session import AsyncSessionFactory
-from app.models import AnalysisJob
+from app.modules.analysis.models import AnalysisJob
 from app.modules.identity.schemas.auth import AuthUserRead
 from app.platform.storage.backend import verify_storage_health
 from app.platform.jobs.heartbeat import (

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AnalysisJob
+from app.modules.analysis.models import AnalysisJob
 from app.modules.cases.models import Project
 from app.modules.exports.models import ProjectExport
 from app.modules.media.models import ProjectPhoto

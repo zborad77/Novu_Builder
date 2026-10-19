@@ -111,7 +111,7 @@ async def test_health_internal_exposes_retry_dlq_and_queue_depth_details():
 
 @pytest.mark.asyncio
 async def test_mock_provider_rehearsal_failure_markers_are_deterministic():
-    from app.ai.providers.mock_vision_provider import MockVisionProvider
+    from app.modules.analysis.ai.providers.mock_vision_provider import MockVisionProvider
 
     provider = MockVisionProvider()
 

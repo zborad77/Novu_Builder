@@ -11,7 +11,7 @@ from app.platform.db.base import Base
 from app.platform.db.mixins import TimestampMixin
 
 if TYPE_CHECKING:
-    from app.models.domain import AnalysisJob
+    from app.modules.analysis.models import AnalysisJob
     from app.modules.catalog.models import MaterialCatalog, PricingProfile, Supplier
     from app.modules.cases.models import Client, Project
 

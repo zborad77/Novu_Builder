@@ -6,8 +6,8 @@ from app.modules.audit.audit_log import log_cross_tenant_denied
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.modules.identity.schemas.auth import AuthUserRead
-from app.schemas.measurement import MeasurementPolygonPoint, MeasurementRead, MeasurementUpsert
-from app.services.analysis_service import AnalysisService
+from app.modules.analysis.schemas.measurement import MeasurementPolygonPoint, MeasurementRead, MeasurementUpsert
+from app.modules.analysis.analysis_service import AnalysisService
 from app.modules.media.photo_service import PhotoService
 from app.modules.workflow.project_service import ProjectService
 

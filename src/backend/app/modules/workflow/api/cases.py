@@ -10,7 +10,7 @@ from app.api.deps import (
 from app.modules.workflow.case_actions import CaseActionError, CaseActionService
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
-from app.repositories.proposal_draft_repository import ProposalVersionConflictError
+from app.modules.quoting.proposal_draft_repository import ProposalVersionConflictError
 from app.modules.identity.schemas.auth import AuthUserRead
 from app.modules.workflow.schemas import CaseActionRequest, ProjectCreate, ProjectCreateResponse, ProjectDetail, ProjectDuplicateRequest, ProjectListResponse, ProjectPatch
 from app.modules.quoting.schemas.proposal import ProjectProposalDraftPatch

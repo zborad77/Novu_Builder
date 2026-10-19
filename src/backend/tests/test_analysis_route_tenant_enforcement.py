@@ -12,9 +12,9 @@ def _mock_request() -> StarletteRequest:
 class TestMeasurementRouteTenantEnforcement:
     @pytest.mark.asyncio
     async def test_patch_measurement_forwards_org_scope_to_service_update(self):
-        from app.api.routes.measurements import patch_measurement
-        from app.schemas.measurement import MeasurementUpsert
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.api.measurements import patch_measurement
+        from app.modules.analysis.schemas.measurement import MeasurementUpsert
+        from app.modules.analysis.analysis_service import AnalysisService
         from app.modules.workflow.project_service import ProjectService
 
         current_user = MagicMock()
@@ -58,9 +58,9 @@ class TestMeasurementRouteTenantEnforcement:
 
     @pytest.mark.asyncio
     async def test_patch_measurement_keeps_not_found_when_service_denies_cross_tenant_update(self):
-        from app.api.routes.measurements import patch_measurement
-        from app.schemas.measurement import MeasurementUpsert
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.api.measurements import patch_measurement
+        from app.modules.analysis.schemas.measurement import MeasurementUpsert
+        from app.modules.analysis.analysis_service import AnalysisService
         from app.modules.workflow.project_service import ProjectService
 
         current_user = MagicMock()
@@ -96,8 +96,8 @@ class TestMeasurementRouteTenantEnforcement:
 class TestAnalysisSelectionRouteTenantEnforcement:
     @pytest.mark.asyncio
     async def test_patch_analysis_selection_forwards_org_scope_to_service_update(self):
-        from app.api.routes.analysis_jobs import patch_analysis_selection
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.api.analysis_jobs import patch_analysis_selection
+        from app.modules.analysis.analysis_service import AnalysisService
         from app.modules.workflow.project_service import ProjectService
 
         current_user = MagicMock()

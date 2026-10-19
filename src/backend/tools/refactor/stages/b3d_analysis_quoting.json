@@ -1,0 +1,36 @@
+{
+ "modules": {
+  "app.ai": "app.modules.analysis.ai",
+  "app.services.analysis_service": "app.modules.analysis.analysis_service",
+  "app.repositories.analysis_repository": "app.modules.analysis.analysis_repository",
+  "app.api.routes.analysis_jobs": "app.modules.analysis.api.analysis_jobs",
+  "app.api.routes.measurements": "app.modules.analysis.api.measurements",
+  "app.schemas.analysis": "app.modules.analysis.schemas.analysis",
+  "app.schemas.measurement": "app.modules.analysis.schemas.measurement",
+  "app.services.quote_variant_service": "app.modules.quoting.quote_variant_service",
+  "app.services.proposal_draft_service": "app.modules.quoting.proposal_draft_service",
+  "app.repositories.quote_variant_repository": "app.modules.quoting.quote_variant_repository",
+  "app.repositories.proposal_draft_repository": "app.modules.quoting.proposal_draft_repository",
+  "app.repositories.final_proposal_repository": "app.modules.quoting.final_proposal_repository",
+  "app.api.routes.estimates": "app.modules.quoting.api.estimates",
+  "app.schemas.quote_variant": "app.modules.quoting.schemas.quote_variant"
+ },
+ "symbols": {
+  "app.models": {
+   "AnalysisJob": "app.modules.analysis.models",
+   "AnalysisResult": "app.modules.analysis.models",
+   "QuoteVariant": "app.modules.quoting.models",
+   "QuoteItem": "app.modules.quoting.models",
+   "ProjectProposalDraft": "app.modules.quoting.models",
+   "ProjectFinalProposal": "app.modules.quoting.models"
+  },
+  "app.models.domain": {
+   "AnalysisJob": "app.modules.analysis.models",
+   "AnalysisResult": "app.modules.analysis.models",
+   "QuoteVariant": "app.modules.quoting.models",
+   "QuoteItem": "app.modules.quoting.models",
+   "ProjectProposalDraft": "app.modules.quoting.models",
+   "ProjectFinalProposal": "app.modules.quoting.models"
+  }
+ }
+}

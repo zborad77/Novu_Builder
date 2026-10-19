@@ -22,7 +22,7 @@ from app.api.deps import (
 from app.platform.jobs.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
 from app.platform.config import get_settings
 from app.platform.db.session import get_db_session
-from app.models.domain import AnalysisJob
+from app.modules.analysis.models import AnalysisJob
 from app.modules.cases.models import Project
 from app.modules.audit.models import AuditLog
 from app.modules.identity.models import Organization, User
@@ -51,7 +51,7 @@ from app.modules.identity.rbac import (
     user_admin_org_scope,
 )
 from app.modules.identity.token_repository import SessionTokenRevocation, TokenRepository
-from app.services.analysis_service import AnalysisService, to_job_read
+from app.modules.analysis.analysis_service import AnalysisService, to_job_read
 from app.modules.identity.company_service import CompanyService
 from app.modules.media.photo_service import PhotoService
 from app.modules.media.photo_repository import PhotoRepository

@@ -8,11 +8,11 @@ from sqlalchemy import select
 
 from app.modules.catalog.work_catalog.models import AnalysisProfile, AnalysisProfileConfidenceThreshold, AnalysisProfileExtractionRule, AnalysisProfileIgnoredObject, AnalysisProfileOutputMapping, AnalysisProfileTargetObject, AnalysisProfileValidationRule, CatalogPricingProfile, CatalogPricingProfileAdjustmentRule, CatalogPricingProfileBaseRule, CatalogPricingProfileLaborAssumption, CatalogPricingProfileMaterialAssumption, CatalogPricingProfileRequiredInput, TenantWorkTypeSetting, WorkCategory, WorkType, WorkTypeParameter, WorkTypeParameterOption
 from app.modules.cases.models import Project
-from app.repositories.quote_variant_repository import QuoteVariantRepository
+from app.modules.quoting.quote_variant_repository import QuoteVariantRepository
 from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
 from app.modules.catalog.schemas.work_catalog import ProjectWorkItemCreate, ProjectWorkItemValueInput
 from app.modules.catalog.pricing_profile_service import PricingProfileResolutionError, PricingProfileService
-from app.services.quote_variant_service import QuoteVariantService
+from app.modules.quoting.quote_variant_service import QuoteVariantService
 from app.modules.catalog.work_catalog_service import WorkCatalogService
 from app.modules.catalog.work_catalog.domain import CatalogValidationError, validate_pricing_profile_definition
 from app.modules.catalog.work_catalog.seeds import GLOBAL_WORK_CATALOG_SEED

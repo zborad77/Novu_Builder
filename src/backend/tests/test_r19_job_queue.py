@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 import app.platform.jobs.queue as queue_module
-from app.services.analysis_service import AnalysisJobCreateResult
+from app.modules.analysis.analysis_service import AnalysisJobCreateResult
 from app.platform.jobs.queue import (
     AnalysisJobQueueCapacityExceededError,
     DLQ_ACTIVE_SET_KEY,
@@ -746,7 +746,7 @@ class TestRetryAndDlqFlow:
 class TestExecuteJobStatusGuard:
     @pytest.mark.asyncio
     async def test_skips_running_job(self):
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
 
         mock_job = MagicMock()
         mock_job.status = "running"
@@ -767,9 +767,9 @@ class TestExecuteJobStatusGuard:
         )
 
         with (
-            patch("app.services.analysis_service.AsyncSessionFactory", return_value=mock_session),
-            patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo),
-            patch("app.services.analysis_service.PhotoRepository", return_value=AsyncMock()),
+            patch("app.modules.analysis.analysis_service.AsyncSessionFactory", return_value=mock_session),
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_repo),
+            patch("app.modules.analysis.analysis_service.PhotoRepository", return_value=AsyncMock()),
         ):
             await service.execute_job("job-1", "proj-1", "org-1", is_superadmin_context=False)
 
@@ -777,7 +777,7 @@ class TestExecuteJobStatusGuard:
 
     @pytest.mark.asyncio
     async def test_skips_failed_job(self):
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
 
         mock_job = MagicMock()
         mock_job.status = "failed"
@@ -797,9 +797,9 @@ class TestExecuteJobStatusGuard:
         )
 
         with (
-            patch("app.services.analysis_service.AsyncSessionFactory", return_value=mock_session),
-            patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo),
-            patch("app.services.analysis_service.PhotoRepository", return_value=AsyncMock()),
+            patch("app.modules.analysis.analysis_service.AsyncSessionFactory", return_value=mock_session),
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_repo),
+            patch("app.modules.analysis.analysis_service.PhotoRepository", return_value=AsyncMock()),
         ):
             await service.execute_job("job-1", "proj-1", "org-1", is_superadmin_context=False)
 
@@ -838,7 +838,7 @@ class TestCreateAnalysisJobRoute:
 class TestDuplicateEnqueueGuard:
     @pytest.mark.asyncio
     async def test_create_analysis_job_skips_enqueue_for_existing_active_job(self):
-        from app.api.routes.analysis_jobs import create_analysis_job
+        from app.modules.analysis.api.analysis_jobs import create_analysis_job
 
         current_user = MagicMock()
         current_user.id = "usr-1"
@@ -856,7 +856,7 @@ class TestDuplicateEnqueueGuard:
         )
         request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
 
-        with patch("app.api.routes.analysis_jobs.enqueue_analysis_job", new=AsyncMock()) as enqueue_mock:
+        with patch("app.modules.analysis.api.analysis_jobs.enqueue_analysis_job", new=AsyncMock()) as enqueue_mock:
             response = await create_analysis_job(
                 case_id="proj-1",
                 request=request,
@@ -876,7 +876,7 @@ class TestDuplicateEnqueueGuard:
 class TestQueueOverflowGuards:
     @pytest.mark.asyncio
     async def test_create_analysis_job_returns_429_when_enqueue_race_hits_capacity(self):
-        from app.api.routes.analysis_jobs import create_analysis_job
+        from app.modules.analysis.api.analysis_jobs import create_analysis_job
 
         current_user = MagicMock()
         current_user.id = "usr-1"
@@ -896,9 +896,9 @@ class TestQueueOverflowGuards:
         request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
 
         with (
-            patch("app.api.routes.analysis_jobs.get_settings") as get_settings,
+            patch("app.modules.analysis.api.analysis_jobs.get_settings") as get_settings,
             patch(
-                "app.api.routes.analysis_jobs.enqueue_analysis_job",
+                "app.modules.analysis.api.analysis_jobs.enqueue_analysis_job",
                 new=AsyncMock(
                     side_effect=AnalysisJobQueueCapacityExceededError(
                         queued=1000,
@@ -925,7 +925,7 @@ class TestQueueOverflowGuards:
 
     @pytest.mark.asyncio
     async def test_retry_analysis_job_returns_429_when_enqueue_race_hits_capacity(self):
-        from app.api.routes.analysis_jobs import retry_analysis_job
+        from app.modules.analysis.api.analysis_jobs import retry_analysis_job
 
         current_user = MagicMock()
         current_user.id = "usr-1"
@@ -941,9 +941,9 @@ class TestQueueOverflowGuards:
         request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
 
         with (
-            patch("app.api.routes.analysis_jobs.get_settings") as get_settings,
+            patch("app.modules.analysis.api.analysis_jobs.get_settings") as get_settings,
             patch(
-                "app.api.routes.analysis_jobs.enqueue_analysis_job",
+                "app.modules.analysis.api.analysis_jobs.enqueue_analysis_job",
                 new=AsyncMock(
                     side_effect=AnalysisJobQueueCapacityExceededError(
                         queued=999,

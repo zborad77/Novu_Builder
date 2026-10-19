@@ -5,11 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from unittest.mock import AsyncMock, patch
 
-from app.models import AnalysisJob, AnalysisResult
+from app.modules.analysis.models import AnalysisJob, AnalysisResult
 from app.modules.cases.models import Project
 from app.modules.identity.models import Organization, User
-from app.repositories.analysis_repository import ANALYSIS_JOB_STATUS_COMPLETED
-from app.services.analysis_service import AnalysisService
+from app.modules.analysis.analysis_repository import ANALYSIS_JOB_STATUS_COMPLETED
+from app.modules.analysis.analysis_service import AnalysisService
 
 
 @pytest.mark.asyncio
@@ -81,8 +81,8 @@ async def test_duplicate_execution_after_commit_and_requeue_is_idempotent(db_ses
     )
 
     with (
-        patch("app.services.analysis_service.WorkerAsyncSessionFactory", worker_factory),
-        patch("app.services.analysis_service.run_project_analysis", new=run_analysis),
+        patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory", worker_factory),
+        patch("app.modules.analysis.analysis_service.run_project_analysis", new=run_analysis),
     ):
         await service.execute_job(
             job_id,

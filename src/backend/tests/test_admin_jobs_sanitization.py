@@ -19,7 +19,7 @@ from app.api.routes.admin import (
     get_admin_job,
     list_all_jobs,
 )
-from app.services.analysis_service import to_job_read
+from app.modules.analysis.analysis_service import to_job_read
 
 
 # ── 1. _sanitize_admin_job unit tests ──────────────────────────────────────────
@@ -245,7 +245,7 @@ class TestNonAdminJobsUnchanged:
 
     def test_sanitize_not_imported_in_analysis_service(self):
         """Sanitization helper must live in admin routes, not bleed into service layer."""
-        from app.services import analysis_service
+        from app.modules.analysis import analysis_service
         assert not hasattr(analysis_service, "_sanitize_admin_job")
 
 

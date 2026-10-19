@@ -10,7 +10,8 @@ from app.platform.db.base import Base
 from app.platform.db.mixins import TimestampMixin
 
 if TYPE_CHECKING:
-    from app.models.domain import AnalysisJob, AnalysisResult, ProjectFinalProposal, ProjectProposalDraft, QuoteVariant
+    from app.modules.analysis.models import AnalysisJob, AnalysisResult
+    from app.modules.quoting.models import ProjectFinalProposal, ProjectProposalDraft, QuoteVariant
     from app.modules.exports.models import ProjectExport
     from app.modules.media.models import ProjectPhoto
     from app.modules.identity.models import Organization, User

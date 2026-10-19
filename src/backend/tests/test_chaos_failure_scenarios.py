@@ -705,7 +705,7 @@ class TestC6AIProviderFailureStorm:
 
     def test_c6_4_retry_backoff_escalates_to_prevent_storm(self):
         """Retry backoff must grow exponentially across attempts."""
-        from app.services.analysis_service import _retry_backoff_seconds
+        from app.modules.analysis.analysis_service import _retry_backoff_seconds
         settings = SimpleNamespace(
             analysis_retry_backoff_base_seconds=30,
             analysis_retry_backoff_max_seconds=300,
@@ -720,7 +720,7 @@ class TestC6AIProviderFailureStorm:
 
     def test_c6_5_retry_backoff_is_deterministic_per_job_id(self):
         """Same job_id + attempt_count always produces the same backoff (jitter is seeded)."""
-        from app.services.analysis_service import _retry_backoff_seconds
+        from app.modules.analysis.analysis_service import _retry_backoff_seconds
         settings = SimpleNamespace(
             analysis_retry_backoff_base_seconds=30,
             analysis_retry_backoff_max_seconds=300,
@@ -732,7 +732,7 @@ class TestC6AIProviderFailureStorm:
     def test_c6_6_dlq_route_taken_when_retry_budget_exhausted(self):
         """When retry budget is exhausted, mark_job_dead_letter must be called, not retry."""
         import inspect
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
 
         # Verify the code path: retry_inflight >= retry_budget → mark_job_dead_letter
         src = inspect.getsource(AnalysisService._handle_attempt_failure)
@@ -783,7 +783,7 @@ class TestC7RetryStormPrevention:
         """The retry budget is a global system limit, not per-tenant — prevents one
         tenant from exhausting retries for all tenants simultaneously."""
         import inspect
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
 
         src = inspect.getsource(AnalysisService._handle_attempt_failure)
         # Must use count_retry_inflight_jobs() — a global count, not per-project
@@ -955,7 +955,7 @@ class TestC9PartialDependencyOutage:
         # only invoked on submission, not on list/get
         # (Source inspection as a proxy for architectural conformance)
         import inspect
-        import app.api.routes.analysis_jobs as analysis_routes
+        import app.modules.analysis.api.analysis_jobs as analysis_routes
 
         route_src = inspect.getsource(analysis_routes)
         # ensure_* calls must only appear inside create/trigger handlers, not list handlers

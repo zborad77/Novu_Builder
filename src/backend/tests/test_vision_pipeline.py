@@ -14,13 +14,13 @@ from __future__ import annotations
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from app.ai.pipeline_contracts import (
+from app.modules.analysis.ai.pipeline_contracts import (
     DetectionStageResult,
     ExtractionStageResult,
     PipelineRunResult,
     WorkCatalogMappingResult,
 )
-from app.ai.pipeline import (
+from app.modules.analysis.ai.pipeline import (
     LegacyProviderAdapter,
     PipelineOrchestrator,
     StagedVisionPipeline,
@@ -307,7 +307,7 @@ class TestPipelineRunResultToLegacyDict:
 
 class TestIsStagedRouting:
     def test_legacy_provider_is_not_staged(self):
-        from app.ai.providers.mock_vision_provider import MockVisionProvider
+        from app.modules.analysis.ai.providers.mock_vision_provider import MockVisionProvider
         assert _is_staged(MockVisionProvider()) is False
 
     def test_object_without_protocol_methods_is_not_staged(self):
@@ -340,7 +340,7 @@ class TestIsStagedRouting:
 class TestPipelineOrchestratorLegacyPath:
     @pytest.mark.asyncio
     async def test_routes_to_legacy_adapter_for_mock_provider(self):
-        from app.ai.providers.mock_vision_provider import MockVisionProvider
+        from app.modules.analysis.ai.providers.mock_vision_provider import MockVisionProvider
 
         provider = MockVisionProvider()
         orchestrator = PipelineOrchestrator(provider)
@@ -357,7 +357,7 @@ class TestPipelineOrchestratorLegacyPath:
 
     @pytest.mark.asyncio
     async def test_legacy_result_contains_all_stage_results(self):
-        from app.ai.providers.mock_vision_provider import MockVisionProvider
+        from app.modules.analysis.ai.providers.mock_vision_provider import MockVisionProvider
 
         result = await PipelineOrchestrator(MockVisionProvider()).run(
             project=_make_project(),
@@ -371,7 +371,7 @@ class TestPipelineOrchestratorLegacyPath:
 
     @pytest.mark.asyncio
     async def test_detection_object_type_from_mock_project(self):
-        from app.ai.providers.mock_vision_provider import MockVisionProvider
+        from app.modules.analysis.ai.providers.mock_vision_provider import MockVisionProvider
 
         # mock provider checks for the exact string "strecha" (nominative)
         result = await PipelineOrchestrator(MockVisionProvider()).run(
@@ -384,7 +384,7 @@ class TestPipelineOrchestratorLegacyPath:
 
     @pytest.mark.asyncio
     async def test_facade_project_detection(self):
-        from app.ai.providers.mock_vision_provider import MockVisionProvider
+        from app.modules.analysis.ai.providers.mock_vision_provider import MockVisionProvider
 
         result = await PipelineOrchestrator(MockVisionProvider()).run(
             project={"description": "oprava fasady", "address_label": "Ostrava"},
@@ -396,7 +396,7 @@ class TestPipelineOrchestratorLegacyPath:
 
     @pytest.mark.asyncio
     async def test_extraction_has_non_empty_materials(self):
-        from app.ai.providers.mock_vision_provider import MockVisionProvider
+        from app.modules.analysis.ai.providers.mock_vision_provider import MockVisionProvider
 
         result = await PipelineOrchestrator(MockVisionProvider()).run(
             project=_make_project(),
@@ -409,7 +409,7 @@ class TestPipelineOrchestratorLegacyPath:
 
     @pytest.mark.asyncio
     async def test_area_confidence_within_bounds(self):
-        from app.ai.providers.mock_vision_provider import MockVisionProvider
+        from app.modules.analysis.ai.providers.mock_vision_provider import MockVisionProvider
 
         result = await PipelineOrchestrator(MockVisionProvider()).run(
             project=_make_project(),
@@ -575,11 +575,11 @@ class TestRunProjectAnalysisBackwardCompat:
 
     @pytest.mark.asyncio
     async def test_mock_provider_returns_all_expected_keys(self):
-        from app.ai.analysis_service import run_project_analysis
+        from app.modules.analysis.ai.analysis_service import run_project_analysis
 
         # Patch normalize_photo_inputs to avoid real DB/storage access
         with patch(
-            "app.ai.analysis_service.normalize_photo_inputs",
+            "app.modules.analysis.ai.analysis_service.normalize_photo_inputs",
             new=AsyncMock(return_value=_make_photos()),
         ):
             result = await run_project_analysis(
@@ -593,10 +593,10 @@ class TestRunProjectAnalysisBackwardCompat:
 
     @pytest.mark.asyncio
     async def test_mock_provider_objectType_is_string(self):
-        from app.ai.analysis_service import run_project_analysis
+        from app.modules.analysis.ai.analysis_service import run_project_analysis
 
         with patch(
-            "app.ai.analysis_service.normalize_photo_inputs",
+            "app.modules.analysis.ai.analysis_service.normalize_photo_inputs",
             new=AsyncMock(return_value=_make_photos()),
         ):
             result = await run_project_analysis(
@@ -610,10 +610,10 @@ class TestRunProjectAnalysisBackwardCompat:
 
     @pytest.mark.asyncio
     async def test_mock_provider_materials_is_list(self):
-        from app.ai.analysis_service import run_project_analysis
+        from app.modules.analysis.ai.analysis_service import run_project_analysis
 
         with patch(
-            "app.ai.analysis_service.normalize_photo_inputs",
+            "app.modules.analysis.ai.analysis_service.normalize_photo_inputs",
             new=AsyncMock(return_value=_make_photos()),
         ):
             result = await run_project_analysis(
@@ -628,7 +628,7 @@ class TestRunProjectAnalysisBackwardCompat:
 
     @pytest.mark.asyncio
     async def test_with_analysis_profile_config(self):
-        from app.ai.analysis_service import run_project_analysis
+        from app.modules.analysis.ai.analysis_service import run_project_analysis
 
         config = {
             "workTypeCode": "roof-repair",
@@ -642,7 +642,7 @@ class TestRunProjectAnalysisBackwardCompat:
         }
 
         with patch(
-            "app.ai.analysis_service.normalize_photo_inputs",
+            "app.modules.analysis.ai.analysis_service.normalize_photo_inputs",
             new=AsyncMock(return_value=_make_photos()),
         ):
             result = await run_project_analysis(
@@ -658,7 +658,7 @@ class TestRunProjectAnalysisBackwardCompat:
 
     @pytest.mark.asyncio
     async def test_unknown_provider_raises(self):
-        from app.ai.analysis_service import run_project_analysis
+        from app.modules.analysis.ai.analysis_service import run_project_analysis
 
         with pytest.raises(ValueError, match="not supported"):
             await run_project_analysis(

@@ -22,7 +22,7 @@ from __future__ import annotations
 import structlog
 from typing import Protocol, runtime_checkable
 
-from app.ai.pipeline_contracts import (
+from app.modules.analysis.ai.pipeline_contracts import (
     DetectionStageResult,
     ExtractionStageResult,
     PipelineRunResult,

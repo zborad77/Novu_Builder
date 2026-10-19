@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.platform.config import get_settings
-from app.services.analysis_service import AnalysisService, _payload_has_large_blob
+from app.modules.analysis.analysis_service import AnalysisService, _payload_has_large_blob
 
 
 def test_payload_has_large_blob_detects_base64_like_string():
@@ -35,7 +35,7 @@ async def test_persist_job_input_payload_offloads_large_payload(monkeypatch):
 
     try:
         with patch(
-            "app.services.analysis_service.write_storage_file",
+            "app.modules.analysis.analysis_service.write_storage_file",
             new=AsyncMock(),
         ) as write_storage_file:
             cleanup_key = await service._persist_job_input_payload(job, payload)

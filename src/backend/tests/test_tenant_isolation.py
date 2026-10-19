@@ -154,13 +154,13 @@ class TestQuoteVariantRepositoryOrgScope:
 
     def test_get_default_pricing_profile_accepts_org_id(self):
         import inspect
-        from app.repositories.quote_variant_repository import QuoteVariantRepository
+        from app.modules.quoting.quote_variant_repository import QuoteVariantRepository
         sig = inspect.signature(QuoteVariantRepository.get_default_pricing_profile)
         assert "organization_id" in sig.parameters, "organization_id param missing from get_default_pricing_profile"
 
     def test_get_default_pricing_profile_filters_by_org(self):
         import inspect
-        from app.repositories.quote_variant_repository import QuoteVariantRepository
+        from app.modules.quoting.quote_variant_repository import QuoteVariantRepository
         source = inspect.getsource(QuoteVariantRepository.get_default_pricing_profile)
         assert "organization_id" in source
 
@@ -174,7 +174,7 @@ class TestAnalysisResultOwnership:
 
     def test_route_verifies_result_project_id(self):
         import inspect
-        from app.api.routes.analysis_jobs import patch_analysis_selection
+        from app.modules.analysis.api.analysis_jobs import patch_analysis_selection
         source = inspect.getsource(patch_analysis_selection)
         assert "projectId" in source or "project_id" in source, \
             "patch_analysis_selection does not verify result ownership"

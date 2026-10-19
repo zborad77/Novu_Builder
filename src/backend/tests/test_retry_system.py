@@ -7,8 +7,8 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from app.repositories.analysis_repository import InvalidAnalysisResultPayloadError
-from app.services.analysis_service import AnalysisService, _retry_backoff_seconds
+from app.modules.analysis.analysis_repository import InvalidAnalysisResultPayloadError
+from app.modules.analysis.analysis_service import AnalysisService, _retry_backoff_seconds
 from app.platform.jobs.queue import LeasedAnalysisJob
 
 
@@ -144,11 +144,11 @@ class TestAnalysisRetryDecisions:
         )
 
         with (
-            patch("app.services.analysis_service.WorkerAsyncSessionFactory", side_effect=[phase1_ctx, phase2_ctx]),
-            patch("app.services.analysis_service.AnalysisRepository", side_effect=[phase1_repo, phase3_repo]),
-            patch("app.services.analysis_service.PhotoRepository", return_value=photo_repo),
-            patch("app.services.analysis_service.run_project_analysis", side_effect=RuntimeError("provider down")),
-            patch("app.services.analysis_service.get_settings", return_value=settings),
+            patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory", side_effect=[phase1_ctx, phase2_ctx]),
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", side_effect=[phase1_repo, phase3_repo]),
+            patch("app.modules.analysis.analysis_service.PhotoRepository", return_value=photo_repo),
+            patch("app.modules.analysis.analysis_service.run_project_analysis", side_effect=RuntimeError("provider down")),
+            patch("app.modules.analysis.analysis_service.get_settings", return_value=settings),
         ):
             result = await service.execute_job(
                 "job-1",
@@ -215,11 +215,11 @@ class TestAnalysisRetryDecisions:
         )
 
         with (
-            patch("app.services.analysis_service.WorkerAsyncSessionFactory", side_effect=[phase1_ctx, phase2_ctx]),
-            patch("app.services.analysis_service.AnalysisRepository", side_effect=[phase1_repo, phase3_repo]),
-            patch("app.services.analysis_service.PhotoRepository", return_value=photo_repo),
-            patch("app.services.analysis_service.run_project_analysis", side_effect=RuntimeError("provider down")),
-            patch("app.services.analysis_service.get_settings", return_value=settings),
+            patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory", side_effect=[phase1_ctx, phase2_ctx]),
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", side_effect=[phase1_repo, phase3_repo]),
+            patch("app.modules.analysis.analysis_service.PhotoRepository", return_value=photo_repo),
+            patch("app.modules.analysis.analysis_service.run_project_analysis", side_effect=RuntimeError("provider down")),
+            patch("app.modules.analysis.analysis_service.get_settings", return_value=settings),
         ):
             result = await service.execute_job(
                 "job-1",
@@ -285,14 +285,14 @@ class TestAnalysisRetryDecisions:
         )
 
         with (
-            patch("app.services.analysis_service.WorkerAsyncSessionFactory", side_effect=[phase1_ctx, phase2_ctx]),
-            patch("app.services.analysis_service.AnalysisRepository", side_effect=[phase1_repo, phase3_repo]),
-            patch("app.services.analysis_service.PhotoRepository", return_value=photo_repo),
+            patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory", side_effect=[phase1_ctx, phase2_ctx]),
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", side_effect=[phase1_repo, phase3_repo]),
+            patch("app.modules.analysis.analysis_service.PhotoRepository", return_value=photo_repo),
             patch(
-                "app.services.analysis_service.run_project_analysis",
+                "app.modules.analysis.analysis_service.run_project_analysis",
                 side_effect=InvalidAnalysisResultPayloadError("schema mismatch"),
             ),
-            patch("app.services.analysis_service.get_settings", return_value=settings),
+            patch("app.modules.analysis.analysis_service.get_settings", return_value=settings),
         ):
             result = await service.execute_job(
                 "job-1",
@@ -348,10 +348,10 @@ class TestDeadLetterReprocess:
         )
 
         with (
-            patch("app.services.analysis_service.AsyncSessionFactory", return_value=session_ctx),
-            patch("app.services.analysis_service.AnalysisRepository", return_value=inner_repo),
-            patch("app.services.analysis_service.get_settings", return_value=settings),
-            patch("app.services.analysis_service.requeue_dlq_job", new=AsyncMock(return_value={"job_id": "job-1"})) as requeue_dlq,
+            patch("app.modules.analysis.analysis_service.AsyncSessionFactory", return_value=session_ctx),
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=inner_repo),
+            patch("app.modules.analysis.analysis_service.get_settings", return_value=settings),
+            patch("app.modules.analysis.analysis_service.requeue_dlq_job", new=AsyncMock(return_value={"job_id": "job-1"})) as requeue_dlq,
         ):
             result = await service.reprocess_dead_letter_job(
                 "job-1",
@@ -431,10 +431,10 @@ class TestDeadLetterReprocess:
         )
 
         with (
-            patch("app.services.analysis_service.AsyncSessionFactory", return_value=session_ctx),
-            patch("app.services.analysis_service.AnalysisRepository", return_value=inner_repo),
-            patch("app.services.analysis_service.get_settings", return_value=settings),
-            patch("app.services.analysis_service.requeue_dlq_job", new=AsyncMock(return_value={"job_id": "job-1"})),
+            patch("app.modules.analysis.analysis_service.AsyncSessionFactory", return_value=session_ctx),
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=inner_repo),
+            patch("app.modules.analysis.analysis_service.get_settings", return_value=settings),
+            patch("app.modules.analysis.analysis_service.requeue_dlq_job", new=AsyncMock(return_value={"job_id": "job-1"})),
         ):
             result = await service.reprocess_dead_letter_job(
                 "job-1",
@@ -491,9 +491,9 @@ class TestWorkerRetryFinalization:
         )
 
         with (
-            patch("app.services.analysis_service.WorkerAsyncSessionFactory", return_value=session_ctx),
-            patch("app.services.analysis_service.AnalysisRepository", return_value=repo),
-            patch("app.services.analysis_service.get_settings", return_value=settings),
+            patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory", return_value=session_ctx),
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=repo),
+            patch("app.modules.analysis.analysis_service.get_settings", return_value=settings),
         ):
             result = await service.recover_job_after_worker_error(
                 lease=lease,

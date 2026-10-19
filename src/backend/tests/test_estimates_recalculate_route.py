@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from app.api.routes.estimates import recalculate_case_estimates
-from app.schemas.quote_variant import QuoteVariantRecalculateResponse
-from app.services.analysis_service import AnalysisJobCreateResult
+from app.modules.quoting.api.estimates import recalculate_case_estimates
+from app.modules.quoting.schemas.quote_variant import QuoteVariantRecalculateResponse
+from app.modules.analysis.analysis_service import AnalysisJobCreateResult
 
 
 @pytest.mark.asyncio

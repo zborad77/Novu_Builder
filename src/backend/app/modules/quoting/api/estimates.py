@@ -12,10 +12,10 @@ from app.api.deps import (
     resolve_org_id,
 )
 from app.modules.identity.schemas.auth import AuthUserRead
-from app.schemas.quote_variant import QuoteVariantListResponse, QuoteVariantRecalculateResponse
-from app.services.analysis_service import AnalysisService
+from app.modules.quoting.schemas.quote_variant import QuoteVariantListResponse, QuoteVariantRecalculateResponse
+from app.modules.analysis.analysis_service import AnalysisService
 from app.modules.workflow.project_service import ProjectService
-from app.services.quote_variant_service import QuoteVariantService
+from app.modules.quoting.quote_variant_service import QuoteVariantService
 
 router = APIRouter(tags=["estimates"])
 

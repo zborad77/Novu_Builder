@@ -7,9 +7,9 @@ from sqlalchemy import select
 
 from app.modules.cases.models import Project
 from app.modules.media.models import ProjectPhoto
-from app.repositories.final_proposal_repository import FinalProposalRepository
+from app.modules.quoting.final_proposal_repository import FinalProposalRepository
 from app.modules.cases.repository import ProjectRepository
-from app.repositories.proposal_draft_repository import ProposalDraftRepository
+from app.modules.quoting.proposal_draft_repository import ProposalDraftRepository
 from app.modules.workflow.schemas import ProjectDuplicateRequest
 from app.modules.workflow.project_service import ProjectService
 

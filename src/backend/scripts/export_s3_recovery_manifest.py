@@ -22,6 +22,10 @@ from app.modules.exports.storage_consistency_repository import (  # noqa: E402
     StorageConsistencyRepository,
 )
 from app.platform.storage.s3_photo_storage import _build_s3_client_kwargs  # noqa: E402
+from app.composition.models import import_all_models  # noqa: E402
+
+# Relace mezi modely různých modulů vyžadují registraci všech ORM modelů.
+import_all_models()
 
 
 @dataclass(frozen=True)

@@ -8,7 +8,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.cases.transitions import TransitionError, apply_transition
-from app.models import AnalysisJob, AnalysisResult
+from app.modules.analysis.models import AnalysisJob, AnalysisResult
 from app.modules.cases.models import Project
 
 logger = structlog.get_logger(__name__)

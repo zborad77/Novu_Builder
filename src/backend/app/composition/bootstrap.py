@@ -11,7 +11,8 @@ from app.platform.db.seed_runtime import (
     execute_seed_plan,
 )
 from app.modules.identity.auth_service import hash_password, verify_password
-from app.models import AnalysisJob, AnalysisResult, QuoteItem, QuoteVariant
+from app.modules.analysis.models import AnalysisJob, AnalysisResult
+from app.modules.quoting.models import QuoteItem, QuoteVariant
 from app.modules.catalog.work_catalog.models import AnalysisProfile, AnalysisProfileConfidenceThreshold, AnalysisProfileExtractionRule, AnalysisProfileIgnoredObject, AnalysisProfileOutputMapping, AnalysisProfileTargetObject, AnalysisProfileValidationRule, CatalogPricingProfile, CatalogPricingProfileAdjustmentRule, CatalogPricingProfileBaseRule, CatalogPricingProfileLaborAssumption, CatalogPricingProfileMaterialAssumption, CatalogPricingProfileRequiredInput, ProjectWorkItem, ProjectWorkItemValue, TenantWorkTypeParameterOverride, TenantWorkTypeSetting, VisionDetection, WorkCategory, WorkType, WorkTypeParameter, WorkTypeParameterOption
 from app.modules.catalog.models import MaterialCatalog, PricingProfile, Supplier, SupplierMaterialPrice
 from app.modules.cases.models import Client, Project

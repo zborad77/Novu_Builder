@@ -8,8 +8,8 @@ from sqlalchemy import delete
 from app.modules.cases.models import Project
 from app.modules.media.models import ProjectPhoto
 from app.modules.catalog.models import PricingProfile
-from app.repositories.final_proposal_repository import FinalProposalRepository
-from app.repositories.proposal_draft_repository import ProposalDraftRepository
+from app.modules.quoting.final_proposal_repository import FinalProposalRepository
+from app.modules.quoting.proposal_draft_repository import ProposalDraftRepository
 from app.modules.cases.repository import ProjectRepository
 from app.modules.workflow.schemas import (
     ProjectCreate,
@@ -23,7 +23,7 @@ from app.modules.workflow.schemas import (
     ProjectWorkflowStatusSummary,
 )
 from app.modules.exports.export_service import ExportService
-from app.services.proposal_draft_service import (
+from app.modules.quoting.proposal_draft_service import (
     build_final_proposal_from_record,
     build_final_proposal_snapshot_payload,
     build_project_proposal_draft,
@@ -173,7 +173,7 @@ def _build_latest_analysis_dict(project: Project) -> dict | None:
 
 
 def _build_quote_variants_list(project: Project) -> list:
-    from app.services.quote_variant_service import to_variant_read
+    from app.modules.quoting.quote_variant_service import to_variant_read
     variants = getattr(project, "quote_variants", None) or []
     if not variants:
         return []

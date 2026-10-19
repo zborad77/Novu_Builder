@@ -8,7 +8,7 @@ import traceback
 import structlog
 from fastapi import HTTPException
 
-from app.ai import describe_analysis_provider, run_project_analysis
+from app.modules.analysis.ai import describe_analysis_provider, run_project_analysis
 from app.platform.jobs.backpressure import (
     analysis_job_priority_for_type,
     collect_backpressure_snapshot,
@@ -27,9 +27,9 @@ from app.platform.db.session import (
     AsyncSessionFactory,        # HTTP-originated ops (retry_job, etc.)
     WorkerAsyncSessionFactory,  # background runner only (execute_job, fail_job_before_processing)
 )
-from app.models import AnalysisJob, AnalysisResult
+from app.modules.analysis.models import AnalysisJob, AnalysisResult
 from app.modules.cases.models import Project
-from app.repositories.analysis_repository import (
+from app.modules.analysis.analysis_repository import (
     ANALYSIS_JOB_TYPE_MANUAL_TRIGGER,
     ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
     ANALYSIS_JOB_STATUS_CANCELED,
@@ -48,7 +48,7 @@ from app.repositories.analysis_repository import (
 )
 from app.modules.media.photo_repository import PhotoRepository
 from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
-from app.schemas.analysis import AnalysisResultRead, parse_json_field
+from app.modules.analysis.schemas.analysis import AnalysisResultRead, parse_json_field
 from app.modules.catalog.analysis_profile_service import (
     AnalysisProfileResolutionError,
     AnalysisProfileService,
@@ -1283,8 +1283,8 @@ class AnalysisService:
         lease_token: str | None = None,
         worker_id: str | None = None,
     ) -> AnalysisJobExecutionResult:
-        from app.repositories.quote_variant_repository import QuoteVariantRepository
-        from app.services.quote_variant_service import (
+        from app.modules.quoting.quote_variant_repository import QuoteVariantRepository
+        from app.modules.quoting.quote_variant_service import (
             QuoteVariantRecalculationUnavailableError,
             QuoteVariantService,
         )

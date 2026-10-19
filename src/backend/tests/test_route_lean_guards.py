@@ -95,9 +95,9 @@ class TestImageLeanGuards:
 class TestMeasurementLeanGuards:
     @pytest.mark.asyncio
     async def test_create_measurement_returns_404_when_case_not_found(self):
-        from app.api.routes.measurements import create_or_update_measurement
-        from app.schemas.measurement import MeasurementUpsert
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.api.measurements import create_or_update_measurement
+        from app.modules.analysis.schemas.measurement import MeasurementUpsert
+        from app.modules.analysis.analysis_service import AnalysisService
         from app.modules.workflow.project_service import ProjectService
 
         mock_user = MagicMock()
@@ -125,9 +125,9 @@ class TestMeasurementLeanGuards:
 
     @pytest.mark.asyncio
     async def test_create_measurement_succeeds_with_lean_guard(self):
-        from app.api.routes.measurements import create_or_update_measurement
-        from app.schemas.measurement import MeasurementUpsert
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.api.measurements import create_or_update_measurement
+        from app.modules.analysis.schemas.measurement import MeasurementUpsert
+        from app.modules.analysis.analysis_service import AnalysisService
         from app.modules.workflow.project_service import ProjectService
 
         mock_user = MagicMock()

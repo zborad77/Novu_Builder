@@ -16,6 +16,10 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.platform.db.session import AsyncSessionFactory
 from app.modules.cases.models import Project
 from app.platform.storage.local_photo_storage import STORAGE_ROOT
+from app.composition.models import import_all_models  # noqa: E402
+
+# Relace mezi modely různých modulů vyžadují registraci všech ORM modelů.
+import_all_models()
 
 
 async def delete_project(*, project_id: str, allow_prefix: str | None) -> int:

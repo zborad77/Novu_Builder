@@ -8,9 +8,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.models import AnalysisJob
+from app.modules.analysis.models import AnalysisJob
 from app.modules.cases.models import Project
-from app.repositories.analysis_repository import (
+from app.modules.analysis.analysis_repository import (
     ANALYSIS_JOB_STATUS_COMPLETED,
     ANALYSIS_JOB_STATUS_QUEUED,
     ANALYSIS_JOB_TYPE_MANUAL_TRIGGER,
@@ -19,8 +19,8 @@ from app.repositories.analysis_repository import (
 )
 from app.modules.media.photo_repository import PhotoRepository
 from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
-from app.services.analysis_service import AnalysisService
-from app.services.quote_variant_service import QuoteVariantRecalculationResult
+from app.modules.analysis.analysis_service import AnalysisService
+from app.modules.quoting.quote_variant_service import QuoteVariantRecalculationResult
 from app.platform.jobs.queue import dequeue_analysis_job
 from tests.test_r19_job_queue import FakeRedisQueue
 
@@ -104,8 +104,8 @@ async def test_execute_analysis_job_enqueues_followup_quote_recalculation_job(db
     }
 
     with (
-        patch("app.services.analysis_service.WorkerAsyncSessionFactory", worker_factory),
-        patch("app.services.analysis_service.run_project_analysis", new=AsyncMock(return_value=analysis_payload)),
+        patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory", worker_factory),
+        patch("app.modules.analysis.analysis_service.run_project_analysis", new=AsyncMock(return_value=analysis_payload)),
     ):
         result = await service.execute_job(
             job.id,
@@ -163,9 +163,9 @@ async def test_execute_quote_recalculation_job_completes_without_analysis_result
     )
 
     with (
-        patch("app.services.analysis_service.WorkerAsyncSessionFactory", worker_factory),
+        patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory", worker_factory),
         patch(
-            "app.services.quote_variant_service.QuoteVariantService.recalculate_quote_variants_with_context",
+            "app.modules.quoting.quote_variant_service.QuoteVariantService.recalculate_quote_variants_with_context",
             new=AsyncMock(return_value=quote_result),
         ),
     ):

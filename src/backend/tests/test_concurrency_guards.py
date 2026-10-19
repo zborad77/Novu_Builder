@@ -23,7 +23,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 
-from app.services.analysis_service import AnalysisService
+from app.modules.analysis.analysis_service import AnalysisService
 from app.modules.media.photo_service import PhotoService
 
 
@@ -125,7 +125,7 @@ class TestCreateJobIdempotency:
 
         project = MagicMock(id="proj-1", organization_id="org-1")
 
-        with patch("app.services.analysis_service.get_settings") as get_settings:
+        with patch("app.modules.analysis.analysis_service.get_settings") as get_settings:
             get_settings.return_value.analysis_jobs_per_tenant_limit = 10
             with pytest.raises(HTTPException) as exc_info:
                 await service.create_job(project, user_id="usr-1")
@@ -140,9 +140,9 @@ class TestCreateJobIdempotency:
         project = MagicMock(id="proj-1", organization_id="org-1")
 
         with (
-            patch("app.services.analysis_service.get_settings") as get_settings,
+            patch("app.modules.analysis.analysis_service.get_settings") as get_settings,
             patch(
-                "app.services.analysis_service.collect_backpressure_snapshot",
+                "app.modules.analysis.analysis_service.collect_backpressure_snapshot",
                 new=AsyncMock(
                     return_value=MagicMock(
                         runtime_servable=True,

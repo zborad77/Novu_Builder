@@ -3,7 +3,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ProjectProposalDraft
+from app.modules.quoting.models import ProjectProposalDraft
 
 
 class ProposalVersionConflictError(Exception):

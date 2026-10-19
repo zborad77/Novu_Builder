@@ -152,7 +152,9 @@ def build_security_surface(app: Any) -> str:
 
 def build_metadata_snapshot() -> str:
     from app.platform.db.base import Base
-    import app.models  # noqa: F401  (registruje všechny modely)
+    from app.composition.models import import_all_models
+
+    import_all_models()
 
     tables = []
     for table in sorted(Base.metadata.tables.values(), key=lambda t: t.name):

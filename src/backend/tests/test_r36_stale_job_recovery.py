@@ -31,7 +31,7 @@ class TestLeaseRecoveryContracts:
 
     @pytest.mark.asyncio
     async def test_reconcile_expired_lease_resets_running_job_to_queued(self):
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
 
         job = MagicMock()
         job.id = "job-1"
@@ -56,8 +56,8 @@ class TestLeaseRecoveryContracts:
         )
 
         with (
-            patch("app.services.analysis_service.WorkerAsyncSessionFactory", return_value=session),
-            patch("app.services.analysis_service.AnalysisRepository", return_value=repo),
+            patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory", return_value=session),
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=repo),
         ):
             disposition = await service.reconcile_expired_lease(self._lease(job_id="job-1"))
 
@@ -66,7 +66,7 @@ class TestLeaseRecoveryContracts:
 
     @pytest.mark.asyncio
     async def test_reconcile_expired_lease_drops_completed_job(self):
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
 
         job = MagicMock()
         job.id = "job-2"
@@ -90,8 +90,8 @@ class TestLeaseRecoveryContracts:
         )
 
         with (
-            patch("app.services.analysis_service.WorkerAsyncSessionFactory", return_value=session),
-            patch("app.services.analysis_service.AnalysisRepository", return_value=repo),
+            patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory", return_value=session),
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=repo),
         ):
             disposition = await service.reconcile_expired_lease(self._lease(job_id="job-2"))
 
@@ -99,7 +99,7 @@ class TestLeaseRecoveryContracts:
 
     @pytest.mark.asyncio
     async def test_reconcile_expired_lease_drops_job_when_db_lease_was_renewed(self):
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
 
         job = MagicMock()
         job.id = "job-3"
@@ -124,8 +124,8 @@ class TestLeaseRecoveryContracts:
         )
 
         with (
-            patch("app.services.analysis_service.WorkerAsyncSessionFactory", return_value=session),
-            patch("app.services.analysis_service.AnalysisRepository", return_value=repo),
+            patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory", return_value=session),
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=repo),
         ):
             disposition = await service.reconcile_expired_lease(self._lease(job_id="job-3"))
 

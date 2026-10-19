@@ -8,7 +8,7 @@ import inspect
 from types import SimpleNamespace
 from fastapi import HTTPException
 
-from app.services.analysis_service import _MAX_JOB_RETRY_COUNT
+from app.modules.analysis.analysis_service import _MAX_JOB_RETRY_COUNT
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -51,25 +51,25 @@ def _make_job(job_id: str, project_id: str):
 class TestExecuteJobOrgScope:
 
     def test_execute_job_signature_has_organization_id(self):
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         sig = inspect.signature(AnalysisService.execute_job)
         assert "organization_id" in sig.parameters
 
     def test_execute_job_has_mismatch_guard(self):
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.execute_job)
         assert "job.project_id != project_id" in src
 
     def test_execute_job_uses_org_scoped_fetch(self):
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.execute_job)
         assert "get_project_in_org" in src
 
     @pytest.mark.asyncio
     async def test_execute_job_fails_on_project_mismatch(self):
         """If job.project_id != project_id, job is failed and HTTPException(403) is raised."""
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_1", "prj_A")  # job belongs to prj_A
@@ -78,14 +78,14 @@ class TestExecuteJobOrgScope:
         mock_repo = AsyncMock(spec=AnalysisRepository)
         mock_repo.get_analysis_job = AsyncMock(return_value=job)
 
-        with patch("app.services.analysis_service.WorkerAsyncSessionFactory") as mock_factory:
+        with patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory") as mock_factory:
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.__aexit__ = AsyncMock(return_value=False)
             mock_factory.return_value = mock_ctx
 
-            with patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo), \
-                 patch("app.services.analysis_service.PhotoRepository"):
+            with patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_repo), \
+                 patch("app.modules.analysis.analysis_service.PhotoRepository"):
 
                 service = AnalysisService(
                     repository=AsyncMock(spec=AnalysisRepository),
@@ -104,8 +104,8 @@ class TestExecuteJobOrgScope:
     @pytest.mark.asyncio
     async def test_execute_job_fails_when_project_not_in_org(self):
         """If project does not belong to the given org, job is failed and HTTPException(403) is raised."""
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_1", "prj_A")
@@ -116,14 +116,14 @@ class TestExecuteJobOrgScope:
         # get_project_in_org returns None — project not in org_B
         mock_repo.get_project_in_org = AsyncMock(return_value=None)
 
-        with patch("app.services.analysis_service.WorkerAsyncSessionFactory") as mock_factory:
+        with patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory") as mock_factory:
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.__aexit__ = AsyncMock(return_value=False)
             mock_factory.return_value = mock_ctx
 
-            with patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo), \
-                 patch("app.services.analysis_service.PhotoRepository"):
+            with patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_repo), \
+                 patch("app.modules.analysis.analysis_service.PhotoRepository"):
 
                 service = AnalysisService(
                     repository=AsyncMock(spec=AnalysisRepository),
@@ -146,7 +146,7 @@ class TestExecuteJobCrossTenantBlocked:
 
     def test_execute_job_does_not_use_raw_session_get_when_org_provided(self):
         """When organization_id is given, execute_job must use get_project_in_org, not session.get."""
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.execute_job)
         # The org-scoped branch calls get_project_in_org
         assert "get_project_in_org(project_id, organization_id)" in src
@@ -157,8 +157,8 @@ class TestExecuteJobCrossTenantBlocked:
     @pytest.mark.asyncio
     async def test_org_scoped_project_fetch_is_called_with_correct_args(self):
         """execute_job calls get_project_in_org with project_id and organization_id."""
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_1", "prj_A")
@@ -172,10 +172,10 @@ class TestExecuteJobCrossTenantBlocked:
         mock_photo_repo = AsyncMock(spec=PhotoRepository)
         mock_photo_repo.list_photos_by_project_id = AsyncMock(return_value=[])
 
-        with patch("app.services.analysis_service.WorkerAsyncSessionFactory") as mock_factory, \
-             patch("app.services.analysis_service.run_project_analysis") as mock_analysis, \
-             patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo), \
-             patch("app.services.analysis_service.PhotoRepository", return_value=mock_photo_repo):
+        with patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory") as mock_factory, \
+             patch("app.modules.analysis.analysis_service.run_project_analysis") as mock_analysis, \
+             patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_repo), \
+             patch("app.modules.analysis.analysis_service.PhotoRepository", return_value=mock_photo_repo):
 
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)
@@ -213,12 +213,12 @@ class TestExecuteJobCrossTenantBlocked:
 class TestRetryJobOrgScope:
 
     def test_retry_job_signature_has_organization_id(self):
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         sig = inspect.signature(AnalysisService.retry_job)
         assert "organization_id" in sig.parameters
 
     def test_retry_job_uses_org_scoped_fetch(self):
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService._resolve_retry_project_scope)
         assert "get_project_in_org" in src
         assert "organization_id is not None" in src
@@ -226,8 +226,8 @@ class TestRetryJobOrgScope:
     @pytest.mark.asyncio
     async def test_retry_job_raises_403_when_project_not_in_org(self):
         """retry_job raises HTTPException(403) if project is not in the given organization."""
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         original_job = _make_job("job_old", "prj_A")
@@ -241,8 +241,8 @@ class TestRetryJobOrgScope:
         # project not in org_B
         mock_inner_repo.get_project_in_org = AsyncMock(return_value=None)
 
-        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory, \
-             patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo):
+        with patch("app.modules.analysis.analysis_service.AsyncSessionFactory") as mock_factory, \
+             patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_inner_repo):
 
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)
@@ -270,7 +270,7 @@ class TestWorkerExplicitFail:
 
     def test_execute_job_without_org_id_falls_back_to_session_get(self):
         """When organization_id is None (superadmin), session.get is used — no silent org fallback."""
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.execute_job)
         # Must not default to any hardcoded org
         assert "org_1" not in src
@@ -279,7 +279,7 @@ class TestWorkerExplicitFail:
 
     def test_mismatch_produces_explicit_failed_status(self):
         """Job status is set to 'failed' explicitly on mismatch — no silent skip."""
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.execute_job)
         # After mismatch detection, _fail_job_and_raise is called (sets status to failed)
         assert "_fail_job_and_raise" in src
@@ -292,14 +292,14 @@ class TestWorkerExplicitFail:
         Worker runner ops → WorkerAsyncSessionFactory.
         If this test fails, a refactor violated the session factory routing rule.
         """
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.retry_job)
         assert "AsyncSessionFactory" in src
         assert "WorkerAsyncSessionFactory" not in src
 
     def test_analysis_repository_get_project_in_org_requires_both_args(self):
         """get_project_in_org must require both project_id and organization_id — no defaults."""
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         sig = inspect.signature(AnalysisRepository.get_project_in_org)
         for name in ("project_id", "organization_id"):
             param = sig.parameters[name]
@@ -308,7 +308,7 @@ class TestWorkerExplicitFail:
 
     def test_routes_pass_org_id_to_execute_job(self):
         """Both routes pass org_id explicitly to the job queue enqueue call (R-19)."""
-        from app.api.routes.analysis_jobs import create_analysis_job, retry_analysis_job
+        from app.modules.analysis.api.analysis_jobs import create_analysis_job, retry_analysis_job
         src_create = inspect.getsource(create_analysis_job)
         # R-19: org_id forwarded to enqueue_analysis_job, not BackgroundTasks
         assert "enqueue_analysis_job" in src_create
@@ -320,7 +320,7 @@ class TestWorkerExplicitFail:
 
     def test_routes_pass_org_id_to_retry_job(self):
         """retry_analysis_job passes org_id to retry_job."""
-        from app.api.routes.analysis_jobs import retry_analysis_job
+        from app.modules.analysis.api.analysis_jobs import retry_analysis_job
         src = inspect.getsource(retry_analysis_job)
         assert "retry_job(" in src
         assert "organization_id=org_id" in src
@@ -334,7 +334,7 @@ class TestSuperadminBypass:
 
     def test_execute_job_org_id_none_uses_session_get_path(self):
         """When organization_id=None (superadmin), execute_job uses session.get — no org filter."""
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.execute_job)
         # Superadmin path must exist and be reachable
         assert "session.get(Project, project_id)" in src
@@ -344,7 +344,7 @@ class TestSuperadminBypass:
 
     def test_retry_job_org_id_none_uses_session_get_path(self):
         """When organization_id=None (superadmin), retry_job uses session.get — no org filter."""
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService._resolve_retry_project_scope)
         assert "session.get(Project, project_id)" in src
         assert "if organization_id is not None:" in src
@@ -353,21 +353,21 @@ class TestSuperadminBypass:
 
     def test_execute_job_logs_superadmin_bypass(self):
         """execute_job logs when organization_id=None to keep bypass observable."""
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.execute_job)
         assert "superadmin_bypass" in src
 
     def test_retry_job_logs_superadmin_bypass(self):
         """retry_job logs when organization_id=None to keep bypass observable."""
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.retry_job)
         assert "superadmin_bypass" in src
 
     @pytest.mark.asyncio
     async def test_execute_job_without_org_id_and_no_flag_raises_403(self):
         """organization_id=None without is_superadmin_context=True raises 403 guard."""
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_1", "prj_A")
@@ -388,8 +388,8 @@ class TestSuperadminBypass:
     @pytest.mark.asyncio
     async def test_execute_job_with_superadmin_context_proceeds_to_session_get(self):
         """organization_id=None + is_superadmin_context=True uses session.get path."""
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_1", "prj_A")
@@ -399,14 +399,14 @@ class TestSuperadminBypass:
         mock_repo = AsyncMock(spec=AnalysisRepository)
         mock_repo.get_analysis_job = AsyncMock(return_value=job)
 
-        with patch("app.services.analysis_service.WorkerAsyncSessionFactory") as mock_factory:
+        with patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory") as mock_factory:
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.__aexit__ = AsyncMock(return_value=False)
             mock_factory.return_value = mock_ctx
 
-            with patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo), \
-                 patch("app.services.analysis_service.PhotoRepository"):
+            with patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_repo), \
+                 patch("app.modules.analysis.analysis_service.PhotoRepository"):
 
                 service = AnalysisService(
                     repository=AsyncMock(spec=AnalysisRepository),
@@ -426,8 +426,8 @@ class TestSuperadminBypass:
     @pytest.mark.asyncio
     async def test_retry_job_without_org_id_and_no_flag_raises_403(self):
         """organization_id=None without is_superadmin_context=True raises 403 guard."""
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
@@ -446,8 +446,8 @@ class TestSuperadminBypass:
     @pytest.mark.asyncio
     async def test_retry_job_with_superadmin_context_proceeds_to_job_lookup(self):
         """organization_id=None + is_superadmin_context=True proceeds to job lookup."""
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
@@ -473,8 +473,8 @@ class TestRetryJobGuards:
     """retry_job must reject non-terminal states and enforce the retry ceiling."""
 
     def _make_service(self, job):
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
@@ -534,8 +534,8 @@ class TestRetryJobGuards:
         job.status = "failed"
         job.retry_count = 0
 
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
@@ -544,8 +544,8 @@ class TestRetryJobGuards:
         mock_inner_repo.get_project_in_org = AsyncMock(return_value=None)  # → 403 (not 409)
 
         session = AsyncMock()
-        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory, \
-             patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo):
+        with patch("app.modules.analysis.analysis_service.AsyncSessionFactory") as mock_factory, \
+             patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_inner_repo):
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -569,8 +569,8 @@ class TestRetryJobGuards:
         job.status = "canceled"
         job.retry_count = 0
 
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
@@ -579,8 +579,8 @@ class TestRetryJobGuards:
         mock_inner_repo.get_project_in_org = AsyncMock(return_value=None)  # → 403
 
         session = AsyncMock()
-        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory, \
-             patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo):
+        with patch("app.modules.analysis.analysis_service.AsyncSessionFactory") as mock_factory, \
+             patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_inner_repo):
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -604,8 +604,8 @@ class TestRetryJobGuards:
         job.status = "failed"
         job.retry_count = _MAX_JOB_RETRY_COUNT  # At the ceiling
 
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         project = MagicMock(id="prj_A", organization_id="org_A")
@@ -615,8 +615,8 @@ class TestRetryJobGuards:
         mock_inner_repo.get_project_in_org = AsyncMock(return_value=project)
 
         session = AsyncMock()
-        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory, \
-             patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo):
+        with patch("app.modules.analysis.analysis_service.AsyncSessionFactory") as mock_factory, \
+             patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_inner_repo):
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -640,8 +640,8 @@ class TestRetryJobGuards:
         job.status = "failed"
         job.retry_count = _MAX_JOB_RETRY_COUNT - 1  # One below ceiling
 
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
@@ -650,8 +650,8 @@ class TestRetryJobGuards:
         mock_inner_repo.get_project_in_org = AsyncMock(return_value=None)  # → 403 (not 409)
 
         session = AsyncMock()
-        with patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory, \
-             patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo):
+        with patch("app.modules.analysis.analysis_service.AsyncSessionFactory") as mock_factory, \
+             patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_inner_repo):
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)
             mock_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -674,8 +674,8 @@ class TestRetryJobGuards:
         job.status = "failed"
         job.retry_count = 0
 
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         project = MagicMock(id="prj_A", organization_id="org_A")
@@ -687,9 +687,9 @@ class TestRetryJobGuards:
 
         session = AsyncMock()
         with (
-            patch("app.services.analysis_service.AsyncSessionFactory") as mock_factory,
-            patch("app.services.analysis_service.AnalysisRepository", return_value=inner_repo),
-            patch("app.services.analysis_service.get_settings") as get_settings,
+            patch("app.modules.analysis.analysis_service.AsyncSessionFactory") as mock_factory,
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=inner_repo),
+            patch("app.modules.analysis.analysis_service.get_settings") as get_settings,
         ):
             get_settings.return_value.analysis_jobs_per_tenant_limit = 10
             mock_ctx = AsyncMock()
@@ -718,7 +718,7 @@ class TestDeadLetterSentinelLog:
 
     def test_source_contains_repeated_failure_event(self):
         """execute_job source must include the dead-letter sentinel log event."""
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.execute_job)
         assert "worker.job_repeated_failure" in src, (
             "execute_job must emit a distinct 'worker.job_repeated_failure' log when "
@@ -727,7 +727,7 @@ class TestDeadLetterSentinelLog:
 
     def test_source_guards_on_retry_count_threshold(self):
         """The dead-letter log must be conditional on retry_count so it is not emitted on first failure."""
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.execute_job)
         assert "retry_count >=" in src, (
             "worker.job_repeated_failure must only be emitted when retry_count reaches "
@@ -737,8 +737,8 @@ class TestDeadLetterSentinelLog:
     @pytest.mark.asyncio
     async def test_repeated_failure_warning_emitted_at_threshold(self):
         """worker.job_repeated_failure is logged when retry_count >= threshold."""
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_repeat", "prj_1")
@@ -754,11 +754,11 @@ class TestDeadLetterSentinelLog:
         session.get = AsyncMock(return_value=project)
         session.commit = AsyncMock()
 
-        with patch("app.services.analysis_service.WorkerAsyncSessionFactory") as mock_factory, \
-             patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo), \
-             patch("app.services.analysis_service.PhotoRepository", return_value=mock_photo_repo), \
-             patch("app.services.analysis_service.run_project_analysis", side_effect=RuntimeError("provider error")), \
-             patch("app.services.analysis_service.logger") as mock_logger:
+        with patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory") as mock_factory, \
+             patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_inner_repo), \
+             patch("app.modules.analysis.analysis_service.PhotoRepository", return_value=mock_photo_repo), \
+             patch("app.modules.analysis.analysis_service.run_project_analysis", side_effect=RuntimeError("provider error")), \
+             patch("app.modules.analysis.analysis_service.logger") as mock_logger:
 
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)
@@ -782,8 +782,8 @@ class TestDeadLetterSentinelLog:
     @pytest.mark.asyncio
     async def test_repeated_failure_warning_not_emitted_on_first_failure(self):
         """worker.job_repeated_failure is NOT logged when retry_count is below threshold."""
-        from app.services.analysis_service import AnalysisService
-        from app.repositories.analysis_repository import AnalysisRepository
+        from app.modules.analysis.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_repository import AnalysisRepository
         from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_first", "prj_1")
@@ -799,11 +799,11 @@ class TestDeadLetterSentinelLog:
         session.get = AsyncMock(return_value=project)
         session.commit = AsyncMock()
 
-        with patch("app.services.analysis_service.WorkerAsyncSessionFactory") as mock_factory, \
-             patch("app.services.analysis_service.AnalysisRepository", return_value=mock_inner_repo), \
-             patch("app.services.analysis_service.PhotoRepository", return_value=mock_photo_repo), \
-             patch("app.services.analysis_service.run_project_analysis", side_effect=RuntimeError("provider error")), \
-             patch("app.services.analysis_service.logger") as mock_logger:
+        with patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory") as mock_factory, \
+             patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_inner_repo), \
+             patch("app.modules.analysis.analysis_service.PhotoRepository", return_value=mock_photo_repo), \
+             patch("app.modules.analysis.analysis_service.run_project_analysis", side_effect=RuntimeError("provider error")), \
+             patch("app.modules.analysis.analysis_service.logger") as mock_logger:
 
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__ = AsyncMock(return_value=session)

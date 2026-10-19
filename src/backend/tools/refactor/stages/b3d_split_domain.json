@@ -1,0 +1,19 @@
+{
+ "source": "app/models/domain.py",
+ "moves": {
+  "app/modules/analysis/models.py": [
+   "AnalysisJob",
+   "AnalysisResult"
+  ],
+  "app/modules/quoting/models.py": [
+   "QuoteVariant",
+   "QuoteItem",
+   "ProjectProposalDraft",
+   "ProjectFinalProposal"
+  ]
+ },
+ "headers": {
+  "app/modules/analysis/models.py": "\"\"\"ORM modely modulu analysis: analytick\u00e9 joby a jejich v\u00fdsledky.\"\"\"\n",
+  "app/modules/quoting/models.py": "\"\"\"ORM modely modulu quoting: varianty nab\u00eddky, polo\u017eky, draft a fin\u00e1ln\u00ed n\u00e1vrh.\"\"\"\n"
+ }
+}

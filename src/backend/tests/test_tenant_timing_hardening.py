@@ -113,7 +113,7 @@ class TestTenantResolutionTimingHardening:
 class TestAnalysisTenantIsolationHardening:
     @pytest.mark.asyncio
     async def test_get_job_uses_tenant_scoped_lookup_before_any_global_lookup(self):
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
 
         repository = AsyncMock()
         repository.get_analysis_job_in_org = AsyncMock(return_value=None)
@@ -139,7 +139,7 @@ class TestAnalysisTenantIsolationHardening:
 
     @pytest.mark.asyncio
     async def test_retry_job_uses_tenant_scoped_lookup_before_any_global_lookup(self):
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
 
         repository = AsyncMock()
         repository.get_analysis_job_in_org = AsyncMock(return_value=None)

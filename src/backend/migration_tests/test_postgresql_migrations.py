@@ -730,7 +730,9 @@ def _normalized_metadata_diff(engine):
     from alembic.migration import MigrationContext
 
     from app.platform.db.base import Base
-    import app.models  # noqa: F401  (registruje všechny ORM modely)
+    from app.composition.models import import_all_models
+
+    import_all_models()
 
     def render(value):
         arg = getattr(value, "arg", None)

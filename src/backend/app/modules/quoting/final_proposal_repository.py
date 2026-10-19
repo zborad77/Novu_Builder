@@ -4,7 +4,7 @@ from uuid import uuid4
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ProjectFinalProposal
+from app.modules.quoting.models import ProjectFinalProposal
 
 
 class FinalProposalRepository:

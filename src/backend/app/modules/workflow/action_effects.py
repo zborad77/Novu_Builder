@@ -44,9 +44,10 @@ from app.platform.events.types import (
     EVENT_PROPOSAL_READY,
     build_live_message,
 )
-from app.models.domain import AnalysisJob, ProjectFinalProposal
+from app.modules.analysis.models import AnalysisJob
+from app.modules.quoting.models import ProjectFinalProposal
 from app.modules.exports.models import ProjectExport
-from app.repositories.analysis_repository import ANALYSIS_JOB_TYPE_MANUAL_TRIGGER
+from app.modules.analysis.analysis_repository import ANALYSIS_JOB_TYPE_MANUAL_TRIGGER
 from app.platform.jobs.heavy_queue import enqueue_heavy_job
 from app.platform.jobs.queue import enqueue_analysis_job
 

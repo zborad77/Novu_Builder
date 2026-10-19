@@ -296,13 +296,13 @@ class TestSuperadminBypassExplicitFlag:
 
     def test_execute_job_has_is_superadmin_context_param(self):
         """execute_job signature contains the explicit bypass flag."""
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.execute_job)
         assert "is_superadmin_context" in src
 
     def test_retry_job_has_is_superadmin_context_param(self):
         """retry_job signature contains the explicit bypass flag."""
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.retry_job)
         assert "is_superadmin_context" in src
 
@@ -314,14 +314,14 @@ class TestSuperadminBypassExplicitFlag:
 
     def test_analysis_route_passes_flag_based_on_user_role(self):
         """Non-admin routes forward is_superadmin_context from current_user.isSuperAdmin."""
-        from app.api.routes.analysis_jobs import create_analysis_job
+        from app.modules.analysis.api.analysis_jobs import create_analysis_job
         src = inspect.getsource(create_analysis_job)
         assert "is_superadmin_context" in src
         assert "isSuperAdmin" in src
 
     def test_execute_job_guard_fires_without_flag(self):
         """Calling execute_job with org_id=None and no flag raises 403 immediately."""
-        from app.services.analysis_service import AnalysisService
+        from app.modules.analysis.analysis_service import AnalysisService
         src = inspect.getsource(AnalysisService.execute_job)
         assert "organization_id is None and not is_superadmin_context" in src
         assert "status_code=403" in src

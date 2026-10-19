@@ -43,18 +43,18 @@ from app.platform.metrics import (
 )
 from app.platform.redis_client import FailoverRedisClient, build_queue_redis_client_from_settings
 from app.platform.db.session import WorkerAsyncSessionFactory
-from app.repositories.analysis_repository import (
+from app.modules.analysis.analysis_repository import (
     ANALYSIS_JOB_STATUS_QUEUED,
     ANALYSIS_JOB_STATUS_RUNNING,
     AnalysisJobLeaseOwnershipError,
     AnalysisRepository,
 )
 from app.modules.exports.export_repository import ExportRepository
-from app.repositories.final_proposal_repository import FinalProposalRepository
+from app.modules.quoting.final_proposal_repository import FinalProposalRepository
 from app.modules.media.photo_repository import PhotoRepository
 from app.modules.cases.repository import ProjectRepository
-from app.repositories.proposal_draft_repository import ProposalDraftRepository
-from app.services.analysis_service import AnalysisService
+from app.modules.quoting.proposal_draft_repository import ProposalDraftRepository
+from app.modules.analysis.analysis_service import AnalysisService
 from app.modules.exports.export_service import ExportService
 from app.modules.media.photo_service import PhotoService
 from app.modules.workflow.project_service import ProjectService
@@ -104,6 +104,11 @@ from app.platform.jobs.queue import (
     schedule_analysis_job_retry,
     validate_analysis_job_payload,
 )
+from app.composition.models import import_all_models
+
+# Všechny ORM modely musí být registrované dřív, než se nakonfigurují mappery
+# (relace mezi moduly jsou deklarované stringem).
+import_all_models()
 
 logger = structlog.get_logger(__name__)
 

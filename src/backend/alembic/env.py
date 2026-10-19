@@ -14,8 +14,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from app.platform.config import get_settings
 from app.platform.db.base import Base
-from app.models import domain  # noqa: F401
-from app.modules.catalog.work_catalog import models as work_catalog  # noqa: F401
+from app.composition.models import import_all_models
+
+# Autogenerate i online/offline migrace potřebují úplná metadata všech modulů.
+import_all_models()
 
 
 config = context.config

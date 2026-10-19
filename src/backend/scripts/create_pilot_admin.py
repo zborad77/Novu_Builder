@@ -29,6 +29,10 @@ from app.modules.identity.security import enforce_password_strength
 from app.composition.bootstrap import _seed_global_work_catalog
 from app.modules.identity.models import Organization, User
 from app.modules.identity.auth_service import hash_password
+from app.composition.models import import_all_models  # noqa: E402
+
+# Relace mezi modely různých modulů vyžadují registraci všech ORM modelů.
+import_all_models()
 
 
 async def _create_superadmin(email: str, full_name: str, password: str) -> None:

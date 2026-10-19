@@ -508,7 +508,7 @@ async def test_photo_list_reports_author_and_per_user_delete_permission(app_clie
 
 
 async def test_purge_removes_markers_and_keeps_historical_analysis(app_client, f03_users, db_session_factory):
-    from app.models import AnalysisResult
+    from app.modules.analysis.models import AnalysisResult
     from app.modules.media.models import Marker
 
     admin = await _token(app_client, "f03_admin_a")

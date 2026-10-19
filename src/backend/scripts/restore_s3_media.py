@@ -12,6 +12,10 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.platform.storage.s3_photo_storage import _build_s3_client_kwargs  # noqa: E402
+from app.composition.models import import_all_models  # noqa: E402
+
+# Relace mezi modely různých modulů vyžadují registraci všech ORM modelů.
+import_all_models()
 
 
 def _build_s3_client(*, region: str):

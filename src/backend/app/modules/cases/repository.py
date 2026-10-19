@@ -101,7 +101,7 @@ class ProjectRepository:
         # update_project() (which re-fetches with full graph internally).
         # Known remaining over-fetches: mark_project_sent (needs final_proposals
         # only), update_proposal_draft (uses full graph in build_project_detail).
-        from app.models import QuoteVariant
+        from app.modules.quoting.models import QuoteVariant
         query = (
             select(Project)
             .options(

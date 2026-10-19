@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from app.repositories.analysis_repository import (
+from app.modules.analysis.analysis_repository import (
     ANALYSIS_JOB_STATUS_COMPLETED,
     ANALYSIS_JOB_STATUS_DEAD_LETTER,
     ANALYSIS_JOB_STATUS_FAILED,
@@ -16,7 +16,7 @@ from app.repositories.analysis_repository import (
     InvalidAnalysisJobStatusTransition,
     AnalysisRepository,
 )
-from app.services.analysis_service import AnalysisService
+from app.modules.analysis.analysis_service import AnalysisService
 from app.platform.jobs.queue import AnalysisJobTransportSnapshot
 
 
@@ -170,8 +170,8 @@ class TestAnalysisServiceFailureGuards:
 
         with (
             patch.object(service, "fail_job_before_processing", new=AsyncMock(return_value=True)) as fail_job,
-            patch("app.services.analysis_service.WorkerAsyncSessionFactory") as factory,
-            patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo),
+            patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory") as factory,
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_repo),
         ):
             ctx = AsyncMock()
             ctx.__aenter__ = AsyncMock(return_value=session)
@@ -205,8 +205,8 @@ class TestAnalysisServiceFailureGuards:
         )
 
         with (
-            patch("app.services.analysis_service.WorkerAsyncSessionFactory") as factory,
-            patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo),
+            patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory") as factory,
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_repo),
         ):
             ctx = AsyncMock()
             ctx.__aenter__ = AsyncMock(return_value=session)
@@ -268,7 +268,7 @@ class TestAnalysisServiceFailureGuards:
         job_queue = AsyncMock()
         job_queue.eval = AsyncMock(return_value=[1, 1, 0, 1])
 
-        with patch("app.services.analysis_service.inspect_analysis_job_transport", new=AsyncMock(return_value=snapshot)):
+        with patch("app.modules.analysis.analysis_service.inspect_analysis_job_transport", new=AsyncMock(return_value=snapshot)):
             results = await service.list_jobs("proj_1", job_queue=job_queue)
 
         assert results[0]["status"] == ANALYSIS_JOB_STATUS_QUEUED
@@ -314,11 +314,11 @@ class TestAnalysisServiceFailureGuards:
         )
 
         with (
-            patch("app.services.analysis_service.WorkerAsyncSessionFactory") as factory,
-            patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo),
-            patch("app.services.analysis_service.PhotoRepository", return_value=mock_photo_repo),
+            patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory") as factory,
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_repo),
+            patch("app.modules.analysis.analysis_service.PhotoRepository", return_value=mock_photo_repo),
             patch(
-                "app.services.analysis_service.run_project_analysis",
+                "app.modules.analysis.analysis_service.run_project_analysis",
                 new=AsyncMock(return_value={"jobStatus": "completed", "estimatedAreaSqm": "bad"}),
             ),
         ):
@@ -354,10 +354,10 @@ class TestAnalysisServiceFailureGuards:
         )
 
         with (
-            patch("app.services.analysis_service.WorkerAsyncSessionFactory") as factory,
-            patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo),
-            patch("app.services.analysis_service.PhotoRepository", return_value=mock_photo_repo),
-            patch("app.services.analysis_service.run_project_analysis", new=AsyncMock()) as run_analysis,
+            patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory") as factory,
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_repo),
+            patch("app.modules.analysis.analysis_service.PhotoRepository", return_value=mock_photo_repo),
+            patch("app.modules.analysis.analysis_service.run_project_analysis", new=AsyncMock()) as run_analysis,
         ):
             ctx = AsyncMock()
             ctx.__aenter__ = AsyncMock(return_value=session)
@@ -398,11 +398,11 @@ class TestAnalysisServiceFailureGuards:
         )
 
         with (
-            patch("app.services.analysis_service.WorkerAsyncSessionFactory") as factory,
-            patch("app.services.analysis_service.AnalysisRepository", return_value=mock_repo),
-            patch("app.services.analysis_service.PhotoRepository", return_value=mock_photo_repo),
+            patch("app.modules.analysis.analysis_service.WorkerAsyncSessionFactory") as factory,
+            patch("app.modules.analysis.analysis_service.AnalysisRepository", return_value=mock_repo),
+            patch("app.modules.analysis.analysis_service.PhotoRepository", return_value=mock_photo_repo),
             patch(
-                "app.services.analysis_service.run_project_analysis",
+                "app.modules.analysis.analysis_service.run_project_analysis",
                 new=AsyncMock(return_value={"jobStatus": "completed", "estimatedAreaSqm": 1.0}),
             ),
         ):

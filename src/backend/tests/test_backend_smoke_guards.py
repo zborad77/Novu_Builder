@@ -5,7 +5,7 @@ import builtins
 import pytest
 
 from app.platform.config import get_settings
-from app.ai.analysis_service import get_analysis_provider
+from app.modules.analysis.ai.analysis_service import get_analysis_provider
 from app.main import create_app
 
 

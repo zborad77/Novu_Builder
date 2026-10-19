@@ -11,6 +11,7 @@ from __future__ import annotations
 
 def import_all_models() -> None:
     import app.models  # noqa: F401  (modely, které ještě nebyly přesunuty do modulů)
+    import app.modules.analysis.models  # noqa: F401
     import app.modules.audit.models  # noqa: F401
     import app.modules.catalog.models  # noqa: F401
     import app.modules.catalog.work_catalog.models  # noqa: F401
@@ -18,3 +19,4 @@ def import_all_models() -> None:
     import app.modules.exports.models  # noqa: F401
     import app.modules.identity.models  # noqa: F401
     import app.modules.media.models  # noqa: F401
+    import app.modules.quoting.models  # noqa: F401

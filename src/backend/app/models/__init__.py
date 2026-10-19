@@ -6,7 +6,8 @@ from app.models.offer_processing import (
     OrganizationAiBudget,
     OutboxEvent,
 )
-from app.models.domain import AnalysisJob, AnalysisResult, ProjectFinalProposal, ProjectProposalDraft, QuoteItem, QuoteVariant
+from app.modules.analysis.models import AnalysisJob, AnalysisResult
+from app.modules.quoting.models import ProjectFinalProposal, ProjectProposalDraft, QuoteItem, QuoteVariant
 from app.modules.catalog.models import MaterialCatalog, PricingProfile, Supplier, SupplierMaterialPrice
 from app.modules.cases.models import Client, Project, ProjectStatusHistory
 from app.modules.media.models import Marker, ProjectPhoto

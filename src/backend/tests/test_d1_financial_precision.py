@@ -42,7 +42,7 @@ class TestNormalizeCostValue:
     """Pure unit tests for _normalize_cost_value — no HTTP, no ORM."""
 
     def _fn(self, value):
-        from app.services.proposal_draft_service import _normalize_cost_value
+        from app.modules.quoting.proposal_draft_service import _normalize_cost_value
         return _normalize_cost_value(value)
 
     def test_integer_input_returns_float(self):

@@ -44,14 +44,14 @@ disable_error_code = ["arg-type"]
 [[tool.mypy.overrides]]
 # analysis_repository uses runtime-safe patterns (float/int casts on SQLAlchemy scalars,
 # column expression assignments) that mypy's SQLAlchemy stubs cannot resolve statically.
-module = ["app.repositories.analysis_repository"]
+module = ["app.modules.analysis.analysis_repository"]
 disable_error_code = ["call-overload", "assignment", "arg-type"]
 
 
 [[tool.mypy.overrides]]
 # analysis_service: Project|None union-attr accesses are guarded in the surrounding logic;
 # Sequence→list, str assignment, and arg-type mismatches are SQLAlchemy/Pydantic stub limits.
-module = ["app.services.analysis_service"]
+module = ["app.modules.analysis.analysis_service"]
 disable_error_code = ["union-attr", "assignment", "arg-type", "call-overload"]
 
 [[tool.mypy.overrides]]

@@ -1,6 +1,6 @@
 import inspect
 
-import app.ai.analysis_service as analysis_service_mod
+import app.modules.analysis.ai.analysis_service as analysis_service_mod
 import app.modules.exports.export_service as export_service_mod
 
 

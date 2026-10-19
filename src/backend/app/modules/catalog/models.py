@@ -11,7 +11,7 @@ from app.platform.db.base import Base
 from app.platform.db.mixins import TimestampMixin
 
 if TYPE_CHECKING:
-    from app.models.domain import QuoteItem, QuoteVariant
+    from app.modules.quoting.models import QuoteItem, QuoteVariant
     from app.modules.identity.models import Organization
 
 
