@@ -27,10 +27,10 @@ from app.modules.exports.storage_consistency_repository import (  # noqa: E402
 )
 from app.modules.media.photo_service import to_read_model  # noqa: E402
 from app.platform.storage.backend import generate_presigned_url, storage_key_exists  # noqa: E402
-from app.composition.models import import_all_models  # noqa: E402
+from app.composition.wiring import init_modules  # noqa: E402
 
-# Relace mezi modely různých modulů vyžadují registraci všech ORM modelů.
-import_all_models()
+# Registrace ORM modelů všech modulů a propojení portů mezi moduly.
+init_modules()
 
 ValidationStatus = Literal["PASSED", "FAILED", "NOT EXECUTED", "OUT OF SCOPE"]
 

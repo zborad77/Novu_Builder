@@ -12,10 +12,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from app.composition.deps import get_current_user, get_project_service, resolve_org_id
+from app.modules.identity.api.deps import get_current_user, resolve_org_id
+from app.modules.cases.api.deps import CaseReader, get_case_reader
 from app.platform.config import get_settings
 from app.modules.identity.schemas.auth import AuthUserRead
-from app.modules.workflow.project_service import ProjectService
 from app.platform.storage.local_photo_storage import STORAGE_ROOT
 
 router = APIRouter()
@@ -27,7 +27,7 @@ _ALLOWED_PREFIXES = ("projects", "exports")
 async def serve_storage_file(
     file_path: str,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
 ):
     settings = get_settings()
     if settings.storage_backend != "local":

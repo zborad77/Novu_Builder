@@ -39,6 +39,16 @@ TransitionKey = tuple[str, str]
 _BEFORE_COMMIT: dict[TransitionKey, list[EffectFn]] = defaultdict(list)
 _AFTER_COMMIT: dict[TransitionKey, list[EffectFn]] = defaultdict(list)
 
+# Efekty registrují i moduly nad cases (workflow, exports) – načte je
+# app.composition.wiring.init_modules(). Bez toho by přechod proběhl bez svých
+# efektů (např. bez exportu při odeslání nabídky), proto přechod raději selže.
+_PROVIDERS_LOADED = False
+
+
+def mark_effect_providers_loaded() -> None:
+    global _PROVIDERS_LOADED
+    _PROVIDERS_LOADED = True
+
 
 @dataclass(frozen=True)
 class EffectContext:
@@ -88,6 +98,10 @@ def after_transition(from_status: str, to_status: str) -> Callable[[EffectFn], E
 
 async def run_before_commit(ctx: EffectContext) -> None:
     """Run all before-commit effects for one concrete transition."""
+    if not _PROVIDERS_LOADED:
+        raise RuntimeError(
+            "cases: transition effect providers are not loaded (call app.composition.wiring.init_modules())"
+        )
     key = (ctx.from_status, ctx.to_status)
     for fn in _BEFORE_COMMIT.get(key, []):
         await fn(ctx)

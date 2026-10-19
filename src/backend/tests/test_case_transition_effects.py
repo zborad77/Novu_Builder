@@ -138,7 +138,7 @@ async def test_send_quote_creates_supported_export_and_enqueues_heavy_job(db_ses
     await db_session.commit()
 
     with patch(
-        "app.modules.workflow.action_effects.enqueue_heavy_job",
+        "app.modules.exports.case_effects.enqueue_heavy_job",
         new=AsyncMock(),
     ) as enqueue_heavy:
         detail = await _service(db_session).send_quote(
@@ -174,7 +174,7 @@ async def test_complete_creates_case_zip_export_and_enqueues_heavy_job(db_sessio
     project = await _create_project(db_session, project_id="prj_transition_complete", status="sent")
 
     with patch(
-        "app.modules.workflow.action_effects.enqueue_heavy_job",
+        "app.modules.exports.case_effects.enqueue_heavy_job",
         new=AsyncMock(),
     ) as enqueue_heavy:
         detail = await _service(db_session).complete(

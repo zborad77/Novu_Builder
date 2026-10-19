@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.cases.models import Project
@@ -145,3 +145,16 @@ class ExportRepository:
         await self.session.commit()
         rowcount = getattr(result, "rowcount", None)
         return int(rowcount or 0)
+
+    async def expire_project_exports(self, project_id: str, *, now: datetime) -> int:
+        """Make every export of the case unreachable now (they may embed the photo).
+
+        GET /exports/{id} rejects expired exports immediately; the worker's export
+        cleanup removes their files and rows. Does not commit.
+        """
+        result = await self.session.execute(
+            update(ProjectExport)
+            .where(ProjectExport.project_id == project_id, ProjectExport.expires_at > now)
+            .values(expires_at=now)
+        )
+        return int(getattr(result, "rowcount", 0) or 0)

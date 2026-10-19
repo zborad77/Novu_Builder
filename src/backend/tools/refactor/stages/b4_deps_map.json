@@ -1,0 +1,31 @@
+{
+ "modules": {},
+ "symbols": {
+  "app.composition.deps": {
+   "_request_app_state": "app.platform.http.deps",
+   "get_job_queue": "app.platform.http.deps",
+   "get_redis": "app.platform.http.deps",
+   "get_auth_redis": "app.platform.http.deps",
+   "get_auth_service": "app.modules.identity.api.deps",
+   "get_current_user": "app.modules.identity.api.deps",
+   "require_superadmin": "app.modules.identity.api.deps",
+   "ADMIN_CAPABILITIES": "app.modules.identity.api.deps",
+   "require_admin_capability": "app.modules.identity.api.deps",
+   "require_user_admin": "app.modules.identity.api.deps",
+   "resolve_org_id": "app.modules.identity.api.deps",
+   "require_org_id": "app.modules.identity.api.deps",
+   "require_manager": "app.modules.identity.api.deps",
+   "get_project_service": "app.modules.workflow.api.deps",
+   "get_case_action_service": "app.modules.workflow.api.deps",
+   "get_photo_service": "app.modules.media.api.deps",
+   "get_analysis_service": "app.modules.analysis.api.deps",
+   "get_quote_variant_service": "app.modules.quoting.api.deps",
+   "get_pricebook_service": "app.modules.catalog.api.deps",
+   "get_material_catalog_service": "app.modules.catalog.api.deps",
+   "get_supplier_service": "app.modules.catalog.api.deps",
+   "get_work_catalog_service": "app.modules.catalog.api.deps",
+   "get_export_service": "app.modules.exports.api.deps",
+   "get_storage_consistency_service": "app.modules.exports.api.deps"
+  }
+ }
+}

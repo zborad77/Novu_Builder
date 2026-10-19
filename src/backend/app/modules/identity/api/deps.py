@@ -1,165 +1,22 @@
+"""Autentizace a autorizace požadavku: aktuální uživatel, RBAC guardy, tenant (org_id)."""
+
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 import structlog.contextvars
 
+from app.platform.http.deps import get_auth_redis
 from app.modules.audit.audit_log import bind_request_audit_actor
-from app.platform.config import get_settings
 from app.modules.identity.device_binding import check_device_binding
 from app.modules.identity.rbac import is_system_admin, is_tenant_admin, is_tenant_operator
 from app.platform.db.session import get_db_session
-from app.modules.workflow.case_actions import CaseActionService
-from app.modules.analysis.analysis_repository import AnalysisRepository
-from app.modules.exports.export_repository import ExportRepository
-from app.modules.quoting.final_proposal_repository import FinalProposalRepository
-from app.modules.catalog.material_catalog_repository import MaterialCatalogRepository
-from app.modules.media.photo_repository import PhotoRepository
-from app.modules.catalog.pricebook_repository import PricebookRepository
-from app.modules.cases.repository import ProjectRepository
-from app.modules.quoting.proposal_draft_repository import ProposalDraftRepository
-from app.modules.quoting.quote_variant_repository import QuoteVariantRepository
-from app.modules.exports.storage_consistency_repository import StorageConsistencyRepository
-from app.modules.catalog.supplier_repository import SupplierRepository
 from app.modules.identity.token_repository import TokenStateBackendUnavailableError
-from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
 from app.modules.identity.schemas.auth import AuthUserRead
-from app.modules.analysis.analysis_service import AnalysisService
 from app.modules.identity.auth_service import AuthService
-from app.modules.exports.export_service import ExportService
-from app.modules.catalog.material_catalog_service import MaterialCatalogService
-from app.modules.media.photo_service import PhotoService
-from app.modules.catalog.pricebook_service import PricebookService
-from app.modules.workflow.project_service import ProjectService
-from app.modules.quoting.quote_variant_service import QuoteVariantService
-from app.modules.exports.storage_consistency_service import StorageConsistencyService
-from app.modules.catalog.supplier_service import SupplierService
-from app.modules.catalog.work_catalog_service import WorkCatalogService
+from app.modules.identity.company_service import CompanyService
+
 
 logger = structlog.get_logger(__name__)
-
-
-def _request_app_state(request: Request):
-    """Best-effort access to ASGI app state.
-
-    Route adapter dependencies may run in direct-call tests or narrow harnesses
-    where the Request has no bound ``app``. In that case return ``None`` rather
-    than failing on framework wiring.
-    """
-    app = None
-    scope = getattr(request, "scope", None)
-    if not isinstance(scope, dict):
-        try:
-            app = request.app
-        except Exception:
-            app = None
-    else:
-        app = scope.get("app")
-        if app is None:
-            try:
-                app = request.app
-            except Exception:
-                app = None
-    return getattr(app, "state", None)
-
-
-def get_job_queue(request: Request):
-    """Return the Redis job queue from app state, or None if unavailable."""
-    state = _request_app_state(request)
-    return getattr(state, "job_queue", None)
-
-
-def get_redis(request: Request):
-    """Return the shared Redis client for caching (R-32), or None if unavailable.
-
-    Reuses the same connection as the job queue; key prefixes keep them isolated:
-      job queue: analysis:jobs
-      cache:     cache:*
-    """
-    state = _request_app_state(request)
-    return getattr(state, "job_queue", None)
-
-
-def get_auth_redis(request: Request):
-    """Return the shared Redis client for auth token-state caching."""
-    state = _request_app_state(request)
-    auth_store = getattr(state, "auth_token_store", None)
-    if auth_store is not None:
-        return auth_store
-    return getattr(state, "job_queue", None)
-
-
-def get_project_service(session: AsyncSession = Depends(get_db_session)) -> ProjectService:
-    return ProjectService(
-        ProjectRepository(session),
-        ProposalDraftRepository(session),
-        FinalProposalRepository(session),
-        ExportService(ExportRepository(session)),
-    )
-
-
-def get_case_action_service(
-    session: AsyncSession = Depends(get_db_session),
-    work_queue=Depends(get_job_queue),
-) -> CaseActionService:
-    return CaseActionService(ProjectRepository(session), work_queue=work_queue)
-
-
-def get_photo_service(
-    session: AsyncSession = Depends(get_db_session),
-    work_queue=Depends(get_job_queue),
-) -> PhotoService:
-    repository = PhotoRepository(session)
-    return PhotoService(repository, work_queue=work_queue)
-
-
-def get_analysis_service(
-    session: AsyncSession = Depends(get_db_session),
-    redis=Depends(get_redis),
-) -> AnalysisService:
-    settings = get_settings()
-    return AnalysisService(
-        repository=AnalysisRepository(session),
-        photo_repository=PhotoRepository(session),
-        work_catalog_repository=WorkCatalogRepository(session),
-        provider_key=settings.ai_analysis_provider,
-        redis=redis,
-    )
-
-
-def get_quote_variant_service(
-    session: AsyncSession = Depends(get_db_session),
-    redis=Depends(get_redis),
-) -> QuoteVariantService:
-    return QuoteVariantService(
-        QuoteVariantRepository(session),
-        WorkCatalogRepository(session),
-        redis=redis,
-    )
-
-
-def get_pricebook_service(session: AsyncSession = Depends(get_db_session)) -> PricebookService:
-    return PricebookService(PricebookRepository(session))
-
-
-def get_material_catalog_service(session: AsyncSession = Depends(get_db_session)) -> MaterialCatalogService:
-    return MaterialCatalogService(MaterialCatalogRepository(session))
-
-
-def get_supplier_service(session: AsyncSession = Depends(get_db_session)) -> SupplierService:
-    return SupplierService(SupplierRepository(session))
-
-
-def get_storage_consistency_service(
-    session: AsyncSession = Depends(get_db_session),
-) -> StorageConsistencyService:
-    return StorageConsistencyService(StorageConsistencyRepository(session))
-
-
-def get_work_catalog_service(
-    session: AsyncSession = Depends(get_db_session),
-    redis=Depends(get_redis),
-) -> WorkCatalogService:
-    return WorkCatalogService(WorkCatalogRepository(session), redis=redis)
 
 
 def get_auth_service(
@@ -355,8 +212,5 @@ async def require_manager(
     return current_user
 
 
-def get_export_service(
-    session: AsyncSession = Depends(get_db_session),
-    work_queue=Depends(get_job_queue),
-) -> ExportService:
-    return ExportService(ExportRepository(session), work_queue=work_queue)
+def get_company_service(session: AsyncSession = Depends(get_db_session)) -> CompanyService:
+    return CompanyService(session)

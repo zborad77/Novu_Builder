@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.composition.deps import require_manager, resolve_org_id
+from app.modules.identity.api.deps import require_manager, resolve_org_id
 from app.platform.events.types import build_outbox_message, sse_id_from_message
 from app.platform.metrics import observe_sse_connection, observe_sse_reconnect
 from app.platform.db.session import AsyncSessionFactory, get_db_session

@@ -11,14 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.media.photo_purge import purge_photo_with_audit
-from app.composition.deps import (
-    get_analysis_service,
-    get_auth_redis,
-    get_job_queue,
-    require_admin_capability,
-    require_superadmin,
-    require_user_admin,
-)
+from app.modules.analysis.api.deps import get_analysis_service
+from app.platform.http.deps import get_auth_redis, get_job_queue
+from app.modules.identity.api.deps import require_admin_capability, require_superadmin, require_user_admin
 from app.platform.jobs.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
 from app.platform.config import get_settings
 from app.platform.db.session import get_db_session
@@ -43,7 +38,6 @@ from app.platform.db.sql_like import LIKE_ESCAPE_CHAR, build_contains_ilike_patt
 from app.modules.identity.security import enforce_password_strength
 from app.modules.audit.audit_log import SecurityAuditWriteError, commit_security_critical_audit, write_audit_log
 from app.modules.identity.rbac import (
-    Decision,
     assignable_roles,
     can_manage_company,
     can_manage_user,
@@ -53,6 +47,11 @@ from app.modules.identity.rbac import (
 from app.modules.identity.token_repository import SessionTokenRevocation, TokenRepository
 from app.modules.analysis.analysis_service import AnalysisService, to_job_read
 from app.modules.identity.company_service import CompanyService
+from app.modules.identity.api.deps import get_company_service
+from app.modules.identity.authz import (
+    commit_security_critical_audit_or_503 as _commit_security_critical_audit,
+    enforce_rbac_decision as _enforce,
+)
 from app.modules.media.photo_service import PhotoService
 from app.modules.media.photo_repository import PhotoRepository
 from app.modules.media.schemas.photo import PurgePhotoRequest, PurgePhotoResponse
@@ -63,77 +62,6 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
-
-
-def get_company_service(session: AsyncSession = Depends(get_db_session)) -> CompanyService:
-    return CompanyService(session)
-
-
-# ── Authorization helpers ─────────────────────────────────────────────────────
-
-_PERMISSION_DENIED = "Permission denied."
-_AUDIT_UNAVAILABLE = "Security audit subsystem unavailable. Retry later."
-
-
-def _enforce(
-    decision: Decision,
-    *,
-    current_user: AuthUserRead,
-    operation: str,
-    resource_id: str,
-    not_found_detail: str = "Not found.",
-) -> None:
-    """Translate an app.modules.identity.rbac decision into an HTTP error.
-
-    Targets outside the caller's tenant (or superadmin accounts seen by a company
-    admin) answer 404 exactly like a missing record, so the response never
-    confirms that another company's user or organization exists.
-    """
-    if decision == "allow":
-        return
-    logger.warning(
-        "SECURITY_EVENT: admin_operation_denied",
-        operation=operation,
-        decision=decision,
-        user_id=current_user.id,
-        role=current_user.role,
-        org_id=current_user.organizationId,
-        resource_id=resource_id,
-    )
-    if decision == "not_found":
-        raise HTTPException(status_code=404, detail=not_found_detail)
-    raise HTTPException(status_code=403, detail=_PERMISSION_DENIED)
-
-
-async def _commit_security_critical_audit(
-    session: AsyncSession,
-    *,
-    current_user: AuthUserRead,
-    action: str,
-    resource_type: str,
-    resource_id: str,
-    detail: dict,
-) -> None:
-    """Commit staged changes together with their audit row, or roll both back."""
-    try:
-        await commit_security_critical_audit(
-            session,
-            current_user_id=current_user.id,
-            action=action,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            detail=detail,
-        )
-    except SecurityAuditWriteError as exc:
-        await session.rollback()
-        logger.error(
-            "admin.security_audit_enforcement_failed",
-            action=action,
-            admin_id=current_user.id,
-            resource_id=resource_id,
-            error=str(exc),
-        )
-        raise HTTPException(status_code=503, detail=_AUDIT_UNAVAILABLE) from exc
 
 
 # ── Companies ──────────────────────────────────────────────────────────────────

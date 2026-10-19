@@ -1,4 +1,6 @@
-"""Každý vstupní bod musí registrovat všechny ORM modely (app.composition.models).
+"""Každý vstupní bod musí zavolat app.composition.wiring.init_modules().
+
+Tím registruje všechny ORM modely a propojí porty mezi moduly.
 
 Relace mezi modely různých modulů jsou deklarované stringem; pokud vstupní bod
 naimportuje jen část modelů, selže konfigurace mapperů až za běhu (zjištěno při

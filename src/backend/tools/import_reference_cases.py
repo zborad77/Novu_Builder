@@ -14,10 +14,10 @@ from app.platform.db.session import AsyncSessionFactory
 from app.modules.cases.models import Project
 from app.modules.media.models import ProjectPhoto
 from app.platform.storage.backend import sanitize_filename, write_storage_file
-from app.composition.models import import_all_models  # noqa: E402
+from app.composition.wiring import init_modules  # noqa: E402
 
-# Relace mezi modely různých modulů vyžadují registraci všech ORM modelů.
-import_all_models()
+# Registrace ORM modelů všech modulů a propojení portů mezi moduly.
+init_modules()
 
 
 DATASET_ROOT = BACKEND_ROOT.parent / "test-data" / "reference-cases"

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 
-from app.composition.deps import get_current_user
+from app.modules.identity.api.deps import get_current_user
 from app.modules.admin.api.admin import router as admin_router
 from app.modules.analysis.api.analysis_jobs import router as analysis_jobs_router
 from app.modules.identity.api.auth import router as auth_router

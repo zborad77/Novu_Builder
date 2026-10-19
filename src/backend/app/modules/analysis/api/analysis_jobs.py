@@ -1,14 +1,16 @@
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.composition.deps import get_analysis_service, get_current_user, get_job_queue, get_project_service, require_manager, resolve_org_id
+from app.modules.analysis.api.deps import get_analysis_service
+from app.modules.identity.api.deps import get_current_user, require_manager, resolve_org_id
+from app.platform.http.deps import get_job_queue
+from app.modules.cases.api.deps import CaseReader, get_case_reader
 from app.modules.audit.audit_log import log_cross_tenant_denied
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.modules.analysis.schemas.analysis import AnalysisJobCreateRequest, AnalysisTriggerResponse
 from app.modules.identity.schemas.auth import AuthUserRead
 from app.modules.analysis.analysis_service import AnalysisService
-from app.modules.workflow.project_service import ProjectService
 from app.platform.jobs.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
 
 logger = structlog.get_logger(__name__)
@@ -31,7 +33,7 @@ async def create_analysis_job(
     request: Request,
     body: AnalysisJobCreateRequest | None = None,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     analysis_service: AnalysisService = Depends(get_analysis_service),
     job_queue=Depends(get_job_queue),
 ) -> AnalysisTriggerResponse:
@@ -82,7 +84,7 @@ async def create_analysis_job(
 async def list_case_analysis_jobs(
     case_id: str,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     analysis_service: AnalysisService = Depends(get_analysis_service),
     job_queue=Depends(get_job_queue),
 ) -> list[dict]:
@@ -98,7 +100,7 @@ async def get_analysis_job(
     job_id: str,
     current_user: AuthUserRead = Depends(get_current_user),
     analysis_service: AnalysisService = Depends(get_analysis_service),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     job_queue=Depends(get_job_queue),
 ) -> dict:
     org_id = resolve_org_id(current_user)
@@ -124,7 +126,7 @@ async def cancel_analysis_job(
     job_id: str,
     current_user: AuthUserRead = Depends(require_manager),
     analysis_service: AnalysisService = Depends(get_analysis_service),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
 ) -> dict:
     org_id = resolve_org_id(current_user)
     updated = await analysis_service.cancel_analysis_job(
@@ -149,7 +151,7 @@ async def patch_analysis_selection(
     result_id: str,
     body: dict,
     current_user: AuthUserRead = Depends(require_manager),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     analysis_service: AnalysisService = Depends(get_analysis_service),
 ) -> dict:
     org_id = resolve_org_id(current_user)
@@ -202,7 +204,7 @@ async def retry_analysis_job(
     request: Request,
     current_user: AuthUserRead = Depends(require_manager),
     analysis_service: AnalysisService = Depends(get_analysis_service),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     job_queue=Depends(get_job_queue),
 ) -> AnalysisTriggerResponse:
     org_id = resolve_org_id(current_user)

@@ -2,19 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
-from app.composition.deps import (
-    get_analysis_service,
-    get_current_user,
-    get_job_queue,
-    get_project_service,
-    get_quote_variant_service,
-    require_manager,
-    resolve_org_id,
-)
+from app.modules.analysis.api.deps import get_analysis_service
+from app.modules.identity.api.deps import get_current_user, require_manager, resolve_org_id
+from app.platform.http.deps import get_job_queue
+from app.modules.cases.api.deps import CaseReader, get_case_reader
+from app.modules.quoting.api.deps import get_quote_variant_service
 from app.modules.identity.schemas.auth import AuthUserRead
 from app.modules.quoting.schemas.quote_variant import QuoteVariantListResponse, QuoteVariantRecalculateResponse
 from app.modules.analysis.analysis_service import AnalysisService
-from app.modules.workflow.project_service import ProjectService
 from app.modules.quoting.quote_variant_service import QuoteVariantService
 
 router = APIRouter(tags=["estimates"])
@@ -26,7 +21,7 @@ async def list_case_estimates(
     case_id: str,
     request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     quote_service: QuoteVariantService = Depends(get_quote_variant_service),
 ) -> QuoteVariantListResponse:
     org_id = resolve_org_id(current_user)
@@ -45,7 +40,7 @@ async def list_case_estimates(
 async def recalculate_case_estimates(
     case_id: str,
     current_user: AuthUserRead = Depends(require_manager),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     quote_service: QuoteVariantService = Depends(get_quote_variant_service),
     analysis_service: AnalysisService = Depends(get_analysis_service),
     job_queue=Depends(get_job_queue),

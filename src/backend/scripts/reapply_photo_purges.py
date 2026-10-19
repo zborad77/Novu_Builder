@@ -30,10 +30,10 @@ from app.modules.media.purge_ledger import read_purged_photo_ids
 from app.modules.cases.models import Project
 from app.modules.media.photo_repository import PhotoRepository
 from app.modules.media.photo_service import PhotoService
-from app.composition.models import import_all_models  # noqa: E402
+from app.composition.wiring import init_modules  # noqa: E402
 
-# Relace mezi modely různých modulů vyžadují registraci všech ORM modelů.
-import_all_models()
+# Registrace ORM modelů všech modulů a propojení portů mezi moduly.
+init_modules()
 
 SYSTEM_ACTOR = "system:reapply_photo_purges"
 

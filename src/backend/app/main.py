@@ -37,11 +37,11 @@ from app.platform.db.session import AsyncSessionFactory, engine
 from app.modules.cases.models import Project
 from app.modules.identity.token_repository import TokenRepository
 from app.platform.storage.backend import verify_storage_health
-from app.composition.models import import_all_models
+from app.composition.wiring import init_modules
 
-# Všechny ORM modely musí být registrované dřív, než se nakonfigurují mappery
-# (relace mezi moduly jsou deklarované stringem).
-import_all_models()
+# Registrace ORM modelů (relace mezi moduly jsou stringové) a propojení portů
+# mezi moduly – musí proběhnout před prvním požadavkem/jobem.
+init_modules()
 
 
 logger = structlog.get_logger(__name__)

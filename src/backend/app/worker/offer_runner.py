@@ -97,11 +97,11 @@ from app.platform.jobs.offer_queue import (
     ack_offer_job,
     dequeue_offer_job,
 )
-from app.composition.models import import_all_models
+from app.composition.wiring import init_modules
 
-# Všechny ORM modely musí být registrované dřív, než se nakonfigurují mappery
-# (relace mezi moduly jsou deklarované stringem).
-import_all_models()
+# Registrace ORM modelů (relace mezi moduly jsou stringové) a propojení portů
+# mezi moduly – musí proběhnout před prvním požadavkem/jobem.
+init_modules()
 
 logger = structlog.get_logger(__name__)
 

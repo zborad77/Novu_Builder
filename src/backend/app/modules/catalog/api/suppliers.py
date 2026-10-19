@@ -2,7 +2,9 @@ from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.composition.deps import get_current_user, get_redis, get_supplier_service, require_manager, require_org_id
+from app.modules.identity.api.deps import get_current_user, require_manager, require_org_id
+from app.platform.http.deps import get_redis
+from app.modules.catalog.api.deps import get_supplier_service
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.platform.cache import delete_cached, get_cache_tag, get_cached, invalidate_cache_tag, set_cached

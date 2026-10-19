@@ -13,7 +13,7 @@ from fastapi.responses import Response as RawResponse
 from sqlalchemy import case, func, select, text
 import structlog
 
-from app.composition.deps import require_superadmin
+from app.modules.identity.api.deps import require_superadmin
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.platform.metrics import (

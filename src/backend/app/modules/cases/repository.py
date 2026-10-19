@@ -101,7 +101,9 @@ class ProjectRepository:
         # update_project() (which re-fetches with full graph internally).
         # Known remaining over-fetches: mark_project_sent (needs final_proposals
         # only), update_proposal_draft (uses full graph in build_project_detail).
-        from app.modules.quoting.models import QuoteVariant
+        # Třídu varianty nabídky bereme z namapované relace: modul cases leží pod
+        # quoting a nesmí ho importovat; loader option je tatáž (QuoteVariant.items).
+        quote_variant = Project.quote_variants.property.mapper.class_
         query = (
             select(Project)
             .options(
@@ -110,7 +112,7 @@ class ProjectRepository:
                 selectinload(Project.proposal_draft),
                 selectinload(Project.final_proposals),
                 selectinload(Project.analysis_results),
-                selectinload(Project.quote_variants).selectinload(QuoteVariant.items),
+                selectinload(Project.quote_variants).selectinload(quote_variant.items),
             )
             .where(Project.id == project_id)
         )

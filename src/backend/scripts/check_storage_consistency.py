@@ -41,10 +41,10 @@ from app.modules.exports.storage_consistency_service import (  # noqa: E402
     StorageConsistencyService,
 )
 from app.platform.storage.backend import storage_key_exists  # noqa: E402
-from app.composition.models import import_all_models  # noqa: E402
+from app.composition.wiring import init_modules  # noqa: E402
 
-# Relace mezi modely různých modulů vyžadují registraci všech ORM modelů.
-import_all_models()
+# Registrace ORM modelů všech modulů a propojení portů mezi moduly.
+init_modules()
 
 
 def _sanitize(value: str) -> str:

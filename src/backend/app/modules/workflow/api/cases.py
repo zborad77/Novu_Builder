@@ -1,12 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from app.composition.deps import (
-    get_case_action_service,
-    get_current_user,
-    get_project_service,
-    require_manager,
-    resolve_org_id,
-)
+from app.modules.workflow.api.deps import get_case_action_service, get_project_service
+from app.modules.identity.api.deps import get_current_user, require_manager, resolve_org_id
 from app.modules.workflow.case_actions import CaseActionError, CaseActionService
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter

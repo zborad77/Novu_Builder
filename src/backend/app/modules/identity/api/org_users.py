@@ -25,8 +25,13 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
-from app.composition.deps import get_auth_redis, get_current_user
-from app.modules.admin.api.admin import _commit_security_critical_audit, _enforce, get_company_service
+from app.platform.http.deps import get_auth_redis
+from app.modules.identity.api.deps import get_current_user
+from app.modules.identity.api.deps import get_company_service
+from app.modules.identity.authz import (
+    commit_security_critical_audit_or_503 as _commit_security_critical_audit,
+    enforce_rbac_decision as _enforce,
+)
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.modules.identity.rbac import TenantRole, assignable_roles, can_manage_user, can_view_user, is_tenant_admin

@@ -24,7 +24,7 @@ def _mock_request() -> StarletteRequest:
     return StarletteRequest({"type": "http", "method": "GET", "path": "/", "headers": []})
 
 import app.modules.admin.api.admin as admin_module
-from app.composition.deps import ADMIN_CAPABILITIES, require_admin_capability, require_superadmin, require_user_admin
+from app.modules.identity.api.deps import ADMIN_CAPABILITIES, require_admin_capability, require_superadmin, require_user_admin
 from app.modules.admin.api.admin import (
     admin_retry_job,
     create_company,
@@ -33,7 +33,7 @@ from app.modules.admin.api.admin import (
     patch_company,
     patch_user,
 )
-from app.composition.deps import require_superadmin
+from app.modules.identity.api.deps import require_superadmin
 
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
@@ -237,7 +237,7 @@ class TestImpersonatedTokenBlocked:
     @pytest.mark.asyncio
     async def test_require_superadmin_blocks_impersonated_token(self):
         """A token with impersonated_by set must be rejected even if user is superadmin."""
-        from app.composition.deps import require_superadmin
+        from app.modules.identity.api.deps import require_superadmin
         from app.modules.identity.schemas.auth import AuthUserRead
 
         impersonated_superadmin = AuthUserRead(
@@ -259,7 +259,7 @@ class TestImpersonatedTokenBlocked:
     @pytest.mark.asyncio
     async def test_require_superadmin_allows_real_superadmin(self):
         """A normal superadmin token (no impersonation) passes through."""
-        from app.composition.deps import require_superadmin
+        from app.modules.identity.api.deps import require_superadmin
         from app.modules.identity.schemas.auth import AuthUserRead
 
         real_superadmin = AuthUserRead(
@@ -386,7 +386,7 @@ class TestAdminPasswordResetInvalidatesTokens:
         # Strip microseconds to match .replace(microsecond=0) in the implementation
         before = datetime.now(UTC).replace(microsecond=0)
 
-        with patch("app.modules.admin.api.admin.commit_security_critical_audit", new_callable=AsyncMock):
+        with patch("app.modules.identity.authz.commit_security_critical_audit", new_callable=AsyncMock):
             with patch("app.modules.admin.api.admin.TokenRepository.revoke_all_user_sessions", new=AsyncMock(return_value=[])):
                 with patch("app.modules.admin.api.admin.logger"):
                     await reset_user_password(
@@ -465,7 +465,7 @@ class TestAdminPasswordResetInvalidatesTokens:
         ]
 
         with (
-            patch("app.modules.admin.api.admin.commit_security_critical_audit", new_callable=AsyncMock),
+            patch("app.modules.identity.authz.commit_security_critical_audit", new_callable=AsyncMock),
             patch("app.modules.admin.api.admin.TokenRepository.revoke_all_user_sessions", new=AsyncMock(return_value=revocations)),
             patch(
                 "app.modules.admin.api.admin.TokenRepository.cache_revoked_token",

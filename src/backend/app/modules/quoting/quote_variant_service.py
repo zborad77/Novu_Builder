@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
+from app.modules.analysis.ports import QuoteRecalculationUnavailableError
 from app.modules.analysis.models import AnalysisJob
 from app.modules.quoting.models import QuoteItem, QuoteVariant
 from app.modules.quoting.quote_variant_repository import QuoteVariantRepository
@@ -28,7 +29,7 @@ class QuoteVariantRecalculationResult:
         return len(self.variants)
 
 
-class QuoteVariantRecalculationUnavailableError(ValueError):
+class QuoteVariantRecalculationUnavailableError(QuoteRecalculationUnavailableError):
     """Raised when quote variants cannot be recalculated from current project state."""
 
 

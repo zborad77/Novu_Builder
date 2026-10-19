@@ -232,7 +232,7 @@ class TestAuthRouteHardening:
 
     @pytest.mark.asyncio
     async def test_get_current_user_returns_503_when_token_state_backend_is_unavailable(self):
-        from app.composition.deps import get_current_user
+        from app.modules.identity.api.deps import get_current_user
 
         request = Request(
             {

@@ -1,7 +1,10 @@
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.composition.deps import get_analysis_service, get_current_user, get_photo_service, get_project_service, resolve_org_id
+from app.modules.analysis.api.deps import get_analysis_service
+from app.modules.identity.api.deps import get_current_user, resolve_org_id
+from app.modules.media.api.deps import get_photo_service
+from app.modules.cases.api.deps import CaseReader, get_case_reader
 from app.modules.audit.audit_log import log_cross_tenant_denied
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
@@ -9,7 +12,6 @@ from app.modules.identity.schemas.auth import AuthUserRead
 from app.modules.analysis.schemas.measurement import MeasurementPolygonPoint, MeasurementRead, MeasurementUpsert
 from app.modules.analysis.analysis_service import AnalysisService
 from app.modules.media.photo_service import PhotoService
-from app.modules.workflow.project_service import ProjectService
 
 logger = structlog.get_logger(__name__)
 
@@ -68,7 +70,7 @@ async def create_or_update_measurement(
     case_id: str,
     payload: MeasurementUpsert,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     analysis_service: AnalysisService = Depends(get_analysis_service),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> MeasurementRead:
@@ -94,7 +96,7 @@ async def patch_measurement(
     payload: MeasurementUpsert,
     current_user: AuthUserRead = Depends(get_current_user),
     analysis_service: AnalysisService = Depends(get_analysis_service),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> MeasurementRead:
     org_id = resolve_org_id(current_user)
@@ -140,7 +142,7 @@ async def confirm_measurement(
     measurement_id: str,
     current_user: AuthUserRead = Depends(get_current_user),
     analysis_service: AnalysisService = Depends(get_analysis_service),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
 ) -> MeasurementRead:
     org_id = resolve_org_id(current_user)
     existing = await analysis_service.get_analysis_result_by_id(measurement_id, organization_id=org_id)

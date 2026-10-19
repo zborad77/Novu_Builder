@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.media.models import Marker, ProjectPhoto
 from app.modules.cases.models import Project
-from app.modules.exports.models import ProjectExport
 
 
 class PhotoRepository:
@@ -162,19 +161,6 @@ class PhotoRepository:
     async def delete_markers_for_photo(self, photo_id: str) -> int:
         """Remove annotations drawn on a permanently deleted photo. Does not commit."""
         result = await self.session.execute(delete(Marker).where(Marker.image_id == photo_id))
-        return int(getattr(result, "rowcount", 0) or 0)
-
-    async def expire_project_exports(self, project_id: str, *, now: datetime) -> int:
-        """Make every export of the case unreachable now (they may embed the photo).
-
-        GET /exports/{id} rejects expired exports immediately; the worker's export
-        cleanup removes their files and rows. Does not commit.
-        """
-        result = await self.session.execute(
-            update(ProjectExport)
-            .where(ProjectExport.project_id == project_id, ProjectExport.expires_at > now)
-            .values(expires_at=now)
-        )
         return int(getattr(result, "rowcount", 0) or 0)
 
     async def clear_primary(self, project_id: str) -> None:

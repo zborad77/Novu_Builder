@@ -22,7 +22,7 @@ from app.modules.workflow.schemas import (
     ProjectWorkflowPhotoReadiness,
     ProjectWorkflowStatusSummary,
 )
-from app.modules.exports.export_service import ExportService
+from app.modules.workflow.ports import FinalProposalExporter
 from app.modules.quoting.proposal_draft_service import (
     build_final_proposal_from_record,
     build_final_proposal_snapshot_payload,
@@ -287,7 +287,7 @@ class ProjectService:
         repository: ProjectRepository,
         proposal_draft_repository: ProposalDraftRepository,
         final_proposal_repository: FinalProposalRepository,
-        export_service: ExportService,
+        export_service: FinalProposalExporter,
     ):
         self.repository = repository
         self.proposal_draft_repository = proposal_draft_repository

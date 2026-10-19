@@ -1,0 +1,6 @@
+{"source": "app/modules/admin/api/admin.py",
+ "moves": {
+   "app/modules/identity/authz.py": ["_PERMISSION_DENIED", "_AUDIT_UNAVAILABLE", "_enforce", "_commit_security_critical_audit"],
+   "app/modules/identity/api/deps.py": ["get_company_service"]
+ },
+ "headers": {"app/modules/identity/authz.py": "\"\"\"Převod RBAC rozhodnutí na HTTP chyby a security-critical audit commit pro správu uživatelů a firem.\n\nSdílí ho systémová administrace (modul admin) i firemní administrace (D-10, org_users).\n\"\"\"\n"}}

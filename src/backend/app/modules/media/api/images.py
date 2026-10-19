@@ -3,7 +3,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, Upload
 from fastapi.responses import RedirectResponse
 from typing import cast
 
-from app.composition.deps import get_current_user, get_photo_service, get_project_service, resolve_org_id
+from app.modules.identity.api.deps import get_current_user, resolve_org_id
+from app.modules.media.api.deps import get_photo_service
+from app.modules.cases.api.deps import CaseReader, get_case_reader
 from app.modules.media.photo_purge import purge_photo_with_audit
 from app.modules.audit.audit_log import log_cross_tenant_denied, mark_request_audited
 from app.platform.config import get_settings
@@ -34,7 +36,6 @@ from app.modules.media.schemas.photo import (
     UploadedPhotoPayload,
 )
 from app.modules.media.photo_service import PhotoService
-from app.modules.workflow.project_service import ProjectService
 from app.platform.storage.backend import UploadValidationError
 
 logger = structlog.get_logger(__name__)
@@ -85,7 +86,7 @@ async def list_case_images(
     case_id: str,
     request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PhotoListResponse:
     org_id = resolve_org_id(current_user)
@@ -105,7 +106,7 @@ async def upload_case_images(
     request: Request,
     case_id: str,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PhotoUploadResponse:
     org_id = resolve_org_id(current_user)
@@ -224,7 +225,7 @@ async def set_case_primary_image(
     case_id: str,
     image_id: str,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PrimaryPhotoResponse:
     org_id = resolve_org_id(current_user)
@@ -242,7 +243,7 @@ async def set_case_analysis_reference_image(
     case_id: str,
     image_id: str,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> AnalysisReferencePhotoResponse:
     org_id = resolve_org_id(current_user)
@@ -264,7 +265,7 @@ async def move_case_image(
     image_id: str,
     payload: PhotoMoveRequest,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PhotoListResponse:
     org_id = resolve_org_id(current_user)
@@ -309,7 +310,7 @@ async def delete_case_image(
     case_id: str,
     image_id: str,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> DeletePhotoResponse:
     org_id = resolve_org_id(current_user)
@@ -336,7 +337,7 @@ async def delete_case_image(
 async def list_deleted_case_images(
     case_id: str,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> DeletedPhotoListResponse:
     org_id = resolve_org_id(current_user)
@@ -364,7 +365,7 @@ async def restore_case_image(
     case_id: str,
     image_id: str,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> RestorePhotoResponse:
     org_id = resolve_org_id(current_user)
@@ -394,7 +395,7 @@ async def purge_case_image(
     image_id: str,
     payload: PurgePhotoRequest,
     current_user: AuthUserRead = Depends(get_current_user),
-    project_service: ProjectService = Depends(get_project_service),
+    project_service: CaseReader = Depends(get_case_reader),
     photo_service: PhotoService = Depends(get_photo_service),
 ) -> PurgePhotoResponse:
     """Permanently delete a photo and its derived files (company admin only).

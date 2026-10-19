@@ -8,6 +8,13 @@ import traceback
 import structlog
 from fastapi import HTTPException
 
+from app.modules.analysis.ports import (
+    QuoteRecalculationUnavailableError,
+    notify_proposal_ready,
+    quote_recalculation_output_summary,
+    recalculate_quotes,
+)
+from app.modules.cases.errors import CaseActionError
 from app.modules.analysis.ai import describe_analysis_provider, run_project_analysis
 from app.platform.jobs.backpressure import (
     analysis_job_priority_for_type,
@@ -1248,16 +1255,10 @@ class AnalysisService:
         failed; logs a warning instead (e.g. project already advanced or cancelled).
         Other exceptions are logged as errors — they indicate unexpected state.
         """
-        from app.modules.workflow.case_actions import CaseActionError, CaseActionService
-        from app.modules.cases.repository import ProjectRepository
-
         _log = log or logger.bind(project_id=project_id)
         try:
             async with WorkerAsyncSessionFactory() as session:
-                await CaseActionService(ProjectRepository(session)).worker_proposal_ready(
-                    project_id,
-                    reason="Quote recalculation completed.",
-                )
+                await notify_proposal_ready(session, project_id, "Quote recalculation completed.")
             _log.info("worker.case_transitioned_to_proposal_ready", project_id=project_id)
         except CaseActionError as exc:
             _log.warning(
@@ -1283,11 +1284,6 @@ class AnalysisService:
         lease_token: str | None = None,
         worker_id: str | None = None,
     ) -> AnalysisJobExecutionResult:
-        from app.modules.quoting.quote_variant_repository import QuoteVariantRepository
-        from app.modules.quoting.quote_variant_service import (
-            QuoteVariantRecalculationUnavailableError,
-            QuoteVariantService,
-        )
 
         log = logger.bind(
             job_id=job_id,
@@ -1398,14 +1394,8 @@ class AnalysisService:
 
         try:
             async with WorkerAsyncSessionFactory() as quote_session:
-                result = await QuoteVariantService(
-                    QuoteVariantRepository(quote_session),
-                    WorkCatalogRepository(quote_session),
-                ).recalculate_quote_variants_with_context(
-                    project_id,
-                    raise_on_unavailable=True,
-                )
-        except QuoteVariantRecalculationUnavailableError as exc:
+                result = await recalculate_quotes(quote_session, project_id)
+        except QuoteRecalculationUnavailableError as exc:
             failure_message = str(exc)
             failure_policy = _classify_analysis_failure(
                 cause=exc,
@@ -1478,7 +1468,7 @@ class AnalysisService:
 
             await repo.complete_job_without_result(
                 job,
-                output_summary=QuoteVariantService.build_recalculation_output_summary(result),
+                output_summary=quote_recalculation_output_summary(result),
             )
             duration = _job_duration_seconds(job)
 

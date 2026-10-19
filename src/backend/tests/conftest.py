@@ -58,15 +58,15 @@ from app.platform.config import get_settings  # noqa: E402
 
 get_settings.cache_clear()
 
-from app.composition.models import import_all_models  # noqa: E402
+from app.composition.wiring import init_modules  # noqa: E402
 from app.platform.db.base import Base  # noqa: E402
 from app.modules.catalog.models import MaterialCatalog, PricingProfile, Supplier  # noqa: E402
 from app.modules.identity.models import Organization, User  # noqa: E402
 from app.modules.identity.auth_service import hash_password  # noqa: E402
 
-# Všechny ORM modely musí být registrované před create_all/drop_all (i při běhu
-# jediného testového souboru).
-import_all_models()
+# Registrace všech ORM modelů (create_all/drop_all) a propojení portů mezi moduly
+# – i při běhu jediného testového souboru.
+init_modules()
 
 
 # Mirror the application engine's profile. Both engines talk to the same test

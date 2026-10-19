@@ -17,7 +17,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 import time
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from uuid import uuid4
 
 import jwt
@@ -259,6 +259,26 @@ def _audit_actor_from_scope(scope: Scope) -> _AuditActor | None:
     return _audit_actor_from_context()
 
 
+# Port: e-mail a organizaci aktéra dohledá modul identity (audit je pod ním a
+# nesmí ho importovat). Propojuje app.composition.wiring.init_modules(); bez
+# propojení se zápis auditu odmítne (fail-closed), nikdy se tiše nevynechá.
+ActorLookup = Callable[[Any, str], Awaitable["tuple[str, str | None] | None"]]
+_actor_lookup: ActorLookup | None = None
+
+
+def register_actor_lookup(lookup: ActorLookup) -> None:
+    global _actor_lookup
+    _actor_lookup = lookup
+
+
+async def _lookup_actor(session, user_id: str) -> tuple[str, str | None] | None:
+    if _actor_lookup is None:
+        raise RuntimeError(
+            "audit: actor lookup is not registered (call app.composition.wiring.init_modules())"
+        )
+    return await _actor_lookup(session, user_id)
+
+
 async def _enrich_audit_actor(session, actor: _AuditActor | None) -> _AuditActor:
     if actor is None:
         context_actor = _audit_actor_from_context()
@@ -285,16 +305,15 @@ async def _enrich_audit_actor(session, actor: _AuditActor | None) -> _AuditActor
     if actor.user_email is not None and actor.org_id is not None:
         return actor
 
-    from app.modules.identity.models import User as _User
-
-    user_obj = await session.get(_User, actor.user_id)
-    if user_obj is None:
+    found = await _lookup_actor(session, actor.user_id)
+    if found is None:
         return actor
+    user_email, org_id = found
 
     enriched_actor = _AuditActor(
         user_id=actor.user_id,
-        user_email=user_obj.email,
-        org_id=user_obj.organization_id,
+        user_email=user_email,
+        org_id=org_id,
         impersonated_by=actor.impersonated_by,
     )
     _request_audit_actor.set(enriched_actor)

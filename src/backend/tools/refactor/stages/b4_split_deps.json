@@ -1,0 +1,56 @@
+{
+ "source": "app/composition/deps.py",
+ "moves": {
+  "app/platform/http/deps.py": [
+   "_request_app_state",
+   "get_job_queue",
+   "get_redis",
+   "get_auth_redis"
+  ],
+  "app/modules/identity/api/deps.py": [
+   "logger",
+   "get_auth_service",
+   "get_current_user",
+   "require_superadmin",
+   "ADMIN_CAPABILITIES",
+   "require_admin_capability",
+   "require_user_admin",
+   "resolve_org_id",
+   "require_org_id",
+   "require_manager"
+  ],
+  "app/modules/workflow/api/deps.py": [
+   "get_project_service",
+   "get_case_action_service"
+  ],
+  "app/modules/media/api/deps.py": [
+   "get_photo_service"
+  ],
+  "app/modules/analysis/api/deps.py": [
+   "get_analysis_service"
+  ],
+  "app/modules/quoting/api/deps.py": [
+   "get_quote_variant_service"
+  ],
+  "app/modules/catalog/api/deps.py": [
+   "get_pricebook_service",
+   "get_material_catalog_service",
+   "get_supplier_service",
+   "get_work_catalog_service"
+  ],
+  "app/modules/exports/api/deps.py": [
+   "get_export_service",
+   "get_storage_consistency_service"
+  ]
+ },
+ "headers": {
+  "app/platform/http/deps.py": "\"\"\"FastAPI DI providery sdílené infrastruktury (fronta jobů, Redis).\"\"\"\n",
+  "app/modules/identity/api/deps.py": "\"\"\"Autentizace a autorizace požadavku: aktuální uživatel, RBAC guardy, tenant (org_id).\"\"\"\n",
+  "app/modules/workflow/api/deps.py": "\"\"\"FastAPI DI providery modulu workflow.\"\"\"\n",
+  "app/modules/media/api/deps.py": "\"\"\"FastAPI DI providery modulu media.\"\"\"\n",
+  "app/modules/analysis/api/deps.py": "\"\"\"FastAPI DI providery modulu analysis.\"\"\"\n",
+  "app/modules/quoting/api/deps.py": "\"\"\"FastAPI DI providery modulu quoting.\"\"\"\n",
+  "app/modules/catalog/api/deps.py": "\"\"\"FastAPI DI providery modulu catalog.\"\"\"\n",
+  "app/modules/exports/api/deps.py": "\"\"\"FastAPI DI providery modulu exports.\"\"\"\n"
+ }
+}

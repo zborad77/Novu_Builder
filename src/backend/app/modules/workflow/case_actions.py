@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from app.modules.cases.errors import CaseActionError
 from app.modules.cases.effects import EffectContext, run_after_commit, run_before_commit
 from app.modules.cases.transitions import TransitionError, apply_transition
 from app.modules.cases.models import ProjectStatusHistory  # noqa: F401  (imported so ORM sees model)
@@ -44,10 +45,6 @@ if TYPE_CHECKING:
     from app.modules.cases.models import Project
 
 logger = structlog.get_logger(__name__)
-
-
-class CaseActionError(ValueError):
-    """Business-rule violation during a case action (maps to HTTP 409)."""
 
 
 class CaseActionService:

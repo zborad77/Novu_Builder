@@ -79,7 +79,7 @@ async def test_reset_user_password_returns_503_when_security_audit_enforcement_f
     company_admin = _current_user(user_id="admin-1").model_copy(update={"role": "admin"})
 
     with patch(
-        "app.modules.admin.api.admin.commit_security_critical_audit",
+        "app.modules.identity.authz.commit_security_critical_audit",
         new=AsyncMock(side_effect=SecurityAuditWriteError("audit unavailable")),
     ), patch(
         "app.modules.admin.api.admin.TokenRepository.revoke_all_user_sessions",

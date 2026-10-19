@@ -14,6 +14,7 @@ from app.platform.jobs.backpressure import (
 from app.platform.config import get_settings
 from app.modules.cases.models import Project
 from app.modules.media.models import ProjectPhoto
+from app.modules.media.ports import invalidate_case_exports
 from app.modules.media.photo_repository import PhotoRepository
 from app.modules.media.schemas.photo import PhotoVariant, PhotoVariants, ProjectPhotoRead
 from app.platform.storage.backend import (
@@ -527,7 +528,7 @@ class PhotoService:
             photo.deleted_at = now
             photo.deleted_by_user_id = actor_user_id
         return {
-            "exports_expired": await self.repository.expire_project_exports(photo.project_id, now=now),
+            "exports_expired": await invalidate_case_exports(self.repository.session, photo.project_id, now=now),
             "markers_deleted": await self.repository.delete_markers_for_photo(photo.id),
         }
 
