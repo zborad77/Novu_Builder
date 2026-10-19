@@ -13,10 +13,20 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]
 REPO_ROOT_MARKER = ".novu-repo-root"
 
 
+def _fallback_root(backend_root: Path) -> Path:
+    """Kořen bez markeru: v rozložení repozitáře `<kořen>/src/backend`, jinak rodič backendu.
+
+    Docker image má backend v `/app` (bez zbytku repozitáře) – kořenem je pak `/`,
+    stejně jako před přesunem do src/ (výchozí dev úložiště `/storage`).
+    """
+    if backend_root.parent.name == "src" and len(backend_root.parents) > 1:
+        return backend_root.parents[1]
+    return backend_root.parent
+
+
 @lru_cache(maxsize=1)
 def repo_root() -> Path:
     for candidate in (BACKEND_ROOT, *BACKEND_ROOT.parents):
         if (candidate / REPO_ROOT_MARKER).is_file():
             return candidate
-    # Release bez markeru: backend je vždy src/backend v kořeni repozitáře.
-    return BACKEND_ROOT.parents[1]
+    return _fallback_root(BACKEND_ROOT)
