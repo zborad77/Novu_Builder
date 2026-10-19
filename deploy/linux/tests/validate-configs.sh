@@ -74,17 +74,20 @@ chmod 0644 "$units/nc-api@gateway.service.d/"*
 cp "$units/nc-api@.service" "$units/nc-api@desktop.service"
 cp "$units/nc-api@.service" "$units/nc-api@admin.service"
 chmod 0644 "$units"/*
-if SYSTEMD_LOG_LEVEL=warning systemd-analyze verify --man=no "$units/nc-api@gateway.service" "$units/nc-api@desktop.service" "$units/nc-api@admin.service" "$units/nc-worker.service" "$units/nc-core.target" 2>&1 | grep -v -E "Failed to (connect|open|create).*bus|Unit.*not found|postgresql|redis-server|minio" | grep . ; then
+if SYSTEMD_LOG_LEVEL=warning systemd-analyze verify --man=no "$units/nc-api@gateway.service" "$units/nc-api@desktop.service" "$units/nc-api@admin.service" "$units/nc-worker.service" "$units/nc-offer-worker.service" "$units/nc-core.target" 2>&1 | grep -v -E "Failed to (connect|open|create).*bus|Unit.*not found|postgresql|redis-server|minio" | grep . ; then
   bad "systemd-analyze verify reported problems"
 else ok "systemd-analyze verify"; fi
 # F6.1: sandbox exposure below 3.0 ("threshold" is exposure x 10).
-for unit in nc-api@desktop.service nc-worker.service; do
+for unit in nc-api@desktop.service nc-worker.service nc-offer-worker.service; do
   if systemd-analyze security --offline=yes --threshold=30 "$units/$unit" >/tmp/sec.txt 2>&1; then
     ok "systemd-analyze security $unit: $(tail -n 1 /tmp/sec.txt | sed 's/.*exposure level for [^:]*: //')"
   else
     bad "systemd-analyze security $unit: $(tail -n 1 /tmp/sec.txt)"
   fi
 done
+# N2: offer pipeline must run (offer queue, budget sweeper, reconciler, outbox publisher).
+grep -q 'python -m app.worker.offer_runner' "$D/systemd/nc-offer-worker.service" && grep -q 'nc-offer-worker.service' "$D/systemd/nc-core.target" \
+  && ok "offer worker unit present and wanted by nc-core.target" || bad "offer worker not deployed (N2)"
 grep -q '^Environment=NC_ZONE=%i' "$D/systemd/nc-api@.service" && ok "zone fixed per instance (NC_ZONE=%i)" || bad "NC_ZONE not fixed by the unit"
 grep -q -- '--no-proxy-headers' "$D/systemd/nc-api@.service" && ok "uvicorn --no-proxy-headers" || bad "proxy headers not disabled"
 grep -q -- '--uds ' "$D/systemd/nc-api@.service" && ok "API on unix socket only" || bad "API not on a unix socket"

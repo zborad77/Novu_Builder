@@ -1,8 +1,9 @@
-# Private Core application processes. Pilot: desktop + admin zones and the worker.
+# Private Core application processes. Pilot: desktop + admin zones, the worker
+# and the offer worker.
 # Gateway zone (nc-api@gateway) is added in F4 together with the Public Edge gateway.
 [Unit]
 Description=NovuConstruct Private Core
-Wants=nc-api@desktop.service nc-api@admin.service nc-worker.service
+Wants=nc-api@desktop.service nc-api@admin.service nc-worker.service nc-offer-worker.service
 After=network-online.target
 
 [Install]

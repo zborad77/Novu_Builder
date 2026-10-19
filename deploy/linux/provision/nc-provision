@@ -505,7 +505,7 @@ install_units() {
   info "systemd jednotky"
   local u units_before=$CHANGES
   if has_core; then
-    for u in nc-api@.service nc-worker.service nc-core.target nc-egress-refresh.service nc-egress-refresh.timer; do
+    for u in nc-api@.service nc-worker.service nc-offer-worker.service nc-core.target nc-egress-refresh.service nc-egress-refresh.timer; do
       install_file "$DEPLOY_DIR/systemd/$u" "/etc/systemd/system/$u" 0644 root:root
     done
     install_file "$DEPLOY_DIR/systemd/nc-api@gateway.service.d/10-gateway-hmac.conf" \
@@ -594,7 +594,7 @@ cmd_start() {
     if [ "$DRY_RUN" -eq 0 ] && ! sh "$DEPLOY_DIR/bin/nc-migrate" status | grep -q "up to date"; then
       die "databáze není na aktuální revizi: nejdřív '$0 migrate'"
     fi
-    run systemctl enable --now nc-worker.service nc-api@desktop.service nc-api@admin.service
+    run systemctl enable --now nc-worker.service nc-offer-worker.service nc-api@desktop.service nc-api@admin.service
     [ "$NC_ENABLE_GATEWAY_ZONE" = 1 ] && run systemctl enable --now nc-api@gateway.service
     run systemctl enable --now nc-core.target
   fi
@@ -612,7 +612,7 @@ cmd_smoke() {
   local fail=0 u
   check() { if "$@" >/dev/null 2>&1; then ok "$DESC"; else printf '%sFAIL%s %s\n' "$c_err" "$c_off" "$DESC"; fail=1; fi; }
   if has_core; then
-    for u in "postgresql@$NC_PG_VERSION-main" redis-server nc-worker nc-api@desktop nc-api@admin; do
+    for u in "postgresql@$NC_PG_VERSION-main" redis-server nc-worker nc-offer-worker nc-api@desktop nc-api@admin; do
       DESC="služba $u aktivní"; check systemctl is-active --quiet "$u"
     done
     DESC="PostgreSQL bez TCP portu"; check sh -c "! ss -Hltn | awk '{print \$4}' | grep -qE ':5432\$'"
@@ -744,7 +744,7 @@ cmd_tls() {
 
 cmd_status() {
   local u
-  for u in "postgresql@$NC_PG_VERSION-main" redis-server nc-worker nc-api@desktop nc-api@admin nc-api@gateway nginx nftables wg-quick@wg-nc wg-quick@wg-nc-admin; do
+  for u in "postgresql@$NC_PG_VERSION-main" redis-server nc-worker nc-offer-worker nc-api@desktop nc-api@admin nc-api@gateway nginx nftables wg-quick@wg-nc wg-quick@wg-nc-admin; do
     printf '  %-28s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"
   done
   [ -x "$DEPLOY_DIR/bin/nc-migrate" ] || [ -f "$DEPLOY_DIR/bin/nc-migrate" ] && has_core && sh "$DEPLOY_DIR/bin/nc-migrate" status 2>/dev/null || true
