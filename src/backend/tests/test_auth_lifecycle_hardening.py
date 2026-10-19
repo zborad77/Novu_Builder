@@ -6,12 +6,12 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from app.repositories.token_repository import (
+from app.modules.identity.token_repository import (
     TOKEN_STATE_ACTIVE,
     TokenStateBackendUnavailableError,
 )
-from app.schemas.auth import LogoutRequest, RefreshRequest
-from app.services.auth_service import AuthService, RefreshResult
+from app.modules.identity.schemas.auth import LogoutRequest, RefreshRequest
+from app.modules.identity.auth_service import AuthService, RefreshResult
 
 
 _JWT_SECRET = "test-e2e-jwt-secret-x99-32bytes-min"
@@ -111,7 +111,7 @@ class TestAuthServiceHardening:
 class TestAuthRouteHardening:
     @pytest.mark.asyncio
     async def test_refresh_route_logs_reuse_reason_without_token_leak(self):
-        from app.api.routes.auth import refresh
+        from app.modules.identity.api.auth import refresh
 
         request = Request(
             {
@@ -127,7 +127,7 @@ class TestAuthRouteHardening:
             return_value=RefreshResult(tokens=None, failure_reason="revoked_or_reused_token")
         )
 
-        with patch("app.api.routes.auth.logger.warning") as mock_warning:
+        with patch("app.modules.identity.api.auth.logger.warning") as mock_warning:
             with pytest.raises(HTTPException) as exc_info:
                 await refresh(
                     request=request,
@@ -141,7 +141,7 @@ class TestAuthRouteHardening:
 
     @pytest.mark.asyncio
     async def test_refresh_route_returns_503_when_token_state_backend_is_unavailable(self):
-        from app.api.routes.auth import refresh
+        from app.modules.identity.api.auth import refresh
 
         request = Request(
             {
@@ -171,7 +171,7 @@ class TestAuthRouteHardening:
 
     @pytest.mark.asyncio
     async def test_logout_route_logs_without_token_leak(self):
-        from app.api.routes.auth import logout
+        from app.modules.identity.api.auth import logout
 
         request = Request(
             {
@@ -186,7 +186,7 @@ class TestAuthRouteHardening:
         service.revoke_session_by_token = AsyncMock(side_effect=[True, False])
         service.revoke_token = AsyncMock(side_effect=[False, True])
 
-        with patch("app.api.routes.auth.logger.info") as mock_info:
+        with patch("app.modules.identity.api.auth.logger.info") as mock_info:
             response = await logout(
                 request=request,
                 payload=LogoutRequest(refreshToken="bad-refresh-token"),
@@ -201,7 +201,7 @@ class TestAuthRouteHardening:
 
     @pytest.mark.asyncio
     async def test_logout_route_returns_503_when_token_state_backend_is_unavailable(self):
-        from app.api.routes.auth import logout
+        from app.modules.identity.api.auth import logout
 
         request = Request(
             {

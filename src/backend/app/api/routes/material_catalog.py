@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.api.deps import get_current_user, get_material_catalog_service, require_manager, resolve_org_id
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 from app.schemas.material_catalog import MaterialCatalogPatch
 from app.services.material_catalog_service import MaterialCatalogService
 

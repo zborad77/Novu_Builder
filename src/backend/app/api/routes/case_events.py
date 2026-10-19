@@ -25,7 +25,7 @@ from app.platform.events.types import build_outbox_message, sse_id_from_message
 from app.platform.metrics import observe_sse_connection, observe_sse_reconnect
 from app.platform.db.session import AsyncSessionFactory, get_db_session
 from app.repositories.project_repository import ProjectRepository
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 
 router = APIRouter(prefix="/cases", tags=["case-events"])
 

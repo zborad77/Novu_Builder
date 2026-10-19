@@ -10,8 +10,8 @@
 import pytest
 import pytest_asyncio
 
-from app.models import User
-from app.services.auth_service import hash_password
+from app.modules.identity.models import User
+from app.modules.identity.auth_service import hash_password
 
 _PW_USER_ID = "usr_pw_change_test"
 _PW_USER_EMAIL = "pw_change_test@test.local"

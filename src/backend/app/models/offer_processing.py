@@ -36,7 +36,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.schema import Identity
 
 from app.platform.db.base import Base
-from app.models.domain import TimestampMixin
+from app.platform.db.mixins import TimestampMixin
 
 _JSONB = JSON().with_variant(JSONB(), "postgresql")
 

@@ -11,8 +11,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.platform.metrics import observe_cache_operation
-from app.core.token_limits import JTI_MAX_LENGTH
-from app.models import PasswordResetToken, RevokedToken, UserSession
+from app.modules.identity.token_limits import JTI_MAX_LENGTH
+from app.modules.identity.models import PasswordResetToken, RevokedToken, UserSession
 
 _MAX_PASSWORD_RESET_TOKEN_LENGTH = 512
 _REVOKED_TOKEN_CACHE_NAMESPACE = "revoked-token"

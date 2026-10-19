@@ -9,19 +9,19 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.audit import commit_security_critical_audit
+from app.modules.audit.audit_log import commit_security_critical_audit
 from app.platform.config import get_settings
 from app.platform.http.exposure import SUPERADMIN_ZONES, current_audience, current_zone
-from app.core.security import enforce_password_strength
-from app.models import User, UserSession
-from app.repositories.token_repository import (
+from app.modules.identity.security import enforce_password_strength
+from app.modules.identity.models import User, UserSession
+from app.modules.identity.token_repository import (
     SessionTokenRevocation,
     TOKEN_STATE_ACTIVE,
     TOKEN_STATE_EXPIRED,
     TOKEN_STATE_REVOKED,
     TokenRepository,
 )
-from app.schemas.auth import AuthSessionRead, AuthUserRead
+from app.modules.identity.schemas.auth import AuthSessionRead, AuthUserRead
 
 logger = structlog.get_logger(__name__)
 _MAX_ENCODED_TOKEN_LENGTH = 8192

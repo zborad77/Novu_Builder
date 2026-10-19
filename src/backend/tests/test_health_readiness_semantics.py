@@ -355,7 +355,7 @@ async def test_health_returns_503_when_startup_integrity_is_not_ready(app_client
 @pytest.mark.asyncio
 async def test_internal_health_returns_503_when_service_is_not_ready():
     from app.api.routes.system import health_internal
-    from app.schemas.auth import AuthUserRead
+    from app.modules.identity.schemas.auth import AuthUserRead
 
     mock_request = AsyncMock()
     mock_request.app.state.startup_checks = {
@@ -408,7 +408,7 @@ async def test_internal_health_returns_503_when_service_is_not_ready():
 @pytest.mark.asyncio
 async def test_internal_health_omits_debug_flag_and_keeps_internal_details():
     from app.api.routes.system import health_internal
-    from app.schemas.auth import AuthUserRead
+    from app.modules.identity.schemas.auth import AuthUserRead
 
     mock_request = AsyncMock()
     mock_request.app.state.startup_checks = {
@@ -471,7 +471,7 @@ async def test_internal_health_omits_debug_flag_and_keeps_internal_details():
 @pytest.mark.asyncio
 async def test_internal_health_keeps_api_ready_true_when_worker_processing_is_down():
     from app.api.routes.system import health_internal
-    from app.schemas.auth import AuthUserRead
+    from app.modules.identity.schemas.auth import AuthUserRead
 
     mock_request = AsyncMock()
     mock_request.app.state.startup_checks = {

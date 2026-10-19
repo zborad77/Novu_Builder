@@ -8,9 +8,9 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from app.api.routes.auth import change_password, login, logout, refresh
-from app.schemas.auth import AuthUserRead, ChangePasswordRequest, LogoutRequest
-from app.services.auth_service import AuthService
+from app.modules.identity.api.auth import change_password, login, logout, refresh
+from app.modules.identity.schemas.auth import AuthUserRead, ChangePasswordRequest, LogoutRequest
+from app.modules.identity.auth_service import AuthService
 
 
 def _src(fn) -> str:
@@ -111,9 +111,9 @@ class TestAuthAbuseLogging:
         service.login = AsyncMock(return_value=None)
 
         with (
-            patch("app.api.routes.auth.is_account_throttled", new=AsyncMock(return_value=False)),
-            patch("app.api.routes.auth.record_login_failure", new=AsyncMock()) as mock_record,
-            patch("app.api.routes.auth.logger.warning") as mock_warning,
+            patch("app.modules.identity.api.auth.is_account_throttled", new=AsyncMock(return_value=False)),
+            patch("app.modules.identity.api.auth.record_login_failure", new=AsyncMock()) as mock_record,
+            patch("app.modules.identity.api.auth.logger.warning") as mock_warning,
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await change_password(
@@ -142,9 +142,9 @@ class TestAuthAbuseLogging:
         service.change_password = AsyncMock(return_value=True)
 
         with (
-            patch("app.api.routes.auth.is_account_throttled", new=AsyncMock(return_value=False)),
-            patch("app.api.routes.auth.reset_login_failures", new=AsyncMock()) as mock_reset,
-            patch("app.api.routes.auth.logger.info") as mock_info,
+            patch("app.modules.identity.api.auth.is_account_throttled", new=AsyncMock(return_value=False)),
+            patch("app.modules.identity.api.auth.reset_login_failures", new=AsyncMock()) as mock_reset,
+            patch("app.modules.identity.api.auth.logger.info") as mock_info,
         ):
             response = await change_password(
                 request=request,
@@ -171,7 +171,7 @@ class TestAuthAbuseLogging:
         service.login = AsyncMock()
 
         with patch(
-            "app.api.routes.auth.is_account_throttled",
+            "app.modules.identity.api.auth.is_account_throttled",
             new=AsyncMock(return_value=True),
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -195,7 +195,7 @@ class TestAuthAbuseLogging:
         service.revoke_session_by_token = AsyncMock(side_effect=[True, False])
         service.revoke_token = AsyncMock(side_effect=[False, True])
 
-        with patch("app.api.routes.auth.logger.info") as mock_info:
+        with patch("app.modules.identity.api.auth.logger.info") as mock_info:
             response = await logout(
                 request=request,
                 payload=LogoutRequest(refreshToken="refresh-secret-token"),

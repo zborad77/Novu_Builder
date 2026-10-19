@@ -253,7 +253,7 @@ class TestHealthInternalWorkerSection:
     async def test_worker_alive_when_any_recent_per_instance_heartbeat_exists(self):
         """Returns worker.alive=True when at least one worker instance heartbeat is fresh."""
         from app.api.routes.system import health_internal
-        from app.schemas.auth import AuthUserRead
+        from app.modules.identity.schemas.auth import AuthUserRead
 
         fresh_ts = datetime.now(UTC).isoformat().encode()
         stale_ts = datetime(2020, 1, 1, tzinfo=UTC).isoformat().encode()
@@ -296,7 +296,7 @@ class TestHealthInternalWorkerSection:
     async def test_worker_dead_when_no_heartbeat_key(self):
         """Returns worker.alive=False when no heartbeat key exists in Redis."""
         from app.api.routes.system import health_internal
-        from app.schemas.auth import AuthUserRead
+        from app.modules.identity.schemas.auth import AuthUserRead
 
         mock_redis = _redis_with_heartbeats({})
 
@@ -328,7 +328,7 @@ class TestHealthInternalWorkerSection:
     @pytest.mark.asyncio
     async def test_health_internal_reports_auth_protection_unavailable_when_redis_monitoring_is_missing(self):
         from app.api.routes.system import health_internal
-        from app.schemas.auth import AuthUserRead
+        from app.modules.identity.schemas.auth import AuthUserRead
 
         mock_request = MagicMock()
         mock_request.app.state.startup_checks = {"db": "ok"}
@@ -358,7 +358,7 @@ class TestHealthInternalWorkerSection:
     async def test_worker_alive_with_legacy_single_worker_heartbeat_key(self):
         """Legacy single-worker heartbeat key remains readable during rollout."""
         from app.api.routes.system import health_internal
-        from app.schemas.auth import AuthUserRead
+        from app.modules.identity.schemas.auth import AuthUserRead
 
         fresh_ts = datetime.now(UTC).isoformat().encode()
         mock_redis = _redis_with_heartbeats({"worker:heartbeat": fresh_ts})
@@ -391,7 +391,7 @@ class TestHealthInternalWorkerSection:
     async def test_worker_unknown_when_redis_unavailable(self):
         """Returns worker.alive=None when Redis is unavailable (app state has no client)."""
         from app.api.routes.system import health_internal
-        from app.schemas.auth import AuthUserRead
+        from app.modules.identity.schemas.auth import AuthUserRead
 
         mock_request = MagicMock()
         mock_request.app.state.startup_checks = {"db": "ok"}

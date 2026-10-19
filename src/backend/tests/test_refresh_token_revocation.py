@@ -16,9 +16,9 @@ import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from app.models import User
-from app.repositories.token_repository import TOKEN_STATE_ACTIVE, TOKEN_STATE_REVOKED
-from app.services.auth_service import AuthService, hash_password
+from app.modules.identity.models import User
+from app.modules.identity.token_repository import TOKEN_STATE_ACTIVE, TOKEN_STATE_REVOKED
+from app.modules.identity.auth_service import AuthService, hash_password
 
 
 # ── Unit-level helpers ────────────────────────────────────────────────────────

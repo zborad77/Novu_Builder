@@ -12,7 +12,7 @@ import json
 import pytest
 
 from app.platform.config import get_settings
-from app.core.device_binding import DeviceRegistryError, decide, parse_registry
+from app.modules.identity.device_binding import DeviceRegistryError, decide, parse_registry
 
 LOGIN_A = {"email": "manager_a@test.local", "password": "TestPassA1!"}
 ORG_A = "org_e2e_a"

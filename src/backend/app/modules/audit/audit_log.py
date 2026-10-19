@@ -29,10 +29,10 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from app.platform.config import get_settings
 from app.platform.metrics import AUDIT_WRITE_FAILED_TOTAL
 from app.platform.db.session import AsyncSessionFactory
-from app.models.domain import AuditLog
+from app.modules.audit.models import AuditLog
 
 if TYPE_CHECKING:
-    from app.schemas.auth import AuthUserRead
+    from app.modules.identity.schemas.auth import AuthUserRead
 
 logger = structlog.get_logger(__name__)
 
@@ -285,7 +285,7 @@ async def _enrich_audit_actor(session, actor: _AuditActor | None) -> _AuditActor
     if actor.user_email is not None and actor.org_id is not None:
         return actor
 
-    from app.models.domain import User as _User
+    from app.modules.identity.models import User as _User
 
     user_obj = await session.get(_User, actor.user_id)
     if user_obj is None:

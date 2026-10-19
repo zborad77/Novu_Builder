@@ -5,18 +5,18 @@ from typing import cast
 
 from app.api.deps import get_current_user, get_photo_service, get_project_service, resolve_org_id
 from app.api.photo_purge import purge_photo_with_audit
-from app.core.audit import log_cross_tenant_denied, mark_request_audited
+from app.modules.audit.audit_log import log_cross_tenant_denied, mark_request_audited
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.platform.metrics import UPLOAD_REJECTIONS_TOTAL, metric_labels
-from app.core.rbac import (
+from app.modules.identity.rbac import (
     Decision,
     can_purge_photo_in_tenant,
     can_soft_delete_photo,
     is_tenant_operator,
     may_soft_delete_photo_of,
 )
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 from app.schemas.photo import (
     AnalysisReferencePhotoResponse,
     DeletePhotoResponse,

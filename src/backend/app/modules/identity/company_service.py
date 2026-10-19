@@ -4,10 +4,10 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.audit import write_audit_log
-from app.core.rbac import SUPERADMIN_ROLE
-from app.models import Organization, User
-from app.schemas.company import (
+from app.modules.audit.audit_log import write_audit_log
+from app.modules.identity.rbac import SUPERADMIN_ROLE
+from app.modules.identity.models import Organization, User
+from app.modules.identity.schemas.company import (
     AdminUserCreate,
     AdminUserPatch,
     AdminUserRead,
@@ -15,7 +15,7 @@ from app.schemas.company import (
     CompanyPatch,
     CompanyRead,
 )
-from app.services.auth_service import AuthService, hash_password
+from app.modules.identity.auth_service import AuthService, hash_password
 
 
 def _org_to_read(org: Organization, user_count: int = 0) -> CompanyRead:
@@ -220,7 +220,7 @@ class CompanyService:
     def apply_user_patch(self, user: User, payload: AdminUserPatch, *, now: datetime) -> None:
         """Stage profile/role/activation/password changes without committing.
 
-        Authorization is the caller's job (app.core.rbac). A password change
+        Authorization is the caller's job (app.modules.identity.rbac). A password change
         always invalidates every token issued before ``now``.
         """
         if payload.fullName is not None:

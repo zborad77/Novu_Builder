@@ -9,11 +9,11 @@ from app.api.deps import (
     resolve_org_id,
 )
 from app.platform.db.session import get_db_session
-from app.core.audit import log_cross_tenant_denied
+from app.modules.audit.audit_log import log_cross_tenant_denied
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.repositories.marker_repository import MarkerRepository
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 from app.schemas.marker import MarkerCreate, MarkerDeleteResponse, MarkerListResponse, MarkerRead
 from app.services.photo_service import PhotoService
 from app.services.project_service import ProjectService

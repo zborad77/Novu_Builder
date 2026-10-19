@@ -22,9 +22,11 @@ from app.api.deps import (
 from app.platform.jobs.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
 from app.platform.config import get_settings
 from app.platform.db.session import get_db_session
-from app.models.domain import AnalysisJob, AuditLog, Organization, Project, User
-from app.schemas.auth import AuthUserRead
-from app.schemas.company import (
+from app.models.domain import AnalysisJob, Project
+from app.modules.audit.models import AuditLog
+from app.modules.identity.models import Organization, User
+from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.company import (
     AdminUserCreate,
     AdminUserListResponse,
     AdminUserPatch,
@@ -37,9 +39,9 @@ from app.schemas.company import (
 from app.platform.http.exposure import AUDIENCE_BY_ZONE, ZONE_DEV, ZONE_GATEWAY, current_audience, current_zone
 from app.platform.http.limiter import limiter
 from app.platform.db.sql_like import LIKE_ESCAPE_CHAR, build_contains_ilike_pattern
-from app.core.security import enforce_password_strength
-from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit, write_audit_log
-from app.core.rbac import (
+from app.modules.identity.security import enforce_password_strength
+from app.modules.audit.audit_log import SecurityAuditWriteError, commit_security_critical_audit, write_audit_log
+from app.modules.identity.rbac import (
     Decision,
     assignable_roles,
     can_manage_company,
@@ -47,13 +49,13 @@ from app.core.rbac import (
     can_view_user,
     user_admin_org_scope,
 )
-from app.repositories.token_repository import SessionTokenRevocation, TokenRepository
+from app.modules.identity.token_repository import SessionTokenRevocation, TokenRepository
 from app.services.analysis_service import AnalysisService, to_job_read
-from app.services.company_service import CompanyService
+from app.modules.identity.company_service import CompanyService
 from app.services.photo_service import PhotoService
 from app.repositories.photo_repository import PhotoRepository
 from app.schemas.photo import PurgePhotoRequest, PurgePhotoResponse
-from app.services.auth_service import AuthService, hash_password
+from app.modules.identity.auth_service import AuthService, hash_password
 
 import structlog
 
@@ -80,7 +82,7 @@ def _enforce(
     resource_id: str,
     not_found_detail: str = "Not found.",
 ) -> None:
-    """Translate an app.core.rbac decision into an HTTP error.
+    """Translate an app.modules.identity.rbac decision into an HTTP error.
 
     Targets outside the caller's tenant (or superadmin accounts seen by a company
     admin) answer 404 exactly like a missing record, so the response never
@@ -229,7 +231,7 @@ async def patch_company(
 #
 # Superadmin: every tenant. Company admin (role "admin"): own tenant only, never
 # superadmin accounts, never another company admin's credentials, role or
-# activation. Rules live in app.core.rbac; superadmin accounts are managed only
+# activation. Rules live in app.modules.identity.rbac; superadmin accounts are managed only
 # with the server CLI.
 
 @router.get("/users", response_model=AdminUserListResponse)

@@ -13,8 +13,8 @@ import pytest
 import pytest_asyncio
 from pydantic import ValidationError
 
-from app.models import User
-from app.services.auth_service import hash_password
+from app.modules.identity.models import User
+from app.modules.identity.auth_service import hash_password
 
 ORG_A = "org_e2e_a"
 PASSWORD = "F3-Zone-Pass-1!"

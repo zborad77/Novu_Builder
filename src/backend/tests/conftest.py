@@ -59,8 +59,9 @@ from app.platform.config import get_settings  # noqa: E402
 get_settings.cache_clear()
 
 from app.platform.db.base import Base  # noqa: E402
-from app.models import MaterialCatalog, Organization, PricingProfile, Supplier, User  # noqa: E402
-from app.services.auth_service import hash_password  # noqa: E402
+from app.models import MaterialCatalog, PricingProfile, Supplier  # noqa: E402
+from app.modules.identity.models import Organization, User  # noqa: E402
+from app.modules.identity.auth_service import hash_password  # noqa: E402
 
 
 # Mirror the application engine's profile. Both engines talk to the same test

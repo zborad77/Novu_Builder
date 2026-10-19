@@ -5,9 +5,9 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.token_limits import JTI_MAX_LENGTH
-from app.models import RevokedToken
-from app.repositories.token_repository import (
+from app.modules.identity.token_limits import JTI_MAX_LENGTH
+from app.modules.identity.models import RevokedToken
+from app.modules.identity.token_repository import (
     TOKEN_STATE_ACTIVE,
     TOKEN_STATE_REVOKED,
     TokenRepository,

@@ -3,10 +3,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 import structlog.contextvars
 
-from app.core.audit import bind_request_audit_actor
+from app.modules.audit.audit_log import bind_request_audit_actor
 from app.platform.config import get_settings
-from app.core.device_binding import check_device_binding
-from app.core.rbac import is_system_admin, is_tenant_admin, is_tenant_operator
+from app.modules.identity.device_binding import check_device_binding
+from app.modules.identity.rbac import is_system_admin, is_tenant_admin, is_tenant_operator
 from app.platform.db.session import get_db_session
 from app.case_workflow.case_actions import CaseActionService
 from app.repositories.analysis_repository import AnalysisRepository
@@ -20,11 +20,11 @@ from app.repositories.proposal_draft_repository import ProposalDraftRepository
 from app.repositories.quote_variant_repository import QuoteVariantRepository
 from app.repositories.storage_consistency_repository import StorageConsistencyRepository
 from app.repositories.supplier_repository import SupplierRepository
-from app.repositories.token_repository import TokenStateBackendUnavailableError
+from app.modules.identity.token_repository import TokenStateBackendUnavailableError
 from app.repositories.work_catalog_repository import WorkCatalogRepository
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 from app.services.analysis_service import AnalysisService
-from app.services.auth_service import AuthService
+from app.modules.identity.auth_service import AuthService
 from app.services.export_service import ExportService
 from app.services.material_catalog_service import MaterialCatalogService
 from app.services.photo_service import PhotoService
@@ -244,7 +244,7 @@ async def require_superadmin(
 # These are held exclusively by superadmins. The role_permissions table is no
 # longer consulted: its historical manager rows granted cross-tenant platform
 # administration (SA-01) and migration 20261017_0057 removes them. Tenant-level
-# administration uses require_user_admin / app.core.rbac instead.
+# administration uses require_user_admin / app.modules.identity.rbac instead.
 ADMIN_CAPABILITIES: frozenset[str] = frozenset({
     "admin:read",
     "admin:write",
@@ -294,7 +294,7 @@ async def require_user_admin(
 ) -> AuthUserRead:
     """Superadmin (all tenants) or company admin (own tenant only).
 
-    Which targets the caller may touch is decided per request by app.core.rbac;
+    Which targets the caller may touch is decided per request by app.modules.identity.rbac;
     this dependency only rejects callers with no administration role at all.
     """
     if current_user.impersonatedBy:

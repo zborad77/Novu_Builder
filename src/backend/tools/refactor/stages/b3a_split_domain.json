@@ -1,0 +1,11 @@
+{"source": "app/models/domain.py",
+ "moves": {
+   "app/platform/db/mixins.py": ["TimestampMixin"],
+   "app/modules/audit/models.py": ["AuditLog"],
+   "app/modules/identity/models.py": ["Organization", "User", "RevokedToken", "UserSession", "RolePermission", "PasswordResetToken"]
+ },
+ "headers": {
+   "app/platform/db/mixins.py": "\"\"\"Sdílené ORM mixiny (časová razítka) pro modely všech modulů.\"\"\"\n",
+   "app/modules/audit/models.py": "\"\"\"ORM model modulu audit.\"\"\"\n",
+   "app/modules/identity/models.py": "\"\"\"ORM modely modulu identity: organizace (tenant), uživatelé, session a tokeny.\"\"\"\n"
+ }}

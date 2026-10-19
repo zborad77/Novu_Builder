@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from app.api.deps import get_export_service, get_project_service, require_manager, resolve_org_id
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
-from app.core.audit import log_cross_tenant_denied
-from app.schemas.auth import AuthUserRead
+from app.modules.audit.audit_log import log_cross_tenant_denied
+from app.modules.identity.schemas.auth import AuthUserRead
 from app.schemas.export import ExportCreateResponse, ExportRead
 from app.services.export_service import ExportService
 from app.services.project_service import ProjectService

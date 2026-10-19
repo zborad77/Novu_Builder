@@ -25,10 +25,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.platform.config import get_settings
-from app.core.security import enforce_password_strength
+from app.modules.identity.security import enforce_password_strength
 from app.composition.bootstrap import _seed_global_work_catalog
-from app.models.domain import Organization, User
-from app.services.auth_service import hash_password
+from app.modules.identity.models import Organization, User
+from app.modules.identity.auth_service import hash_password
 
 
 async def _create_superadmin(email: str, full_name: str, password: str) -> None:

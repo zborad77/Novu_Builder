@@ -12,7 +12,7 @@ async def test_health_internal_exposes_retry_dlq_and_queue_depth_details():
         _WorkerHeartbeatSnapshot,
         health_internal,
     )
-    from app.schemas.auth import AuthUserRead
+    from app.modules.identity.schemas.auth import AuthUserRead
 
     request = SimpleNamespace(
         app=SimpleNamespace(

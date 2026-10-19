@@ -5,11 +5,11 @@ from __future__ import annotations
 import structlog
 from fastapi import HTTPException
 
-from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit
+from app.modules.audit.audit_log import SecurityAuditWriteError, commit_security_critical_audit
 from app.platform.config import get_settings
 from app.core.purge_ledger import PurgeLedgerError, append_purge_entry
 from app.models import ProjectPhoto
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 from app.schemas.photo import PurgePhotoResponse
 from app.services.photo_service import PhotoService
 

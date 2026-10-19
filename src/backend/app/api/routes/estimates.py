@@ -11,7 +11,7 @@ from app.api.deps import (
     require_manager,
     resolve_org_id,
 )
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 from app.schemas.quote_variant import QuoteVariantListResponse, QuoteVariantRecalculateResponse
 from app.services.analysis_service import AnalysisService
 from app.services.project_service import ProjectService

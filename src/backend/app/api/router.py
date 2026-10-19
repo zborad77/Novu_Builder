@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends
 from app.api.deps import get_current_user
 from app.api.routes.admin import router as admin_router
 from app.api.routes.analysis_jobs import router as analysis_jobs_router
-from app.api.routes.auth import router as auth_router
+from app.modules.identity.api.auth import router as auth_router
 from app.api.routes.case_events import router as case_events_router
 from app.api.routes.cases import router as cases_router
 from app.api.routes.estimates import router as estimates_router
@@ -17,7 +17,7 @@ from app.api.routes.suppliers import router as suppliers_router
 from app.api.routes.system import router as system_router
 from app.api.routes.offer_events import router as offer_events_router
 from app.api.routes.offer_requests import router as offer_requests_router
-from app.api.routes.org_users import router as org_users_router
+from app.modules.identity.api.org_users import router as org_users_router
 from app.api.routes.work_catalog import router as work_catalog_router
 
 # Canonical API uses the /cases/* surface shared by the current clients.

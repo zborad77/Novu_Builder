@@ -23,8 +23,8 @@ import pytest_asyncio
 @pytest_asyncio.fixture
 async def superadmin_for_reset(app_client, db_session_factory):
     """Function-scoped throwaway superadmin for admin-reset tests."""
-    from app.models import User
-    from app.services.auth_service import hash_password
+    from app.modules.identity.models import User
+    from app.modules.identity.auth_service import hash_password
 
     uid = f"usr_sa_{uuid.uuid4().hex[:8]}"
     email = f"superadmin_{uid}@test.local"
@@ -57,8 +57,8 @@ async def superadmin_for_reset(app_client, db_session_factory):
 @pytest_asyncio.fixture
 async def target_user_with_old_token(app_client, db_session_factory):
     """Function-scoped user whose token we will try to invalidate."""
-    from app.models import User
-    from app.services.auth_service import hash_password
+    from app.modules.identity.models import User
+    from app.modules.identity.auth_service import hash_password
 
     uid = f"usr_tgt_{uuid.uuid4().hex[:8]}"
     email = f"target_{uid}@test.local"
@@ -147,7 +147,7 @@ class TestAdminResetInvalidatesOldTokens:
         email = target_user_with_old_token["email"]
 
         with (
-            patch("app.services.auth_service.datetime", FrozenDateTime),
+            patch("app.modules.identity.auth_service.datetime", FrozenDateTime),
             patch("app.api.routes.admin.datetime", FrozenDateTime),
         ):
             login_resp = await app_client.post(

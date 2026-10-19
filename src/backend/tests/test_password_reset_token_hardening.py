@@ -4,9 +4,9 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
-from app.models import PasswordResetToken, User
-from app.repositories.token_repository import TokenRepository
-from app.services.auth_service import AuthService
+from app.modules.identity.models import PasswordResetToken, User
+from app.modules.identity.token_repository import TokenRepository
+from app.modules.identity.auth_service import AuthService
 
 
 @pytest.mark.asyncio
@@ -161,7 +161,7 @@ async def test_reset_password_token_for_inactive_user_is_consumed_and_logged_saf
 
     from unittest.mock import patch
 
-    with patch("app.services.auth_service.logger.warning") as mock_warning:
+    with patch("app.modules.identity.auth_service.logger.warning") as mock_warning:
         assert await service.reset_password_with_token(raw_token=raw_token, new_password="ValidResetP@ss3!") is False
 
     assert await repo.get_valid_password_reset_token(raw_token) is None

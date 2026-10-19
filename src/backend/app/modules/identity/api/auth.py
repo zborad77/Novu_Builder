@@ -4,20 +4,20 @@ import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.api.deps import get_auth_redis, get_auth_service, get_current_user
-from app.core.account_limiter import (
+from app.modules.identity.account_limiter import (
     AccountThrottleBackendUnavailableError,
     is_account_throttled,
     record_login_failure,
     reset_login_failures,
 )
-from app.core.audit import SecurityAuditWriteError
+from app.modules.audit.audit_log import SecurityAuditWriteError
 from app.platform.config import get_settings
-from app.core.device_binding import check_device_binding
+from app.modules.identity.device_binding import check_device_binding
 from app.platform.http.limiter import client_ip_rate_limit_key, limiter
 from app.platform.metrics import AUTH_FAILURES_TOTAL, metric_labels, normalize_tenant_metric_label
-from app.core.security import enforce_password_strength
-from app.repositories.token_repository import TokenStateBackendUnavailableError
-from app.schemas.auth import (
+from app.modules.identity.security import enforce_password_strength
+from app.modules.identity.token_repository import TokenStateBackendUnavailableError
+from app.modules.identity.schemas.auth import (
     AuthSessionListResponse,
     AuthUserRead,
     ChangePasswordRequest,
@@ -30,7 +30,7 @@ from app.schemas.auth import (
     RefreshRequest,
     ResetPasswordResponse,
 )
-from app.services.auth_service import AuthService
+from app.modules.identity.auth_service import AuthService
 
 logger = structlog.get_logger(__name__)
 

@@ -22,8 +22,10 @@ import pytest_asyncio
 from PIL import Image
 from sqlalchemy import select
 
-from app.models import AuditLog, ProjectExport, ProjectPhoto, User
-from app.services.auth_service import hash_password
+from app.modules.audit.models import AuditLog
+from app.models import ProjectExport, ProjectPhoto
+from app.modules.identity.models import User
+from app.modules.identity.auth_service import hash_password
 
 ORG_A = "org_e2e_a"
 ORG_B = "org_e2e_b"
@@ -440,7 +442,7 @@ async def test_retrying_a_pending_purge_through_the_api_completes_it(app_client,
 
 
 async def test_audit_outage_blocks_the_purge(app_client, f03_users, db_session_factory):
-    from app.core.audit import SecurityAuditWriteError
+    from app.modules.audit.audit_log import SecurityAuditWriteError
 
     admin = await _token(app_client, "f03_admin_a")
     case_id = await _new_case(app_client, admin)

@@ -10,7 +10,7 @@ from app.api.routes.admin import get_audit_log
 def _mock_request() -> StarletteRequest:
     return StarletteRequest({"type": "http", "method": "GET", "path": "/", "headers": []})
 from app.models import MaterialCatalog, PricingProfile, Project, ProjectPhoto, Supplier
-from app.models.domain import AuditLog
+from app.modules.audit.models import AuditLog
 from app.repositories.photo_repository import PhotoRepository
 from app.repositories.pricebook_repository import PricebookRepository
 from app.repositories.material_catalog_repository import MaterialCatalogRepository

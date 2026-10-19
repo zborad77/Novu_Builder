@@ -20,8 +20,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from app.models import ProjectPhoto, User
-    from app.schemas.auth import AuthUserRead
+    from app.models import ProjectPhoto
+    from app.modules.identity.models import User
+    from app.modules.identity.schemas.auth import AuthUserRead
 
 
 SUPERADMIN_ROLE = "superadmin"

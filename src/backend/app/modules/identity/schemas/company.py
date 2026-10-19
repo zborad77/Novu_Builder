@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.core.rbac import TenantRole
+from app.modules.identity.rbac import TenantRole
 
 # Write payloads reject unknown fields (organizationId on PATCH, isSuperAdmin,
 # tenant_id, …) instead of silently ignoring them, so mass-assignment attempts

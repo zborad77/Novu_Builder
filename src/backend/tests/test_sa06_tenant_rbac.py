@@ -17,8 +17,10 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from app.models import AuditLog, ProjectPhoto, User
-from app.services.auth_service import hash_password
+from app.modules.audit.models import AuditLog
+from app.models import ProjectPhoto
+from app.modules.identity.models import User
+from app.modules.identity.auth_service import hash_password
 
 ORG_A = "org_e2e_a"
 ORG_B = "org_e2e_b"

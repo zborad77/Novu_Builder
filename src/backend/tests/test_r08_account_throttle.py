@@ -4,8 +4,8 @@ from fastapi import HTTPException
 from starlette.requests import Request
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import app.core.account_limiter as limiter_mod
-from app.api.routes.auth import login
+import app.modules.identity.account_limiter as limiter_mod
+from app.modules.identity.api.auth import login
 
 
 # ── Unit tests: account_limiter module ───────────────────────────────────────
@@ -196,7 +196,7 @@ class TestLoginEndpointThrottling:
 
     async def test_throttled_account_gets_429(self, app_client, test_tenants):
         """When per-account throttle is active, login returns 429."""
-        with patch("app.api.routes.auth.is_account_throttled", return_value=True):
+        with patch("app.modules.identity.api.auth.is_account_throttled", return_value=True):
             resp = await app_client.post(
                 "/api/v1/auth/login",
                 json={"email": "victim@example.com", "password": "anypassword"},
@@ -206,7 +206,7 @@ class TestLoginEndpointThrottling:
 
     async def test_throttle_message_does_not_reveal_account_existence(self, app_client):
         """The 429 message must not reveal whether the account exists."""
-        with patch("app.api.routes.auth.is_account_throttled", return_value=True):
+        with patch("app.modules.identity.api.auth.is_account_throttled", return_value=True):
             resp = await app_client.post(
                 "/api/v1/auth/login",
                 json={"email": "no-such-user@example.com", "password": "x"},
@@ -219,8 +219,8 @@ class TestLoginEndpointThrottling:
     async def test_failed_login_records_failure(self, app_client):
         """Failed login calls record_login_failure for the email."""
         with (
-            patch("app.api.routes.auth.is_account_throttled", return_value=False),
-            patch("app.api.routes.auth.record_login_failure", new_callable=AsyncMock) as mock_record,
+            patch("app.modules.identity.api.auth.is_account_throttled", return_value=False),
+            patch("app.modules.identity.api.auth.record_login_failure", new_callable=AsyncMock) as mock_record,
         ):
             resp = await app_client.post(
                 "/api/v1/auth/login",
@@ -233,9 +233,9 @@ class TestLoginEndpointThrottling:
     async def test_successful_login_resets_counter(self, app_client, test_tenants):
         """Successful login calls reset_login_failures and NOT record_login_failure."""
         with (
-            patch("app.api.routes.auth.is_account_throttled", return_value=False),
-            patch("app.api.routes.auth.record_login_failure", new_callable=AsyncMock) as mock_record,
-            patch("app.api.routes.auth.reset_login_failures", new_callable=AsyncMock) as mock_reset,
+            patch("app.modules.identity.api.auth.is_account_throttled", return_value=False),
+            patch("app.modules.identity.api.auth.record_login_failure", new_callable=AsyncMock) as mock_record,
+            patch("app.modules.identity.api.auth.reset_login_failures", new_callable=AsyncMock) as mock_reset,
         ):
             resp = await app_client.post(
                 "/api/v1/auth/login",
@@ -250,7 +250,7 @@ class TestLoginEndpointThrottling:
         self, app_client
     ):
         """Invalid credentials return the same message whether the account exists or not."""
-        with patch("app.api.routes.auth.is_account_throttled", return_value=False):
+        with patch("app.modules.identity.api.auth.is_account_throttled", return_value=False):
             resp_existing = await app_client.post(
                 "/api/v1/auth/login",
                 json={"email": "manager_a@test.local", "password": "wrong_password!"},
@@ -266,7 +266,7 @@ class TestLoginEndpointThrottling:
 
     async def test_login_returns_503_when_throttle_backend_is_unavailable_before_verification(self, app_client):
         with patch(
-            "app.api.routes.auth.is_account_throttled",
+            "app.modules.identity.api.auth.is_account_throttled",
             new=AsyncMock(
                 side_effect=limiter_mod.AccountThrottleBackendUnavailableError(
                     operation="check",
@@ -285,9 +285,9 @@ class TestLoginEndpointThrottling:
 
     async def test_login_returns_503_when_failure_cannot_be_recorded(self, app_client):
         with (
-            patch("app.api.routes.auth.is_account_throttled", new=AsyncMock(return_value=False)),
+            patch("app.modules.identity.api.auth.is_account_throttled", new=AsyncMock(return_value=False)),
             patch(
-                "app.api.routes.auth.record_login_failure",
+                "app.modules.identity.api.auth.record_login_failure",
                 new=AsyncMock(
                     side_effect=limiter_mod.AccountThrottleBackendUnavailableError(
                         operation="record",
@@ -326,9 +326,9 @@ class TestLoginEndpointThrottling:
         service.revoke_token = AsyncMock(return_value=True)
 
         with (
-            patch("app.api.routes.auth.is_account_throttled", new=AsyncMock(return_value=False)),
+            patch("app.modules.identity.api.auth.is_account_throttled", new=AsyncMock(return_value=False)),
             patch(
-                "app.api.routes.auth.reset_login_failures",
+                "app.modules.identity.api.auth.reset_login_failures",
                 new=AsyncMock(
                     side_effect=limiter_mod.AccountThrottleBackendUnavailableError(
                         operation="reset",
@@ -353,7 +353,7 @@ class TestLoginEndpointThrottling:
 class TestChangePasswordEndpointThrottling:
 
     async def test_throttled_account_gets_429(self, app_client, token_a, test_tenants):
-        with patch("app.api.routes.auth.is_account_throttled", return_value=True):
+        with patch("app.modules.identity.api.auth.is_account_throttled", return_value=True):
             resp = await app_client.post(
                 "/api/v1/auth/change-password",
                 json={

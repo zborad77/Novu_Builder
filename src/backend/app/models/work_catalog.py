@@ -18,7 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.platform.db.base import Base
-from app.models.domain import TimestampMixin
+from app.platform.db.mixins import TimestampMixin
 
 
 class WorkCategory(TimestampMixin, Base):

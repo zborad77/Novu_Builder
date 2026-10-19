@@ -1,0 +1,31 @@
+{
+  "modules": {
+    "app.core.audit": "app.modules.audit.audit_log",
+    "app.core.rbac": "app.modules.identity.rbac",
+    "app.core.security": "app.modules.identity.security",
+    "app.core.device_binding": "app.modules.identity.device_binding",
+    "app.core.account_limiter": "app.modules.identity.account_limiter",
+    "app.core.token_limits": "app.modules.identity.token_limits",
+    "app.services.auth_service": "app.modules.identity.auth_service",
+    "app.services.company_service": "app.modules.identity.company_service",
+    "app.repositories.token_repository": "app.modules.identity.token_repository",
+    "app.schemas.auth": "app.modules.identity.schemas.auth",
+    "app.schemas.company": "app.modules.identity.schemas.company",
+    "app.api.routes.auth": "app.modules.identity.api.auth",
+    "app.api.routes.org_users": "app.modules.identity.api.org_users"
+  },
+  "symbols": {
+    "app.models": {
+      "TimestampMixin": "app.platform.db.mixins", "AuditLog": "app.modules.audit.models",
+      "Organization": "app.modules.identity.models", "User": "app.modules.identity.models",
+      "RevokedToken": "app.modules.identity.models", "UserSession": "app.modules.identity.models",
+      "RolePermission": "app.modules.identity.models", "PasswordResetToken": "app.modules.identity.models"
+    },
+    "app.models.domain": {
+      "TimestampMixin": "app.platform.db.mixins", "AuditLog": "app.modules.audit.models",
+      "Organization": "app.modules.identity.models", "User": "app.modules.identity.models",
+      "RevokedToken": "app.modules.identity.models", "UserSession": "app.modules.identity.models",
+      "RolePermission": "app.modules.identity.models", "PasswordResetToken": "app.modules.identity.models"
+    }
+  }
+}

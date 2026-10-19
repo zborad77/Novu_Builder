@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.composition.bootstrap import audit_seed_default_passwords
-from app.models import Organization, User
-from app.services.auth_service import hash_password
+from app.modules.identity.models import Organization, User
+from app.modules.identity.auth_service import hash_password
 from app.main import verify_seed_credentials_on_startup
 
 

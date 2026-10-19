@@ -16,32 +16,32 @@ class TestPasswordResetSource:
 
     def test_forgot_password_endpoint_exists(self):
         """forgot_password endpoint must be defined in auth routes."""
-        from app.api.routes.auth import forgot_password
+        from app.modules.identity.api.auth import forgot_password
         assert callable(forgot_password)
 
     def test_reset_password_endpoint_exists(self):
         """reset_password endpoint must be defined in auth routes."""
-        from app.api.routes.auth import reset_password
+        from app.modules.identity.api.auth import reset_password
         assert callable(reset_password)
 
     def test_forgot_password_retired(self):
         """forgot_password must be marked as retired."""
-        src = inspect.getsource(__import__("app.api.routes.auth", fromlist=["forgot_password"]).forgot_password)
+        src = inspect.getsource(__import__("app.modules.identity.api.auth", fromlist=["forgot_password"]).forgot_password)
         assert "retired" in src.lower()
 
     def test_reset_password_retired(self):
         """reset_password must be marked as retired."""
-        src = inspect.getsource(__import__("app.api.routes.auth", fromlist=["reset_password"]).reset_password)
+        src = inspect.getsource(__import__("app.modules.identity.api.auth", fromlist=["reset_password"]).reset_password)
         assert "retired" in src.lower()
 
     def test_reset_token_model_has_used_at(self):
         """PasswordResetToken must have a used_at field to track consumption."""
-        from app.models import PasswordResetToken
+        from app.modules.identity.models import PasswordResetToken
         assert hasattr(PasswordResetToken, "used_at")
 
     def test_reset_token_model_has_expires_at(self):
         """PasswordResetToken must have an expires_at field."""
-        from app.models import PasswordResetToken
+        from app.modules.identity.models import PasswordResetToken
         assert hasattr(PasswordResetToken, "expires_at")
 
 
@@ -84,7 +84,7 @@ class TestForgotPassword:
     async def test_no_token_created_when_disabled(self, app_client, test_tenants, db_session):
         """No PasswordResetToken row must be created when the endpoint is disabled."""
         from sqlalchemy import select
-        from app.models import PasswordResetToken, User
+        from app.modules.identity.models import PasswordResetToken, User
         email = test_tenants["user_a"]["email"]
 
         await app_client.post("/api/v1/auth/forgot-password", json={"email": email})

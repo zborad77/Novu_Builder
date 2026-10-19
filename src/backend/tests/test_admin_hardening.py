@@ -56,7 +56,7 @@ def _has_admin_access_dep(endpoint) -> bool:
         if dep is None:
             continue
         # F0: user/company administration is shared by superadmin and company
-        # admins; per-target rules are enforced in app.core.rbac.
+        # admins; per-target rules are enforced in app.modules.identity.rbac.
         if dep is require_superadmin or dep is require_user_admin:
             return True
         # require_admin_capability returns a closure whose name starts with require_admin_
@@ -172,7 +172,7 @@ class TestAdminWriteAuditLogs:
 # ── 4. list_users passes org_id filter ─────────────────────────────────────────
 
 def _superadmin():
-    from app.schemas.auth import AuthUserRead
+    from app.modules.identity.schemas.auth import AuthUserRead
 
     return AuthUserRead(
         id="sa-1", email="sa@test.com", fullName="SA", role="superadmin",
@@ -238,7 +238,7 @@ class TestImpersonatedTokenBlocked:
     async def test_require_superadmin_blocks_impersonated_token(self):
         """A token with impersonated_by set must be rejected even if user is superadmin."""
         from app.api.deps import require_superadmin
-        from app.schemas.auth import AuthUserRead
+        from app.modules.identity.schemas.auth import AuthUserRead
 
         impersonated_superadmin = AuthUserRead(
             id="admin-1",
@@ -260,7 +260,7 @@ class TestImpersonatedTokenBlocked:
     async def test_require_superadmin_allows_real_superadmin(self):
         """A normal superadmin token (no impersonation) passes through."""
         from app.api.deps import require_superadmin
-        from app.schemas.auth import AuthUserRead
+        from app.modules.identity.schemas.auth import AuthUserRead
 
         real_superadmin = AuthUserRead(
             id="admin-1",
@@ -277,14 +277,14 @@ class TestImpersonatedTokenBlocked:
 
     def test_auth_user_read_has_impersonated_by_field(self):
         """AuthUserRead schema carries impersonatedBy for downstream checks."""
-        from app.schemas.auth import AuthUserRead
+        from app.modules.identity.schemas.auth import AuthUserRead
         import inspect
         src = inspect.getsource(AuthUserRead)
         assert "impersonatedBy" in src
 
     def test_get_user_by_token_propagates_impersonated_by(self):
         """auth_service.get_user_by_token sets impersonatedBy from JWT payload."""
-        from app.services.auth_service import AuthService
+        from app.modules.identity.auth_service import AuthService
         src = inspect.getsource(AuthService.get_user_by_token)
         assert "impersonated_by" in src
         assert "impersonatedBy" in src
@@ -359,7 +359,7 @@ class TestAdminPasswordResetInvalidatesTokens:
         from fastapi import Request
 
         from app.api.routes.admin import ResetPasswordPayload, reset_user_password
-        from app.schemas.auth import AuthUserRead
+        from app.modules.identity.schemas.auth import AuthUserRead
 
         # Minimal User mock with a mutable tokens_valid_after attribute
         mock_user = MagicMock()
@@ -418,8 +418,8 @@ class TestAdminPasswordResetInvalidatesTokens:
         from fastapi import Request
 
         from app.api.routes.admin import ResetPasswordPayload, reset_user_password
-        from app.repositories.token_repository import SessionTokenRevocation
-        from app.schemas.auth import AuthUserRead
+        from app.modules.identity.token_repository import SessionTokenRevocation
+        from app.modules.identity.schemas.auth import AuthUserRead
 
         mock_user = MagicMock()
         mock_user.id = "user-1"
@@ -486,21 +486,21 @@ class TestAuditMiddlewareDedup:
     """Middleware must not produce duplicate audit rows for routes that call write_audit_log() directly."""
 
     def test_forgot_password_is_in_skip_paths(self):
-        from app.core.audit import _SKIP_PATHS
+        from app.modules.audit.audit_log import _SKIP_PATHS
         assert "/api/v1/auth/forgot-password" in _SKIP_PATHS, (
             "forgot-password is unauthenticated — middleware would log user_id=None; "
             "explicit write_audit_log() inside the route carries the real user_id"
         )
 
     def test_reset_password_is_in_skip_paths(self):
-        from app.core.audit import _SKIP_PATHS
+        from app.modules.audit.audit_log import _SKIP_PATHS
         assert "/api/v1/auth/reset-password" in _SKIP_PATHS, (
             "reset-password is unauthenticated — middleware would log user_id=None; "
             "explicit write_audit_log() inside the route carries the real user_id"
         )
 
     def test_admin_prefix_is_skipped(self):
-        from app.core.audit import _SKIP_PREFIXES
+        from app.modules.audit.audit_log import _SKIP_PREFIXES
         assert any(p == "/api/v1/admin" for p in _SKIP_PREFIXES), (
             "admin routes use explicit write_audit_log() with business detail — middleware must not double-log"
         )

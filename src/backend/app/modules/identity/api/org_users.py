@@ -10,7 +10,7 @@ Firemní admin (role ``admin``) spravuje uživatele **své** firmy z webu
 
 Nikdy: uživatelé jiné firmy (404 jako neexistující), superadmini (neviditelní),
 jiní firemní admini a vlastní účet (role, aktivace, heslo – 403), přidělení
-role ``admin`` nebo ``superadmin``. Pravidla jsou v ``app.core.rbac``.
+role ``admin`` nebo ``superadmin``. Pravidla jsou v ``app.modules.identity.rbac``.
 
 Systémová administrace (``/admin/*``) zůstává jen v zóně admin pro NovuAdmin
 přes WG; tento router ji nenahrazuje a neodkrývá.
@@ -29,13 +29,13 @@ from app.api.deps import get_auth_redis, get_current_user
 from app.api.routes.admin import _commit_security_critical_audit, _enforce, get_company_service
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
-from app.core.rbac import TenantRole, assignable_roles, can_manage_user, can_view_user, is_tenant_admin
-from app.core.security import enforce_password_strength
-from app.repositories.token_repository import SessionTokenRevocation, TokenRepository
-from app.schemas.auth import AuthUserRead
-from app.schemas.company import AdminUserCreate, AdminUserListResponse, AdminUserPatch, AdminUserRead
-from app.services.auth_service import AuthService, hash_password
-from app.services.company_service import CompanyService
+from app.modules.identity.rbac import TenantRole, assignable_roles, can_manage_user, can_view_user, is_tenant_admin
+from app.modules.identity.security import enforce_password_strength
+from app.modules.identity.token_repository import SessionTokenRevocation, TokenRepository
+from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.company import AdminUserCreate, AdminUserListResponse, AdminUserPatch, AdminUserRead
+from app.modules.identity.auth_service import AuthService, hash_password
+from app.modules.identity.company_service import CompanyService
 
 logger = structlog.get_logger(__name__)
 

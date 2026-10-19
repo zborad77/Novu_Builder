@@ -14,7 +14,7 @@ import structlog
 
 from app.api.router import api_router
 from app.platform.http.api_versioning import ApiVersioningMiddleware
-from app.core.audit import AuditMiddleware
+from app.modules.audit.audit_log import AuditMiddleware
 from app.platform.http.client_ip import TrustedProxyMiddleware, trusts_unix_socket
 from app.platform.http.exposure import PRODUCTION_ZONES, ExposureGuardMiddleware
 from app.platform.http.gateway_auth import GatewaySignatureMiddleware
@@ -35,7 +35,7 @@ from app.platform.db.base import Base
 from app.composition.bootstrap import audit_seed_default_passwords, ensure_dev_seed
 from app.platform.db.session import AsyncSessionFactory, engine
 from app.models import Project
-from app.repositories.token_repository import TokenRepository
+from app.modules.identity.token_repository import TokenRepository
 from app.platform.storage.backend import verify_storage_health
 
 

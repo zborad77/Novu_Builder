@@ -52,7 +52,7 @@ from app.platform.metrics import (
 )
 from app.platform.db.session import AsyncSessionFactory
 from app.models import AnalysisJob
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 from app.platform.storage.backend import verify_storage_health
 from app.platform.jobs.heartbeat import (
     WORKER_HEARTBEAT_FRESHNESS_SECONDS,

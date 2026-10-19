@@ -19,7 +19,7 @@ def _scalar_result(value):
 class TestAuthTimingHardening:
     @pytest.mark.asyncio
     async def test_login_unknown_email_and_wrong_password_have_consistent_timing(self):
-        from app.services.auth_service import AuthService
+        from app.modules.identity.auth_service import AuthService
 
         missing_session = AsyncMock()
         missing_session.execute = AsyncMock(return_value=_scalar_result(None))
@@ -49,7 +49,7 @@ class TestAuthTimingHardening:
                 assert result is None
             return median(samples)
 
-        with patch("app.services.auth_service._verify_password", side_effect=_slow_verify):
+        with patch("app.modules.identity.auth_service._verify_password", side_effect=_slow_verify):
             missing_avg = await _median_duration(missing_service, "missing@example.test")
             wrong_avg = await _median_duration(wrong_password_service, "known@example.test")
 

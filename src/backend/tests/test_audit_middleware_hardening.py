@@ -3,11 +3,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 
 
 def test_bind_request_audit_actor_stores_full_actor_context():
-    from app.core.audit import _audit_actor_from_context, _request_audit_actor, bind_request_audit_actor
+    from app.modules.audit.audit_log import _audit_actor_from_context, _request_audit_actor, bind_request_audit_actor
 
     request = SimpleNamespace(state=SimpleNamespace())
     current_user = AuthUserRead(
@@ -37,7 +37,7 @@ def test_bind_request_audit_actor_stores_full_actor_context():
 
 @pytest.mark.asyncio
 async def test_enrich_audit_actor_skips_lookup_when_request_state_already_has_identity():
-    from app.core.audit import _AuditActor, _enrich_audit_actor
+    from app.modules.audit.audit_log import _AuditActor, _enrich_audit_actor
 
     session = AsyncMock()
     actor = _AuditActor(
@@ -55,7 +55,7 @@ async def test_enrich_audit_actor_skips_lookup_when_request_state_already_has_id
 
 @pytest.mark.asyncio
 async def test_enrich_audit_actor_uses_request_context_without_lookup():
-    from app.core.audit import _AuditActor, _enrich_audit_actor, _request_audit_actor
+    from app.modules.audit.audit_log import _AuditActor, _enrich_audit_actor, _request_audit_actor
 
     session = AsyncMock()
     token = _request_audit_actor.set(
@@ -88,7 +88,7 @@ async def test_enrich_audit_actor_uses_request_context_without_lookup():
 
 @pytest.mark.asyncio
 async def test_write_audit_log_skips_lookup_when_request_context_has_identity():
-    from app.core.audit import _request_audit_actor, bind_request_audit_actor, write_audit_log
+    from app.modules.audit.audit_log import _request_audit_actor, bind_request_audit_actor, write_audit_log
 
     request = SimpleNamespace(state=SimpleNamespace())
     current_user = AuthUserRead(
@@ -129,7 +129,7 @@ async def test_write_audit_log_skips_lookup_when_request_context_has_identity():
 
 @pytest.mark.asyncio
 async def test_write_audit_log_rolls_back_on_commit_failure():
-    from app.core.audit import write_audit_log
+    from app.modules.audit.audit_log import write_audit_log
 
     session = AsyncMock()
     session.get = AsyncMock(return_value=None)
@@ -151,7 +151,7 @@ async def test_write_audit_log_rolls_back_on_commit_failure():
 
 @pytest.mark.asyncio
 async def test_write_audit_log_security_critical_raises_on_commit_failure():
-    from app.core.audit import AUDIT_POLICY_SECURITY_CRITICAL, SecurityAuditWriteError, write_audit_log
+    from app.modules.audit.audit_log import AUDIT_POLICY_SECURITY_CRITICAL, SecurityAuditWriteError, write_audit_log
 
     session = AsyncMock()
     session.get = AsyncMock(return_value=None)
@@ -175,7 +175,7 @@ async def test_write_audit_log_security_critical_raises_on_commit_failure():
 
 @pytest.mark.asyncio
 async def test_write_audit_log_commit_false_stages_without_committing():
-    from app.core.audit import write_audit_log
+    from app.modules.audit.audit_log import write_audit_log
 
     session = AsyncMock()
     session.get = AsyncMock(return_value=None)
@@ -199,7 +199,7 @@ async def test_write_audit_log_commit_false_stages_without_committing():
 
 
 def test_build_audit_log_keeps_structured_detail_dict():
-    from app.core.audit import _AuditActor, _build_audit_log
+    from app.modules.audit.audit_log import _AuditActor, _build_audit_log
 
     row = _build_audit_log(
         actor=_AuditActor(
@@ -219,7 +219,7 @@ def test_build_audit_log_keeps_structured_detail_dict():
 
 @pytest.mark.asyncio
 async def test_commit_security_critical_audit_fails_closed_on_commit_failure():
-    from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit
+    from app.modules.audit.audit_log import SecurityAuditWriteError, commit_security_critical_audit
 
     session = AsyncMock()
     session.get = AsyncMock(return_value=None)

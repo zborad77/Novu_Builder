@@ -12,7 +12,7 @@ from app.platform.tenant_timing import (
     TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
     enforce_timing_floor,
 )
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 from app.schemas.work_catalog import (
     CatalogCategoryListResponse,
     CatalogGroupedResponse,

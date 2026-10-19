@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 
 from app.api.deps import get_current_user, get_project_service, resolve_org_id
 from app.platform.config import get_settings
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 from app.services.project_service import ProjectService
 from app.platform.storage.local_photo_storage import STORAGE_ROOT
 

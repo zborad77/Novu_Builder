@@ -10,7 +10,7 @@ from app.platform.tenant_timing import (
     TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
     enforce_timing_floor,
 )
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 from app.schemas.pricebook import PricebookCreate, PricebookItemRead, PricebookListResponse, PricebookRead
 from app.services.pricebook_service import PricebookService
 from app.work_catalog.cache import pricing_resolution_cache_scope

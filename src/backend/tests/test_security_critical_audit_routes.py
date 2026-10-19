@@ -5,7 +5,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 
 
 def _current_user(*, user_id: str = "usr-1", org_id: str = "org-1", is_superadmin: bool = False) -> AuthUserRead:
@@ -35,17 +35,17 @@ def _request(*, client_host: str = "127.0.0.1") -> Request:
 
 @pytest.mark.asyncio
 async def test_change_password_returns_503_when_security_audit_enforcement_fails():
-    from app.api.routes.auth import change_password
-    from app.core.audit import SecurityAuditWriteError
-    from app.schemas.auth import ChangePasswordRequest
+    from app.modules.identity.api.auth import change_password
+    from app.modules.audit.audit_log import SecurityAuditWriteError
+    from app.modules.identity.schemas.auth import ChangePasswordRequest
 
     service = MagicMock()
     service.login = AsyncMock(return_value=("access", "refresh", _current_user()))
     service.change_password = AsyncMock(side_effect=SecurityAuditWriteError("audit unavailable"))
 
     with (
-        patch("app.api.routes.auth.is_account_throttled", new=AsyncMock(return_value=False)),
-        patch("app.api.routes.auth.reset_login_failures", new=AsyncMock()),
+        patch("app.modules.identity.api.auth.is_account_throttled", new=AsyncMock(return_value=False)),
+        patch("app.modules.identity.api.auth.reset_login_failures", new=AsyncMock()),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await change_password(
@@ -61,7 +61,7 @@ async def test_change_password_returns_503_when_security_audit_enforcement_fails
 @pytest.mark.asyncio
 async def test_reset_user_password_returns_503_when_security_audit_enforcement_fails():
     from app.api.routes.admin import ResetPasswordPayload, reset_user_password
-    from app.core.audit import SecurityAuditWriteError
+    from app.modules.audit.audit_log import SecurityAuditWriteError
 
     target = SimpleNamespace(
         id="usr-target",
@@ -101,7 +101,7 @@ async def test_reset_user_password_returns_503_when_security_audit_enforcement_f
 @pytest.mark.asyncio
 async def test_impersonate_user_returns_503_when_security_audit_enforcement_fails():
     from app.api.routes.admin import impersonate_user
-    from app.core.audit import SecurityAuditWriteError
+    from app.modules.audit.audit_log import SecurityAuditWriteError
 
     target = SimpleNamespace(
         id="usr-target",

@@ -11,7 +11,7 @@ from app.case_workflow.case_actions import CaseActionError, CaseActionService
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.repositories.proposal_draft_repository import ProposalVersionConflictError
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 from app.schemas.project import (
     CaseActionRequest,
     ProjectCreate,

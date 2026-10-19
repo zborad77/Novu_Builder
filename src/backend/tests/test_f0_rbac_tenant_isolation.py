@@ -19,10 +19,12 @@ from fastapi import FastAPI, Request
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from app.core.rbac import is_tenant_operator
-from app.models import AuditLog, Client, Project, RolePermission, User
-from app.schemas.auth import AuthUserRead
-from app.services.auth_service import hash_password
+from app.modules.identity.rbac import is_tenant_operator
+from app.modules.audit.models import AuditLog
+from app.models import Client, Project
+from app.modules.identity.models import RolePermission, User
+from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.identity.auth_service import hash_password
 
 ORG_A = "org_e2e_a"
 ORG_B = "org_e2e_b"
@@ -709,12 +711,12 @@ def _forged_token(org: str) -> str:
 
 
 def test_unauthenticated_auth_routes_are_keyed_by_client_ip_only():
-    from app.api.routes import auth
+    from app.modules.identity.api import auth
 
     # Read through the auth module: other tests reload app.platform.http.limiter, and the
     # limits live on the instance the routes were decorated with.
     for name in ("login", "refresh", "logout", "forgot_password", "reset_password"):
-        limits = auth.limiter._route_limits[f"app.api.routes.auth.{name}"]
+        limits = auth.limiter._route_limits[f"app.modules.identity.api.auth.{name}"]
         assert limits, name
         assert all(limit.key_func.__name__ == "client_ip_rate_limit_key" for limit in limits), name
 

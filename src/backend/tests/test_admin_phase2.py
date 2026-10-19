@@ -24,7 +24,7 @@ from app.api.routes.admin import (
     patch_user,
     reset_user_password,
 )
-from app.schemas.auth import AuthUserRead
+from app.modules.identity.schemas.auth import AuthUserRead
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -157,7 +157,7 @@ class TestRBACFoundation:
         # Creating companies is system administration (superadmin only).
         assert 'require_admin_capability("admin:write")' in _src(create_company)
         # F0: tenant-scoped administration is shared with company admins and
-        # authorised per target by app.core.rbac.
+        # authorised per target by app.modules.identity.rbac.
         for fn in (patch_company, create_user, patch_user):
             src = _src(fn)
             assert "Depends(require_user_admin)" in src, (
@@ -215,7 +215,7 @@ class TestAuditEnforcement:
 
     def test_audit_write_failure_logs_warning(self):
         """write_audit_log must emit a warning on failure (not silently swallow)."""
-        from app.core.audit import _log_audit_write_failure, write_audit_log
+        from app.modules.audit.audit_log import _log_audit_write_failure, write_audit_log
 
         helper_src = inspect.getsource(_log_audit_write_failure)
         src = inspect.getsource(write_audit_log)

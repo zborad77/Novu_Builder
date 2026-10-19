@@ -446,7 +446,7 @@ class TestOperationalMetricsExported:
 
     @pytest.mark.asyncio
     async def test_auth_failure_metric_uses_unknown_tenant_when_context_is_missing(self, app_client):
-        from app.api.routes.auth import _record_auth_failure
+        from app.modules.identity.api.auth import _record_auth_failure
 
         _record_auth_failure("refresh", "missing_token")
 
@@ -460,7 +460,7 @@ class TestOperationalMetricsExported:
 
     @pytest.mark.asyncio
     async def test_auth_failure_metric_uses_explicit_tenant_and_superadmin_invariants(self, app_client):
-        from app.api.routes.auth import _record_auth_failure
+        from app.modules.identity.api.auth import _record_auth_failure
 
         _record_auth_failure(
             "change_password",
