@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased — modulární architektura (refactor/modular-architecture)
+
+- **Rozložení repozitáře:** `python-backend/` → `src/backend/`, `web/` → `src/frontend/`,
+  `desktop-qt/` → `src/desktop/`, nové `src/contracts/`. Cesty v CI, docker-compose,
+  `deploy/linux` (systemd, nc-provision, nc-migrate), `ops/` a skriptech aktualizovány;
+  na existujícím serveru se venv vytvoří znovu v `/opt/novuconstruct/src/backend/.venv`.
+- **Backend = modulární monolit** (`docs/architecture/MODULAR_ARCHITECTURE.md`): jádro
+  `app/platform`, moduly `app/modules/{audit, identity, cases, media, catalog, analysis,
+  quoting, workflow, exports, offers, admin}` s veřejnými rozhraními `public.py`,
+  kompoziční vrstva `app/composition` (router, porty, registr ORM modelů). Hranice
+  vynucuje import-linter a `tests/architecture`.
+- **Beze změny:** veřejné API (OpenAPI a pořadí rout zmrazené v `src/contracts`), DB
+  schéma a migrace (head `20261017_0059`), pořadí bezpečnostních middlewarů, zóny,
+  RBAC/tenant guardy a hodnoty rate limitů. Vstupní body `app.main:app` a
+  `python -m app.worker.runner` zůstávají.
+- **Provozní důsledek:** slowapi klíčuje limity jménem modulu routy – po nasazení se
+  čítače rate limitů jednorázově vynulují (O8).
+- **Kontrakty:** `src/contracts/workflow/case-workflow.json`; frontend generuje typy
+  z OpenAPI a slovník workflow (`npm run gen:contracts`, CI `check:contracts`).
+- **Frontend:** bez duplicitních pravidel workflow (labely a povinný důvod akcí ze
+  serveru), volání backendu jen přes `features/*/api`, nová pravidla dependency-cruiseru.
+- **Opravy:** `npm run build` webu (N10).
+
 ## v0.8.6 — Fresh Install / Alembic Hotfix (Unreleased)
 
 - Freeze revision `20260318_0001` to its 13 historical core tables instead of

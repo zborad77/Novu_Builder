@@ -2,6 +2,9 @@
 
 This file defines the current high-level runtime architecture for the repository.
 
+Code structure (modular monolith, module boundaries, contracts, how to add a
+module): [docs/architecture/MODULAR_ARCHITECTURE.md](docs/architecture/MODULAR_ARCHITECTURE.md).
+
 ## Storage Model
 
 - PostgreSQL is the authoritative relational data store

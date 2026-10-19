@@ -34,7 +34,7 @@
 
 | Pravidlo | Kde se vynucuje |
 |---|---|
-| Zónu určuje proces (`NC_ZONE=%i` v systemd), nikdy požadavek | `systemd/nc-api@.service`, `app/core/exposure.py` |
+| Zónu určuje proces (`NC_ZONE=%i` v systemd), nikdy požadavek | `systemd/nc-api@.service`, `app/platform/http/exposure.py` |
 | Každá instance má vlastní unix socket. Připojit se smí jen nginx (skupina `nc-api-sock`) | systemd `RuntimeDirectory` + `UMask=0007` |
 | Deny-by-default: route mimo zónu i nezařazená route vrací 404, a to i v admin zóně | `ExposureGuardMiddleware`, CI `tests/test_route_exposure.py` |
 | JWT: ověřuje se podpis, `exp`, `iat`, `iss` a `aud` zóny. Token z jiné zóny vrací 401 | `auth_service.decode_token`, `tests/test_f3_jwt_zones.py` |

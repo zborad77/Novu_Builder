@@ -43,6 +43,8 @@ python -m pytest tests/test_d1_e2e_analysis_flow.py::test_name  # single test
 ruff check app/
 mypy app/
 bandit -r app/ -ll -ii
+lint-imports                         # module boundaries (layers, no cycles)
+python -m scripts.export_contracts --check   # API/route/middleware/security baselines
 pip-audit -r requirements.txt --progress-spinner=off
 ```
 
@@ -77,25 +79,32 @@ python scripts\smoke_check_live.py                                          # li
 
 ## Backend Architecture
 
-### Layering (enforced)
+### Modular monolith (enforced)
+
+The backend package `app` is a modular monolith — see `docs/architecture/MODULAR_ARCHITECTURE.md` (rules, how to add a module).
 
 ```
-Route (app/api/routes/*)  → request validation, auth, response contract
-Service (app/services/*)  → workflow orchestration, storage policy, fail-fast
-Repository (app/repositories/*) → DB access
-ORM (app/models/*)        → persistence model
+app/main.py, app/worker/, app/composition/   composition roots: router, wiring (ports), ORM model registry, bootstrap
+app/modules/<module>/                        admin > offers > exports > workflow > quoting > analysis > catalog > media > cases > identity > audit
+app/platform/                                shared core: config, http (exposure/gateway/client IP/limiter), db, jobs, events/outbox, storage
 ```
 
-API is mounted under `settings.api_v1_prefix` (`/api/v1`). The **canonical** surface is `cases / images / analysis-jobs / measurements / estimates / pricebooks` (see `app/api/router.py`); legacy `/projects/*` aliases are gone — wire new routes through `router.py`. All routers except `system` and `auth` require a valid JWT (`Depends(get_current_user)`).
+- Dependencies only point **down** that list; `lint-imports` (`[tool.importlinter]` in `src/backend/pyproject.toml`) enforces it, no cycles.
+- Other modules, composition and worker import a module **only via `app.modules.<module>.public`**; no private names across modules (`tests/architecture/test_module_boundaries.py`).
+- Calls "upward" go through ports wired in `app/composition/wiring.py::init_modules()`; every entrypoint (API, worker, scripts, tests) calls it. ORM relations across modules are string-declared; type-only imports under `TYPE_CHECKING`.
+- Inside a module the old layering still applies: `api/` (routes, `deps.py`) → services → repositories → `models.py`.
+- API contract, route order (exposure guard matches the first template), middleware order and the security surface are frozen in `src/contracts/` and `src/backend/tests/architecture/baseline/` (`python -m scripts.export_contracts --check`). Changing them = approved API change.
+
+API is mounted under `settings.api_v1_prefix` (`/api/v1`). The **canonical** surface is `cases / images / analysis-jobs / measurements / estimates / pricebooks` (see `app/composition/router.py`); legacy `/projects/*` aliases are gone — wire new routes through `router.py` (append, never reorder). All routers except `system` and `auth` require a valid JWT (`Depends(get_current_user)`).
 
 ### Key subsystems (each has a spec in `docs/`)
 
-- **Work catalog** (`app/work_catalog/`, `app/models/work_catalog.py`) — first-class subsystem with explicit boundaries: global catalog → tenant work-type settings → project work items → vision detections. Sparse tenant overrides; seed data + caching live here.
-- **Vision pipeline** (`app/ai/`) — `PipelineOrchestrator` runs either a **staged** provider (`detect`/`extract`/`map_to_catalog`, implementing `StagedVisionPipeline`) or wraps a legacy single-shot provider via `LegacyProviderAdapter`. Routing is explicit by attribute presence; all current providers (mock/claude) use the legacy path until upgraded. Provider selected by `AI_ANALYSIS_PROVIDER` (`mock` in CI/dev).
-- **Case workflow** (`app/case_workflow/`) — state machine: `transitions.py`, `case_actions.py`, `action_effects.py`. Send is guarded (e.g. `send` before final proposal → 409).
-- **Offer processing** (`app/offer_processing/`) — budget/outbox/reconciler/snapshot for offer requests; has its own worker (`app/worker/offer_runner.py`, `offer_queue.py`).
-- **Worker** (`app/worker/`) — Redis-backed job queue (`queue.py`), separate **heavy export/media lane** (`heavy_queue.py`) with its own concurrency/semaphore and lease reaper, plus heartbeat (`heartbeat.py`). The backend logs an ERROR and is not READY until a worker registers a fresh heartbeat. Workers follow the same storage rules as services (no local FS in prod).
-- **Storage consistency** (`app/services/storage_consistency_service.py`) — orphan scan comparing DB photo/export refs against storage keys; `cleanup_orphans()` runs safe-mode by default and logs every action.
+- **Work catalog** (`app/modules/catalog/work_catalog/`, `app/modules/catalog/work_catalog/models.py`) — first-class subsystem with explicit boundaries: global catalog → tenant work-type settings → project work items → vision detections. Sparse tenant overrides; seed data + caching live here.
+- **Vision pipeline** (`app/modules/analysis/ai/`) — `PipelineOrchestrator` runs either a **staged** provider (`detect`/`extract`/`map_to_catalog`, implementing `StagedVisionPipeline`) or wraps a legacy single-shot provider via `LegacyProviderAdapter`. Routing is explicit by attribute presence; all current providers (mock/claude) use the legacy path until upgraded. Provider selected by `AI_ANALYSIS_PROVIDER` (`mock` in CI/dev).
+- **Case workflow** — state machine and effect registry in `app/modules/cases/` (`transitions.py`, `effects.py`); orchestration in `app/modules/workflow/` (`case_actions.py`, `action_effects.py`); export effects in `app/modules/exports/case_effects.py`. Send is guarded (e.g. `send` before final proposal → 409).
+- **Offer processing** (`app/modules/offers/`) — budget/outbox/reconciler/snapshot for offer requests; has its own worker (`app/worker/offer_runner.py`, `offer_queue.py`).
+- **Worker** (`app/worker/runner.py`) — Redis-backed job queue (`app/platform/jobs/queue.py`), separate **heavy export/media lane** (`heavy_queue.py`) with its own concurrency/semaphore and lease reaper, plus heartbeat (`heartbeat.py`). The backend logs an ERROR and is not READY until a worker registers a fresh heartbeat. Workers follow the same storage rules as services (no local FS in prod).
+- **Storage consistency** (`app/modules/exports/storage_consistency_service.py`) — orphan scan comparing DB photo/export refs against storage keys; `cleanup_orphans()` runs safe-mode by default and logs every action.
 
 ### Session factory routing (important)
 
@@ -114,8 +123,8 @@ API is mounted under `settings.api_v1_prefix` (`/api/v1`). The **canonical** sur
 ## CI & Governance
 
 `.github/workflows/ci.yml` runs three parallel jobs aggregated by the required **`orchestration-release-gate`** status check (fails if any dependency failed *or was skipped*):
-- `lint` — ruff + mypy + bandit + pip-audit on `src/backend`
-- `web-lint` — typecheck + ESLint boundaries + dependency-cruiser architecture gate on `web`
+- `lint` — ruff + mypy + bandit + `lint-imports` (module boundaries) + pip-audit on `src/backend`
+- `web-lint` — typecheck + ESLint boundaries + dependency-cruiser architecture gate + `check:contracts` + build on `src/frontend`
 - `test` — pytest (Postgres service) + live backend probes (`scripts/verify_deploy.py`, `test-api-contracts.py`, `test-auth-validation.py`, `test-business-flow.py`)
 
 This repo enforces orchestration safety via the release gate, protected-core-file review discipline, and recovery rehearsal scenarios. Branch is `master`; commit/push only when asked.

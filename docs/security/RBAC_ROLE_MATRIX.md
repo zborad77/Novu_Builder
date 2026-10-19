@@ -4,7 +4,7 @@
 |---|---|
 | **Datum** | 17. 10. 2026 |
 | **Stav** | Implementováno ve větvi `fix/f0-rbac-tenant-isolation` (F0 + SA-06 varianta A), **zatím nevydáno**. |
-| **Zdroj pravdy v kódu** | [`app/core/rbac.py`](../../src/backend/app/core/rbac.py), závislosti v [`app/api/deps.py`](../../src/backend/app/api/deps.py), migrace `20261017_0057` |
+| **Zdroj pravdy v kódu** | [`app/modules/identity/rbac.py`](../../src/backend/app/modules/identity/rbac.py), závislosti v [`app/modules/identity/api/deps.py`](../../src/backend/app/modules/identity/api/deps.py), migrace `20261017_0057` |
 | **Související** | [SECURITY_AUDIT.md](SECURITY_AUDIT.md) (SA-01 až SA-04) · [API_EXPOSURE_MATRIX.md](API_EXPOSURE_MATRIX.md) |
 
 ## 1. Dvě oddělené roviny oprávnění
@@ -15,7 +15,7 @@
 | **Firemní** (správa a práce uvnitř jedné firmy) | `admin` ⊃ `manager` ⊃ `technician` | `users.role` + `users.organization_id` | jen vlastní firma |
 
 **Pravidla:**
-- Platí deny-by-default: co není povoleno v `app/core/rbac.py`, je zakázáno.
+- Platí deny-by-default: co není povoleno v `app/modules/identity/rbac.py`, je zakázáno.
 - Tabulku `role_permissions` aplikace pro jiné role než superadmin **nepoužívá**. Migrace `0057` odstranila historické řádky `manager → admin:read/admin:write`.
 - Role `superadmin` **nelze přidělit, upravit, deaktivovat ani resetovat přes žádné HTTP API**. Nový superadmin a obnova jeho přístupu jdou jen přes serverový CLI `scripts/create_pilot_admin.py`.
 - `organization_id` (tenant) se vždy bere z ověřené identity, nikdy z parametru klienta. Pokus poslat `organizationId`, `organization_id`, `tenant_id` nebo `isSuperAdmin` do admin PATCH skončí **422**.
@@ -63,7 +63,7 @@ Rozhodnutí D-10 z 17. 10. 2026: firemní admin spravuje uživatele své firmy z
 | Reset hesla | ❌ | ✅ uživatelům své firmy · ❌ jinému adminovi · ❌ sobě | ❌ | ❌ |
 | Impersonované tokeny | ❌ | ❌ | ❌ | ❌ |
 
-Platí stejná pravidla jako v 2.1 (`app.core.rbac`): politika hesel, revokace sessions při resetu i deaktivaci, fail-closed audit akcí `org.user.create`, `org.user.patch` a `org.user.reset_password`. Firma má vždy aspoň jednoho admina, protože admin nemůže deaktivovat sebe ani jiného admina. Testy: `tests/test_d10_org_users.py`.
+Platí stejná pravidla jako v 2.1 (`app.modules.identity.rbac`): politika hesel, revokace sessions při resetu i deaktivaci, fail-closed audit akcí `org.user.create`, `org.user.patch` a `org.user.reset_password`. Firma má vždy aspoň jednoho admina, protože admin nemůže deaktivovat sebe ani jiného admina. Testy: `tests/test_d10_org_users.py`.
 
 ### 2.2 Správa firem (`/api/v1/admin/companies*`)
 

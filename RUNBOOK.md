@@ -223,7 +223,7 @@ docker compose run --rm backend alembic show 20260326_0018
 ### Náprava — Migrace nebyla spuštěna před deployem
 ```bash
 # POZOR: Nejdřív záloha!
-docker compose run --rm backend python -m app.db.session  # ověř připojení
+docker compose run --rm backend python -m app.platform.db.session  # ověř připojení
 docker compose run --rm backend alembic upgrade head
 docker compose restart backend worker
 ```

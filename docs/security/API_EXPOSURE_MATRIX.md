@@ -11,14 +11,14 @@
 
 Zóny jsou implementované ve větvi `fix/f0-rbac-tenant-isolation` (F3.1–F3.3, F3.5), **zatím nenasazené**.
 
-- **Zdroj pravdy je kód:** [`src/backend/app/core/exposure.py`](../../src/backend/app/core/exposure.py). Tato tabulka ho popisuje.
+- **Zdroj pravdy je kód:** [`src/backend/app/platform/http/exposure.py`](../../src/backend/app/platform/http/exposure.py). Tato tabulka ho popisuje.
 - **Zóna se určuje jen z procesu:** `NC_ZONE` v `deploy/linux/systemd/nc-api@.service`.
 - **Nezařazená route** je blokovaná ve všech produkčních zónách, i v admin.
 - **Odchylky od původního návrhu:**
   - `GET /api/v1/health` je navíc v zóně D, protože ho volá desktop při nastavení serveru,
   - `POST /api/v1/offer-requests/{offer_id}/more-info` je v zónách G/D,
   - routy z F0.3 (koš, obnova a trvalé smazání fotek, `/admin/photos/{id}/purge`) odpovídají tabulce v kap. 5 a 10.
-- **Allowlist pro gateway** je generovaný soubor [gateway-allowlist.json](gateway-allowlist.json) (86 rout). Hlídá ho test `tests/test_gateway_allowlist.py`.
+- **Allowlist pro gateway** je generovaný soubor [gateway-allowlist.json](gateway-allowlist.json) (91 rout). Hlídá ho test `tests/test_gateway_allowlist.py`.
 - **JWT** nese `aud` podle zóny (`nc-web`, `nc-desktop`, `nc-admin`), dále `iss` a `iat`. Token z jiné zóny vrací 401. Superadmin se přihlásí jen v zóně A.
 
 ## Legenda
@@ -264,4 +264,4 @@ Vše ostatní na edge vrací 404: `/api/*`, `/docs`, `/openapi.json`, `/metrics`
 | A | 15 admin + 7 systém + 7 auth = 29 |
 | DEV | 5 |
 
-Allowlist gateway je **podmnožina zóny G**. Vznikne z tabulky výše a bude se generovat do `gateway/allowlist.json` z `app/core/exposure.py`. Test v CI kontroluje, že gateway nepustí nic mimo zónu G a že allowlist neobsahuje žádnou `/admin` routu.
+Allowlist gateway je **podmnožina zóny G**. Vznikne z tabulky výše a generuje se do [`docs/security/gateway-allowlist.json`](gateway-allowlist.json) z `app/platform/http/exposure.py` (`python -m scripts.export_gateway_allowlist`). Test v CI kontroluje, že gateway nepustí nic mimo zónu G a že allowlist neobsahuje žádnou `/admin` routu.

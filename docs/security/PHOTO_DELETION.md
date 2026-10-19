@@ -4,7 +4,7 @@
 |---|---|
 | **Datum** | 17. 10. 2026 |
 | **Stav** | Implementováno ve větvi `fix/f0-rbac-tenant-isolation` (F0.3), **zatím nevydáno** |
-| **Kód** | `app/core/rbac.py` (`can_soft_delete_photo`, `can_purge_photo_in_tenant`), `app/api/routes/images.py`, `app/api/photo_purge.py`, `app/services/photo_service.py`, `scripts/reapply_photo_purges.py` |
+| **Kód** | `app/modules/identity/rbac.py` (`can_soft_delete_photo`, `can_purge_photo_in_tenant`), `app/modules/media/api/images.py`, `app/modules/media/photo_purge.py`, `app/modules/media/photo_service.py`, `scripts/reapply_photo_purges.py` |
 | **Migrace** | `20261017_0058` (soft delete), `20261017_0059` (autor, stav `purge_pending`) |
 | **Související** | [RBAC_ROLE_MATRIX.md](RBAC_ROLE_MATRIX.md) §2.5 |
 
@@ -94,7 +94,7 @@ Kontroly na každém požadavku: tenant (cizí zakázka 404) → zakázka (fotka
 
 Trvale smazaná fotka tak může v zálohách přežít **nejvýše ~6 měsíců**. Zálohy jsou šifrované, přístupné jen správcům a slouží jen k obnově po havárii. Jednotlivé soubory se z nich nevyřezávají, protože by to porušilo integritu a ověřitelnost záloh. Výmaz je úplný, když vyprší poslední záloha, která fotku obsahuje. Tuto lhůtu je potřeba uvést v informacích o zpracování osobních údajů.
 
-**Ledger trvalých smazání** (`app/core/purge_ledger.py`):
+**Ledger trvalých smazání** (`app/modules/media/purge_ledger.py`):
 - Je to append-only soubor JSONL **mimo databázi** (`PHOTO_PURGE_LEDGER_PATH`, např. `/var/lib/novu/photo-purge-ledger.jsonl`).
 - Každé trvalé smazání se do něj zapíše **před** commitem DB transakce, s `flush` a `fsync`. Záznam obsahuje `ts`, `photo_id`, `case_id`, `org_id`, `actor_id` a `action`.
 - Když zápis selže, smazání se neprovede (503). Mimo development bez nastaveného ledgeru se trvalé smazání odmítne (503).

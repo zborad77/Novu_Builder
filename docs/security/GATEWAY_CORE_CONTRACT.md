@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Datum** | 17. 10. 2026 |
-| **Stav** | Implementováno v core (`app/core/gateway_auth.py`), nenasazeno. Gateway (F4) ho bude implementovat podle tohoto dokumentu. |
+| **Stav** | Implementováno v core (`app/platform/http/gateway_auth.py`), nenasazeno. Gateway (F4) ho bude implementovat podle tohoto dokumentu. |
 | **Navazuje na** | [SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md) kap. 3, 4.5 a 6 · [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) F3.4 · [API_EXPOSURE_MATRIX.md](API_EXPOSURE_MATRIX.md) |
 
 ## 1. Co kontrakt zaručuje

@@ -111,7 +111,7 @@ Tím se obejde slabé místo modelu podle hlaviček: i kdyby se útočník dosta
 
 ### 3.3 Exposure guard (port vzoru NovuServeru)
 
-- `app/core/exposure.py` obsahuje tabulku `(metoda, šablona cesty) → množina zón`, generovanou a kontrolovanou proti [API_EXPOSURE_MATRIX.md](API_EXPOSURE_MATRIX.md).
+- `app/platform/http/exposure.py` obsahuje tabulku `(metoda, šablona cesty) → množina zón`, generovanou a kontrolovanou proti [API_EXPOSURE_MATRIX.md](API_EXPOSURE_MATRIX.md).
 - Middleware `exposure_guard` je **nejvnější** vrstva. Rozhodne ještě před autentizací, dependencies a rate limitem a nepovolenou route vrátí jako **404**, ne 403.
 - Nezařazená route je blokovaná ve všech produkčních zónách, i v `admin` (default-deny). Dostupná je jen v zóně `dev` (lokální vývoj).
 - `tests/test_route_exposure.py` selže na:

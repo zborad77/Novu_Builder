@@ -1,5 +1,9 @@
 # Python Backend
 
+Modulární monolit (balíček `app`): jádro `app/platform`, doménové moduly `app/modules/*`
+s veřejným rozhraním `public.py`, kompozice `app/composition`. Pravidla a postup přidání
+modulu: [docs/architecture/MODULAR_ARCHITECTURE.md](../../docs/architecture/MODULAR_ARCHITECTURE.md).
+
 Tato slozka je novy cilovy backend pro FotoNabidku.
 
 Smer:

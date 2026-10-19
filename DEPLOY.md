@@ -217,7 +217,7 @@ A healthy backend therefore proves that the explicit migration step completed.
 
 ### Client IP and rate limiting (SA-05)
 
-The backend resolves the client address itself (`app/core/client_ip.py`):
+The backend resolves the client address itself (`app/platform/http/client_ip.py`):
 `X-Forwarded-For` / `X-Forwarded-Proto` are honoured only from peers listed in
 `TRUSTED_PROXY_IPS`. Uvicorn must run with `--no-proxy-headers`, and
 `FORWARDED_ALLOW_IPS='*'` is rejected at startup outside development. Rate-limit

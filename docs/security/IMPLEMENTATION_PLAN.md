@@ -101,7 +101,7 @@ Odhady jsou orientační, pro jednoho vývojáře, a nezahrnují dokončení web
 
 | ID | Úkol | Hotovo, když | Testy |
 |---|---|---|---|
-| F3.1 | `app/core/exposure.py`: tabulka (metoda, šablona) → zóny, default `admin` | Všech 113 rout je zařazeno | `test_route_exposure.py`: žádná nezařazená route; množina G se rovná schválenému seznamu |
+| F3.1 | `app/platform/http/exposure.py`: tabulka (metoda, šablona) → zóny, default `admin` | Všech 113 rout je zařazeno | `test_route_exposure.py`: žádná nezařazená route; množina G se rovná schválenému seznamu |
 | F3.2 | Middleware `exposure_guard` (nejvnější), zóna z `NC_ZONE` procesu; mimo zónu 404 | `/admin/*` v instanci gateway vrací 404 ještě před autentizací | test na každou zónu × route |
 | F3.3 | JWT: `iss`, `aud` podle zóny, `iat`, validace algoritmu, access 10 min. Instance přijímá jen svůj `aud`. Superadmin login jen v zóně admin. | Token `nc-web` v instanci desktop vrací 401 | testy `aud` |
 | F3.4 | **Samostatná fáze, až po návrhu Gateway.** `X-NC-Client-IP` a HMAC `X-NC-Gateway-Sig` v instanci gateway (jen audit a rate limit). Navazuje na `TrustedProxyMiddleware` (SA-05, hotovo). Instance gateway přestane číst `X-Forwarded-For` a IP převezme jen z podepsané hlavičky na gateway socketu. | Požadavek bez platného HMAC v zóně gateway vrací 401; podvržené `X-NC-Client-IP` bez podpisu se ignoruje | test |

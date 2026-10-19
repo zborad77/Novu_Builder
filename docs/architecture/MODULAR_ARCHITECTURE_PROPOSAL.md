@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Stav | **NÁVRH – čeká na schválení.** Nic se neimplementuje, nepushuje ani nenasazuje. |
+| Stav | Předběžně schváleno; implementováno ve Fázi B – závazný stav a odchylky: [MODULAR_ARCHITECTURE.md](MODULAR_ARCHITECTURE.md). |
 | Datum | 2026-10-19 |
 | Výchozí stav | větev `fix/f0-rbac-tenant-isolation` @ `3f581d7` (10 commitů před `master`) |
 | Rozsah | backend, web, desktop, kontrakty, CI, migrace, `deploy/linux` |
