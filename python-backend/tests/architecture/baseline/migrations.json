@@ -1,0 +1,362 @@
+{
+  "heads": [
+    "20261017_0059"
+  ],
+  "count": 59,
+  "revisions": [
+    {
+      "revision": "20260318_0001",
+      "downRevision": null,
+      "file": "20260318_0001_initial_schema.py",
+      "sha256": "b6509f42711fe9d49ae98f7c76e2180f26032af4542b603c8649403ddbd5b94c"
+    },
+    {
+      "revision": "20260318_0002",
+      "downRevision": "20260318_0001",
+      "file": "20260318_0002_add_project_proposal_drafts.py",
+      "sha256": "d9d5cd81c75414482d0bfe1ef5834e6880f8e05528995b93a9ad72cf9b7aa842"
+    },
+    {
+      "revision": "20260318_0003",
+      "downRevision": "20260318_0002",
+      "file": "20260318_0003_add_proposal_draft_version.py",
+      "sha256": "8c95b7d7a4b3ff07ffbd0a1379ccb0f81722685b2f7eb30536bb45cfdbc93ec0"
+    },
+    {
+      "revision": "20260318_0004",
+      "downRevision": "20260318_0003",
+      "file": "20260318_0004_add_project_final_proposals.py",
+      "sha256": "c5fbb8e23e46a6780d2e7b3aee9dcc6a95576d1e746e8849f0ac0b5f88496bf5"
+    },
+    {
+      "revision": "20260318_0005",
+      "downRevision": "20260318_0004",
+      "file": "20260318_0005_add_analysis_reference_to_project_photos.py",
+      "sha256": "14f0719220bd099ced1a57959603b29e09ee966215a3d560776109c14f69f068"
+    },
+    {
+      "revision": "20260318_0006",
+      "downRevision": "20260318_0005",
+      "file": "20260318_0006_add_reference_expectations_to_projects.py",
+      "sha256": "44854a413876bdb47a50645cda54e6fa0a4f0e5c20956146687b12116ca7b866"
+    },
+    {
+      "revision": "20260321_0007",
+      "downRevision": "20260318_0006",
+      "file": "20260321_0007_add_revoked_tokens.py",
+      "sha256": "98e6fd4bc7130662219acdce79bc5c0a81c0d0986b4d5023d77182c0f9c23456"
+    },
+    {
+      "revision": "20260321_0008",
+      "downRevision": "20260321_0007",
+      "file": "20260321_0008_add_analysis_duration_fields.py",
+      "sha256": "b07674a9dd2aef5663aabf681c1b19881a3c3db3f391e67979e52282710b30e0"
+    },
+    {
+      "revision": "20260321_0009",
+      "downRevision": "20260321_0008",
+      "file": "20260321_0009_add_transport_cost_to_proposal_draft.py",
+      "sha256": "20ee1ee5f3e7fbecdacb63211d6517f58d02c582b286b6dee22b4a5a84460fb8"
+    },
+    {
+      "revision": "20260321_0010",
+      "downRevision": "20260321_0009",
+      "file": "20260321_0010_add_source_to_projects.py",
+      "sha256": "69584776b040cb5a28fdd791892efb4014c21f827c5d570d286efe5f1e6bb2d3"
+    },
+    {
+      "revision": "20260324_0011",
+      "downRevision": "20260321_0010",
+      "file": "20260324_0011_add_analysis_job_retry_fields.py",
+      "sha256": "91e5c3a7897bd7d778c093f1cc669f647bc55e27701b83b554811d2bf8632604"
+    },
+    {
+      "revision": "20260324_0012",
+      "downRevision": "20260324_0011",
+      "file": "20260324_0012_create_audit_logs.py",
+      "sha256": "1fbca5a940fb3db48a1f15a2ca51cac501a7af10b07c82e5cc10ed3fdaadb589"
+    },
+    {
+      "revision": "20260326_0013",
+      "downRevision": "20260324_0012",
+      "file": "20260326_0013_add_user_tokens_valid_after.py",
+      "sha256": "6341d6e6d68faa9047a2494677178829a38abff39c27e601ca7e907ab065a41f"
+    },
+    {
+      "revision": "20260326_0014",
+      "downRevision": "20260326_0013",
+      "file": "20260326_0014_add_performance_indexes.py",
+      "sha256": "9a97aa9bdb8aa7894796e6d0ef0c37f6dadc588a0cc019d7f781f18ce30d96eb"
+    },
+    {
+      "revision": "20260326_0015",
+      "downRevision": "20260326_0014",
+      "file": "20260326_0015_financial_float_to_numeric.py",
+      "sha256": "d111c9b80749523abb7b5066ec904481b439a3b6610b002e116166b3ea81314c"
+    },
+    {
+      "revision": "20260326_0016",
+      "downRevision": "20260326_0015",
+      "file": "20260326_0016_add_status_check_constraints.py",
+      "sha256": "26f62ca3e3b234cbb1c3cd1597e136d16d7f12ce81c3c8dbea570a4a83aa11e0"
+    },
+    {
+      "revision": "20260326_0017",
+      "downRevision": "20260326_0016",
+      "file": "20260326_0017_add_password_reset_tokens.py",
+      "sha256": "8c3539513018055233cabfa72006c82a06f51c7b87f9024475858bdb9b64f534"
+    },
+    {
+      "revision": "20260326_0018",
+      "downRevision": "20260326_0017",
+      "file": "20260326_0018_add_role_permissions.py",
+      "sha256": "eb9447b9998d96fad09583b1a336f3b8909d288a3f79f78c6822c44b57b64b97"
+    },
+    {
+      "revision": "20260329_0019",
+      "downRevision": "20260326_0018",
+      "file": "20260329_0019_add_project_photos_project_id_index.py",
+      "sha256": "ebd6919ab74baaf6d9ddd2bd017fefe5d69d0fc496b97bcb545853859505fc39"
+    },
+    {
+      "revision": "20260329_0020",
+      "downRevision": "20260329_0019",
+      "file": "20260329_0020_add_projects_cursor_listing_indexes.py",
+      "sha256": "1a4ae1e3f86dcd49cc3a0f8488503eb4182455f93f4ae16eadf6b27c8c116754"
+    },
+    {
+      "revision": "20260329_0021",
+      "downRevision": "20260329_0020",
+      "file": "20260329_0021_add_project_photos_sort_index.py",
+      "sha256": "668d8c5a186ce06b337235e23b5e53aeba4f89df5cb424ad5661aaec39fe41c9"
+    },
+    {
+      "revision": "20260329_0022",
+      "downRevision": "20260329_0021",
+      "file": "20260329_0022_harden_password_reset_tokens.py",
+      "sha256": "a93cd6479be42bc2105ecfcc9c3e3793fb43bb5fb293c83cbf311cf86462c6b1"
+    },
+    {
+      "revision": "20260329_0023",
+      "downRevision": "20260329_0022",
+      "file": "20260329_0023_add_hot_path_indexes.py",
+      "sha256": "d02b9dfbe69114d1639196921b5550eea29ab10c31fa4ae76d705f1d154d593f"
+    },
+    {
+      "revision": "20260330_0024",
+      "downRevision": "20260329_0023",
+      "file": "20260330_0024_add_project_exports.py",
+      "sha256": "5c661e788f2090a9c10d3bff183148f65652d109613fe1053293d28683f7918a"
+    },
+    {
+      "revision": "20260330_0025",
+      "downRevision": "20260330_0024",
+      "file": "20260330_0025_harden_storage_state_machines.py",
+      "sha256": "4966abcf5c87b3969c03195ec3208381374c6db168e4e12607a70e1791664b41"
+    },
+    {
+      "revision": "20260330_0026",
+      "downRevision": "20260330_0025",
+      "file": "20260330_0026_add_analysis_job_lease_ownership.py",
+      "sha256": "fa076d35af242c4fe59247d7fae4986977d145c68bcb0c89ba53732eb2cf7b68"
+    },
+    {
+      "revision": "20260330_0027",
+      "downRevision": "20260330_0026",
+      "file": "20260330_0027_add_analysis_job_retry_attempts_and_dlq_status.py",
+      "sha256": "b13ade83203b74745ecf6b98f686ed5a43cb3f81803e5c0a7dd59496dff59cf1"
+    },
+    {
+      "revision": "20260330_0028",
+      "downRevision": "20260330_0027",
+      "file": "20260330_0028_create_work_catalog_core_subsystem.py",
+      "sha256": "cf981cb4d0ca3afae364dccc4f2579e23ca1da5f6d94d1f41a90e35a6401de96"
+    },
+    {
+      "revision": "20260330_0029",
+      "downRevision": "20260330_0028",
+      "file": "20260330_0029_expand_work_catalog_parameter_overrides_and_scaling_indexes.py",
+      "sha256": "59b38b0abbdd1ddaca9a86eda630005436b247dc447aeedc59af5a92c8a99c19"
+    },
+    {
+      "revision": "20260330_0030",
+      "downRevision": "20260330_0029",
+      "file": "20260330_0030_expand_work_type_parameters_parametric_schema.py",
+      "sha256": "08d6a320d9ed91a2409375bcd300f6dc270338dd49d395d255bfa4cb38eb9231"
+    },
+    {
+      "revision": "20260330_0031",
+      "downRevision": "20260330_0030",
+      "file": "20260330_0031_add_work_catalog_parameter_integrity_guards.py",
+      "sha256": "f8fc04f651e00e54684199b0f93c27054046c47a52f69abdbe4a98243fcb82c4"
+    },
+    {
+      "revision": "20260331_0032",
+      "downRevision": "20260330_0031",
+      "file": "20260331_0032_add_analysis_profile_subsystem.py",
+      "sha256": "a506c7ed15191ab6fd46250d7ff6590bae9c7614ed639932fdf2e78a26fc4cab"
+    },
+    {
+      "revision": "20260331_0033",
+      "downRevision": "20260331_0032",
+      "file": "20260331_0033_add_pricing_profile_subsystem.py",
+      "sha256": "7cddec6bbdc39bb4e6067878a3e350614e0950dc2b0932e0ecc3eb5c9dd06891"
+    },
+    {
+      "revision": "20260331_0034",
+      "downRevision": "20260331_0033",
+      "file": "20260331_0034_add_tenant_work_type_override_subsystem.py",
+      "sha256": "9cecafe345bbb964f67e752a17955a446026eaa7bccdcccb56e81e3e9d4739fa"
+    },
+    {
+      "revision": "20260331_0035",
+      "downRevision": "20260331_0034",
+      "file": "20260331_0035_add_runtime_workflow_states.py",
+      "sha256": "987da3d6a25d42e5c2535262e48639270b30015e8199fd1859bb46ad06a5dacf"
+    },
+    {
+      "revision": "20260331_0036",
+      "downRevision": "20260331_0035",
+      "file": "20260331_0036_add_work_catalog_hot_path_indexes.py",
+      "sha256": "b94088149846b814e5f3f51b283292bd358235c310e96b445f453f289c028413"
+    },
+    {
+      "revision": "20260401_0037",
+      "downRevision": "20260331_0036",
+      "file": "20260401_0037_add_user_sessions.py",
+      "sha256": "2dfd7d2d9cfebe36cbfb09d8e29e1ace9fe243efdcef7e002e95cbf63c1768f2"
+    },
+    {
+      "revision": "20260401_0038",
+      "downRevision": "20260401_0037",
+      "file": "20260401_0038_analysis_job_payload_offload.py",
+      "sha256": "2af2e2eb76f598d8379743fec857cbfccfcff22e6084b1eaec0a5747f0b1a5c1"
+    },
+    {
+      "revision": "20260401_0039",
+      "downRevision": "20260401_0038",
+      "file": "20260401_0039_audit_log_detail_jsonb.py",
+      "sha256": "326124db180790f69cd6182606a76419740895fee84a9d7126537dec1f97d30b"
+    },
+    {
+      "revision": "20260401_0040",
+      "downRevision": "20260401_0039",
+      "file": "20260401_0040_add_user_token_version.py",
+      "sha256": "959bc69264f7aef727918d6b469fef0392079e839e3edc343cf425ee2b936bbb"
+    },
+    {
+      "revision": "20260416_0041",
+      "downRevision": "20260401_0040",
+      "file": "20260416_0041_add_markers.py",
+      "sha256": "878169453da067c3dc8f973664f14c8a9ab52e45a9e356ec5f01399e6e012895"
+    },
+    {
+      "revision": "20260416_0042",
+      "downRevision": "20260416_0041",
+      "file": "20260416_0042_add_marker_source_to_markers.py",
+      "sha256": "4571ee0a02e64e9bdb34b979697c6400a85dbcea37e1f1dfc1152d435d84d474"
+    },
+    {
+      "revision": "20260417_0043",
+      "downRevision": "20260416_0042",
+      "file": "20260417_0043_work_type_kind_proposal_components.py",
+      "sha256": "abd35b750673c0f79a5bbead30a7b0300f4c0709081ba2874396ee44760b3365"
+    },
+    {
+      "revision": "20260417_0044",
+      "downRevision": "20260417_0043",
+      "file": "20260417_0044_project_status_machine.py",
+      "sha256": "e8b21a1154e98d299ff75aa7c517c52daf641b16dbaaa1437fe7595713d44d26"
+    },
+    {
+      "revision": "20260527_0045",
+      "downRevision": "20260417_0044",
+      "file": "20260527_0045_add_name_cs_to_work_catalog.py",
+      "sha256": "7651a71b66b8f7f7f2a1995eaab02c45cba7d3c1601cfd2b24b454524779062b"
+    },
+    {
+      "revision": "20260527_0046",
+      "downRevision": "20260527_0045",
+      "file": "20260527_0046_create_offer_requests.py",
+      "sha256": "e486c99e7c23cb31eb80b0a46081f7d9fed31acb12f7848f4f91d8dc5e490678"
+    },
+    {
+      "revision": "20260527_0047",
+      "downRevision": "20260527_0046",
+      "file": "20260527_0047_create_offer_jobs.py",
+      "sha256": "fce5e675d5e4dc18e0a37e8d3936422b5e9dc72644ffbdd1bde3d349ce6d3529"
+    },
+    {
+      "revision": "20260527_0048",
+      "downRevision": "20260527_0047",
+      "file": "20260527_0048_create_agent_runs.py",
+      "sha256": "f53d75b6b5ffcba71c30067194969aa439c30b8856e1dd128d40f9e7603cc08e"
+    },
+    {
+      "revision": "20260527_0049",
+      "downRevision": "20260527_0048",
+      "file": "20260527_0049_create_outbox_events.py",
+      "sha256": "421b6a08a41125cdf2ecb06262d1651bb64b60b1ba69014abadd49e544a28a46"
+    },
+    {
+      "revision": "20260527_0050",
+      "downRevision": "20260527_0049",
+      "file": "20260527_0050_create_organization_ai_budgets.py",
+      "sha256": "7f8bd50023f56d855122215cac90204b3dc7669d59d5cdafae58b3e0b7345adc"
+    },
+    {
+      "revision": "20260527_0051",
+      "downRevision": "20260527_0050",
+      "file": "20260527_0051_harden_offer_pipeline.py",
+      "sha256": "b91cedf275cc73aa535ba7a85d1f30786328de1058eb7744fb796f2ef9a2755d"
+    },
+    {
+      "revision": "20260527_0052",
+      "downRevision": "20260527_0051",
+      "file": "20260527_0052_create_ai_budget_reservations.py",
+      "sha256": "064dedb636e6fbb7fdc9d63c5ca33a4c3628373c035780284070c58ebbd1503a"
+    },
+    {
+      "revision": "20260527_0053",
+      "downRevision": "20260527_0052",
+      "file": "20260527_0053_idempotent_persist_and_poison_detection.py",
+      "sha256": "7597bd3a487f1a55a3baa745c47b19000233662a2e6456ea24dc20351b26f701"
+    },
+    {
+      "revision": "20260527_0054",
+      "downRevision": "20260527_0053",
+      "file": "20260527_0054_create_reconciler_events.py",
+      "sha256": "77381ca033860c29c81c30886d6bf1facb1310e4b631e67e5bd423a43632dbcd"
+    },
+    {
+      "revision": "20260527_0055",
+      "downRevision": "20260527_0054",
+      "file": "20260527_0055_add_analysis_result_id_to_final_proposals.py",
+      "sha256": "288761e4fc0ee0b32ff84d0bcac09213d867c81fcb86ccbaf26bda8abefb6061"
+    },
+    {
+      "revision": "20261003_0056",
+      "downRevision": "20260527_0055",
+      "file": "20261003_0056_add_users_is_superadmin.py",
+      "sha256": "e8197b3bb28881c964eab89000bbabccb35102ccfe2ebaf72b7872a5c826eddf"
+    },
+    {
+      "revision": "20261017_0057",
+      "downRevision": "20261003_0056",
+      "file": "20261017_0057_harden_rbac_roles.py",
+      "sha256": "022f8fdce3397a9f48386a32eae833d5daed3d71e01e6d41db5ae859b0acd980"
+    },
+    {
+      "revision": "20261017_0058",
+      "downRevision": "20261017_0057",
+      "file": "20261017_0058_photo_soft_delete_audit.py",
+      "sha256": "4be50eb8280f39b370b1be731766cce036359671f003f6398435982197aaf1d5"
+    },
+    {
+      "revision": "20261017_0059",
+      "downRevision": "20261017_0058",
+      "file": "20261017_0059_photo_ownership_and_purge.py",
+      "sha256": "a28c45693dd8d97306b1238411b158f110873059fcfdc7489d1a3e8bfd60e271"
+    }
+  ]
+}

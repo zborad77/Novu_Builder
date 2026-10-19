@@ -138,7 +138,9 @@ def _cli(engine, *arguments, succeeds=True):
     ]:
         if value:
             output = output.replace(value, "[REDACTED]")
-    if succeeds:
+    if succeeds is None:
+        pass
+    elif succeeds:
         assert result.returncode == 0, output
     else:
         assert result.returncode != 0, "Incompatible schema unexpectedly migrated successfully."
@@ -665,3 +667,116 @@ def test_photo_ownership_and_purge_state_on_existing_database(database):
     _cli(database, "downgrade", SOFT_DELETE_REVISION)
     with database.connect() as connection:
         assert "uploaded_by_user_id" not in _columns(sa.inspect(connection), "project_photos")
+
+
+# ---------------------------------------------------------------------------
+# Modulární refaktor (B0): schéma po čisté instalaci a shoda ORM × migrace.
+# Baseline vznikla na 3f581d7 před prvním přesunem kódu. Refaktor nesmí změnit
+# ani schéma vytvořené migracemi, ani metadata modelů vůči tomuto schématu.
+# Přegenerování (jen pro schválenou změnu schématu):
+#     NC_UPDATE_SCHEMA_BASELINE=1 python -m pytest migration_tests -k schema_baseline
+# ---------------------------------------------------------------------------
+
+SCHEMA_BASELINE = BACKEND_ROOT / "migration_tests" / "baseline" / "pg_schema.json"
+
+
+def _reflect_schema(engine):
+    queries = {
+        "columns": """
+            SELECT table_name, column_name, ordinal_position, data_type, udt_name, is_nullable,
+                   column_default, character_maximum_length, numeric_precision, numeric_scale
+            FROM information_schema.columns WHERE table_schema = 'public'
+            ORDER BY table_name, ordinal_position""",
+        "constraints": """
+            SELECT rel.relname AS table_name, con.conname, con.contype,
+                   pg_get_constraintdef(con.oid, true) AS definition
+            FROM pg_constraint con JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace ns ON ns.oid = rel.relnamespace
+            WHERE ns.nspname = 'public' ORDER BY rel.relname, con.conname""",
+        "indexes": """
+            SELECT tablename, indexname, indexdef FROM pg_indexes
+            WHERE schemaname = 'public' ORDER BY tablename, indexname""",
+        "enums": """
+            SELECT t.typname, e.enumlabel, e.enumsortorder FROM pg_type t
+            JOIN pg_enum e ON e.enumtypid = t.oid ORDER BY t.typname, e.enumsortorder""",
+        "alembic_version": "SELECT version_num FROM alembic_version",
+    }
+    with engine.connect() as connection:
+        return {
+            name: [
+                {key: (str(value) if value is not None and not isinstance(value, (int, str)) else value)
+                 for key, value in row._mapping.items()}
+                for row in connection.execute(sa.text(sql))
+            ]
+            for name, sql in queries.items()
+        }
+
+
+def test_fresh_install_schema_matches_baseline(database):
+    import json
+
+    _cli(database, "upgrade", "head")
+    schema = _reflect_schema(database)
+    rendered = json.dumps(schema, indent=1, ensure_ascii=False) + "\n"
+    if os.environ.get("NC_UPDATE_SCHEMA_BASELINE") == "1":
+        SCHEMA_BASELINE.parent.mkdir(parents=True, exist_ok=True)
+        SCHEMA_BASELINE.write_bytes(rendered.encode("utf-8"))
+    assert SCHEMA_BASELINE.is_file(), "missing baseline; see NC_UPDATE_SCHEMA_BASELINE"
+    assert json.loads(SCHEMA_BASELINE.read_text(encoding="utf-8")) == schema
+
+
+def _normalized_metadata_diff(engine):
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
+
+    from app.db.base import Base
+    import app.models  # noqa: F401  (registruje všechny ORM modely)
+
+    def render(value):
+        arg = getattr(value, "arg", None)
+        if arg is not None:
+            return str(getattr(arg, "text", arg))
+        return str(value)
+
+    def describe(diff):
+        if isinstance(diff, list):  # modify_* operace jsou zabalené v seznamu
+            return [entry for item in diff for entry in describe(item)]
+        op, *rest = diff
+        if op in {"add_table", "remove_table"}:
+            return [f"{op}:{rest[0].name}"]
+        if op in {"add_index", "remove_index"}:
+            return [f"{op}:{rest[0].table.name}:{rest[0].name}"]
+        if op in {"add_constraint", "remove_constraint", "add_fk", "remove_fk"}:
+            constraint = rest[0]
+            return [f"{op}:{constraint.table.name}:{constraint.name}"]
+        if op in {"add_column", "remove_column"}:
+            return [f"{op}:{rest[1]}:{rest[2].name}"]
+        if op.startswith("modify_"):
+            _schema, table, column, _info, old, new = rest
+            return [f"{op}:{table}:{column}:{render(old)}->{render(new)}"]
+        return [f"{op}:{rest!s}"]
+
+    with engine.connect() as connection:
+        context = MigrationContext.configure(
+            connection, opts={"compare_type": True, "compare_server_default": True}
+        )
+        diffs = compare_metadata(context, Base.metadata)
+    return sorted(entry for diff in diffs for entry in describe(diff))
+
+
+def test_orm_metadata_matches_migrated_schema(database):
+    """Autogenerate nad hlavou: rozdíl ORM × migrace se refaktorem nesmí změnit.
+
+    Baseline obsahuje už existující rozdíly (např. tabulky vytvořené jen migrací);
+    přesun modelů mezi moduly nesmí přidat ani odebrat jediný řádek.
+    """
+    _cli(database, "upgrade", "head")
+    import re
+
+    entries = [re.sub(r" at 0x[0-9A-Fa-f]+", "", line) for line in _normalized_metadata_diff(database)]
+    rendered = "\n".join(entries) + "\n"
+    baseline = BACKEND_ROOT / "migration_tests" / "baseline" / "metadata_diff.txt"
+    if os.environ.get("NC_UPDATE_SCHEMA_BASELINE") == "1":
+        baseline.parent.mkdir(parents=True, exist_ok=True)
+        baseline.write_bytes(rendered.encode("utf-8"))
+    assert baseline.read_text(encoding="utf-8") == rendered

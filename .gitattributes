@@ -4,3 +4,10 @@ deploy/linux/** text eol=lf
 *.sh text eol=lf
 python-backend/docker-entrypoint.sh text eol=lf
 docs/security/gateway-allowlist.json text eol=lf
+# Modulární refaktor: generované kontrakty a baseline snapshoty jsou vždy LF,
+# aby drift-checky byly nezávislé na platformě.
+src/contracts/** text eol=lf
+python-backend/tests/architecture/baseline/** text eol=lf
+python-backend/migration_tests/baseline/** text eol=lf
+python-backend/tools/refactor/baseline/** text eol=lf
+.novu-repo-root text eol=lf

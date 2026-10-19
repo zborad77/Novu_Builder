@@ -1,0 +1,3700 @@
+{
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/v1/metrics",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/alive",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/health",
+      "zones": [
+        "admin",
+        "desktop"
+      ],
+      "dependencies": [],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ready",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ready/processing",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/health/internal",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "require_superadmin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/login",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "10 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/refresh",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "10 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/logout",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "10 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/sessions",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/auth/sessions/{session_id}",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "10 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/change-password",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "10 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/forgot-password",
+      "zones": [],
+      "dependencies": [],
+      "rateLimits": [
+        "5 per 1 hour"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "zones": [],
+      "dependencies": [],
+      "rateLimits": [
+        "5 per 1 hour"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/duplicate",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/proposal-draft",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/final-proposal",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/submit",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_case_action_service",
+        "get_db_session",
+        "get_job_queue",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/start-analysis",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_case_action_service",
+        "get_db_session",
+        "get_job_queue",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/approve-proposal",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_case_action_service",
+        "get_db_session",
+        "get_job_queue",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/send",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_case_action_service",
+        "get_db_session",
+        "get_job_queue",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/archive",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_case_action_service",
+        "get_db_session",
+        "get_job_queue",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/return-to-draft",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_case_action_service",
+        "get_db_session",
+        "get_job_queue",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/cancel",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_case_action_service",
+        "get_db_session",
+        "get_job_queue",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/timeline",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/activity/stream",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "_get_project_repository",
+        "get_db_session"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/images",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/images",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [
+        "30 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/images/{image_id}/preview",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/primary",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/analysis-reference",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/move",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/images/deleted",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/restore",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/purge",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/analysis-jobs",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_analysis_service",
+        "get_db_session",
+        "get_redis",
+        "get_job_queue"
+      ],
+      "rateLimits": [
+        "20 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/analysis-jobs",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_analysis_service",
+        "get_db_session",
+        "get_redis",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/analysis-jobs/{job_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_analysis_service",
+        "get_db_session",
+        "get_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/analysis-jobs/{job_id}/cancel",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_analysis_service",
+        "get_db_session",
+        "get_redis",
+        "get_project_service",
+        "get_db_session"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/analysis-results/{result_id}/selection",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_analysis_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/analysis-jobs/{job_id}/retry",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_analysis_service",
+        "get_db_session",
+        "get_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [
+        "20 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/markers",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue",
+        "_get_marker_repository",
+        "get_db_session"
+      ],
+      "rateLimits": [
+        "30 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/markers",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue",
+        "_get_marker_repository",
+        "get_db_session"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/markers/{marker_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "_get_marker_repository",
+        "get_db_session"
+      ],
+      "rateLimits": [
+        "30 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/measurements",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_analysis_service",
+        "get_db_session",
+        "get_redis",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [
+        "30 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/measurements/{measurement_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_analysis_service",
+        "get_db_session",
+        "get_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [
+        "30 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/measurements/{measurement_id}/confirm",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_analysis_service",
+        "get_db_session",
+        "get_redis",
+        "get_project_service",
+        "get_db_session"
+      ],
+      "rateLimits": [
+        "30 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/estimates",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_quote_variant_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/estimates/recalculate",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_quote_variant_service",
+        "get_db_session",
+        "get_redis",
+        "get_analysis_service",
+        "get_db_session",
+        "get_redis",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pricebooks",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_pricebook_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/pricebooks",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_pricebook_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pricebooks/{pricebook_id}/items",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_pricebook_service",
+        "get_db_session"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/report-pdf",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_export_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/proposal-docx",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_export_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/quote-pdf",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_export_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/quote-docx",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_export_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/case-zip",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_export_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exports/{export_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_export_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/material-catalog",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_material_catalog_service",
+        "get_db_session"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/material-catalog/{material_id}/supplier-prices",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_material_catalog_service",
+        "get_db_session"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/material-catalog/{material_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_material_catalog_service",
+        "get_db_session"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/suppliers",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_supplier_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/suppliers/{supplier_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_supplier_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/work-types",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis",
+        "get_redis"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/categories",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis",
+        "get_redis"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/grouped",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis",
+        "get_redis"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/work-types",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis",
+        "get_redis"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/work-types/{work_type_code}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis",
+        "get_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/work-types/{work_type_code}/parameters/{parameter_code}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis",
+        "get_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/work-types/{work_type_code}/effective",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis",
+        "get_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/work-catalog/work-types/{work_type_code}/settings",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis",
+        "get_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/work-items",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/work-types/{work_type_code}/effective-configuration",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis",
+        "get_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/work-items",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values/merge",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values/confirm",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/detections",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_work_catalog_service",
+        "get_db_session",
+        "get_redis"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/companies",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_company_service",
+        "get_db_session",
+        "require_superadmin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/companies",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_company_service",
+        "get_db_session",
+        "require_admin_write",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "10 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/companies/{company_id}",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_company_service",
+        "get_db_session",
+        "require_user_admin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/admin/companies/{company_id}",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_company_service",
+        "get_db_session",
+        "require_user_admin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "10 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/users",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_company_service",
+        "get_db_session",
+        "require_user_admin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_company_service",
+        "get_db_session",
+        "require_user_admin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "10 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/users/{user_id}",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_company_service",
+        "get_db_session",
+        "require_user_admin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/admin/users/{user_id}",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_company_service",
+        "get_db_session",
+        "require_user_admin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "10 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/users/{user_id}/reset-password",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_user_admin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "5 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/photos/{photo_id}/purge",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_admin_write",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_db_session"
+      ],
+      "rateLimits": [
+        "5 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/jobs",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_db_session",
+        "require_admin_jobs",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/jobs/{job_id}",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_db_session",
+        "require_admin_jobs",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/jobs/{job_id}/retry",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_admin_jobs",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_analysis_service",
+        "get_db_session",
+        "get_redis",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [
+        "10 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/jobs/{job_id}/reprocess",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_admin_jobs",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_analysis_service",
+        "get_db_session",
+        "get_redis",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [
+        "10 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/logs",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_superadmin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/audit",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_db_session",
+        "require_superadmin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate/{user_id}",
+      "zones": [
+        "admin"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_admin_impersonate",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_db_session"
+      ],
+      "rateLimits": [
+        "5 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/org/users",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_company_service",
+        "get_db_session",
+        "require_company_admin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/org/users",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_company_service",
+        "get_db_session",
+        "require_company_admin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "10 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/org/users/{user_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_company_service",
+        "get_db_session",
+        "require_company_admin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "60 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/org/users/{user_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_company_service",
+        "get_db_session",
+        "require_company_admin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "10 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/org/users/{user_id}/reset-password",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_company_service",
+        "get_db_session",
+        "require_company_admin",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_auth_redis"
+      ],
+      "rateLimits": [
+        "5 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/offer-requests",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_offer_service",
+        "get_db_session"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/offer-requests/{offer_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_offer_service",
+        "get_db_session"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/offer-requests/{offer_id}/status",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_offer_service",
+        "get_db_session"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/offer-requests/{offer_id}/result",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_offer_service",
+        "get_db_session"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/offer-requests/{offer_id}/cancel",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_offer_service",
+        "get_db_session"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/offer-requests/{offer_id}/more-info",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_offer_service",
+        "get_db_session"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/offer-requests/{offer_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_offer_service",
+        "get_db_session"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/offer-requests/{offer_id}/events",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "_get_offer_service",
+        "get_db_session"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/mock-storage/{file_path:path}",
+      "zones": [],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session"
+      ],
+      "rateLimits": [],
+      "rateLimitExempt": false
+    }
+  ],
+  "exposureTable": [
+    {
+      "method": "GET",
+      "path": "/api/v1/",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/audit",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/companies",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/companies",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/companies/{company_id}",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/admin/companies/{company_id}",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/impersonate/{user_id}",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/jobs",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/jobs/{job_id}",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/jobs/{job_id}/reprocess",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/jobs/{job_id}/retry",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/logs",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/photos/{photo_id}/purge",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/users",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/users/{user_id}",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/admin/users/{user_id}",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/users/{user_id}/reset-password",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/alive",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/analysis-jobs/{job_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/analysis-jobs/{job_id}/cancel",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/analysis-jobs/{job_id}/retry",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/change-password",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/forgot-password",
+      "zones": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/login",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/logout",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/refresh",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/reset-password",
+      "zones": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/sessions",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/auth/sessions/{session_id}",
+      "zones": [
+        "admin",
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/activity/stream",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/analysis-jobs",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/analysis-jobs",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/analysis-results/{result_id}/selection",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/approve-proposal",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/archive",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/cancel",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/duplicate",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/estimates",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/estimates/recalculate",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/case-zip",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/proposal-docx",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/quote-docx",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/quote-pdf",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/exports/report-pdf",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/final-proposal",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/images",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/images",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/images/deleted",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/analysis-reference",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/move",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/primary",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/purge",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/restore",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/measurements",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/proposal-draft",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/return-to-draft",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/send",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/start-analysis",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/submit",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/timeline",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/work-items",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/work-items",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/detections",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values/confirm",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values/merge",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/cases/{case_id}/work-types/{work_type_code}/effective-configuration",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/exports/{export_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/health",
+      "zones": [
+        "admin",
+        "desktop"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/health/internal",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/images/{image_id}/preview",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/markers",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/markers",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/markers/{marker_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/material-catalog",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/material-catalog/{material_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/material-catalog/{material_id}/supplier-prices",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/measurements/{measurement_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/measurements/{measurement_id}/confirm",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/metrics",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/offer-requests",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/offer-requests/{offer_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/offer-requests/{offer_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/offer-requests/{offer_id}/cancel",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/offer-requests/{offer_id}/events",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/offer-requests/{offer_id}/more-info",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/offer-requests/{offer_id}/result",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/offer-requests/{offer_id}/status",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/org/users",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/org/users",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/org/users/{user_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/org/users/{user_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/org/users/{user_id}/reset-password",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pricebooks",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/pricebooks",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/pricebooks/{pricebook_id}/items",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ready",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/ready/processing",
+      "zones": [
+        "admin"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/suppliers",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/suppliers/{supplier_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/categories",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/grouped",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/work-types",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/work-types/{work_type_code}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/catalog/work-types/{work_type_code}/parameters/{parameter_code}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/work-types",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/work-catalog/work-types/{work_type_code}/effective",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/work-catalog/work-types/{work_type_code}/settings",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/docs",
+      "zones": []
+    },
+    {
+      "method": "HEAD",
+      "path": "/docs",
+      "zones": []
+    },
+    {
+      "method": "GET",
+      "path": "/docs/oauth2-redirect",
+      "zones": []
+    },
+    {
+      "method": "HEAD",
+      "path": "/docs/oauth2-redirect",
+      "zones": []
+    },
+    {
+      "method": "GET",
+      "path": "/mock-storage/{file_path:path}",
+      "zones": []
+    },
+    {
+      "method": "GET",
+      "path": "/openapi.json",
+      "zones": []
+    },
+    {
+      "method": "HEAD",
+      "path": "/openapi.json",
+      "zones": []
+    },
+    {
+      "method": "GET",
+      "path": "/redoc",
+      "zones": []
+    },
+    {
+      "method": "HEAD",
+      "path": "/redoc",
+      "zones": []
+    }
+  ]
+}

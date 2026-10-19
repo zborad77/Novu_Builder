@@ -1,0 +1,69 @@
+{
+  "outermostFirst": [
+    {
+      "position": 0,
+      "class": "GatewaySignatureMiddleware",
+      "kwargs": []
+    },
+    {
+      "position": 1,
+      "class": "TrustedProxyMiddleware",
+      "kwargs": [
+        "trust_unix_socket",
+        "trusted_proxies"
+      ]
+    },
+    {
+      "position": 2,
+      "class": "ExposureGuardMiddleware",
+      "kwargs": []
+    },
+    {
+      "position": 3,
+      "class": "BaseHTTPMiddleware",
+      "dispatch": "security_headers",
+      "kwargs": []
+    },
+    {
+      "position": 4,
+      "class": "BaseHTTPMiddleware",
+      "dispatch": "request_id_context",
+      "kwargs": []
+    },
+    {
+      "position": 5,
+      "class": "BaseHTTPMiddleware",
+      "dispatch": "log_requests",
+      "kwargs": []
+    },
+    {
+      "position": 6,
+      "class": "CORSMiddleware",
+      "kwargs": [
+        "allow_credentials",
+        "allow_headers",
+        "allow_methods",
+        "allow_origins"
+      ]
+    },
+    {
+      "position": 7,
+      "class": "AuditMiddleware",
+      "kwargs": []
+    },
+    {
+      "position": 8,
+      "class": "ApiVersioningMiddleware",
+      "kwargs": []
+    }
+  ],
+  "exceptionHandlers": [
+    "Exception",
+    "HTTPException",
+    "RateLimitExceeded",
+    "RedisError",
+    "RequestValidationError",
+    "TimeoutError",
+    "WebSocketRequestValidationError"
+  ]
+}

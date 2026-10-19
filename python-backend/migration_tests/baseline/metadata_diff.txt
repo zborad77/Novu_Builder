@@ -1,0 +1,114 @@
+add_index:password_reset_tokens:ix_password_reset_tokens_user_id
+modify_default:agent_runs:status:'pending'::character varying->None
+modify_default:ai_budget_reservations:status:'reserved'::character varying->None
+modify_default:analysis_jobs:attempt_count:0->None
+modify_default:analysis_jobs:retry_count:0->None
+modify_default:catalog_analysis_profile_confidence_thresholds:sort_order:100->None
+modify_default:catalog_analysis_profile_extraction_rules:is_required:false->None
+modify_default:catalog_analysis_profile_extraction_rules:manual_review_on_missing:true->None
+modify_default:catalog_analysis_profile_extraction_rules:sort_order:100->None
+modify_default:catalog_analysis_profile_ignored_objects:sort_order:100->None
+modify_default:catalog_analysis_profile_output_mappings:is_required:false->None
+modify_default:catalog_analysis_profile_output_mappings:sort_order:100->None
+modify_default:catalog_analysis_profile_target_objects:is_required:false->None
+modify_default:catalog_analysis_profile_target_objects:sort_order:100->None
+modify_default:catalog_analysis_profile_validation_rules:sort_order:100->None
+modify_default:catalog_analysis_profiles:fallback_mode:'manual_review'::character varying->None
+modify_default:catalog_analysis_profiles:fallback_requires_manual_review:true->None
+modify_default:catalog_analysis_profiles:is_active:true->None
+modify_default:catalog_analysis_profiles:max_detections_per_photo:25->None
+modify_default:catalog_analysis_profiles:output_contract_version:1->None
+modify_default:catalog_analysis_profiles:profile_version:1->None
+modify_default:catalog_analysis_profiles:scope_code:'legacy-generic'::character varying->None
+modify_default:catalog_analysis_profiles:scope_label:'Legacy Generic Scope'::character varying->None
+modify_default:catalog_analysis_profiles:status:'active'::character varying->None
+modify_default:catalog_pricing_profile_adjustment_rules:sort_order:100->None
+modify_default:catalog_pricing_profile_base_rules:sort_order:100->None
+modify_default:catalog_pricing_profile_labor_assumptions:sort_order:100->None
+modify_default:catalog_pricing_profile_material_assumptions:sort_order:100->None
+modify_default:catalog_pricing_profile_required_inputs:is_required:true->None
+modify_default:catalog_pricing_profile_required_inputs:sort_order:100->None
+modify_default:catalog_pricing_profiles:currency:'CZK'::character varying->None
+modify_default:catalog_pricing_profiles:is_active:true->None
+modify_default:catalog_pricing_profiles:pricing_basis:'area'::character varying->None
+modify_default:catalog_pricing_profiles:profile_version:1->None
+modify_default:catalog_pricing_profiles:status:'active'::character varying->None
+modify_default:offer_jobs:attempt:1->None
+modify_default:offer_jobs:error_repeat_count:0->None
+modify_default:offer_jobs:lease_version:0->None
+modify_default:offer_jobs:max_retries:3->None
+modify_default:offer_jobs:retry_count:0->None
+modify_default:offer_jobs:status:'queued'::character varying->None
+modify_default:offer_requests:auto_review_bypass:false->None
+modify_default:offer_requests:auto_send:false->None
+modify_default:offer_requests:status:'submitted'::character varying->None
+modify_default:organization_ai_budgets:alert_threshold_pct:80->None
+modify_default:organization_ai_budgets:daily_token_limit:200000->None
+modify_default:organization_ai_budgets:daily_tokens_used:0->None
+modify_default:organization_ai_budgets:is_hard_limit:true->None
+modify_default:organization_ai_budgets:monthly_cost_limit_usd:500.00->None
+modify_default:organization_ai_budgets:monthly_cost_used_usd:0.00->None
+modify_default:outbox_events:published:false->None
+modify_default:project_final_proposals:currency:'CZK'::character varying->None
+modify_default:project_final_proposals:status:'ready_for_export'::character varying->None
+modify_default:project_photos:is_analysis_reference:false->None
+modify_default:project_photos:status:'active'::character varying->None
+modify_default:project_proposal_drafts:version:1->None
+modify_default:project_work_item_values:confirmation_status:'pending'::character varying->None
+modify_default:project_work_item_values:resolved_parameter_scope:'global'::character varying->None
+modify_default:project_work_item_values:source_type:'manual'::character varying->None
+modify_default:project_work_items:confirmation_status:'pending'::character varying->None
+modify_default:project_work_items:item_sequence:1->None
+modify_default:project_work_items:source_type:'manual'::character varying->None
+modify_default:project_work_items:status:'draft'::character varying->None
+modify_default:quote_variants:currency:'CZK'::character varying->None
+modify_default:quote_variants:vat_pct:'21'::numeric->None
+modify_default:tenant_work_type_extra_parameter_options:is_active:true->None
+modify_default:tenant_work_type_extra_parameter_options:sort_order:100->None
+modify_default:tenant_work_type_extra_parameters:config_version:1->None
+modify_default:tenant_work_type_extra_parameters:is_required:false->None
+modify_default:tenant_work_type_extra_parameters:manual_override_allowed:true->None
+modify_default:tenant_work_type_extra_parameters:sort_order:100->None
+modify_default:tenant_work_type_extra_parameters:status:'active'::character varying->None
+modify_default:tenant_work_type_extra_parameters:vision_extractable:false->None
+modify_default:tenant_work_type_parameter_overrides:config_version:1->None
+modify_default:tenant_work_type_parameter_overrides:override_status:'inherited'::character varying->None
+modify_default:tenant_work_type_settings:config_version:1->None
+modify_default:tenant_work_type_settings:status:'inherited'::character varying->None
+modify_default:vision_detections:status:'pending'::character varying->None
+modify_default:work_categories:catalog_version:1->None
+modify_default:work_categories:is_active:true->None
+modify_default:work_categories:sort_order:100->None
+modify_default:work_type_components:condition_code:'always'::character varying->None
+modify_default:work_type_components:quantity_multiplier:1.0->None
+modify_default:work_type_components:sort_order:100->None
+modify_default:work_type_parameter_options:is_active:true->None
+modify_default:work_type_parameter_options:sort_order:100->None
+modify_default:work_type_parameters:is_required:false->None
+modify_default:work_type_parameters:manual_override_allowed:true->None
+modify_default:work_type_parameters:sort_order:100->None
+modify_default:work_type_parameters:vision_extractable:false->None
+modify_default:work_types:catalog_version:1->None
+modify_default:work_types:geometry_correction_type:'none'::character varying->None
+modify_default:work_types:is_active:true->None
+modify_default:work_types:kind:'leaf'::character varying->None
+modify_default:work_types:measurement_kind:'area'::character varying->None
+modify_default:work_types:proposal_step:false->None
+modify_default:work_types:sort_order:100->None
+modify_default:work_types:state:'active'::character varying->None
+remove_index:analysis_jobs:idx_analysis_jobs_project_created
+remove_index:analysis_jobs:idx_analysis_jobs_status
+remove_index:analysis_jobs:idx_analysis_jobs_work_type_profile_status
+remove_index:analysis_results:idx_analysis_results_work_type_profile_created
+remove_index:outbox_events:idx_outbox_events_seq
+remove_index:password_reset_tokens:idx_password_reset_tokens_user_id
+remove_index:project_final_proposals:idx_project_final_proposals_analysis_result_id
+remove_index:projects:idx_projects_created_at
+remove_index:projects:idx_projects_org_created_id
+remove_index:projects:idx_projects_org_status_created_id
+remove_index:projects:idx_projects_updated_at
+remove_index:reconciler_events:idx_reconciler_events_check_type
+remove_index:reconciler_events:idx_reconciler_events_org
+remove_index:reconciler_events:idx_reconciler_events_request
+remove_index:revoked_tokens:idx_revoked_tokens_expires_at
+remove_table:reconciler_events

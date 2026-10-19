@@ -1,0 +1,1196 @@
+{
+  "count": 119,
+  "routes": [
+    {
+      "order": 0,
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "path": "/openapi.json",
+      "name": "openapi",
+      "kind": "Route",
+      "inSchema": false
+    },
+    {
+      "order": 1,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/metrics",
+      "name": "metrics",
+      "kind": "APIRoute",
+      "inSchema": false
+    },
+    {
+      "order": 2,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/alive",
+      "name": "alive",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 3,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/",
+      "name": "root",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 4,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/health",
+      "name": "health",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 5,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/ready",
+      "name": "ready",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 6,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/ready/processing",
+      "name": "ready_processing",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 7,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/health/internal",
+      "name": "health_internal",
+      "kind": "APIRoute",
+      "inSchema": false
+    },
+    {
+      "order": 8,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/auth/login",
+      "name": "login",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 9,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/auth/refresh",
+      "name": "refresh",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 10,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/auth/logout",
+      "name": "logout",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 11,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/auth/me",
+      "name": "me",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 12,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/auth/sessions",
+      "name": "list_sessions",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 13,
+      "methods": [
+        "DELETE"
+      ],
+      "path": "/api/v1/auth/sessions/{session_id}",
+      "name": "revoke_session",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 14,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/auth/change-password",
+      "name": "change_password",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 15,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/auth/forgot-password",
+      "name": "forgot_password",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 16,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/auth/reset-password",
+      "name": "reset_password",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 17,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/cases",
+      "name": "list_cases",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 18,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases",
+      "name": "create_case",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 19,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/cases/{case_id}",
+      "name": "get_case",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 20,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/duplicate",
+      "name": "duplicate_case",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 21,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/cases/{case_id}",
+      "name": "patch_case",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 22,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/cases/{case_id}/proposal-draft",
+      "name": "patch_case_proposal_draft",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 23,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/final-proposal",
+      "name": "create_case_final_proposal",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 24,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/submit",
+      "name": "submit_case",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 25,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/start-analysis",
+      "name": "start_analysis",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 26,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/approve-proposal",
+      "name": "approve_proposal",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 27,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/send",
+      "name": "send_case",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 28,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/archive",
+      "name": "archive_case",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 29,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/return-to-draft",
+      "name": "return_case_to_draft",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 30,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/cancel",
+      "name": "cancel_case",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 31,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/cases/{case_id}/timeline",
+      "name": "get_case_timeline",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 32,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/cases/{case_id}/activity/stream",
+      "name": "stream_case_activity",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 33,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/cases/{case_id}/images",
+      "name": "list_case_images",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 34,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/images",
+      "name": "upload_case_images",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 35,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/images/{image_id}/preview",
+      "name": "get_image_preview",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 36,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/primary",
+      "name": "set_case_primary_image",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 37,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/analysis-reference",
+      "name": "set_case_analysis_reference_image",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 38,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/move",
+      "name": "move_case_image",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 39,
+      "methods": [
+        "DELETE"
+      ],
+      "path": "/api/v1/cases/{case_id}/images/{image_id}",
+      "name": "delete_case_image",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 40,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/cases/{case_id}/images/deleted",
+      "name": "list_deleted_case_images",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 41,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/restore",
+      "name": "restore_case_image",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 42,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/images/{image_id}/purge",
+      "name": "purge_case_image",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 43,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/analysis-jobs",
+      "name": "create_analysis_job",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 44,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/cases/{case_id}/analysis-jobs",
+      "name": "list_case_analysis_jobs",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 45,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/analysis-jobs/{job_id}",
+      "name": "get_analysis_job",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 46,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/analysis-jobs/{job_id}/cancel",
+      "name": "cancel_analysis_job",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 47,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/cases/{case_id}/analysis-results/{result_id}/selection",
+      "name": "patch_analysis_selection",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 48,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/analysis-jobs/{job_id}/retry",
+      "name": "retry_analysis_job",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 49,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/markers",
+      "name": "create_marker",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 50,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/markers",
+      "name": "list_markers",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 51,
+      "methods": [
+        "DELETE"
+      ],
+      "path": "/api/v1/markers/{marker_id}",
+      "name": "delete_marker",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 52,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/measurements",
+      "name": "create_or_update_measurement",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 53,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/measurements/{measurement_id}",
+      "name": "patch_measurement",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 54,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/measurements/{measurement_id}/confirm",
+      "name": "confirm_measurement",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 55,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/cases/{case_id}/estimates",
+      "name": "list_case_estimates",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 56,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/estimates/recalculate",
+      "name": "recalculate_case_estimates",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 57,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/pricebooks",
+      "name": "list_pricebooks",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 58,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/pricebooks",
+      "name": "create_pricebook",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 59,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/pricebooks/{pricebook_id}/items",
+      "name": "list_pricebook_items",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 60,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/exports/report-pdf",
+      "name": "create_report_pdf",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 61,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/exports/proposal-docx",
+      "name": "create_proposal_docx",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 62,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/exports/quote-pdf",
+      "name": "create_quote_pdf",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 63,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/exports/quote-docx",
+      "name": "create_quote_docx",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 64,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/exports/case-zip",
+      "name": "create_case_zip",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 65,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/exports/{export_id}",
+      "name": "get_export",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 66,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/material-catalog",
+      "name": "list_material_catalog",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 67,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/material-catalog/{material_id}/supplier-prices",
+      "name": "list_supplier_prices",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 68,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/material-catalog/{material_id}",
+      "name": "patch_material",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 69,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/suppliers",
+      "name": "list_suppliers",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 70,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/suppliers/{supplier_id}",
+      "name": "patch_supplier",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 71,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/work-catalog/work-types",
+      "name": "list_effective_work_types",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 72,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/work-catalog/catalog/categories",
+      "name": "list_catalog_categories",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 73,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/work-catalog/catalog/grouped",
+      "name": "list_catalog_grouped",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 74,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/work-catalog/catalog/work-types",
+      "name": "list_catalog_work_types",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 75,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/work-catalog/catalog/work-types/{work_type_code}",
+      "name": "get_catalog_work_type_detail",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 76,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/work-catalog/catalog/work-types/{work_type_code}/parameters/{parameter_code}",
+      "name": "get_parameter_schema_detail",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 77,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/work-catalog/work-types/{work_type_code}/effective",
+      "name": "get_effective_work_type",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 78,
+      "methods": [
+        "PUT"
+      ],
+      "path": "/api/v1/work-catalog/work-types/{work_type_code}/settings",
+      "name": "upsert_tenant_work_type_setting",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 79,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/cases/{case_id}/work-items",
+      "name": "list_project_work_items",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 80,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/cases/{case_id}/work-types/{work_type_code}/effective-configuration",
+      "name": "get_project_work_item_effective_configuration",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 81,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}",
+      "name": "get_project_work_item_detail",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 82,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/work-items",
+      "name": "create_project_work_item",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 83,
+      "methods": [
+        "PUT"
+      ],
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values",
+      "name": "replace_project_work_item_values",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 84,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values",
+      "name": "update_project_work_item_values",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 85,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values/merge",
+      "name": "merge_project_work_item_values",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 86,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/values/confirm",
+      "name": "confirm_project_work_item_values",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 87,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/cases/{case_id}/work-items/{project_work_item_id}/detections",
+      "name": "create_vision_detection",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 88,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/admin/companies",
+      "name": "list_companies",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 89,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/admin/companies",
+      "name": "create_company",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 90,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/admin/companies/{company_id}",
+      "name": "get_company",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 91,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/admin/companies/{company_id}",
+      "name": "patch_company",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 92,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/admin/users",
+      "name": "list_users",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 93,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/admin/users",
+      "name": "create_user",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 94,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/admin/users/{user_id}",
+      "name": "get_user",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 95,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/admin/users/{user_id}",
+      "name": "patch_user",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 96,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/admin/users/{user_id}/reset-password",
+      "name": "reset_user_password",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 97,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/admin/photos/{photo_id}/purge",
+      "name": "admin_purge_photo",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 98,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/admin/jobs",
+      "name": "list_all_jobs",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 99,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/admin/jobs/{job_id}",
+      "name": "get_admin_job",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 100,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/admin/jobs/{job_id}/retry",
+      "name": "admin_retry_job",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 101,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/admin/jobs/{job_id}/reprocess",
+      "name": "admin_reprocess_dead_letter_job",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 102,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/admin/logs",
+      "name": "get_recent_logs",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 103,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/admin/audit",
+      "name": "get_audit_log",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 104,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/admin/impersonate/{user_id}",
+      "name": "impersonate_user",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 105,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/org/users",
+      "name": "list_org_users",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 106,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/org/users",
+      "name": "create_org_user",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 107,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/org/users/{user_id}",
+      "name": "get_org_user",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 108,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/org/users/{user_id}",
+      "name": "patch_org_user",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 109,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/org/users/{user_id}/reset-password",
+      "name": "reset_org_user_password",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 110,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/offer-requests",
+      "name": "submit_offer_request",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 111,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/offer-requests/{offer_id}",
+      "name": "get_offer_request",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 112,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/offer-requests/{offer_id}/status",
+      "name": "get_offer_status",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 113,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/offer-requests/{offer_id}/result",
+      "name": "get_offer_result",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 114,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/offer-requests/{offer_id}/cancel",
+      "name": "cancel_offer_request",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 115,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/offer-requests/{offer_id}/more-info",
+      "name": "submit_more_info",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 116,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/v1/offer-requests/{offer_id}",
+      "name": "approve_offer",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 117,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/offer-requests/{offer_id}/events",
+      "name": "stream_offer_events",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 118,
+      "methods": [
+        "GET"
+      ],
+      "path": "/mock-storage/{file_path:path}",
+      "name": "serve_storage_file",
+      "kind": "APIRoute",
+      "inSchema": true
+    }
+  ]
+}
