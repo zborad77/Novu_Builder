@@ -1,62 +1,25 @@
 import { apiClient } from 'shared/lib/apiClient'
+import { CASE_ACTIONS, type CaseActionName } from 'shared/api/generated/caseWorkflow'
 import type { CaseDetail } from '../types/case.types'
 
-type CaseActionConfig = {
-  label: string
-  requiresReason: boolean
-  path: string
-}
+// API klient: mapování akce workflow na endpoint backendu. Kdy je akce dostupná,
+// její popisek a zda vyžaduje důvod určuje backend (`availableTransitions`).
+// `satisfies Record<CaseActionName, …>` zajistí, že nová akce v kontraktu
+// (src/contracts/workflow) bez endpointu zde neprojde typovou kontrolou.
+const CASE_ACTION_ENDPOINTS = {
+  submit: 'submit',
+  start_analysis: 'start-analysis',
+  approve_proposal: 'approve-proposal',
+  send_quote: 'send',
+  complete: 'archive',
+  return_to_draft: 'return-to-draft',
+  cancel: 'cancel',
+} as const satisfies Record<CaseActionName, string>
 
-export const ACTION_CONFIG = {
-  submit: {
-    label: 'Submit for intake',
-    requiresReason: false,
-    path: 'submit',
-  },
-  start_analysis: {
-    label: 'Start analysis',
-    requiresReason: false,
-    path: 'start-analysis',
-  },
-  approve_proposal: {
-    label: 'Approve proposal',
-    requiresReason: false,
-    path: 'approve-proposal',
-  },
-  send_quote: {
-    label: 'Send quote to client',
-    requiresReason: false,
-    path: 'send',
-  },
-  complete: {
-    label: 'Mark as completed',
-    requiresReason: false,
-    path: 'archive',
-  },
-  return_to_draft: {
-    label: 'Return to draft',
-    requiresReason: true,
-    path: 'return-to-draft',
-  },
-  cancel: {
-    label: 'Cancel case',
-    requiresReason: true,
-    path: 'cancel',
-  },
-} as const satisfies Record<string, CaseActionConfig>
-
-export type CaseAction = keyof typeof ACTION_CONFIG
+export type CaseAction = CaseActionName
 
 export function isCaseAction(action: string): action is CaseAction {
-  return action in ACTION_CONFIG
-}
-
-export function getCaseActionConfig(action: string): (typeof ACTION_CONFIG)[CaseAction] | null {
-  if (!isCaseAction(action)) {
-    return null
-  }
-
-  return ACTION_CONFIG[action]
+  return (CASE_ACTIONS as readonly string[]).includes(action)
 }
 
 export function executeCaseAction(
@@ -64,5 +27,5 @@ export function executeCaseAction(
   action: CaseAction,
   payload: { reason?: string } = {},
 ): Promise<CaseDetail> {
-  return apiClient.post<CaseDetail>(`/cases/${caseId}/${ACTION_CONFIG[action].path}`, payload)
+  return apiClient.post<CaseDetail>(`/cases/${caseId}/${CASE_ACTION_ENDPOINTS[action]}`, payload)
 }

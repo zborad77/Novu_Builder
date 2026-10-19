@@ -1,5 +1,5 @@
 import { Link, useParams } from '@tanstack/react-router'
-import { usePhotos } from 'features/cases/api/caseQueries'
+import { usePhotos } from 'features/cases'
 
 export function CasePhotosPage() {
   const { caseId } = useParams({ strict: false })

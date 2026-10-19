@@ -11,3 +11,5 @@ src/backend/tests/architecture/baseline/** text eol=lf
 src/backend/migration_tests/baseline/** text eol=lf
 src/backend/tools/refactor/baseline/** text eol=lf
 .novu-repo-root text eol=lf
+# Vygenerované TS kontrakty frontendu (gen-contracts.mjs píše LF).
+src/frontend/src/shared/api/generated/** text eol=lf

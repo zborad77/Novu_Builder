@@ -1,19 +1,24 @@
+import { CASE_STATUSES, TERMINAL_CASE_STATUSES } from 'shared/api/generated/caseWorkflow'
 import type { CaseStatus } from '../types/case.types'
 
-const CASE_PHASES: Array<{
-  code: CaseStatus
-  label: string
-  shortLabel: string
-}> = [
-  { code: 'draft', label: 'Draft', shortLabel: 'Draft' },
-  { code: 'intake', label: 'Intake', shortLabel: 'Intake' },
-  { code: 'analyzing', label: 'Analyzing', shortLabel: 'Analysis' },
-  { code: 'proposal_ready', label: 'Proposal ready', shortLabel: 'Proposal' },
-  { code: 'quote_ready', label: 'Quote ready', shortLabel: 'Quote' },
-  { code: 'sent', label: 'Sent', shortLabel: 'Sent' },
-  { code: 'archived', label: 'Archived', shortLabel: 'Done' },
-  { code: 'cancelled', label: 'Cancelled', shortLabel: 'Cancelled' },
-]
+// Prezentační popisky stavů; pořadí fází a terminální stavy pocházejí z kontraktu
+// workflow (src/contracts/workflow), který generuje backend.
+const PHASE_LABELS: Record<CaseStatus, { label: string; shortLabel: string }> = {
+  draft: { label: 'Draft', shortLabel: 'Draft' },
+  intake: { label: 'Intake', shortLabel: 'Intake' },
+  analyzing: { label: 'Analyzing', shortLabel: 'Analysis' },
+  proposal_ready: { label: 'Proposal ready', shortLabel: 'Proposal' },
+  quote_ready: { label: 'Quote ready', shortLabel: 'Quote' },
+  sent: { label: 'Sent', shortLabel: 'Sent' },
+  archived: { label: 'Archived', shortLabel: 'Done' },
+  cancelled: { label: 'Cancelled', shortLabel: 'Cancelled' },
+}
+
+const CASE_PHASES = CASE_STATUSES.map((code) => ({ code, ...PHASE_LABELS[code] }))
+
+function isTerminal(status: CaseStatus): status is 'archived' | 'cancelled' {
+  return TERMINAL_CASE_STATUSES.includes(status)
+}
 
 const TERMINAL_TONE: Record<Extract<CaseStatus, 'archived' | 'cancelled'>, string> = {
   archived: 'border-emerald-200 bg-emerald-50 text-emerald-800',
@@ -25,7 +30,7 @@ interface CasePhaseIndicatorProps {
 }
 
 export function CasePhaseIndicator({ status }: CasePhaseIndicatorProps) {
-  if (status === 'archived' || status === 'cancelled') {
+  if (isTerminal(status)) {
     return (
       <div
         className={`rounded-2xl border px-4 py-3 text-sm font-medium ${TERMINAL_TONE[status]}`}
@@ -36,7 +41,7 @@ export function CasePhaseIndicator({ status }: CasePhaseIndicatorProps) {
   }
 
   const activeIndex = CASE_PHASES.findIndex((phase) => phase.code === status)
-  const linearPhases = CASE_PHASES.slice(0, 6)
+  const linearPhases = CASE_PHASES.filter((phase) => !isTerminal(phase.code))
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50/90 px-4 py-4">

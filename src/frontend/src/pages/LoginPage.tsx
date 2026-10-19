@@ -3,8 +3,7 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { AUTH_ME_KEY } from 'app/providers/AuthProvider'
 import { paths } from 'app/router/paths'
-import { apiClient, tokenStorage } from 'shared/lib/apiClient'
-import type { LoginResponse } from 'features/auth'
+import { login, tokenStorage } from 'features/auth'
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -19,7 +18,7 @@ export function LoginPage() {
     setLoading(true)
     setError(null)
     try {
-      const result = await apiClient.post<LoginResponse>('/auth/login', { email, password })
+      const result = await login(email, password)
       tokenStorage.setTokens({
         accessToken: result.accessToken,
         refreshToken: result.refreshToken,

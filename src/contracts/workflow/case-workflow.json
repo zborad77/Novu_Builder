@@ -1,0 +1,210 @@
+{
+  "statuses": [
+    "draft",
+    "intake",
+    "analyzing",
+    "proposal_ready",
+    "quote_ready",
+    "sent",
+    "archived",
+    "cancelled"
+  ],
+  "terminalStatuses": [
+    "archived",
+    "cancelled"
+  ],
+  "lockedStatuses": [
+    "analyzing",
+    "proposal_ready",
+    "quote_ready",
+    "sent"
+  ],
+  "transitions": [
+    {
+      "from": "draft",
+      "to": "intake"
+    },
+    {
+      "from": "draft",
+      "to": "cancelled"
+    },
+    {
+      "from": "intake",
+      "to": "draft"
+    },
+    {
+      "from": "intake",
+      "to": "analyzing"
+    },
+    {
+      "from": "intake",
+      "to": "cancelled"
+    },
+    {
+      "from": "analyzing",
+      "to": "draft"
+    },
+    {
+      "from": "analyzing",
+      "to": "proposal_ready"
+    },
+    {
+      "from": "analyzing",
+      "to": "quote_ready"
+    },
+    {
+      "from": "analyzing",
+      "to": "cancelled"
+    },
+    {
+      "from": "proposal_ready",
+      "to": "draft"
+    },
+    {
+      "from": "proposal_ready",
+      "to": "quote_ready"
+    },
+    {
+      "from": "proposal_ready",
+      "to": "cancelled"
+    },
+    {
+      "from": "quote_ready",
+      "to": "draft"
+    },
+    {
+      "from": "quote_ready",
+      "to": "sent"
+    },
+    {
+      "from": "quote_ready",
+      "to": "cancelled"
+    },
+    {
+      "from": "sent",
+      "to": "draft"
+    },
+    {
+      "from": "sent",
+      "to": "archived"
+    },
+    {
+      "from": "sent",
+      "to": "cancelled"
+    }
+  ],
+  "humanActions": [
+    {
+      "action": "submit",
+      "label": "Submit for intake",
+      "from": "draft",
+      "to": "intake",
+      "requiresReason": false
+    },
+    {
+      "action": "cancel",
+      "label": "Cancel case",
+      "from": "draft",
+      "to": "cancelled",
+      "requiresReason": true
+    },
+    {
+      "action": "start_analysis",
+      "label": "Start analysis",
+      "from": "intake",
+      "to": "analyzing",
+      "requiresReason": false
+    },
+    {
+      "action": "return_to_draft",
+      "label": "Return to draft",
+      "from": "intake",
+      "to": "draft",
+      "requiresReason": true
+    },
+    {
+      "action": "cancel",
+      "label": "Cancel case",
+      "from": "intake",
+      "to": "cancelled",
+      "requiresReason": true
+    },
+    {
+      "action": "return_to_draft",
+      "label": "Return to draft",
+      "from": "analyzing",
+      "to": "draft",
+      "requiresReason": true
+    },
+    {
+      "action": "cancel",
+      "label": "Cancel case",
+      "from": "analyzing",
+      "to": "cancelled",
+      "requiresReason": true
+    },
+    {
+      "action": "approve_proposal",
+      "label": "Approve proposal",
+      "from": "proposal_ready",
+      "to": "quote_ready",
+      "requiresReason": false
+    },
+    {
+      "action": "return_to_draft",
+      "label": "Return to draft",
+      "from": "proposal_ready",
+      "to": "draft",
+      "requiresReason": true
+    },
+    {
+      "action": "cancel",
+      "label": "Cancel case",
+      "from": "proposal_ready",
+      "to": "cancelled",
+      "requiresReason": true
+    },
+    {
+      "action": "send_quote",
+      "label": "Send quote to client",
+      "from": "quote_ready",
+      "to": "sent",
+      "requiresReason": false
+    },
+    {
+      "action": "return_to_draft",
+      "label": "Return to draft",
+      "from": "quote_ready",
+      "to": "draft",
+      "requiresReason": true
+    },
+    {
+      "action": "cancel",
+      "label": "Cancel case",
+      "from": "quote_ready",
+      "to": "cancelled",
+      "requiresReason": true
+    },
+    {
+      "action": "complete",
+      "label": "Mark as completed",
+      "from": "sent",
+      "to": "archived",
+      "requiresReason": false
+    },
+    {
+      "action": "return_to_draft",
+      "label": "Return to draft",
+      "from": "sent",
+      "to": "draft",
+      "requiresReason": true
+    },
+    {
+      "action": "cancel",
+      "label": "Cancel case",
+      "from": "sent",
+      "to": "cancelled",
+      "requiresReason": true
+    }
+  ]
+}

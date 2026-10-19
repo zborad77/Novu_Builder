@@ -89,6 +89,14 @@ jobs:
       - name: dependency-cruiser (architecture gate)
         run: npm run dep-cruise
 
+      # Typy API a slovník workflow jsou vygenerované ze src/contracts (generuje
+      # backend). Zastaralé vygenerované soubory = nesoulad klienta s API.
+      - name: Generated contracts are current
+        run: npm run check:contracts
+
+      - name: Production build
+        run: npm run build
+
   test:
     runs-on: ubuntu-latest
 

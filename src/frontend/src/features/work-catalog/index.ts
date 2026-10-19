@@ -3,6 +3,7 @@ export {
   useCaseWorkTypeCatalog,
   useCreateCaseWorkItem,
   useEffectiveWorkTypes,
+  WORK_CATALOG_KEYS,
 } from './api/workCatalogQueries'
 export { CaseWorkTypeCatalog } from './containers/CaseWorkTypeCatalog'
 export { CaseWorkTree } from './containers/CaseWorkTree'

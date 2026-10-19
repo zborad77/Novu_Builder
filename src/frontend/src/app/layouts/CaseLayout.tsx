@@ -8,11 +8,10 @@ import {
   CaseWorkflowActions,
   useCaseDetail,
 } from 'features/cases'
-import { useCaseEvents } from 'features/cases/hooks/useCaseEvents'
-import { CASE_KEYS } from 'features/cases/api/caseQueries'
-import { WORK_CATALOG_KEYS } from 'features/work-catalog/api/workCatalogQueries'
+import { useCaseEvents, CASE_KEYS } from 'features/cases'
+import { WORK_CATALOG_KEYS } from 'features/work-catalog'
 import type { AnalysisCompletedPayload, CaseEvent } from 'shared/types/events.types'
-import type { CaseDetail } from 'features/cases/types/case.types'
+import type { CaseDetail } from 'features/cases'
 
 const CASE_NAV = [
   { label: 'Overview', to: '/cases/$caseId' },

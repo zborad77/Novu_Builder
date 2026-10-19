@@ -33,6 +33,7 @@ from app.modules.cases.transitions import (  # noqa: F401
     VALID_STATUSES,
     apply_transition,
     get_available_transitions,
+    workflow_contract,
 )
 
 # --- ručně ---
@@ -41,6 +42,7 @@ import app.modules.cases.models as orm_models  # noqa: E402
 # --- konec ---
 
 __all__ = [
+    "workflow_contract",
     "orm_models",
     "CaseActionError",
     "CaseReader",

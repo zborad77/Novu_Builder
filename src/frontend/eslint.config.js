@@ -118,6 +118,7 @@ export default [
     },
   },
   {
-    ignores: ['dist/**', 'node_modules/**', 'src/**/*.js', '*.config.{js,ts}'],
+    // src/shared/api/generated: vygenerováno z src/contracts (npm run gen:contracts)
+    ignores: ['dist/**', 'node_modules/**', 'src/**/*.js', '*.config.{js,ts}', 'src/shared/api/generated/**', 'scripts/**'],
   },
 ]

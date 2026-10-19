@@ -1,7 +1,7 @@
 /**
  * Pure helper functions for identity/context checks.
  * These are NOT hooks — they receive an Actor object as argument.
- * Used by permissions.ts, guards, and UI rendering logic.
+ * Used by guards and UI rendering logic.
  *
  * Rule: no business-state exceptions here (case.status, tenant flags).
  * Those belong in the respective feature.

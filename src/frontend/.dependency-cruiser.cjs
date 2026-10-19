@@ -6,6 +6,8 @@
  *
  * Enforces architectural rules that ESLint cannot catch reliably:
  *   - No cross-feature internal imports (only index.ts boundary allowed)
+ *   - app/ and pages/ use only a feature's public API (index.ts)
+ *   - apiClient only from the feature API layer (features/<feature>/api/)
  *   - No raw axios/fetch outside apiClient.ts
  *   - No queryClient.invalidateQueries called from pages/
  *   - No circular dependencies
@@ -30,6 +32,50 @@ module.exports = {
         // Allow importing the index.ts public API file
         pathNot: '^src/features/[^/]+/index\\.(ts|tsx|js|jsx)$',
       },
+    },
+
+    // -----------------------------------------------------------------------
+    // RULE 1b: app/ a pages/ smí z feature importovat jen její index.ts
+    // (modulární architektura – feature je modul s veřejným rozhraním)
+    // -----------------------------------------------------------------------
+    {
+      name: 'app-and-pages-use-feature-public-api',
+      comment:
+        'app/ and pages/ may only import a feature through its public API (index.ts).',
+      severity: 'error',
+      from: { path: '^src/(app|pages)/' },
+      to: {
+        path: '^src/features/[^/]+/',
+        pathNot: '^src/features/[^/]+/index\\.(ts|tsx|js|jsx)$',
+      },
+    },
+
+    // -----------------------------------------------------------------------
+    // RULE 1c: apiClient smí používat jen API vrstva feature (features/*/api/)
+    // Stránky, providery, hooky a komponenty volají backend přes ni.
+    // -----------------------------------------------------------------------
+    {
+      name: 'api-client-only-in-api-layer',
+      comment:
+        'Only features/<feature>/api/** may import shared/lib/apiClient; ' +
+        'UI code calls the backend through the feature API layer.',
+      severity: 'error',
+      from: {
+        path: '^src/',
+        pathNot: '^src/(features/[^/]+/api/|shared/lib/)',
+      },
+      to: { path: '^src/shared/lib/apiClient\\.ts$' },
+    },
+
+    // -----------------------------------------------------------------------
+    // RULE 1d: vygenerované kontrakty jsou jen ke čtení – nic z nich neimportují
+    // -----------------------------------------------------------------------
+    {
+      name: 'generated-contracts-are-leaves',
+      comment: 'Generated contract files must not depend on application code.',
+      severity: 'error',
+      from: { path: '^src/shared/api/generated/' },
+      to: { path: '^src/', pathNot: '^src/shared/api/generated/' },
     },
 
     // -----------------------------------------------------------------------

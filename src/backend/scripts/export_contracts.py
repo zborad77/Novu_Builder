@@ -5,6 +5,7 @@ Sdílené API kontrakty (src/contracts/, čtou je klienti):
     openapi/openapi.json          – OpenAPI dokument FastAPI aplikace
     openapi/routes.snapshot.json  – routy v PŘESNÉM pořadí registrace (exposure
                                     guard bere první shodu šablony)
+    workflow/case-workflow.json   – slovník stavů a akcí zakázky (klienti z něj generují typy)
 
 Interní baseline backendu (tests/architecture/baseline/, nesdílí se):
     middleware.json        – pořadí a parametry middlewarů (F3.4 → SA-05 → F3 …)
@@ -34,7 +35,8 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.platform.paths import repo_root as _repo_root  # noqa: E402
 
-CONTRACTS_DIR = _repo_root() / "src" / "contracts" / "openapi"
+CONTRACTS_ROOT = _repo_root() / "src" / "contracts"
+CONTRACTS_DIR = CONTRACTS_ROOT / "openapi"
 BASELINE_DIR = BACKEND_ROOT / "tests" / "architecture" / "baseline"
 
 
@@ -97,6 +99,12 @@ def build_routes_snapshot(app: Any) -> str:
             }
         )
     return _dumps({"count": len(routes), "routes": routes})
+
+
+def build_case_workflow() -> str:
+    from app.modules.cases.public import workflow_contract
+
+    return _dumps(workflow_contract())
 
 
 def build_middleware_snapshot(app: Any) -> str:
@@ -228,6 +236,7 @@ def outputs() -> dict[Path, str]:
     return {
         CONTRACTS_DIR / "openapi.json": build_openapi(app),
         CONTRACTS_DIR / "routes.snapshot.json": build_routes_snapshot(app),
+        CONTRACTS_ROOT / "workflow" / "case-workflow.json": build_case_workflow(),
         BASELINE_DIR / "middleware.json": build_middleware_snapshot(app),
         BASELINE_DIR / "security_surface.json": build_security_surface(app),
         BASELINE_DIR / "metadata.json": build_metadata_snapshot(),

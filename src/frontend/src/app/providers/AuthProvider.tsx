@@ -7,7 +7,7 @@ import {
 } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Actor, AuthMeResponse } from 'features/auth'
-import { apiClient, tokenStorage, LOGOUT_EVENT } from 'shared/lib/apiClient'
+import { fetchCurrentActor, tokenStorage, LOGOUT_EVENT } from 'features/auth'
 
 // ---------------------------------------------------------------------------
 // Context shape
@@ -60,7 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const { data: actor, isLoading } = useQuery({
     queryKey: AUTH_ME_KEY,
-    queryFn: (): Promise<AuthMeResponse> => apiClient.get<AuthMeResponse>('/auth/me'),
+    queryFn: (): Promise<AuthMeResponse> => fetchCurrentActor(),
     enabled: tokenStorage.getAccess() !== null,
     retry: false,
     staleTime: 5 * 60 * 1000, // 5 min — actor data changes rarely

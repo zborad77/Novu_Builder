@@ -4,6 +4,8 @@
  * Outside this feature, import auth domain types only from here.
  */
 
+export { fetchCurrentActor, login, LOGOUT_EVENT, tokenStorage } from './api/authApi'
+
 export type {
   Actor,
   ActorRole,

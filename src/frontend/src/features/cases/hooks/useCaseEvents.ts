@@ -19,7 +19,7 @@
  *   should redirect to login via the standard logout flow.
  */
 import { useCallback, useEffect, useReducer, useRef } from 'react'
-import { apiClient } from 'shared/lib/apiClient'
+import { openCaseEventStream } from '../api/caseEventsApi'
 import { isCaseEvent, type CaseEvent } from 'shared/types/events.types'
 
 const MAX_BACKOFF_MS = 16_000
@@ -69,8 +69,8 @@ export function useCaseEvents(caseId: string, opts: CaseEventsOptions): void {
 
         let response: Response
         try {
-          // apiClient.stream owns the base URL and the Authorization header.
-          response = await apiClient.stream(`/cases/${caseId}/activity/stream`, {
+          // openCaseEventStream (api vrstva) vlastní base URL a Authorization hlavičku.
+          response = await openCaseEventStream(caseId, {
             headers,
             signal: abortSignal,
           })

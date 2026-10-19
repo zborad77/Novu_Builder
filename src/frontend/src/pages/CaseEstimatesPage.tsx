@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { CASE_KEYS, useCaseDetail, useCaseTimeline } from 'features/cases'
 import type { ProposalInputVersions } from 'features/cases'
 import { useToast } from 'app/providers/ToastProvider'
-import type { CaseTimelineEvent } from 'features/cases/api/caseApi'
+import type { CaseTimelineEvent } from 'features/cases'
 
 // ---------------------------------------------------------------------------
 // ProposalStaleNotice — shown when PATCH /proposal-draft returns 409 PROPOSAL_STALE

@@ -1,12 +1,6 @@
-export type CaseStatus =
-  | 'draft'
-  | 'intake'
-  | 'analyzing'
-  | 'proposal_ready'
-  | 'quote_ready'
-  | 'sent'
-  | 'archived'
-  | 'cancelled'
+// Slovník stavů zakázky je kontrakt backendu (src/contracts/workflow/case-workflow.json).
+export type { CaseStatus } from 'shared/api/generated/caseWorkflow'
+import type { CaseStatus } from 'shared/api/generated/caseWorkflow'
 
 export interface AvailableTransition {
   action: string

@@ -1,11 +1,6 @@
 import { useState } from 'react'
 import { ReasonDialog } from 'shared/ui'
-import {
-  ACTION_CONFIG,
-  getCaseActionConfig,
-  isCaseAction,
-  type CaseAction,
-} from '../api/caseActionsApi'
+import { isCaseAction, type CaseAction } from '../api/caseActionsApi'
 import { useCaseActions } from '../hooks/useCaseActions'
 import type { AvailableTransition, CaseStatus } from '../types/case.types'
 
@@ -70,16 +65,12 @@ export function CaseWorkflowActions({
     return null
   }
 
+  // Popisek akce a nutnost důvodu určuje backend (availableTransitions).
   function openTransition(transition: ConfiguredTransition) {
-    const config = getCaseActionConfig(transition.action)
-    if (!config) {
-      return
-    }
-
-    if (config.requiresReason) {
+    if (transition.requires_reason) {
       setPendingTransition({
         action: transition.action,
-        label: config.label,
+        label: transition.label,
         reason: '',
       })
       return
@@ -107,8 +98,6 @@ export function CaseWorkflowActions({
     <section aria-label={`Workflow actions for ${statusLabel} case`} className="space-y-3">
       <div className="flex flex-wrap gap-2">
         {visibleTransitions.map((transition) => {
-          const config = ACTION_CONFIG[transition.action]
-
           return (
             <button
               key={transition.action}
@@ -117,7 +106,7 @@ export function CaseWorkflowActions({
               disabled={isPending}
               onClick={() => openTransition(transition)}
             >
-              {config.label}
+              {transition.label}
             </button>
           )
         })}

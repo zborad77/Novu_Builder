@@ -237,3 +237,41 @@ def apply_transition(
         # Fallback: attach via the ORM relationship so it is persisted when
         # the session owning *project* flushes.
         project.status_history.append(history_entry)
+
+
+# ---------------------------------------------------------------------------
+# Kontrakt workflow pro klienty (src/contracts/workflow/case-workflow.json)
+# ---------------------------------------------------------------------------
+
+def workflow_contract() -> dict[str, object]:
+    """Slovník stavů a akcí zakázky pro klienty – jediný zdroj pravdy je tento modul.
+
+    Klienti z něj berou pořadí stavů, terminální/zamčené stavy a seznam akcí;
+    o dostupnosti akce pro konkrétní zakázku a roli rozhoduje dál backend
+    (`availableTransitions` v detailu zakázky).
+    """
+    order = list(ALLOWED_TRANSITIONS)
+
+    def _ordered(statuses: frozenset[str]) -> list[str]:
+        return sorted(statuses, key=order.index)
+
+    return {
+        "statuses": order,
+        "terminalStatuses": _ordered(TERMINAL_STATUSES),
+        "lockedStatuses": _ordered(LOCKED_STATUSES),
+        "transitions": [
+            {"from": from_status, "to": to_status}
+            for from_status in order
+            for to_status in _ordered(ALLOWED_TRANSITIONS[from_status])
+        ],
+        "humanActions": [
+            {
+                "action": meta.action,
+                "label": meta.label,
+                "from": from_status,
+                "to": to_status,
+                "requiresReason": meta.requires_reason,
+            }
+            for (from_status, to_status), meta in _HUMAN_REGISTRY.items()
+        ],
+    }
