@@ -17,6 +17,7 @@ Run interval: every 5 minutes (configurable).
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import structlog
 from sqlalchemy import text
@@ -85,12 +86,14 @@ class BudgetSweeper:
                     SELECT id, organization_id, offer_job_id, token_estimate
                     FROM ai_budget_reservations
                     WHERE status = 'reserved'
-                      AND reserved_at < now() - :expiry_interval::interval
+                      AND reserved_at < now() - CAST(:expiry_interval AS interval)
                     ORDER BY reserved_at ASC
                     LIMIT 200
                     FOR UPDATE SKIP LOCKED
                 """),
-                {"expiry_interval": f"{self._expiry_minutes} minutes"},
+                # timedelta + CAST -> PostgreSQL interval (asyncpg); `::interval` v text() SQL
+                # PostgreSQL odmítl jako syntaktickou chybu.
+                {"expiry_interval": timedelta(minutes=self._expiry_minutes)},
             )
             stale = rows.fetchall()
             if not stale:
