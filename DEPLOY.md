@@ -41,12 +41,12 @@ The working tree must be clean.
 The backend template is:
 
 ```text
-python-backend/.env.production.example
+src/backend/.env.production.example
 ```
 
 Create the two local source files used by the Compose env builder:
 
-- `python-backend/.env.production` — application secrets and strict-runtime overrides
+- `src/backend/.env.production` — application secrets and strict-runtime overrides
 - root `.env` — infrastructure values such as `POSTGRES_PASSWORD` and `REDIS_PASSWORD`
 
 Then render root `.env.production`:
@@ -237,9 +237,9 @@ nginx must overwrite, not append, the chain: `proxy_set_header X-Forwarded-For $
 # /etc/systemd/system/novu-backend.service
 [Service]
 User=novu
-WorkingDirectory=/opt/novu/python-backend
+WorkingDirectory=/opt/novu/src/backend
 EnvironmentFile=/etc/novu/backend.env   # APP_ENV=production, TRUSTED_PROXY_IPS=127.0.0.1,::1, ...
-ExecStart=/opt/novu/python-backend/.venv/bin/uvicorn app.main:app \
+ExecStart=/opt/novu/src/backend/.venv/bin/uvicorn app.main:app \
     --host 127.0.0.1 --port 8000 --no-proxy-headers
 Restart=on-failure
 ```

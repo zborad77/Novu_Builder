@@ -58,9 +58,9 @@ done
 ok "no ruleset opens PostgreSQL/Redis/MinIO/raw API ports"
 
 # ── systemd ──────────────────────────────────────────────────────────────────
-mkdir -p /opt/novuconstruct/python-backend/.venv/bin /opt/novuconstruct/deploy/linux/bin /etc/novuconstruct/secrets
+mkdir -p /opt/novuconstruct/src/backend/.venv/bin /opt/novuconstruct/deploy/linux/bin /etc/novuconstruct/secrets
 cp "$D"/bin/* /opt/novuconstruct/deploy/linux/bin/ && chmod 0755 /opt/novuconstruct/deploy/linux/bin/*
-for exe in uvicorn python; do printf '#!/bin/sh\n' > "/opt/novuconstruct/python-backend/.venv/bin/$exe"; chmod 0755 "/opt/novuconstruct/python-backend/.venv/bin/$exe"; done
+for exe in uvicorn python; do printf '#!/bin/sh\n' > "/opt/novuconstruct/src/backend/.venv/bin/$exe"; chmod 0755 "/opt/novuconstruct/src/backend/.venv/bin/$exe"; done
 touch /etc/novuconstruct/core.env
 units=$(mktemp -d)
 cp "$D"/systemd/*.service "$D"/systemd/*.target "$units/"

@@ -39,8 +39,8 @@ Implemented by repository scripts:
 
 - `scripts/backup.sh`
 - `ops/restore.sh`
-- `python-backend/scripts/verify_restore.sh`
-- `python-backend/scripts/restore_db.sh`
+- `src/backend/scripts/verify_restore.sh`
+- `src/backend/scripts/restore_db.sh`
 
 Current repository capability:
 

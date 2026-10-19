@@ -11,7 +11,7 @@
 
 Zóny jsou implementované ve větvi `fix/f0-rbac-tenant-isolation` (F3.1–F3.3, F3.5), **zatím nenasazené**.
 
-- **Zdroj pravdy je kód:** [`python-backend/app/core/exposure.py`](../../python-backend/app/core/exposure.py). Tato tabulka ho popisuje.
+- **Zdroj pravdy je kód:** [`src/backend/app/core/exposure.py`](../../src/backend/app/core/exposure.py). Tato tabulka ho popisuje.
 - **Zóna se určuje jen z procesu:** `NC_ZONE` v `deploy/linux/systemd/nc-api@.service`.
 - **Nezařazená route** je blokovaná ve všech produkčních zónách, i v admin.
 - **Odchylky od původního návrhu:**

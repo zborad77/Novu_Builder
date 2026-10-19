@@ -45,7 +45,7 @@ RETRY_DELAY = 1
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
-BACKEND_ROOT = REPO_ROOT / "python-backend"
+BACKEND_ROOT = REPO_ROOT / "src" / "backend"
 
 URL_SCRIPTS = {
     "test-backend-startup.py",
@@ -342,12 +342,12 @@ def main() -> None:
     parser.add_argument(
         "--include-ruff",
         action="store_true",
-        help="In backend stability mode, also run ruff check from python-backend",
+        help="In backend stability mode, also run ruff check from src/backend",
     )
     parser.add_argument(
         "--include-mypy",
         action="store_true",
-        help="In backend stability mode, also run mypy on python-backend/app",
+        help="In backend stability mode, also run mypy on src/backend/app",
     )
     args = parser.parse_args()
 

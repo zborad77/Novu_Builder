@@ -205,8 +205,8 @@ Current semantics:
 
 ```bash
 # Restore to TEMP DB, validate, clean up — does not touch production
-# Requires: psql, pg_restore on host + DATABASE_URL in python-backend/.env
-python-backend/scripts/verify_restore.sh /backups/db_YYYYMMDD_HHMMSS.pgdump
+# Requires: psql, pg_restore on host + DATABASE_URL in src/backend/.env
+src/backend/scripts/verify_restore.sh /backups/db_YYYYMMDD_HHMMSS.pgdump
 ```
 
 ### Restore procedure
@@ -263,7 +263,7 @@ It is not an authoritative production recovery mechanism for `STORAGE_BACKEND=s3
 - Full production DR drill
 - Full-state production restore validation
 - Off-site / remote copy of backup files for S3 media
-- Backup verify to temp DB is automated via `python-backend/scripts/verify_restore.sh`
+- Backup verify to temp DB is automated via `src/backend/scripts/verify_restore.sh`
 - Point-in-time recovery (needs WAL archiving or Barman — out of scope for single-host)
 
 ---

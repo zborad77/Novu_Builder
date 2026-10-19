@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-cd /d "%~dp0python-backend"
+cd /d "%~dp0src\backend"
 
 :: Vytvor .env pokud neexistuje
 if not exist ".env" (

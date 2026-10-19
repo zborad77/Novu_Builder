@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-cd /d "%~dp0web"
+cd /d "%~dp0src\frontend"
 
 :: Vytvor .env.local pokud neexistuje (URL backendu)
 if not exist ".env.local" (

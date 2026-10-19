@@ -12,7 +12,7 @@ Type=exec
 User=novuconstruct
 Group=novuconstruct
 UMask=0027
-WorkingDirectory=/opt/novuconstruct/python-backend
+WorkingDirectory=/opt/novuconstruct/src/backend
 EnvironmentFile=/etc/novuconstruct/core.env
 LoadCredential=JWT_SECRET:/etc/novuconstruct/secrets/JWT_SECRET
 LoadCredential=DATABASE_URL:/etc/novuconstruct/secrets/DATABASE_URL
@@ -25,7 +25,7 @@ LoadCredential=ANTHROPIC_API_KEY:/etc/novuconstruct/secrets/ANTHROPIC_API_KEY
 StateDirectory=novuconstruct
 StateDirectoryMode=0750
 ExecStart=/opt/novuconstruct/deploy/linux/bin/nc-run \
-    /opt/novuconstruct/python-backend/.venv/bin/python -m app.worker.runner
+    /opt/novuconstruct/src/backend/.venv/bin/python -m app.worker.runner
 Restart=on-failure
 RestartSec=5
 

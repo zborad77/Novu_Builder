@@ -16,8 +16,8 @@ Reset do noveho ciloveho backend smeru je v [docs/final-architecture-reset.md](d
 
 Repo dnes obsahuje tyto hlavni slozky:
 
-- `desktop-qt` - novy cilovy desktop klient v C++/Qt6
-- `python-backend` - novy cilovy backend smer (FastAPI)
+- `src/desktop` - novy cilovy desktop klient v C++/Qt6
+- `src/backend` - novy cilovy backend smer (FastAPI)
 - `docs` - architektura, blueprint a provozni poznamky
 - `storage` - lokalni dev storage pro obrazky a exporty. Local storage is DEV ONLY.
 
@@ -33,13 +33,13 @@ Repo dnes obsahuje tyto hlavni slozky:
 
 ## Lokalni spusteni aktivnich casti
 
-Backend `python-backend`:
+Backend `src/backend`:
 
 ```bash
 npm run api:dev
 ```
 
-Desktop skeleton `desktop-qt`:
+Desktop skeleton `src/desktop`:
 
 - zatim jen kostra aplikace a architektury
 - Qt6 build a API napojeni doplnime v dalsich krocich
@@ -67,8 +67,8 @@ cd Novu_Builder
 
 Pak doporuceny onboarding:
 
-1. backend setup v [python-backend/README.md](python-backend/README.md)
-2. desktop setup v [desktop-qt/README.md](desktop-qt/README.md)
+1. backend setup v [src/backend/README.md](src/backend/README.md)
+2. desktop setup v [src/desktop/README.md](src/desktop/README.md)
 3. volitelne import testovacich referenci z `test-data/reference-cases`
 
 ### Rychly setup check
@@ -105,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File scripts\bootstrap-dev.ps1 -ImportRefere
 
 Bootstrap pripravi:
 
-- `python-backend/.venv`
+- `src/backend/.venv`
 - backend zavislosti z `requirements.txt`
 - `.env` z `.env.example`, pokud chybi
 - Alembic migrace
@@ -137,7 +137,7 @@ powershell -ExecutionPolicy Bypass -File scripts\switch-backend-db.ps1 `
 
 Skript:
 
-- upravi `python-backend/.env`
+- upravi `src/backend/.env`
 - pri PostgreSQL doinstaluje chybejici `asyncpg` a `psycopg[binary]`
 - umi rovnou spustit `alembic upgrade head`
 
@@ -222,13 +222,13 @@ Deployment details and the operator checklist are in [DEPLOY.md](DEPLOY.md).
 
 ## Nejblizsi kroky
 
-1. Rozvijet `desktop-qt` jako cilovy kancelarsky klient.
+1. Rozvijet `src/desktop` jako cilovy kancelarsky klient.
 2. Dovest Python backend ke stabilnimu produkcnimu API tvaru.
 
 ## Architektura klientu a APP_BASE_URL
 
 Web klient neni soucasti aktualni architektury.
-Primarnim klientem je desktopova Qt aplikace (`desktop-qt`).
+Primarnim klientem je desktopova Qt aplikace (`src/desktop`).
 Self-service reset hesla vyzaduje externi web klient dostupny pres `APP_BASE_URL` —
 dokud zadny takovy klient neexistuje, endpointy `/forgot-password` a `/reset-password` zustavaji vypnute (HTTP 410 Gone).
 

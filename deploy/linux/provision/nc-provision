@@ -193,8 +193,8 @@ preflight() {
   [ "$mem" -ge 4 ] && ok "RAM ${mem} GB" || warn "RAM ${mem} GB (doporučeno ≥ 4 GB pro tři instance API)"
 
   if has_core; then
-    [ -f "$NC_APP_DIR/python-backend/requirements.txt" ] && ok "aplikace v $NC_APP_DIR" \
-      || block "release aplikace chybí v $NC_APP_DIR (python-backend/requirements.txt)"
+    [ -f "$NC_APP_DIR/src/backend/requirements.txt" ] && ok "aplikace v $NC_APP_DIR" \
+      || block "release aplikace chybí v $NC_APP_DIR (src/backend/requirements.txt)"
     [ -x "$NC_APP_DIR/deploy/linux/bin/nc-run" ] || [ -f "$NC_APP_DIR/deploy/linux/bin/nc-run" ] \
       || block "$NC_APP_DIR/deploy/linux chybí (deploy soubory z téhož release)"
     if [ "$(stat -c %U "$NC_APP_DIR" 2>/dev/null)" != root ]; then
@@ -435,13 +435,13 @@ EOF
 install_app() {
   has_core || return 0
   info "aplikace: venv a core.env"
-  local venv="$NC_APP_DIR/python-backend/.venv" stamp="$STATE/requirements.sha256" want
-  want=$(sha256sum "$NC_APP_DIR/python-backend/requirements.txt" | awk '{print $1}')
+  local venv="$NC_APP_DIR/src/backend/.venv" stamp="$STATE/requirements.sha256" want
+  want=$(sha256sum "$NC_APP_DIR/src/backend/requirements.txt" | awk '{print $1}')
   if [ "$NC_SKIP_PIP" = 1 ]; then
     [ -x "$venv/bin/python" ] || die "NC_SKIP_PIP=1, ale $venv chybí"
   elif [ ! -x "$venv/bin/python" ] || [ "$(cat "$stamp" 2>/dev/null)" != "$want" ]; then
     [ -x "$venv/bin/python" ] || run python3 -m venv "$venv"
-    run "$venv/bin/pip" install --quiet --disable-pip-version-check -r "$NC_APP_DIR/python-backend/requirements.txt"
+    run "$venv/bin/pip" install --quiet --disable-pip-version-check -r "$NC_APP_DIR/src/backend/requirements.txt"
     [ "$DRY_RUN" -eq 1 ] || echo "$want" > "$stamp"
   fi
   build_core_env
@@ -449,7 +449,7 @@ install_app() {
 
 # core.env: .env.production.example bez secrets + deploy/linux/env/core.env.overrides.
 build_core_env() {
-  local example="$NC_APP_DIR/python-backend/.env.production.example" out
+  local example="$NC_APP_DIR/src/backend/.env.production.example" out
   out=$(mktemp "$WORK/core.env.XXXXXX")
   {
     echo "# $MARKER (F6.2): generováno z .env.production.example + core.env.overrides."

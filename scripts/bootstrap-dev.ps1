@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$BackendRoot = Join-Path $RepoRoot "python-backend"
+$BackendRoot = Join-Path $RepoRoot "src\backend"
 $VenvPath = Join-Path $BackendRoot ".venv"
 $VenvPython = Join-Path $VenvPath "Scripts\\python.exe"
 $EnvExample = Join-Path $BackendRoot ".env.example"
@@ -117,9 +117,9 @@ $result = [ordered]@{
     )
     reference_cases_imported = [bool]$ImportReferenceCases
     next_steps = @(
-        "Spust backend: cd python-backend; .venv\\Scripts\\activate; python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload",
+        "Spust backend: cd src/backend; .venv\\Scripts\\activate; python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload",
         "Pro desktop zkontroluj Qt 6 + MSVC kit v Qt Creatoru",
-        "Potom muzes pustit scripts\\setup-check.ps1 a desktop-qt\\scripts\\smoke-check.ps1",
+        "Potom muzes pustit scripts\\setup-check.ps1 a src\\desktop\\scripts\\smoke-check.ps1",
         "Pokud budes chtit PostgreSQL rezim, doinstaluj pozdeji i asyncpg a psycopg[binary]"
     )
 }

@@ -25,7 +25,7 @@ __pycache__/
 *.pyo
 *.pyd
 
-python-backend/.venv/
+src/backend/.venv/
 
 # =========================================
 # DATABASES (LOCAL / TEST ONLY)
@@ -34,15 +34,15 @@ python-backend/.venv/
 *.sqlite3
 
 prisma/dev.db
-python-backend/python-backend.db
+src/backend/python-backend.db
 python-backend.db
 
 # =========================================
 # LOGS
 # =========================================
 *.log
-python-backend/log-test-*.json
-python-backend/.log-test-*.json
+src/backend/log-test-*.json
+src/backend/.log-test-*.json
 **/log-test-*.json
 **/.log-test-*.json
 
@@ -60,8 +60,8 @@ tmp_pytest/
 tmp_pytest_orch/
 docs/.pdf-build/
 
-python-backend/tmp_test_runtime/
-python-backend/tmp_*
+src/backend/tmp_test_runtime/
+src/backend/tmp_*
 
 # =========================================
 # RUNTIME STATE (NEVER VERSION)
@@ -73,6 +73,8 @@ python-backend/tmp_*
 # STORAGE / ARTIFACTS (RUNTIME DATA)
 # =========================================
 storage/
+# Zdrojový balíček backendu se jmenuje stejně jako lokální úložiště – nesmí se ignorovat.
+!src/backend/app/storage/
 backups/
 artifacts/
 **/artifacts/
@@ -95,7 +97,7 @@ nginx/certs/*.pem
 # IDE / LOCAL TOOLS
 # =========================================
 .vscode/
-desktop-qt/.qtcreator/
+src/desktop/.qtcreator/
 .claude/
 
 # Personal editor / AI-tool metadata and generated code indexes (not shared)
@@ -106,16 +108,16 @@ desktop-qt/.qtcreator/
 # =========================================
 # WEB FRONTEND BUILD ARTIFACTS
 # =========================================
-web/dist/
-web/*.tsbuildinfo
-web/tsconfig.node.tsbuildinfo
-web/vite.config.js
-web/vite.config.d.ts
-web/vite.config.placeholder.js
-web/vite.config.placeholder.d.ts
-web/vite.config.placeholder.ts
+src/frontend/dist/
+src/frontend/*.tsbuildinfo
+src/frontend/tsconfig.node.tsbuildinfo
+src/frontend/vite.config.js
+src/frontend/vite.config.d.ts
+src/frontend/vite.config.placeholder.js
+src/frontend/vite.config.placeholder.d.ts
+src/frontend/vite.config.placeholder.ts
 # compiled JS outputs alongside TS/TSX source files
-web/src/**/*.js
+src/frontend/src/**/*.js
 
 # =========================================
 # WINDOWS GENERATED DIRECTORY LISTINGS
@@ -139,4 +141,4 @@ docs/*.pdf
 NOVU_MASTER_PRODUCT_BOOK.pdf
 
 # Qt desktop packaging output (windeployqt / Package-Pilot.ps1)
-desktop-qt/dist/
+src/desktop/dist/

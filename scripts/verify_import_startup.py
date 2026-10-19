@@ -9,7 +9,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-BACKEND_ROOT = REPO_ROOT / "python-backend"
+BACKEND_ROOT = REPO_ROOT / "src" / "backend"
 
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -111,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--backend-root",
         default=str(BACKEND_ROOT),
-        help="Path to python-backend directory (default: %(default)s)",
+        help="Path to src/backend directory (default: %(default)s)",
     )
     parser.add_argument(
         "--python-executable",

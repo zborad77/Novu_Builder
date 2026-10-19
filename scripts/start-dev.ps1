@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$BackendRoot = Join-Path $RepoRoot "python-backend"
+$BackendRoot = Join-Path $RepoRoot "src\backend"
 $VenvPython = Join-Path $BackendRoot ".venv\Scripts\python.exe"
 $EnvFile = Join-Path $BackendRoot ".env"
 
@@ -17,7 +17,7 @@ function Fail-WithHelp {
 }
 
 if (-not (Test-Path $BackendRoot)) {
-    throw "Chybi slozka python-backend v $RepoRoot"
+    throw "Chybi slozka src\backend v $RepoRoot"
 }
 
 if (-not (Test-Path $VenvPython)) {
@@ -25,7 +25,7 @@ if (-not (Test-Path $VenvPython)) {
 }
 
 if (-not (Test-Path $EnvFile)) {
-    Fail-WithHelp "Chybi python-backend\\.env."
+    Fail-WithHelp "Chybi src\\backend\\.env."
 }
 
 $backendCommand = "Set-Location '$BackendRoot'; & '$VenvPython' -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload"
@@ -40,8 +40,8 @@ $result = [ordered]@{
     mode = if ($DryRun) { "dry_run" } else { "start_backend" }
     next_steps = @(
         "Pockej na hlasku 'Application startup complete.'",
-        "Potom muzes pustit desktop-qt\\scripts\\smoke-check.ps1",
-        "A v Qt Creatoru otevrit desktop-qt/CMakeLists.txt"
+        "Potom muzes pustit src\\desktop\\scripts\\smoke-check.ps1",
+        "A v Qt Creatoru otevrit src/desktop/CMakeLists.txt"
     )
 }
 

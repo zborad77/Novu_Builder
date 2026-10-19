@@ -32,7 +32,7 @@
 #    9. Polls backend and worker Compose health
 #
 #  verify_restore.sh requires: psql, pg_restore on host + DATABASE_URL in
-#  python-backend/.env. Use --skip-verify if these are not available.
+#  src/backend/.env. Use --skip-verify if these are not available.
 #
 #  Requirements: docker compose, curl
 #  Run from: project root (next to docker-compose.yml)
@@ -103,7 +103,7 @@ read_runtime_or_env_value() {
     return 0
   fi
 
-  for candidate in ".env.${app_env}" ".env" "python-backend/.env.${app_env}" "python-backend/.env"; do
+  for candidate in ".env.${app_env}" ".env" "src/backend/.env.${app_env}" "src/backend/.env"; do
     if value="$(read_env_value "$key" "$candidate")"; then
       printf '%s\n' "$value"
       return 0
@@ -495,7 +495,7 @@ run_media_restore_step() {
   [[ -n "$MEDIA_TARGET_REGION" ]] \
     || fail_restore MEDIA_RESTORE "target region is required for full-state S3 restore"
 
-  helper_script="${MEDIA_RESTORE_HELPER_OVERRIDE:-$PROJECT_DIR/python-backend/scripts/restore_s3_media.py}"
+  helper_script="${MEDIA_RESTORE_HELPER_OVERRIDE:-$PROJECT_DIR/src/backend/scripts/restore_s3_media.py}"
   python_bin="${PYTHON_BIN:-python}"
   [[ -f "$helper_script" ]] || fail_restore MEDIA_RESTORE "media restore helper is missing: $helper_script"
   command -v "$python_bin" >/dev/null 2>&1 \
@@ -531,7 +531,7 @@ run_post_restore_media_validation() {
   set_step_status MEDIA_VALIDATION "IN PROGRESS" \
     "validating restored media accessibility and app-level media semantics in isolated target bucket ${MEDIA_TARGET_BUCKET}"
 
-  helper_script="${MEDIA_VALIDATE_HELPER_OVERRIDE:-$PROJECT_DIR/python-backend/scripts/validate_restored_media.py}"
+  helper_script="${MEDIA_VALIDATE_HELPER_OVERRIDE:-$PROJECT_DIR/src/backend/scripts/validate_restored_media.py}"
   python_bin="${PYTHON_BIN:-python}"
   [[ -f "$helper_script" ]] || fail_restore MEDIA_VALIDATION "media validation helper is missing: $helper_script"
   command -v "$python_bin" >/dev/null 2>&1 \
@@ -570,7 +570,7 @@ run_storage_consistency_check() {
   local output status summary python_bin helper_script
 
   python_bin="${PYTHON_BIN:-python}"
-  helper_script="${STORAGE_CONSISTENCY_HELPER_OVERRIDE:-$PROJECT_DIR/python-backend/scripts/check_storage_consistency.py}"
+  helper_script="${STORAGE_CONSISTENCY_HELPER_OVERRIDE:-$PROJECT_DIR/src/backend/scripts/check_storage_consistency.py}"
 
   if [[ -n "$database_url" ]]; then
     [[ -f "$helper_script" ]] || fail_restore STORAGE_CONSISTENCY_CHECK "storage consistency helper is missing: $helper_script"
@@ -1006,7 +1006,7 @@ if [[ $PRODUCTION_S3_MANIFEST -eq 0 ]]; then
   PRODUCTION_DR_REASON="this flow keeps the DB-only restore path compatible and does not verify full production disaster recovery"
 fi
 log "✓ Manifest OK ($(basename "$MANIFEST_FILE"))"
-EXPECTED_HEAD="$(detect_expected_head "$PROJECT_DIR/python-backend/alembic/versions")"
+EXPECTED_HEAD="$(detect_expected_head "$PROJECT_DIR/src/backend/alembic/versions")"
 log "Expected Alembic HEAD: $EXPECTED_HEAD"
 echo ""
 
@@ -1020,7 +1020,7 @@ log "✓ Checksum OK"
 echo ""
 
 # ── Pre-restore verify ─────────────────────────────────────────────────────────
-VERIFY_SCRIPT="${VERIFY_SCRIPT_OVERRIDE:-$PROJECT_DIR/python-backend/scripts/verify_restore.sh}"
+VERIFY_SCRIPT="${VERIFY_SCRIPT_OVERRIDE:-$PROJECT_DIR/src/backend/scripts/verify_restore.sh}"
 PREVERIFY_STATUS="PASSED"
 if [[ "$SKIP_VERIFY" == "--skip-verify" ]]; then
   echo "WARNING: verify skipped — unsafe operation"

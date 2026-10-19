@@ -17,7 +17,7 @@
 set -eu
 umask 077
 
-APP=/opt/novuconstruct/python-backend
+APP=/opt/novuconstruct/src/backend
 SECRETS=/etc/novuconstruct/secrets
 BACKUPS=${NC_BACKUP_DIR:-/var/backups/novuconstruct}
 DB=novuconstruct

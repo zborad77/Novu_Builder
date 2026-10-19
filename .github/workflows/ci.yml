@@ -19,17 +19,17 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
-            python-backend/requirements.txt
-            python-backend/requirements-dev.txt
+            src/backend/requirements.txt
+            src/backend/requirements-dev.txt
 
       # Runtime deps are installed too: with them missing, `ignore_missing_imports`
       # degrades every third-party symbol to Any and mypy silently stops checking
       # most of app/. Installing both sets makes CI's mypy as strict as the local run.
       - name: Install runtime + dev dependencies
-        run: pip install -r python-backend/requirements.txt -r python-backend/requirements-dev.txt
+        run: pip install -r src/backend/requirements.txt -r src/backend/requirements-dev.txt
 
       - name: Ruff (style + unused imports)
-        working-directory: python-backend
+        working-directory: src/backend
         run: >-
           ruff check app/ migration_tests/
           alembic/versions/20260318_0001_initial_schema.py
@@ -39,15 +39,15 @@ jobs:
           alembic/versions/20261017_0059_photo_ownership_and_purge.py
 
       - name: Mypy (type check — full app/)
-        working-directory: python-backend
+        working-directory: src/backend
         run: mypy app/
 
       - name: Bandit (SAST — medium severity and above)
-        working-directory: python-backend
+        working-directory: src/backend
         run: bandit -r app/ -ll -ii
 
       - name: pip-audit (known CVE scan on production dependencies)
-        working-directory: python-backend
+        working-directory: src/backend
         run: pip-audit -r requirements.txt --progress-spinner=off
 
   # -------------------------------------------------------------------------
@@ -59,7 +59,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: web
+        working-directory: src/frontend
 
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +68,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: src/frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -137,15 +137,15 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
-            python-backend/requirements.txt
-            python-backend/requirements-dev.txt
+            src/backend/requirements.txt
+            src/backend/requirements-dev.txt
 
       # Both sets, pinned. pytest / pytest-asyncio / pytest-cov are declared in
       # requirements-dev.txt; installing them ad-hoc (or relying on a transitive
       # pull) is what left pytest-asyncio missing while pytest.ini requires
       # asyncio_mode = auto.
       - name: Install runtime + dev dependencies
-        run: pip install -r python-backend/requirements.txt -r python-backend/requirements-dev.txt
+        run: pip install -r src/backend/requirements.txt -r src/backend/requirements-dev.txt
 
       # --- No server needed ---
 
@@ -156,14 +156,14 @@ jobs:
         run: python scripts/test-env.py
 
       - name: Pytest
-        working-directory: python-backend
+        working-directory: src/backend
         run: python -m pytest tests/ -v --cov=app --cov-report=term-missing --cov-fail-under=40
 
       # --- Start backend ---
 
       - name: Start backend
         run: |
-          cd python-backend
+          cd src/backend
           uvicorn app.main:app --host 127.0.0.1 --port 8000 &
           echo $! > /tmp/backend.pid
 
@@ -171,7 +171,7 @@ jobs:
       # business flow must actually consume its analysis job.
       - name: Start worker
         run: |
-          cd python-backend
+          cd src/backend
           python -m app.worker.runner > /tmp/worker.log 2>&1 &
           echo $! > /tmp/worker.pid
 
@@ -255,12 +255,12 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
-            python-backend/requirements.txt
-            python-backend/requirements-dev.txt
+            src/backend/requirements.txt
+            src/backend/requirements-dev.txt
       - name: Install runtime + dev dependencies
-        run: pip install -r python-backend/requirements.txt -r python-backend/requirements-dev.txt
+        run: pip install -r src/backend/requirements.txt -r src/backend/requirements-dev.txt
       - name: PostgreSQL 16 fresh-install and migration-path regressions
-        working-directory: python-backend
+        working-directory: src/backend
         run: python -m pytest migration_tests/ -v
 
   # Production-like Compose contract. MinIO Community is source-built from
@@ -287,7 +287,7 @@ jobs:
         run: |
           test -x scripts/backup.sh
           test -x ops/restore.sh
-          test -x python-backend/scripts/verify_restore.sh
+          test -x src/backend/scripts/verify_restore.sh
           test -x scripts/generate-pilot-cert.sh
 
       - name: Set up Go 1.24.8
@@ -403,7 +403,7 @@ jobs:
           POSTGRES_PASSWORD=ci-postgres-password
           REDIS_PASSWORD=ci-redis-password
           EOF
-          cat > python-backend/.env.production <<EOF
+          cat > src/backend/.env.production <<EOF
           APP_BASE_URL=https://novu-ci.local
           CORS_ALLOWED_ORIGINS=https://novu-ci.local
           AI_ANALYSIS_PROVIDER=mock
@@ -523,7 +523,7 @@ jobs:
         run: |
           docker compose --env-file .env.production down -v --rmi local --remove-orphans || true
           docker image rm -f "$MINIO_SERVER_IMAGE" "$MINIO_MC_IMAGE" || true
-          rm -f .env .env.production python-backend/.env.production
+          rm -f .env .env.production src/backend/.env.production
           rm -rf "$RUNNER_TEMP/minio-server-src" "$RUNNER_TEMP/minio-mc-src"                  "$RUNNER_TEMP/minio-server-image" "$RUNNER_TEMP/minio-mc-image"
 
   # Bare-metal deployment templates (deploy/linux, F6): nginx -t, nft -c,

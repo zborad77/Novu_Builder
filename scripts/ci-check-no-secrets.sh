@@ -33,8 +33,8 @@ if [[ -n "$EXAMPLE_FILES" ]]; then
 fi
 
 # ── 3. Verify gitignore covers .env ─────────────────────────────────────────
-if ! git check-ignore -q python-backend/.env.production 2>/dev/null; then
-  echo "[ci-check] FAIL: python-backend/.env.production is NOT covered by .gitignore"
+if ! git check-ignore -q src/backend/.env.production 2>/dev/null; then
+  echo "[ci-check] FAIL: src/backend/.env.production is NOT covered by .gitignore"
   FAIL=1
 fi
 

@@ -18,7 +18,7 @@ Type=exec
 User=novuconstruct
 Group=nc-api-sock
 UMask=0007
-WorkingDirectory=/opt/novuconstruct/python-backend
+WorkingDirectory=/opt/novuconstruct/src/backend
 EnvironmentFile=/etc/novuconstruct/core.env
 Environment=NC_ZONE=%i
 # Secrets never live in core.env or the unit; nc-run exports them from here.
@@ -35,7 +35,7 @@ RuntimeDirectoryMode=0750
 StateDirectory=novuconstruct
 StateDirectoryMode=0750
 ExecStart=/opt/novuconstruct/deploy/linux/bin/nc-run \
-    /opt/novuconstruct/python-backend/.venv/bin/uvicorn app.main:app \
+    /opt/novuconstruct/src/backend/.venv/bin/uvicorn app.main:app \
     --uds /run/novuconstruct/%i/api.sock --no-proxy-headers --workers 2 --timeout-graceful-shutdown 20
 Restart=on-failure
 RestartSec=3

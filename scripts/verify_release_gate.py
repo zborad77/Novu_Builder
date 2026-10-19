@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--backend-root",
         default=str(BACKEND_ROOT),
-        help="Path to python-backend directory (default: %(default)s)",
+        help="Path to src/backend directory (default: %(default)s)",
     )
     parser.add_argument(
         "--python-executable",

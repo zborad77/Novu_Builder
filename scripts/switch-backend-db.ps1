@@ -14,7 +14,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$BackendRoot = Join-Path $RepoRoot "python-backend"
+$BackendRoot = Join-Path $RepoRoot "src\backend"
 $VenvPython = Join-Path $BackendRoot ".venv\Scripts\python.exe"
 $EnvExample = Join-Path $BackendRoot ".env.example"
 $EnvFile = Join-Path $BackendRoot ".env"
@@ -34,7 +34,7 @@ function Fail-WithHelp {
 
 function Ensure-BackendReady {
     if (-not (Test-Path $BackendRoot)) {
-        throw "Chybi slozka python-backend v $RepoRoot"
+        throw "Chybi slozka src\backend v $RepoRoot"
     }
 
     if (-not (Test-Path $VenvPython)) {
@@ -43,7 +43,7 @@ function Ensure-BackendReady {
 
     if (-not (Test-Path $EnvFile)) {
         if (-not (Test-Path $EnvExample)) {
-            throw "Chybi python-backend\\.env.example."
+            throw "Chybi src\\backend\\.env.example."
         }
 
         Copy-Item $EnvExample $EnvFile
@@ -179,13 +179,13 @@ $result = [ordered]@{
     migrations_requested = [bool]$RunMigrations
     next_steps = if ($Target -eq "postgres") {
         @(
-            "Over, ze PostgreSQL databaze existuje a prihlasovaci udaje v python-backend/.env sedi.",
-            "Pokud jsi migrace nespustil ted, pust: cd python-backend; .\\.venv\\Scripts\\python.exe -m alembic upgrade head",
+            "Over, ze PostgreSQL databaze existuje a prihlasovaci udaje v src/backend/.env sedi.",
+            "Pokud jsi migrace nespustil ted, pust: cd src/backend; .\\.venv\\Scripts\\python.exe -m alembic upgrade head",
             "Pak backend spust pres powershell -ExecutionPolicy Bypass -File scripts\\start-dev.ps1"
         )
     } else {
         @(
-            "SQLite rezim je pripraveny v python-backend/.env.",
+            "SQLite rezim je pripraveny v src/backend/.env.",
             "Backend muzes spustit pres powershell -ExecutionPolicy Bypass -File scripts\\start-dev.ps1"
         )
     }

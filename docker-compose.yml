@@ -66,7 +66,7 @@ services:
 
   backend:
     build:
-      context: ./python-backend
+      context: ./src/backend
     restart: unless-stopped
     networks:
       - default
@@ -203,7 +203,7 @@ services:
 
   worker:
     build:
-      context: ./python-backend
+      context: ./src/backend
     restart: unless-stopped
     entrypoint: ["python", "-m", "app.worker.runner"]
     depends_on:

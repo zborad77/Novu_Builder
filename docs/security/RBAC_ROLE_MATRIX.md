@@ -4,7 +4,7 @@
 |---|---|
 | **Datum** | 17. 10. 2026 |
 | **Stav** | Implementováno ve větvi `fix/f0-rbac-tenant-isolation` (F0 + SA-06 varianta A), **zatím nevydáno**. |
-| **Zdroj pravdy v kódu** | [`app/core/rbac.py`](../../python-backend/app/core/rbac.py), závislosti v [`app/api/deps.py`](../../python-backend/app/api/deps.py), migrace `20261017_0057` |
+| **Zdroj pravdy v kódu** | [`app/core/rbac.py`](../../src/backend/app/core/rbac.py), závislosti v [`app/api/deps.py`](../../src/backend/app/api/deps.py), migrace `20261017_0057` |
 | **Související** | [SECURITY_AUDIT.md](SECURITY_AUDIT.md) (SA-01 až SA-04) · [API_EXPOSURE_MATRIX.md](API_EXPOSURE_MATRIX.md) |
 
 ## 1. Dvě oddělené roviny oprávnění

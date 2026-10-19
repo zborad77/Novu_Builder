@@ -21,7 +21,7 @@
 # Secrets are read from the running containers — never hardcoded here.
 #
 # Restore (DB-only contract): ./ops/restore.sh <db_TIMESTAMP.pgdump>
-# Verify:  python-backend/scripts/verify_restore.sh <db_TIMESTAMP.pgdump>
+# Verify:  src/backend/scripts/verify_restore.sh <db_TIMESTAMP.pgdump>
 
 set -euo pipefail
 
@@ -74,7 +74,7 @@ read_runtime_or_env_value() {
     return 0
   fi
 
-  for candidate in ".env.${app_env}" ".env" "python-backend/.env.${app_env}" "python-backend/.env"; do
+  for candidate in ".env.${app_env}" ".env" "src/backend/.env.${app_env}" "src/backend/.env"; do
     if value="$(read_env_value "$key" "$candidate")"; then
       printf '%s\n' "$value"
       return 0
@@ -91,7 +91,7 @@ resolve_app_env() {
   fi
 
   local candidate
-  for candidate in ".env" "python-backend/.env"; do
+  for candidate in ".env" "src/backend/.env"; do
     if candidate="$(read_env_value APP_ENV "$candidate")"; then
       printf '%s\n' "$candidate"
       return 0
@@ -109,7 +109,7 @@ resolve_storage_backend() {
 
   local app_env="$1"
   local candidate
-  for candidate in ".env.${app_env}" ".env" "python-backend/.env.${app_env}" "python-backend/.env"; do
+  for candidate in ".env.${app_env}" ".env" "src/backend/.env.${app_env}" "src/backend/.env"; do
     if candidate="$(read_env_value STORAGE_BACKEND "$candidate")"; then
       printf '%s\n' "$candidate"
       return 0
@@ -262,7 +262,7 @@ fi
 
 # ── 1. PostgreSQL dump (custom archive format) ────────────────────────────────
 # Authoritative DB backup format: .pgdump (pg_dump custom archive)
-# Restores via: ops/restore.sh or python-backend/scripts/restore_db.sh
+# Restores via: ops/restore.sh or src/backend/scripts/restore_db.sh
 DB_FILE="$BACKUP_DIR/${BACKUP_BASENAME}.pgdump"
 echo "  → DB dump: $DB_FILE"
 docker compose exec -T db \
@@ -325,7 +325,7 @@ if [[ "$APP_ENV_CURRENT" == "production" && "$STORAGE_BACKEND_CURRENT" == "s3" &
 
   DATABASE_URL_FOR_FULL_STATE="$(resolve_database_url_for_full_state "$APP_ENV_CURRENT")" \
     || die "Full-state S3 coverage requires DATABASE_URL_SYNC or DATABASE_URL."
-  MEDIA_EXPORT_HELPER="${S3_MEDIA_EXPORT_HELPER_OVERRIDE:-python-backend/scripts/export_s3_recovery_manifest.py}"
+  MEDIA_EXPORT_HELPER="${S3_MEDIA_EXPORT_HELPER_OVERRIDE:-src/backend/scripts/export_s3_recovery_manifest.py}"
   [[ -f "$MEDIA_EXPORT_HELPER" ]] || die "S3 media export helper not found: $MEDIA_EXPORT_HELPER"
 
   S3_MEDIA_MANIFEST_FILE="$BACKUP_DIR/${BACKUP_BASENAME}.s3-media.json"
