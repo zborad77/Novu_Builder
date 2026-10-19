@@ -13,7 +13,7 @@ logger = structlog.get_logger(__name__)
 
 
 def _send_sync(*, to: str, subject: str, body_text: str, body_html: str | None = None) -> None:
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
     settings = get_settings()
 
     if not settings.smtp_host:

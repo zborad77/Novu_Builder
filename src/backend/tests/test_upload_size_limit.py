@@ -165,7 +165,7 @@ class TestPhotoServiceSizeFlow:
 class TestValidatePhotoUploadSizeGuard:
     @pytest.mark.asyncio
     async def test_file_over_limit_raises_value_error(self):
-        from app.storage.local_photo_storage import validate_photo_upload
+        from app.platform.storage.local_photo_storage import validate_photo_upload
 
         limit_mb = 10
         content = b"x" * (limit_mb * 1024 * 1024 + 1)
@@ -180,7 +180,7 @@ class TestValidatePhotoUploadSizeGuard:
 
     @pytest.mark.asyncio
     async def test_rejects_before_read_when_declared_size_exceeds_limit(self):
-        from app.storage.local_photo_storage import validate_photo_upload
+        from app.platform.storage.local_photo_storage import validate_photo_upload
 
         limit_mb = 10
         mock_file = MagicMock(spec=UploadFile)
@@ -200,7 +200,7 @@ class TestValidatePhotoUploadSizeGuard:
 
     @pytest.mark.asyncio
     async def test_bounded_read_uses_limit_plus_one(self):
-        from app.storage.local_photo_storage import validate_photo_upload
+        from app.platform.storage.local_photo_storage import validate_photo_upload
 
         limit_mb = 10
         content = b"x" * (limit_mb * 1024 * 1024 + 1)
@@ -218,7 +218,7 @@ class TestValidatePhotoUploadSizeGuard:
 
     @pytest.mark.asyncio
     async def test_guard_skipped_when_size_is_none(self):
-        from app.storage.local_photo_storage import validate_photo_upload
+        from app.platform.storage.local_photo_storage import validate_photo_upload
 
         limit_mb = 10
         oversized = b"x" * (limit_mb * 1024 * 1024 + 1)
@@ -234,7 +234,7 @@ class TestValidatePhotoUploadSizeGuard:
 
     @pytest.mark.asyncio
     async def test_guard_skipped_when_size_not_integer(self):
-        from app.storage.local_photo_storage import validate_photo_upload
+        from app.platform.storage.local_photo_storage import validate_photo_upload
 
         jpeg_bytes = _make_image_bytes("JPEG")
         mock_file = _make_upload_file(jpeg_bytes)
@@ -254,7 +254,7 @@ class TestUploadRouteSizeLimit:
         from app.api.routes.images import upload_case_images
         from app.services.photo_service import PhotoService
         from app.services.project_service import ProjectService
-        from app.storage.backend import UploadValidationError
+        from app.platform.storage.backend import UploadValidationError
 
         project = _make_project()
         mock_request = MagicMock()
@@ -337,48 +337,48 @@ class TestUploadRouteSizeLimit:
 
 class TestMagicBytesValidation:
     def test_non_image_bytes_rejected(self):
-        from app.storage.local_photo_storage import validate_image_format
+        from app.platform.storage.local_photo_storage import validate_image_format
 
         with pytest.raises(ValueError, match="Unsupported file type"):
             validate_image_format(b"this is not an image")
 
     def test_random_binary_rejected(self):
-        from app.storage.local_photo_storage import validate_image_format
+        from app.platform.storage.local_photo_storage import validate_image_format
 
         with pytest.raises(ValueError, match="Unsupported file type"):
             validate_image_format(bytes(range(256)) * 4)
 
     def test_gif_rejected(self):
-        from app.storage.local_photo_storage import validate_image_format
+        from app.platform.storage.local_photo_storage import validate_image_format
 
         with pytest.raises(ValueError, match="GIF"):
             validate_image_format(_make_image_bytes("GIF"))
 
     def test_truncated_jpeg_rejected(self):
-        from app.storage.local_photo_storage import validate_image_format
+        from app.platform.storage.local_photo_storage import validate_image_format
 
         with pytest.raises(ValueError, match="truncated or corrupted"):
             validate_image_format(_make_image_bytes("JPEG")[:16])
 
     def test_jpeg_accepted(self):
-        from app.storage.local_photo_storage import validate_image_format
+        from app.platform.storage.local_photo_storage import validate_image_format
 
         assert validate_image_format(_make_image_bytes("JPEG")) == "image/jpeg"
 
     def test_png_accepted(self):
-        from app.storage.local_photo_storage import validate_image_format
+        from app.platform.storage.local_photo_storage import validate_image_format
 
         assert validate_image_format(_make_image_bytes("PNG")) == "image/png"
 
     def test_webp_accepted(self):
-        from app.storage.local_photo_storage import validate_image_format
+        from app.platform.storage.local_photo_storage import validate_image_format
 
         assert validate_image_format(_make_image_bytes("WEBP")) == "image/webp"
 
 
 class TestUploadConfigValidation:
     def test_max_upload_size_must_be_positive(self):
-        from app.core.config import Settings
+        from app.platform.config import Settings
 
         with pytest.raises(ValueError, match="MAX_UPLOAD_SIZE_MB"):
             Settings(MAX_UPLOAD_SIZE_MB=0)

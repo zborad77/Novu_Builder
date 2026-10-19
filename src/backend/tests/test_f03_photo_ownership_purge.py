@@ -564,7 +564,7 @@ async def test_purge_ledger_survives_database_restore_and_drives_reapply(
 ):
     import json
 
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
     from app.core.purge_ledger import read_purged_photo_ids
     from scripts.reapply_photo_purges import _reapply
 
@@ -613,7 +613,7 @@ async def test_purge_ledger_survives_database_restore_and_drives_reapply(
 
 
 async def test_purge_fails_closed_without_a_writable_ledger(app_client, f03_users, db_session_factory, tmp_path, monkeypatch):
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
 
     admin = await _token(app_client, "f03_admin_a")
     case_id = await _new_case(app_client, admin)

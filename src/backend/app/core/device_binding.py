@@ -27,7 +27,7 @@ from typing import Literal
 
 import structlog
 
-from app.core.client_ip import parse_ip
+from app.platform.http.client_ip import parse_ip
 
 logger = structlog.get_logger(__name__)
 
@@ -118,8 +118,8 @@ def decide(devices: dict[str, RegisteredDevice] | None, client_ip: str | None, o
 
 
 def binding_applies() -> bool:
-    from app.core.config import get_settings
-    from app.core.exposure import ZONE_DESKTOP, ZONE_DEV
+    from app.platform.config import get_settings
+    from app.platform.http.exposure import ZONE_DESKTOP, ZONE_DEV
 
     settings = get_settings()
     return settings.device_binding_enforced and settings.effective_nc_zone in {ZONE_DESKTOP, ZONE_DEV}
@@ -129,7 +129,7 @@ def check_device_binding(client_ip: str | None, organization_id: str | None) -> 
     """``allow``, nebo důvod odmítnutí. Bez ``enforce`` vždy ``allow``."""
     if not binding_applies():
         return "allow"
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
 
     devices = _registry(get_settings().nc_device_registry_file.strip()).devices()
     decision = decide(devices, client_ip, organization_id)

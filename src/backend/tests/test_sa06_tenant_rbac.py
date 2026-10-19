@@ -289,7 +289,7 @@ async def test_photo_delete_and_restore_are_tenant_isolated(app_client, sa06_use
 
 
 async def test_storage_is_purged_only_after_the_restore_window(app_client, sa06_users, db_session_factory, monkeypatch):
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
     from app.repositories.photo_repository import PhotoRepository
     from app.services.photo_service import PhotoService
 

@@ -37,7 +37,7 @@ import structlog
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.core.client_ip import parse_ip
+from app.platform.http.client_ip import parse_ip
 
 logger = structlog.get_logger(__name__)
 
@@ -234,7 +234,7 @@ class GatewaySignatureMiddleware:
         self._keys: dict[str, bytes] = {}
 
     def _settings(self) -> Any:
-        from app.core.config import get_settings
+        from app.platform.config import get_settings
 
         return get_settings()
 
@@ -263,7 +263,7 @@ class GatewaySignatureMiddleware:
         if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
-        from app.core.exposure import ZONE_GATEWAY
+        from app.platform.http.exposure import ZONE_GATEWAY
 
         settings = self._settings()
         if settings.effective_nc_zone != ZONE_GATEWAY:

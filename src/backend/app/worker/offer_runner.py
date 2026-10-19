@@ -42,10 +42,10 @@ from datetime import UTC, datetime, timedelta
 
 import structlog
 
-from app.core.config import get_settings, startup_failure_message
-from app.core.logging import configure_logging
-from app.core.redis_client import build_queue_redis_client_from_settings
-from app.db.session import WorkerAsyncSessionFactory
+from app.platform.config import get_settings, startup_failure_message
+from app.platform.logging import configure_logging
+from app.platform.redis_client import build_queue_redis_client_from_settings
+from app.platform.db.session import WorkerAsyncSessionFactory
 from app.offer_processing.budget import (
     BudgetExhaustedError,
     BudgetService,
@@ -73,7 +73,7 @@ from app.offer_processing.domain import (
     POISON_THRESHOLD,
     RETRY_BACKOFF_SECONDS,
 )
-from app.offer_processing.outbox import OutboxPublisher, build_offer_status_changed_event
+from app.platform.events.outbox import OutboxPublisher, build_offer_status_changed_event
 from app.offer_processing.provider import (
     AgentRuntime,
     ProviderError,
@@ -86,13 +86,13 @@ from app.offer_processing.repository import OfferRepository
 from app.offer_processing.snapshot import build_input_snapshot
 from app.repositories.photo_repository import PhotoRepository
 from app.repositories.work_catalog_repository import WorkCatalogRepository
-from app.storage.backend import generate_presigned_url
+from app.platform.storage.backend import generate_presigned_url
 from app.offer_processing.validation import (
     InsufficientDataResult,
     OfferOutputValidator,
     OfferValidationError,
 )
-from app.worker.offer_queue import (
+from app.platform.jobs.offer_queue import (
     DequeuedOfferJob,
     ack_offer_job,
     dequeue_offer_job,

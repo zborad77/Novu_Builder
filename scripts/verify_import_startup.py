@@ -17,10 +17,10 @@ if str(SCRIPT_DIR) not in sys.path:
 from verification_common import CheckResult, all_ok, print_results
 
 IMPORT_CHECKS = [
-    ("app.core.config", "settings and env parsing"),
-    ("app.core.logging", "logging configuration"),
-    ("app.db.base", "SQLAlchemy declarative base"),
-    ("app.db.session", "engine and session factory"),
+    ("app.platform.config", "settings and env parsing"),
+    ("app.platform.logging", "logging configuration"),
+    ("app.platform.db.base", "SQLAlchemy declarative base"),
+    ("app.platform.db.session", "engine and session factory"),
     ("app.models", "domain models"),
     ("app.api.router", "routes, services, repositories and schemas"),
     ("app.main", "application entrypoint"),
@@ -172,7 +172,7 @@ def _run_settings_subprocess_check(
     command = [
         python_executable,
         "-c",
-        "from app.core.config import Settings; Settings(); print('settings-ok')",
+        "from app.platform.config import Settings; Settings(); print('settings-ok')",
     ]
 
     try:

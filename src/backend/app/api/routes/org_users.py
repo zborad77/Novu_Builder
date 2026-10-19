@@ -27,8 +27,8 @@ from pydantic import BaseModel, ConfigDict
 
 from app.api.deps import get_auth_redis, get_current_user
 from app.api.routes.admin import _commit_security_critical_audit, _enforce, get_company_service
-from app.core.config import get_settings
-from app.core.limiter import limiter
+from app.platform.config import get_settings
+from app.platform.http.limiter import limiter
 from app.core.rbac import TenantRole, assignable_roles, can_manage_user, can_view_user, is_tenant_admin
 from app.core.security import enforce_password_strength
 from app.repositories.token_repository import SessionTokenRevocation, TokenRepository

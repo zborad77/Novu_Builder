@@ -14,8 +14,8 @@ import sys
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import Settings
-from app.core.paths import BACKEND_ROOT, repo_root
+from app.platform.config import Settings
+from app.platform.paths import BACKEND_ROOT, repo_root
 
 _STRONG_JWT = "a-very-strong-jwt-secret-for-testing-x99-minimum-32chars!"
 _STRONG_REDIS = "redis://:a-strong-redis-password-xyz123@localhost:6379/0"

@@ -5,17 +5,17 @@ from uuid import uuid4
 import structlog
 from fastapi import HTTPException, UploadFile
 
-from app.core.backpressure import (
+from app.platform.jobs.backpressure import (
     collect_backpressure_snapshot,
     effective_backpressure_max_queued_jobs,
     ensure_heavy_intake_capacity,
     require_worker_capacity,
 )
-from app.core.config import get_settings
+from app.platform.config import get_settings
 from app.models import Project, ProjectPhoto
 from app.repositories.photo_repository import PhotoRepository
 from app.schemas.photo import PhotoVariant, PhotoVariants, ProjectPhotoRead
-from app.storage.backend import (
+from app.platform.storage.backend import (
     delete_storage_file,
     generate_presigned_url,
     get_image_dimensions,
@@ -25,7 +25,7 @@ from app.storage.backend import (
     validate_photo_upload,
     write_storage_file,
 )
-from app.worker.heavy_queue import HeavyJobQueueCapacityExceededError, enqueue_heavy_job
+from app.platform.jobs.heavy_queue import HeavyJobQueueCapacityExceededError, enqueue_heavy_job
 
 logger = structlog.get_logger(__name__)
 

@@ -68,7 +68,7 @@ if [ "$CMD" = check-config ]; then
   # Validate the production settings as each API zone would load them (no DB access).
   for zone in desktop admin; do
     ( load_service_env; export NC_ZONE=$zone; cd "$APP"
-      "$APP/.venv/bin/python" -c "from app.core.config import get_settings; get_settings()" ) || exit 1
+      "$APP/.venv/bin/python" -c "from app.platform.config import get_settings; get_settings()" ) || exit 1
   done
   echo "configuration valid (desktop, admin)"
   exit 0

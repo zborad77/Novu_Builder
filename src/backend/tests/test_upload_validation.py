@@ -126,9 +126,9 @@ class TestUploadRouteStructure:
 
 def test_upload_goes_to_s3_only(monkeypatch):
     """When STORAGE_BACKEND=s3, upload storage writes must resolve to S3 backend functions only."""
-    import app.storage.backend as backend_mod
-    import app.storage.local_photo_storage as local_storage_mod
-    import app.storage.s3_photo_storage as s3_storage_mod
+    import app.platform.storage.backend as backend_mod
+    import app.platform.storage.local_photo_storage as local_storage_mod
+    import app.platform.storage.s3_photo_storage as s3_storage_mod
     import app.services.photo_service as photo_service_mod
 
     monkeypatch.setenv("STORAGE_BACKEND", "s3")
@@ -140,7 +140,7 @@ def test_upload_goes_to_s3_only(monkeypatch):
         assert reloaded_backend.write_storage_file is not local_storage_mod.write_storage_file
 
         source = inspect.getsource(photo_service_mod)
-        assert "from app.storage.backend import (" in source
+        assert "from app.platform.storage.backend import (" in source
         assert "local_photo_storage" not in source
     finally:
         monkeypatch.setenv("STORAGE_BACKEND", "local")

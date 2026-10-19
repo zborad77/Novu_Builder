@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from redis.asyncio import Redis
 
-from app.core.metrics import observe_work_catalog_resolution, record_work_catalog_validation_failure
+from app.platform.metrics import observe_work_catalog_resolution, record_work_catalog_validation_failure
 from app.models.work_catalog import (
     ProjectWorkItem,
     ProjectWorkItemValue,

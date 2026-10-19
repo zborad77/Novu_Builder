@@ -14,9 +14,9 @@ from sqlalchemy import case, func, select, text
 import structlog
 
 from app.api.deps import require_superadmin
-from app.core.config import get_settings
-from app.core.limiter import limiter
-from app.core.metrics import (
+from app.platform.config import get_settings
+from app.platform.http.limiter import limiter
+from app.platform.metrics import (
     AUTH_PROTECTION_ENFORCED,
     BACKPRESSURE_CURRENT_CONCURRENT,
     BACKPRESSURE_CURRENT_QUEUED,
@@ -50,22 +50,22 @@ from app.core.metrics import (
     WORKER_MONITORING_AVAILABLE,
     WORKER_SEEN_INSTANCES,
 )
-from app.db.session import AsyncSessionFactory
+from app.platform.db.session import AsyncSessionFactory
 from app.models import AnalysisJob
 from app.schemas.auth import AuthUserRead
-from app.storage.backend import verify_storage_health
-from app.worker.heartbeat import (
+from app.platform.storage.backend import verify_storage_health
+from app.platform.jobs.heartbeat import (
     WORKER_HEARTBEAT_FRESHNESS_SECONDS,
     WORKER_HEARTBEAT_KEY_PATTERN,
     WORKER_HEARTBEAT_KEY_PREFIX,
     WORKER_HEARTBEAT_LEGACY_KEY,
 )
-from app.worker.queue import (
+from app.platform.jobs.queue import (
     DLQ_ACTIVE_SET_KEY,
     RETRY_QUEUE_KEY,
     get_analysis_job_queue_counts,
 )
-from app.worker.heavy_queue import get_heavy_job_queue_counts
+from app.platform.jobs.heavy_queue import get_heavy_job_queue_counts
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)

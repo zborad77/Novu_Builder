@@ -1,6 +1,6 @@
 from httpx import ASGITransport, AsyncClient
 
-from app.core.config import get_settings
+from app.platform.config import get_settings
 from app.main import create_app
 
 

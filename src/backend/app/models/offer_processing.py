@@ -35,7 +35,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.schema import Identity
 
-from app.db.base import Base
+from app.platform.db.base import Base
 from app.models.domain import TimestampMixin
 
 _JSONB = JSON().with_variant(JSONB(), "postgresql")

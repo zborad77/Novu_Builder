@@ -19,9 +19,9 @@ from app.api.deps import (
     require_superadmin,
     require_user_admin,
 )
-from app.worker.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
-from app.core.config import get_settings
-from app.db.session import get_db_session
+from app.platform.jobs.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
+from app.platform.config import get_settings
+from app.platform.db.session import get_db_session
 from app.models.domain import AnalysisJob, AuditLog, Organization, Project, User
 from app.schemas.auth import AuthUserRead
 from app.schemas.company import (
@@ -34,9 +34,9 @@ from app.schemas.company import (
     CompanyPatch,
     CompanyRead,
 )
-from app.core.exposure import AUDIENCE_BY_ZONE, ZONE_DEV, ZONE_GATEWAY, current_audience, current_zone
-from app.core.limiter import limiter
-from app.core.sql_like import LIKE_ESCAPE_CHAR, build_contains_ilike_pattern
+from app.platform.http.exposure import AUDIENCE_BY_ZONE, ZONE_DEV, ZONE_GATEWAY, current_audience, current_zone
+from app.platform.http.limiter import limiter
+from app.platform.db.sql_like import LIKE_ESCAPE_CHAR, build_contains_ilike_pattern
 from app.core.security import enforce_password_strength
 from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit, write_audit_log
 from app.core.rbac import (

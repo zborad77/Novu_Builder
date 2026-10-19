@@ -8,7 +8,7 @@ from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.sql_like import LIKE_ESCAPE_CHAR, build_contains_ilike_pattern
+from app.platform.db.sql_like import LIKE_ESCAPE_CHAR, build_contains_ilike_pattern
 from app.models import Client, Project
 
 logger = structlog.get_logger(__name__)

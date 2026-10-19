@@ -16,7 +16,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from app.core.config import get_settings
+from app.platform.config import get_settings
 from app.models import AuditLog, User
 from app.services.auth_service import hash_password
 

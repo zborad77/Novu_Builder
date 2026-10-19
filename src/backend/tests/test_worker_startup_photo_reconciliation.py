@@ -248,7 +248,7 @@ class TestReconciliationFailFast:
                 except Exception as exc:
                     # Simulate the run() wrapper behavior
                     from app.worker.runner import _is_strict_worker_environment
-                    from app.core.config import startup_failure_message
+                    from app.platform.config import startup_failure_message
                     if _is_strict_worker_environment(runtime.settings):
                         raise RuntimeError(
                             startup_failure_message("worker_reconciliation", str(exc))

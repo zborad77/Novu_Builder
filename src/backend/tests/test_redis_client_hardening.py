@@ -5,8 +5,8 @@ import pytest
 from pydantic import ValidationError
 from redis.retry import Retry
 
-from app.core.config import Settings
-from app.core.redis_client import (
+from app.platform.config import Settings
+from app.platform.redis_client import (
     FailoverRedisClient,
     REDIS_HEALTH_CHECK_INTERVAL,
     REDIS_RETRY_ATTEMPTS,
@@ -96,7 +96,7 @@ def _set_valid_prod_runtime(monkeypatch) -> None:
 
 
 def test_build_redis_client_uses_hardened_defaults():
-    with patch("app.core.redis_client.Redis.from_url", return_value=object()) as from_url:
+    with patch("app.platform.redis_client.Redis.from_url", return_value=object()) as from_url:
         build_redis_client("redis://:secret@localhost:6379/0")
 
     from_url.assert_called_once_with(
@@ -114,7 +114,7 @@ def test_build_redis_client_uses_hardened_defaults():
 
 
 def test_build_redis_client_accepts_explicit_retry_and_timeout_overrides():
-    with patch("app.core.redis_client.Redis.from_url", return_value=object()) as from_url:
+    with patch("app.platform.redis_client.Redis.from_url", return_value=object()) as from_url:
         build_redis_client(
             "redis://:secret@localhost:6379/0",
             socket_connect_timeout=2.5,
@@ -171,7 +171,7 @@ def test_build_queue_redis_client_from_settings_wraps_primary_and_failover_candi
     )
 
     with patch(
-        "app.core.redis_client.build_redis_client_from_settings",
+        "app.platform.redis_client.build_redis_client_from_settings",
         side_effect=[object(), object(), object()],
     ) as build_client:
         client = build_queue_redis_client_from_settings(settings, client_name="novu-test")
@@ -273,7 +273,7 @@ def test_build_redis_client_from_settings_uses_settings_values():
         redis_retry_backoff_cap=0.9,
     )
 
-    with patch("app.core.redis_client.Redis.from_url", return_value=object()) as from_url:
+    with patch("app.platform.redis_client.Redis.from_url", return_value=object()) as from_url:
         build_redis_client_from_settings(settings, client_name="novu-test")
 
     kwargs = from_url.call_args.kwargs
@@ -297,7 +297,7 @@ def test_build_redis_client_from_settings_allows_worker_socket_timeout_override(
         redis_retry_backoff_cap=0.9,
     )
 
-    with patch("app.core.redis_client.Redis.from_url", return_value=object()) as from_url:
+    with patch("app.platform.redis_client.Redis.from_url", return_value=object()) as from_url:
         build_redis_client_from_settings(
             settings,
             socket_timeout=None,

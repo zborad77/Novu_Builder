@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.config import Settings, get_settings
+from app.platform.config import Settings, get_settings
 from app.main import initialize_job_queue
 
 _STRONG_JWT = "a-very-strong-jwt-secret-for-testing-x99-minimum-32chars!"

@@ -12,7 +12,7 @@ Solution (Transactional Outbox):
 Guarantee: at-least-once delivery.
 SSE consumers MUST deduplicate by event_id (= outbox_events.id, the row UUID).
 
-Canonical message shape — see app.core.events for the full specification.
+Canonical message shape — see app.platform.events.types for the full specification.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from uuid import uuid4
 import structlog
 from sqlalchemy import text
 
-from app.core.events import (
+from app.platform.events.types import (
     AGGREGATE_CASE,
     AGGREGATE_OFFER,
     EVENT_OFFER_STATUS_CHANGED,
@@ -211,7 +211,7 @@ class OutboxPublisher:
             published_rows = [r for r in events if r.id in set(published_ids)]
             if published_rows:
                 try:
-                    from app.core.metrics import observe_outbox_batch  # noqa: PLC0415
+                    from app.platform.metrics import observe_outbox_batch  # noqa: PLC0415
                     observe_outbox_batch(rows=published_rows)
                 except Exception:
                     pass

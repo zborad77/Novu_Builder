@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.worker.queue import (
+from app.platform.jobs.queue import (
     AnalysisJobQueueCapacityExceededError,
     InvalidAnalysisJobPayloadError,
     LeasedAnalysisJob,
 )
-from app.worker.heavy_queue import LeasedHeavyJob, LostHeavyJobLeaseError
+from app.platform.jobs.heavy_queue import LeasedHeavyJob, LostHeavyJobLeaseError
 
 
 def _lease(
@@ -240,7 +240,7 @@ class TestWorkerRedisConnectionHardening:
         assert "STORAGE_ROOT" not in source
         assert "read_bytes(" not in source
         assert "write_bytes(" not in source
-        assert "app.storage.backend" not in source
+        assert "app.platform.storage.backend" not in source
 
     @pytest.mark.asyncio
     async def test_worker_startup_fails_fast_when_redis_is_unavailable_in_production(self):

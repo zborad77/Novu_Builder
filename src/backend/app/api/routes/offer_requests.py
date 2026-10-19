@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_manager, require_org_id
 from app.core.rbac import is_tenant_operator
-from app.db.session import get_db_session
+from app.platform.db.session import get_db_session
 from app.offer_processing.domain import InvalidOfferTransitionError
 from app.offer_processing.service import (
     OfferAlreadyExistsError,

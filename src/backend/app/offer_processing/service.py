@@ -27,7 +27,7 @@ from app.offer_processing.domain import (
     OFFER_TERMINAL_STATUSES,
     require_offer_transition,
 )
-from app.offer_processing.outbox import build_offer_status_changed_event
+from app.platform.events.outbox import build_offer_status_changed_event
 from app.offer_processing.repository import OfferRepository
 
 logger = structlog.get_logger(__name__)

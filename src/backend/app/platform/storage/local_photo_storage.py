@@ -12,7 +12,7 @@ from uuid import uuid4
 import structlog
 from fastapi import UploadFile
 
-from app.core.metrics import observe_storage_operation
+from app.platform.metrics import observe_storage_operation
 
 logger = structlog.get_logger(__name__)
 
@@ -22,7 +22,7 @@ def _resolve_storage_root() -> Path:
     env_val = os.getenv("STORAGE_ROOT", "").strip()
     if env_val:
         return Path(env_val)
-    from app.core.paths import repo_root
+    from app.platform.paths import repo_root
 
     return repo_root() / "storage"
 

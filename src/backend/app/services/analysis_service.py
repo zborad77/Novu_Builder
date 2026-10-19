@@ -9,7 +9,7 @@ import structlog
 from fastapi import HTTPException
 
 from app.ai import describe_analysis_provider, run_project_analysis
-from app.core.backpressure import (
+from app.platform.jobs.backpressure import (
     analysis_job_priority_for_type,
     collect_backpressure_snapshot,
     effective_backpressure_max_queued_jobs,
@@ -17,13 +17,13 @@ from app.core.backpressure import (
     ensure_analysis_intake_capacity,
     ensure_retry_budget,
 )
-from app.core.config import get_settings
-from app.core.metrics import (
+from app.platform.config import get_settings
+from app.platform.metrics import (
     observe_job_outcome,
     record_backpressure_rejection,
     record_duplicate_prevented,
 )
-from app.db.session import (
+from app.platform.db.session import (
     AsyncSessionFactory,        # HTTP-originated ops (retry_job, etc.)
     WorkerAsyncSessionFactory,  # background runner only (execute_job, fail_job_before_processing)
 )
@@ -52,16 +52,16 @@ from app.services.analysis_profile_service import (
     AnalysisProfileResolutionError,
     AnalysisProfileService,
 )
-from app.storage.backend import delete_storage_file, write_storage_file
+from app.platform.storage.backend import delete_storage_file, write_storage_file
 from app.work_catalog.domain import CatalogValidationError
-from app.worker.queue import (
+from app.platform.jobs.queue import (
     AnalysisJobTransportSnapshot,
     AnalysisJobQueueCapacityExceededError,
     enqueue_analysis_job,
     inspect_analysis_job_transport,
     requeue_dlq_job,
 )
-from app.worker.heartbeat import is_worker_instance_alive
+from app.platform.jobs.heartbeat import is_worker_instance_alive
 
 logger = structlog.get_logger(__name__)
 
@@ -1165,8 +1165,8 @@ class AnalysisService:
 
             # Write proposal.recalculate.started outbox event in the same txn
             # as the job row so replay always delivers it.
-            from app.offer_processing.outbox import build_case_activity_event  # noqa: PLC0415
-            from app.core.events import EVENT_PROPOSAL_RECALCULATE_STARTED  # noqa: PLC0415
+            from app.platform.events.outbox import build_case_activity_event  # noqa: PLC0415
+            from app.platform.events.types import EVENT_PROPOSAL_RECALCULATE_STARTED  # noqa: PLC0415
             _recalc_evt = build_case_activity_event(
                 event_type=EVENT_PROPOSAL_RECALCULATE_STARTED,
                 project_id=project_id,
@@ -1178,7 +1178,7 @@ class AnalysisService:
 
         # Live Redis publish — best-effort; outbox handles durable replay.
         if self._redis is not None:
-            from app.core.events import AGGREGATE_CASE, build_live_message  # noqa: PLC0415
+            from app.platform.events.types import AGGREGATE_CASE, build_live_message  # noqa: PLC0415
             try:
                 await self._redis.publish(
                     f"case:events:{project_id}",
@@ -1448,7 +1448,7 @@ class AnalysisService:
 
             if failure_message is not None:
                 _fail_duration = _job_duration_seconds(job)
-                from app.core.metrics import observe_quote_recalculation  # noqa: PLC0415
+                from app.platform.metrics import observe_quote_recalculation  # noqa: PLC0415
                 observe_quote_recalculation(
                     outcome="failed",
                     duration_seconds=_fail_duration if _fail_duration is not None else 0.0,
@@ -1487,7 +1487,7 @@ class AnalysisService:
             tenant_id=organization_id,
             is_superadmin_context=is_superadmin_context,
         )
-        from app.core.metrics import observe_quote_recalculation  # noqa: PLC0415
+        from app.platform.metrics import observe_quote_recalculation  # noqa: PLC0415
         observe_quote_recalculation(
             outcome="completed",
             duration_seconds=duration if duration is not None else 0.0,
@@ -1504,7 +1504,7 @@ class AnalysisService:
         # proposal_event_id is None when the transition was skipped (project had
         # already moved away from analyzing before the variants committed).
         if result.proposal_event_id and self._redis is not None:
-            from app.core.events import AGGREGATE_CASE, EVENT_PROPOSAL_READY, build_live_message  # noqa: PLC0415
+            from app.platform.events.types import AGGREGATE_CASE, EVENT_PROPOSAL_READY, build_live_message  # noqa: PLC0415
             try:
                 await self._redis.publish(
                     f"case:events:{project_id}",
@@ -1990,12 +1990,12 @@ class AnalysisService:
             "reference_photo_id": _saved_result.reference_photo_id,
         }
         if _emit_org:
-            from app.core.events import (  # noqa: PLC0415
+            from app.platform.events.types import (  # noqa: PLC0415
                 AGGREGATE_CASE,
                 EVENT_ANALYSIS_COMPLETED,
                 build_live_message as _blm,
             )
-            from app.offer_processing.outbox import build_case_activity_event  # noqa: PLC0415
+            from app.platform.events.outbox import build_case_activity_event  # noqa: PLC0415
             try:
                 async with WorkerAsyncSessionFactory() as _out:
                     _ac_evt = build_case_activity_event(

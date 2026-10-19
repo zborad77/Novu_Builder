@@ -9,7 +9,7 @@ from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.pool import NullPool
 
-from app.core.analysis_provider_capabilities import validate_selected_analysis_provider
+from app.platform.analysis_provider_capabilities import validate_selected_analysis_provider
 
 _logger = logging.getLogger(__name__)
 
@@ -796,7 +796,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_network_zone(self) -> "Settings":
-        from app.core.exposure import ALL_ZONES, ZONE_DEV
+        from app.platform.http.exposure import ALL_ZONES, ZONE_DEV
 
         zone = self.nc_zone.strip().lower()
         if zone and zone not in ALL_ZONES:
@@ -808,7 +808,7 @@ class Settings(BaseSettings):
         if not self.jwt_issuer.strip():
             raise ValueError("JWT_ISSUER must not be empty.")
 
-        from app.core.gateway_auth import GatewayKeyConfigError, parse_gateway_keys
+        from app.platform.http.gateway_auth import GatewayKeyConfigError, parse_gateway_keys
 
         try:
             gateway_keys = parse_gateway_keys(self.nc_gateway_hmac_keys)
@@ -847,7 +847,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_trusted_proxies(self) -> "Settings":
-        from app.core.client_ip import TrustedProxyConfigError, parse_trusted_proxies
+        from app.platform.http.client_ip import TrustedProxyConfigError, parse_trusted_proxies
 
         try:
             parse_trusted_proxies(self.trusted_proxy_ips)
@@ -867,7 +867,7 @@ class Settings(BaseSettings):
 
     @property
     def trusted_proxy_networks(self):
-        from app.core.client_ip import parse_trusted_proxies
+        from app.platform.http.client_ip import parse_trusted_proxies
 
         return parse_trusted_proxies(self.trusted_proxy_ips)
 

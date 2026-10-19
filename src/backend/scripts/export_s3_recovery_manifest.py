@@ -21,7 +21,7 @@ from app.repositories.storage_consistency_repository import (  # noqa: E402
     PhotoStorageReference,
     StorageConsistencyRepository,
 )
-from app.storage.s3_photo_storage import _build_s3_client_kwargs  # noqa: E402
+from app.platform.storage.s3_photo_storage import _build_s3_client_kwargs  # noqa: E402
 
 
 @dataclass(frozen=True)

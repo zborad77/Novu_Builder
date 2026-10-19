@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from app.core.config import get_settings
+from app.platform.config import get_settings
 from app.core.device_binding import DeviceRegistryError, decide, parse_registry
 
 LOGIN_A = {"email": "manager_a@test.local", "password": "TestPassA1!"}

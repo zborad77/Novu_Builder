@@ -29,20 +29,20 @@ from datetime import UTC, datetime
 import structlog
 from fastapi import HTTPException
 
-from app.core.backpressure import (
+from app.platform.jobs.backpressure import (
     analysis_job_priority_for_type,
     heavy_job_priority_for_type,
 )
-from app.core.config import Settings, get_settings, startup_failure_message
-from app.core.logging import configure_logging
-from app.core.metrics import (
+from app.platform.config import Settings, get_settings, startup_failure_message
+from app.platform.logging import configure_logging
+from app.platform.metrics import (
     PROMETHEUS_CLIENT_AVAILABLE,
     PROMETHEUS_TEXT_CONTENT_TYPE,
     record_reaper_requeues,
     render_metrics_text,
 )
-from app.core.redis_client import FailoverRedisClient, build_queue_redis_client_from_settings
-from app.db.session import WorkerAsyncSessionFactory
+from app.platform.redis_client import FailoverRedisClient, build_queue_redis_client_from_settings
+from app.platform.db.session import WorkerAsyncSessionFactory
 from app.repositories.analysis_repository import (
     ANALYSIS_JOB_STATUS_QUEUED,
     ANALYSIS_JOB_STATUS_RUNNING,
@@ -58,7 +58,7 @@ from app.services.analysis_service import AnalysisService
 from app.services.export_service import ExportService
 from app.services.photo_service import PhotoService
 from app.services.project_service import ProjectService
-from app.worker.heavy_queue import (
+from app.platform.jobs.heavy_queue import (
     InvalidHeavyJobPayloadError,
     LeasedHeavyJob,
     LostHeavyJobLeaseError,
@@ -72,7 +72,7 @@ from app.worker.heavy_queue import (
     renew_heavy_job_lease,
     validate_heavy_job_payload,
 )
-from app.worker.heartbeat import (
+from app.platform.jobs.heartbeat import (
     clear_local_worker_heartbeat,
     clear_worker_heartbeat,
     WORKER_HEARTBEAT_INTERVAL,
@@ -85,7 +85,7 @@ from app.worker.heartbeat import (
     worker_heartbeat_key,
     write_worker_heartbeat,
 )
-from app.worker.queue import (
+from app.platform.jobs.queue import (
     AnalysisJobQueueCapacityExceededError,
     InvalidAnalysisJobPayloadError,
     LeasedAnalysisJob,

@@ -13,7 +13,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from app.core.client_ip import (
+from app.platform.http.client_ip import (
     TrustedProxyConfigError,
     TrustedProxyMiddleware,
     parse_ip,
@@ -41,7 +41,7 @@ def test_trusted_proxy_list_accepts_addresses_and_networks():
 
 
 def test_settings_reject_wildcard_trusted_proxies(monkeypatch):
-    from app.core.config import Settings
+    from app.platform.config import Settings
 
     monkeypatch.setenv("TRUSTED_PROXY_IPS", "*")
     with pytest.raises(ValidationError, match="TRUSTED_PROXY_IPS"):
@@ -49,7 +49,7 @@ def test_settings_reject_wildcard_trusted_proxies(monkeypatch):
 
 
 def test_strict_settings_reject_uvicorn_wildcard_forwarded_allow_ips(monkeypatch):
-    from app.core.config import Settings
+    from app.platform.config import Settings
     from tests.test_config_production_hardening import _set_valid_prod_env
 
     _set_valid_prod_env(monkeypatch)
@@ -60,7 +60,7 @@ def test_strict_settings_reject_uvicorn_wildcard_forwarded_allow_ips(monkeypatch
 
 
 def test_rate_limit_storage_is_redis_in_production_and_memory_in_development(monkeypatch):
-    from app.core.config import Settings
+    from app.platform.config import Settings
     from tests.test_config_production_hardening import _set_valid_prod_env
 
     assert Settings().effective_rate_limit_storage_uri == "memory://"
@@ -161,7 +161,7 @@ async def test_application_resolves_client_before_rate_limiting_and_audit():
     the address with the signed X-NC-Client-IP and drops X-Forwarded-For; in the
     other zones it only drops X-NC-* headers. TrustedProxyMiddleware comes next.
     """
-    from app.core.gateway_auth import GatewaySignatureMiddleware
+    from app.platform.http.gateway_auth import GatewaySignatureMiddleware
     from app.main import app
 
     assert app.user_middleware[0].cls is GatewaySignatureMiddleware
@@ -191,7 +191,7 @@ async def _limited_app(storage_uri: str):
     from slowapi.errors import RateLimitExceeded
     from slowapi.extension import _rate_limit_exceeded_handler
 
-    from app.core.limiter import client_ip_rate_limit_key
+    from app.platform.http.limiter import client_ip_rate_limit_key
 
     limiter = Limiter(key_func=client_ip_rate_limit_key, storage_uri=storage_uri, in_memory_fallback_enabled=False)
     app = FastAPI()
@@ -250,7 +250,7 @@ def test_uvicorn_proxy_header_handling_is_disabled_in_the_image():
 
 
 def test_unix_token_is_accepted_and_not_a_network():
-    from app.core.client_ip import trusts_unix_socket
+    from app.platform.http.client_ip import trusts_unix_socket
 
     assert trusts_unix_socket("unix") and trusts_unix_socket("127.0.0.1, UNIX")
     assert not trusts_unix_socket("127.0.0.1,::1")

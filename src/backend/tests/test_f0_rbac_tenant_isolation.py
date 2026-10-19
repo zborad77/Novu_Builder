@@ -711,7 +711,7 @@ def _forged_token(org: str) -> str:
 def test_unauthenticated_auth_routes_are_keyed_by_client_ip_only():
     from app.api.routes import auth
 
-    # Read through the auth module: other tests reload app.core.limiter, and the
+    # Read through the auth module: other tests reload app.platform.http.limiter, and the
     # limits live on the instance the routes were decorated with.
     for name in ("login", "refresh", "logout", "forgot_password", "reset_password"):
         limits = auth.limiter._route_limits[f"app.api.routes.auth.{name}"]
@@ -724,7 +724,7 @@ async def test_forged_authorization_header_cannot_escape_ip_rate_limit():
     from slowapi.errors import RateLimitExceeded
     from slowapi.extension import _rate_limit_exceeded_handler
 
-    from app.core.limiter import client_ip_rate_limit_key
+    from app.platform.http.limiter import client_ip_rate_limit_key
 
     test_limiter = Limiter(key_func=client_ip_rate_limit_key)
     app = FastAPI()

@@ -10,7 +10,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.metrics import observe_cache_operation
+from app.platform.metrics import observe_cache_operation
 from app.core.token_limits import JTI_MAX_LENGTH
 from app.models import PasswordResetToken, RevokedToken, UserSession
 

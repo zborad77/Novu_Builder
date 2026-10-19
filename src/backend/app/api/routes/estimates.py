@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.core.config import get_settings
-from app.core.limiter import limiter
+from app.platform.config import get_settings
+from app.platform.http.limiter import limiter
 from app.api.deps import (
     get_analysis_service,
     get_current_user,

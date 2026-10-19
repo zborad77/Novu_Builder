@@ -6,9 +6,9 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-import app.worker.queue as queue_module
+import app.platform.jobs.queue as queue_module
 from app.services.analysis_service import AnalysisJobCreateResult
-from app.worker.queue import (
+from app.platform.jobs.queue import (
     AnalysisJobQueueCapacityExceededError,
     DLQ_ACTIVE_SET_KEY,
     DLQ_KEY_PREFIX,

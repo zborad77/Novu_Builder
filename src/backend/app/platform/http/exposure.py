@@ -204,7 +204,7 @@ def is_exposed(zone: str, method: str, template: str) -> bool:
 
 
 def current_zone() -> str:
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
 
     return get_settings().effective_nc_zone
 

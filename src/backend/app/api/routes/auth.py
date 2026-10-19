@@ -11,10 +11,10 @@ from app.core.account_limiter import (
     reset_login_failures,
 )
 from app.core.audit import SecurityAuditWriteError
-from app.core.config import get_settings
+from app.platform.config import get_settings
 from app.core.device_binding import check_device_binding
-from app.core.limiter import client_ip_rate_limit_key, limiter
-from app.core.metrics import AUTH_FAILURES_TOTAL, metric_labels, normalize_tenant_metric_label
+from app.platform.http.limiter import client_ip_rate_limit_key, limiter
+from app.platform.metrics import AUTH_FAILURES_TOTAL, metric_labels, normalize_tenant_metric_label
 from app.core.security import enforce_password_strength
 from app.repositories.token_repository import TokenStateBackendUnavailableError
 from app.schemas.auth import (

@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import structlog
 
-from app.core.logging import (
+from app.platform.logging import (
     REDACTED,
     REDACTED_BEARER,
     REDACTED_TOKEN,

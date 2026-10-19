@@ -18,7 +18,7 @@ import os as _os
 _backend = _os.getenv("STORAGE_BACKEND", "local").lower()
 
 if _backend == "s3":
-    from app.storage.s3_photo_storage import (  # noqa: F401
+    from app.platform.storage.s3_photo_storage import (  # noqa: F401
         copy_storage_file,
         delete_storage_file,
         generate_presigned_url,
@@ -32,7 +32,7 @@ if _backend == "s3":
         write_storage_file,
     )
 elif _backend == "local":
-    from app.storage.local_photo_storage import (  # type: ignore[assignment]  # noqa: F401
+    from app.platform.storage.local_photo_storage import (  # type: ignore[assignment]  # noqa: F401
         copy_storage_file,
         delete_storage_file,
         generate_presigned_url,
@@ -53,7 +53,7 @@ else:
 
 # Backend-independent helpers — always sourced from local_photo_storage
 # (pure computation, no I/O)
-from app.storage.local_photo_storage import (  # noqa: F401
+from app.platform.storage.local_photo_storage import (  # noqa: F401
     UploadValidationError,
     ensure_directory,
     get_image_dimensions,

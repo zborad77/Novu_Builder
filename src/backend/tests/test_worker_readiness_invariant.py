@@ -215,11 +215,11 @@ async def test_processing_ready_api_ready_reflects_api_state_not_worker_state(ap
 async def test_startup_guard_logs_error_when_no_worker_detected():
     import structlog.testing
 
-    from app.worker.heartbeat import scan_alive_workers  # noqa: F401
+    from app.platform.jobs.heartbeat import scan_alive_workers  # noqa: F401
 
     with (
         patch(
-            "app.worker.heartbeat.scan_alive_workers",
+            "app.platform.jobs.heartbeat.scan_alive_workers",
             new=AsyncMock(return_value=(0, None)),
         ) as mock_scan,
         structlog.testing.capture_logs() as cap,
@@ -229,7 +229,7 @@ async def test_startup_guard_logs_error_when_no_worker_detected():
         _logger = structlog.get_logger("app.main")
         _startup_redis = object()
 
-        from app.worker.heartbeat import scan_alive_workers as _scan
+        from app.platform.jobs.heartbeat import scan_alive_workers as _scan
 
         _alive_count, _last_seen = await _scan(_startup_redis)
         if _alive_count == 0:

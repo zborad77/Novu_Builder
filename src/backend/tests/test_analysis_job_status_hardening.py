@@ -17,7 +17,7 @@ from app.repositories.analysis_repository import (
     AnalysisRepository,
 )
 from app.services.analysis_service import AnalysisService
-from app.worker.queue import AnalysisJobTransportSnapshot
+from app.platform.jobs.queue import AnalysisJobTransportSnapshot
 
 
 def _make_job(status: str = "queued") -> MagicMock:

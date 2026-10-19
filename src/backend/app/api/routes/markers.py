@@ -8,10 +8,10 @@ from app.api.deps import (
     get_project_service,
     resolve_org_id,
 )
-from app.db.session import get_db_session
+from app.platform.db.session import get_db_session
 from app.core.audit import log_cross_tenant_denied
-from app.core.config import get_settings
-from app.core.limiter import limiter
+from app.platform.config import get_settings
+from app.platform.http.limiter import limiter
 from app.repositories.marker_repository import MarkerRepository
 from app.schemas.auth import AuthUserRead
 from app.schemas.marker import MarkerCreate, MarkerDeleteResponse, MarkerListResponse, MarkerRead

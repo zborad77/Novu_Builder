@@ -5,7 +5,7 @@ from typing import Any
 
 import structlog
 
-from app.core.config import startup_failure_message
+from app.platform.config import startup_failure_message
 
 logger = structlog.get_logger(__name__)
 _NON_STRICT_ENVIRONMENTS: frozenset[str] = frozenset({"development", "test"})
@@ -89,7 +89,7 @@ except ModuleNotFoundError as exc:
 
     limiter: Any = _NoopLimiter()
 else:
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
 
     # Single shared limiter instance - registered on app.state in main.py.
     # key_func: per-org for authenticated requests, per-user for superadmins,

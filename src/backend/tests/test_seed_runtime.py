@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from app.db.bootstrap import _seed_global_work_catalog
-from app.db.seed_runtime import (
+from app.composition.bootstrap import _seed_global_work_catalog
+from app.platform.db.seed_runtime import (
     SeedModelPlan,
     SeedWriteMode,
     apply_seed_model_plan,

@@ -6,9 +6,9 @@ from typing import cast
 from app.api.deps import get_current_user, get_photo_service, get_project_service, resolve_org_id
 from app.api.photo_purge import purge_photo_with_audit
 from app.core.audit import log_cross_tenant_denied, mark_request_audited
-from app.core.config import get_settings
-from app.core.limiter import limiter
-from app.core.metrics import UPLOAD_REJECTIONS_TOTAL, metric_labels
+from app.platform.config import get_settings
+from app.platform.http.limiter import limiter
+from app.platform.metrics import UPLOAD_REJECTIONS_TOTAL, metric_labels
 from app.core.rbac import (
     Decision,
     can_purge_photo_in_tenant,
@@ -35,7 +35,7 @@ from app.schemas.photo import (
 )
 from app.services.photo_service import PhotoService
 from app.services.project_service import ProjectService
-from app.storage.backend import UploadValidationError
+from app.platform.storage.backend import UploadValidationError
 
 logger = structlog.get_logger(__name__)
 

@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from app.core.paths import repo_root  # noqa: E402
+from app.platform.paths import repo_root  # noqa: E402
 
 REPO_ROOT = repo_root()
 SCRIPTS_DIR = REPO_ROOT / "scripts"

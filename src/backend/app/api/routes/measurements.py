@@ -3,8 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.deps import get_analysis_service, get_current_user, get_photo_service, get_project_service, resolve_org_id
 from app.core.audit import log_cross_tenant_denied
-from app.core.config import get_settings
-from app.core.limiter import limiter
+from app.platform.config import get_settings
+from app.platform.http.limiter import limiter
 from app.schemas.auth import AuthUserRead
 from app.schemas.measurement import MeasurementPolygonPoint, MeasurementRead, MeasurementUpsert
 from app.services.analysis_service import AnalysisService
@@ -188,8 +188,8 @@ async def confirm_measurement(
     # separate commit on the same session.  Acceptable: if this commit fails,
     # the state is still correct and the live Redis publish below already
     # attempted best-effort delivery.
-    from app.offer_processing.outbox import build_case_activity_event  # noqa: PLC0415
-    from app.core.events import EVENT_MEASUREMENT_CONFIRMED, AGGREGATE_CASE, build_live_message  # noqa: PLC0415
+    from app.platform.events.outbox import build_case_activity_event  # noqa: PLC0415
+    from app.platform.events.types import EVENT_MEASUREMENT_CONFIRMED, AGGREGATE_CASE, build_live_message  # noqa: PLC0415
     _evt = build_case_activity_event(
         event_type=EVENT_MEASUREMENT_CONFIRMED,
         project_id=existing.projectId,

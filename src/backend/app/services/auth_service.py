@@ -10,8 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import commit_security_critical_audit
-from app.core.config import get_settings
-from app.core.exposure import SUPERADMIN_ZONES, current_audience, current_zone
+from app.platform.config import get_settings
+from app.platform.http.exposure import SUPERADMIN_ZONES, current_audience, current_zone
 from app.core.security import enforce_password_strength
 from app.models import User, UserSession
 from app.repositories.token_repository import (

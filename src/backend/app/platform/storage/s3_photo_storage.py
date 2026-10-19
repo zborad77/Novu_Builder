@@ -22,8 +22,8 @@ from uuid import uuid4
 
 import structlog
 
-from app.core.metrics import observe_storage_operation
-from app.storage.local_photo_storage import sanitize_filename
+from app.platform.metrics import observe_storage_operation
+from app.platform.storage.local_photo_storage import sanitize_filename
 
 logger = structlog.get_logger(__name__)
 

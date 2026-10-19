@@ -54,11 +54,11 @@ TEST_GATEWAY_KEY_ID = "test-gw"
 TEST_GATEWAY_SECRET = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 os.environ["NC_GATEWAY_HMAC_KEYS"] = f"{TEST_GATEWAY_KEY_ID}:{TEST_GATEWAY_SECRET}"
 
-from app.core.config import get_settings  # noqa: E402
+from app.platform.config import get_settings  # noqa: E402
 
 get_settings.cache_clear()
 
-from app.db.base import Base  # noqa: E402
+from app.platform.db.base import Base  # noqa: E402
 from app.models import MaterialCatalog, Organization, PricingProfile, Supplier, User  # noqa: E402
 from app.services.auth_service import hash_password  # noqa: E402
 
@@ -437,7 +437,7 @@ async def app_client(test_tenants):
         # The lifespan Redis client belongs to another event loop than the tests;
         # gateway nonces (F3.4) use a per-session in-memory store here. The Redis
         # path is exercised on a real deployment (deploy/linux provisioning smoke).
-        from app.core.gateway_auth import InMemoryNonceStore  # noqa: PLC0415
+        from app.platform.http.gateway_auth import InMemoryNonceStore  # noqa: PLC0415
 
         fastapi_app.state.gateway_nonce_store = InMemoryNonceStore()
         transport = ASGITransport(app=fastapi_app)
@@ -460,8 +460,8 @@ async def _sign_like_the_gateway(request) -> None:
     """In zone gateway every request reaches core signed by the gateway (F3.4)."""
     import secrets  # noqa: PLC0415
 
-    from app.core.config import get_settings  # noqa: PLC0415
-    from app.core.gateway_auth import sign_request  # noqa: PLC0415
+    from app.platform.config import get_settings  # noqa: PLC0415
+    from app.platform.http.gateway_auth import sign_request  # noqa: PLC0415
 
     if UNSIGNED_MARKER in request.headers:
         del request.headers[UNSIGNED_MARKER]

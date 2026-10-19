@@ -4,7 +4,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-import app.storage.local_photo_storage as storage_mod
+import app.platform.storage.local_photo_storage as storage_mod
 
 
 class TestStorageFunctionsAreAsync:

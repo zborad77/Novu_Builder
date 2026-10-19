@@ -13,15 +13,15 @@ from redis.exceptions import RedisError
 import structlog
 
 from app.api.router import api_router
-from app.core.api_versioning import ApiVersioningMiddleware
+from app.platform.http.api_versioning import ApiVersioningMiddleware
 from app.core.audit import AuditMiddleware
-from app.core.client_ip import TrustedProxyMiddleware, trusts_unix_socket
-from app.core.exposure import PRODUCTION_ZONES, ExposureGuardMiddleware
-from app.core.gateway_auth import GatewaySignatureMiddleware
-from app.core.config import get_settings, startup_failure_message
-from app.core.limiter import limiter
-from app.core.logging import configure_logging
-from app.core.metrics import (
+from app.platform.http.client_ip import TrustedProxyMiddleware, trusts_unix_socket
+from app.platform.http.exposure import PRODUCTION_ZONES, ExposureGuardMiddleware
+from app.platform.http.gateway_auth import GatewaySignatureMiddleware
+from app.platform.config import get_settings, startup_failure_message
+from app.platform.http.limiter import limiter
+from app.platform.logging import configure_logging
+from app.platform.metrics import (
     DB_POOL_EXHAUSTED_TOTAL,
     HTTP_REQUEST_DURATION_SECONDS,
     HTTP_REQUESTS_IN_PROGRESS,
@@ -29,14 +29,14 @@ from app.core.metrics import (
     PROMETHEUS_CLIENT_AVAILABLE,
     metric_labels,
 )
-from app.core.request_id import sanitize_request_id
-from app.core.redis_client import build_queue_redis_client_from_settings
-from app.db.base import Base
-from app.db.bootstrap import audit_seed_default_passwords, ensure_dev_seed
-from app.db.session import AsyncSessionFactory, engine
+from app.platform.http.request_id import sanitize_request_id
+from app.platform.redis_client import build_queue_redis_client_from_settings
+from app.platform.db.base import Base
+from app.composition.bootstrap import audit_seed_default_passwords, ensure_dev_seed
+from app.platform.db.session import AsyncSessionFactory, engine
 from app.models import Project
 from app.repositories.token_repository import TokenRepository
-from app.storage.backend import verify_storage_health
+from app.platform.storage.backend import verify_storage_health
 
 
 logger = structlog.get_logger(__name__)
@@ -321,7 +321,7 @@ async def lifespan(app: FastAPI):
     # heartbeat.  Log an ERROR here so operators know the gap exists.
     _startup_redis = app.state.job_queue
     if _startup_redis is not None:
-        from app.worker.heartbeat import scan_alive_workers  # noqa: PLC0415
+        from app.platform.jobs.heartbeat import scan_alive_workers  # noqa: PLC0415
         try:
             _alive_count, _last_seen = await scan_alive_workers(_startup_redis)
             if _alive_count == 0:

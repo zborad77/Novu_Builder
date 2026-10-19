@@ -768,7 +768,7 @@ def _resolve_storage_root(args: argparse.Namespace) -> Path:
     if env_val:
         return Path(env_val)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from app.core.paths import repo_root
+    from app.platform.paths import repo_root
 
     return repo_root() / "storage"
 

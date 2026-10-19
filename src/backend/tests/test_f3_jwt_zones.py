@@ -50,7 +50,7 @@ async def f3_users(test_tenants, db_session_factory):
 
 @pytest.fixture
 def zone(monkeypatch):
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
 
     def switch(name: str) -> None:
         monkeypatch.setattr(get_settings(), "nc_zone", name)
@@ -114,7 +114,7 @@ async def test_superadmin_authenticates_in_admin_zone_only(app_client, f3_users,
 
 
 def _forge(**overrides) -> str:
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
 
     settings = get_settings()
     now = datetime.now(UTC)
@@ -180,7 +180,7 @@ async def test_impersonation_token_targets_the_web_gateway_only(app_client, f3_u
 
 
 def test_unknown_zone_is_rejected(monkeypatch):
-    from app.core.config import Settings
+    from app.platform.config import Settings
 
     monkeypatch.setenv("NC_ZONE", "public")
     with pytest.raises(ValidationError, match="NC_ZONE"):
@@ -188,7 +188,7 @@ def test_unknown_zone_is_rejected(monkeypatch):
 
 
 def test_dev_zone_is_refused_outside_development(monkeypatch):
-    from app.core.config import Settings
+    from app.platform.config import Settings
     from tests.test_config_production_hardening import _set_valid_prod_env
 
     _set_valid_prod_env(monkeypatch)
@@ -198,7 +198,7 @@ def test_dev_zone_is_refused_outside_development(monkeypatch):
 
 
 def test_insecure_jwt_algorithm_is_refused(monkeypatch):
-    from app.core.config import Settings
+    from app.platform.config import Settings
 
     monkeypatch.setenv("JWT_ALGORITHM", "none")
     with pytest.raises(ValidationError, match="JWT_ALGORITHM"):
@@ -209,7 +209,7 @@ async def test_api_refuses_to_start_without_a_production_zone(monkeypatch):
     from fastapi import FastAPI
 
     import app.main as main
-    from app.core.config import Settings
+    from app.platform.config import Settings
     from tests.test_config_production_hardening import _set_valid_prod_env
 
     _set_valid_prod_env(monkeypatch)
@@ -223,7 +223,7 @@ async def test_api_refuses_to_start_without_a_production_zone(monkeypatch):
 
 
 def test_development_defaults_to_dev_zone(monkeypatch):
-    from app.core.config import Settings
+    from app.platform.config import Settings
 
     monkeypatch.delenv("NC_ZONE", raising=False)
     monkeypatch.setenv("APP_ENV", "development")

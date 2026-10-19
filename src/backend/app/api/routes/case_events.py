@@ -9,7 +9,7 @@ Replay-safe delivery guarantee (mirrors offer_events.py):
     4. Every outbox-sourced SSE frame carries: id: {seq}
        Live frames carry no id: line — client does not advance Last-Event-ID.
 
-Canonical message shape — see app.core.events.
+Canonical message shape — see app.platform.events.types.
 """
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_manager, resolve_org_id
-from app.core.events import build_outbox_message, sse_id_from_message
-from app.core.metrics import observe_sse_connection, observe_sse_reconnect
-from app.db.session import AsyncSessionFactory, get_db_session
+from app.platform.events.types import build_outbox_message, sse_id_from_message
+from app.platform.metrics import observe_sse_connection, observe_sse_reconnect
+from app.platform.db.session import AsyncSessionFactory, get_db_session
 from app.repositories.project_repository import ProjectRepository
 from app.schemas.auth import AuthUserRead
 

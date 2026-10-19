@@ -3,7 +3,7 @@ import pytest
 from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.storage.local_photo_storage import resize_image_bytes, get_image_dimensions
+from app.platform.storage.local_photo_storage import resize_image_bytes, get_image_dimensions
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@ from app.repositories.storage_consistency_repository import (
     PhotoStorageReference,
     StorageConsistencyRepository,
 )
-from app.storage.backend import delete_storage_file, list_storage_objects
+from app.platform.storage.backend import delete_storage_file, list_storage_objects
 
 logger = structlog.get_logger(__name__)
 

@@ -25,7 +25,7 @@ from app.repositories.storage_consistency_repository import (  # noqa: E402
     StorageConsistencyRepository,
 )
 from app.services.photo_service import to_read_model  # noqa: E402
-from app.storage.backend import generate_presigned_url, storage_key_exists  # noqa: E402
+from app.platform.storage.backend import generate_presigned_url, storage_key_exists  # noqa: E402
 
 ValidationStatus = Literal["PASSED", "FAILED", "NOT EXECUTED", "OUT OF SCOPE"]
 

@@ -23,7 +23,7 @@ disallow_untyped_defs = false
 disallow_any_generics = false
 
 [[tool.mypy.overrides]]
-module = ["app.core.*", "app.api.routes.auth"]
+module = ["app.core.*", "app.platform.*", "app.api.routes.auth"]
 # Security-critical modules — stricter checks encouraged here
 disallow_untyped_defs = false
 
@@ -31,7 +31,7 @@ disallow_untyped_defs = false
 # redis.asyncio stubs return Awaitable[T] | T for many operations.
 # All usages here are correct at runtime; [misc] errors are stub artifacts.
 # The hmget [arg-type] errors are positional-vs-list API accepted by the library.
-module = ["app.worker.queue", "app.worker.heavy_queue", "app.worker.offer_queue"]
+module = ["app.platform.jobs.queue", "app.platform.jobs.heavy_queue", "app.platform.jobs.offer_queue"]
 disable_error_code = ["misc", "arg-type"]
 
 [[tool.mypy.overrides]]

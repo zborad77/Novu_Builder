@@ -13,19 +13,19 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 import structlog
 
-from app.core.backpressure import (
+from app.platform.jobs.backpressure import (
     collect_backpressure_snapshot,
     effective_backpressure_max_queued_jobs,
     ensure_heavy_intake_capacity,
     heavy_job_priority_for_type,
     require_worker_capacity,
 )
-from app.core.config import get_settings
+from app.platform.config import get_settings
 from app.models import ProjectExport
 from app.repositories.export_repository import ExportRepository
 from app.schemas.export import ExportRead
 from app.schemas.project import ProjectDetail, ProposalDraftField, ProposalDraftItem, ProposalDraftSection
-from app.storage.backend import (
+from app.platform.storage.backend import (
     delete_storage_file,
     generate_presigned_url,
     read_storage_file,
@@ -33,7 +33,7 @@ from app.storage.backend import (
     storage_key_exists,
     write_storage_file,
 )
-from app.worker.heavy_queue import HeavyJobQueueCapacityExceededError, enqueue_heavy_job
+from app.platform.jobs.heavy_queue import HeavyJobQueueCapacityExceededError, enqueue_heavy_job
 
 logger = structlog.get_logger(__name__)
 

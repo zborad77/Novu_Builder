@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.core.config import Settings
+from app.platform.config import Settings
 
 
 # ---------------------------------------------------------------------------

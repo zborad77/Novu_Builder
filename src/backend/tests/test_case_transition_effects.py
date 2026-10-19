@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 
 from app.case_workflow.case_actions import CaseActionService
-from app.core.events import AGGREGATE_CASE, EVENT_ANALYSIS_STARTED
+from app.platform.events.types import AGGREGATE_CASE, EVENT_ANALYSIS_STARTED
 from app.models import AnalysisJob, OutboxEvent, Project, ProjectExport, ProjectFinalProposal
 from app.repositories.project_repository import ProjectRepository
 

@@ -4,7 +4,7 @@ from collections.abc import Iterable
 
 from redis.asyncio import Redis
 
-from app.core.cache import delete_cached, invalidate_cache_tag
+from app.platform.cache import delete_cached, invalidate_cache_tag
 
 
 WORK_CATALOG_CACHE_VERSION = "v2"

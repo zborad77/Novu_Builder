@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.core.cache import _k, delete_cached, get_cache_tag, get_cached, invalidate_cache_tag, set_cached
+from app.platform.cache import _k, delete_cached, get_cache_tag, get_cached, invalidate_cache_tag, set_cached
 from app.work_catalog.cache import (
     effective_work_type_item_key,
     effective_work_type_list_key,
@@ -104,7 +104,7 @@ class TestGetCached:
                 samples.append(perf_counter() - started_at)
             return median(samples)
 
-        with patch("app.core.cache.CACHE_ACCESS_TIMING_FLOOR_SECONDS", 0.01):
+        with patch("app.platform.cache.CACHE_ACCESS_TIMING_FLOOR_SECONDS", 0.01):
             hit_avg = await _median_duration(hit_redis)
             miss_avg = await _median_duration(miss_redis)
 

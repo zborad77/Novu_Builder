@@ -21,8 +21,8 @@ import structlog
 from redis.asyncio import Redis
 from typing import NoReturn
 
-from app.core.config import get_settings
-from app.core.redis_client import build_redis_client_from_settings
+from app.platform.config import get_settings
+from app.platform.redis_client import build_redis_client_from_settings
 
 logger = structlog.get_logger(__name__)
 

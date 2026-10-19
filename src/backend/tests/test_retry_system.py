@@ -9,7 +9,7 @@ from starlette.requests import Request
 
 from app.repositories.analysis_repository import InvalidAnalysisResultPayloadError
 from app.services.analysis_service import AnalysisService, _retry_backoff_seconds
-from app.worker.queue import LeasedAnalysisJob
+from app.platform.jobs.queue import LeasedAnalysisJob
 
 
 def _job(*, status: str = "queued", attempt_count: int = 0):
@@ -368,7 +368,7 @@ class TestDeadLetterReprocess:
     @pytest.mark.asyncio
     async def test_admin_reprocess_route_returns_429_when_queue_is_full(self):
         from app.api.routes.admin import admin_reprocess_dead_letter_job
-        from app.worker.queue import AnalysisJobQueueCapacityExceededError
+        from app.platform.jobs.queue import AnalysisJobQueueCapacityExceededError
 
         request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
         current_user = MagicMock(id="admin-1")

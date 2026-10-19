@@ -6,8 +6,8 @@ from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
 
-from app.core.config import get_settings
-from app.core.request_id import REQUEST_ID_MAX_LENGTH, sanitize_request_id
+from app.platform.config import get_settings
+from app.platform.http.request_id import REQUEST_ID_MAX_LENGTH, sanitize_request_id
 from app.main import create_app
 
 

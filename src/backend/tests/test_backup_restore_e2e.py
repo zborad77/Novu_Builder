@@ -36,7 +36,7 @@ from typing import Optional
 
 import pytest
 
-from app.core.paths import BACKEND_ROOT, repo_root
+from app.platform.paths import BACKEND_ROOT, repo_root
 
 REPO_ROOT = repo_root()
 BACKUP_SH  = REPO_ROOT / "scripts" / "backup.sh"

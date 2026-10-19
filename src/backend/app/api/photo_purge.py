@@ -6,7 +6,7 @@ import structlog
 from fastapi import HTTPException
 
 from app.core.audit import SecurityAuditWriteError, commit_security_critical_audit
-from app.core.config import get_settings
+from app.platform.config import get_settings
 from app.core.purge_ledger import PurgeLedgerError, append_purge_entry
 from app.models import ProjectPhoto
 from app.schemas.auth import AuthUserRead

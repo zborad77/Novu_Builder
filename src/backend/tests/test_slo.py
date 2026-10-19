@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.slo import (
+from app.platform.slo import (
     API_AVAILABILITY_SLO,
     API_LATENCY_P95_SLO,
     API_LATENCY_P99_SLO,

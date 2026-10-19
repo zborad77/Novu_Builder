@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.token_limits import JTI_MAX_LENGTH
-from app.db.base import Base
+from app.platform.db.base import Base
 
 
 class TimestampMixin:

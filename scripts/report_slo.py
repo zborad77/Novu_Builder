@@ -16,7 +16,7 @@ BACKEND_ROOT = REPO_ROOT / "src" / "backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.core.slo import (  # noqa: E402
+from app.platform.slo import (  # noqa: E402
     API_AVAILABILITY_SLO,
     API_LATENCY_P95_SLO,
     API_LATENCY_P99_SLO,

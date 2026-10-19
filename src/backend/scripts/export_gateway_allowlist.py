@@ -13,9 +13,9 @@ import json
 import sys
 from pathlib import Path
 
-from app.core import exposure
-from app.core.exposure import EXPOSURE, ZONE_GATEWAY
-from app.core.paths import repo_root
+from app.platform.http import exposure
+from app.platform.http.exposure import EXPOSURE, ZONE_GATEWAY
+from app.platform.paths import repo_root
 
 TARGET = repo_root() / "docs" / "security" / "gateway-allowlist.json"
 

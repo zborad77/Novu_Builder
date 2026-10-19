@@ -11,7 +11,7 @@ Replay-safe delivery guarantee:
 
 Deduplication responsibility: client MUST deduplicate by event_id field.
 
-Canonical message shape — see app.core.events.
+Canonical message shape — see app.platform.events.types.
 """
 from __future__ import annotations
 
@@ -23,9 +23,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_org_id
-from app.core.events import build_outbox_message, sse_id_from_message
-from app.core.metrics import observe_sse_connection, observe_sse_reconnect
-from app.db.session import AsyncSessionFactory, get_db_session
+from app.platform.events.types import build_outbox_message, sse_id_from_message
+from app.platform.metrics import observe_sse_connection, observe_sse_reconnect
+from app.platform.db.session import AsyncSessionFactory, get_db_session
 from app.offer_processing.service import OfferNotFoundError, OfferService
 from app.schemas.auth import AuthUserRead
 

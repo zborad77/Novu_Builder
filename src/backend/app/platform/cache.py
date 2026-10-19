@@ -17,8 +17,8 @@ from typing import Any
 import structlog
 from redis.asyncio import Redis
 
-from app.core.metrics import observe_cache_operation
-from app.core.tenant_timing import (
+from app.platform.metrics import observe_cache_operation
+from app.platform.tenant_timing import (
     CACHE_ACCESS_TIMING_FLOOR_SECONDS,
     enforce_timing_floor,
 )

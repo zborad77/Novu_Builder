@@ -15,8 +15,8 @@ import pytest
 from fastapi import FastAPI, Request
 from httpx import ASGITransport, AsyncClient
 
-from app.core.config import get_settings
-from app.core.gateway_auth import (
+from app.platform.config import get_settings
+from app.platform.http.gateway_auth import (
     GatewayKeyConfigError,
     GatewaySignatureMiddleware,
     canonical_string,
@@ -322,7 +322,7 @@ async def test_redis_nonce_store_claims_each_nonce_once():
 
     import redis.asyncio as aioredis
 
-    from app.core.gateway_auth import RedisNonceStore
+    from app.platform.http.gateway_auth import RedisNonceStore
 
     url = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
     client = aioredis.from_url(url, socket_connect_timeout=0.5)
@@ -341,7 +341,7 @@ async def test_redis_nonce_store_claims_each_nonce_once():
 
 
 async def test_redis_nonce_store_failure_fails_closed():
-    from app.core.gateway_auth import NonceStoreUnavailableError, RedisNonceStore
+    from app.platform.http.gateway_auth import NonceStoreUnavailableError, RedisNonceStore
 
     class Broken:
         async def set(self, *args, **kwargs):

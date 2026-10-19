@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from app.worker.heartbeat import local_worker_heartbeat_status, worker_local_health_path
+from app.platform.jobs.heartbeat import local_worker_heartbeat_status, worker_local_health_path
 
 
 def main() -> int:

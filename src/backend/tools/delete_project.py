@@ -13,9 +13,9 @@ os.chdir(BACKEND_ROOT)
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.db.session import AsyncSessionFactory
+from app.platform.db.session import AsyncSessionFactory
 from app.models import Project
-from app.storage.local_photo_storage import STORAGE_ROOT
+from app.platform.storage.local_photo_storage import STORAGE_ROOT
 
 
 async def delete_project(*, project_id: str, allow_prefix: str | None) -> int:

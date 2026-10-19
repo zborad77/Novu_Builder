@@ -20,7 +20,7 @@ from app.repositories.photo_repository import PhotoRepository
 from app.repositories.work_catalog_repository import WorkCatalogRepository
 from app.services.analysis_service import AnalysisService
 from app.services.quote_variant_service import QuoteVariantRecalculationResult
-from app.worker.queue import dequeue_analysis_job
+from app.platform.jobs.queue import dequeue_analysis_job
 from tests.test_r19_job_queue import FakeRedisQueue
 
 

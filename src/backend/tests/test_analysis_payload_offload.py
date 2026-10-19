@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.core.config import get_settings
+from app.platform.config import get_settings
 from app.services.analysis_service import AnalysisService, _payload_has_large_blob
 
 

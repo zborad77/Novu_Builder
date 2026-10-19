@@ -9,10 +9,10 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.db.bootstrap import ensure_dev_seed
-from app.db.session import AsyncSessionFactory
+from app.composition.bootstrap import ensure_dev_seed
+from app.platform.db.session import AsyncSessionFactory
 from app.models import Project, ProjectPhoto
-from app.storage.backend import sanitize_filename, write_storage_file
+from app.platform.storage.backend import sanitize_filename, write_storage_file
 
 
 DATASET_ROOT = BACKEND_ROOT.parent / "test-data" / "reference-cases"

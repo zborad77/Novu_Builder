@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.db.bootstrap import audit_seed_default_passwords
+from app.composition.bootstrap import audit_seed_default_passwords
 from app.models import Organization, User
 from app.services.auth_service import hash_password
 from app.main import verify_seed_credentials_on_startup
@@ -61,8 +61,8 @@ async def _create_user(
 @pytest.mark.asyncio
 async def test_seed_default_password_check_is_silent_when_monitored_account_does_not_exist(db_session):
     with (
-        patch("app.db.bootstrap.logger.critical") as critical_log,
-        patch("app.db.bootstrap.logger.warning") as warning_log,
+        patch("app.composition.bootstrap.logger.critical") as critical_log,
+        patch("app.composition.bootstrap.logger.warning") as warning_log,
     ):
         findings = await audit_seed_default_passwords(
             db_session,
@@ -86,7 +86,7 @@ async def test_seed_default_password_check_is_silent_when_password_was_rotated(d
         role="superadmin",
     )
 
-    with patch("app.db.bootstrap.logger.critical") as critical_log:
+    with patch("app.composition.bootstrap.logger.critical") as critical_log:
         findings = await audit_seed_default_passwords(
             db_session,
             app_env="production",
@@ -108,7 +108,7 @@ async def test_seed_default_password_check_logs_critical_for_active_default_seed
         role="superadmin",
     )
 
-    with patch("app.db.bootstrap.logger.critical") as critical_log:
+    with patch("app.composition.bootstrap.logger.critical") as critical_log:
         findings = await audit_seed_default_passwords(
             db_session,
             app_env="production",
@@ -162,8 +162,8 @@ async def test_seed_default_password_check_downgrades_to_warning_in_development(
     )
 
     with (
-        patch("app.db.bootstrap.logger.warning") as warning_log,
-        patch("app.db.bootstrap.logger.critical") as critical_log,
+        patch("app.composition.bootstrap.logger.warning") as warning_log,
+        patch("app.composition.bootstrap.logger.critical") as critical_log,
     ):
         findings = await audit_seed_default_passwords(
             db_session,

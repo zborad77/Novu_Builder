@@ -27,7 +27,7 @@ from app.services.proposal_draft_service import (
     build_project_proposal_draft,
     normalize_proposal_patch_payload,
 )
-from app.storage.backend import copy_storage_file, delete_storage_file
+from app.platform.storage.backend import copy_storage_file, delete_storage_file
 
 logger = structlog.get_logger(__name__)
 
@@ -584,7 +584,7 @@ class ProjectService:
         # Events emitted after finalization (e.g. export.completed) are intentionally excluded.
         from sqlalchemy import select as _sa_select  # noqa: PLC0415
         from app.models.offer_processing import OutboxEvent  # noqa: PLC0415
-        from app.core.events import AGGREGATE_CASE  # noqa: PLC0415
+        from app.platform.events.types import AGGREGATE_CASE  # noqa: PLC0415
         _ARCHIVE_EVENT_TYPES = frozenset({
             "analysis.started", "analysis.completed", "measurement.confirmed",
             "proposal.recalculate.started", "proposal.ready", "quote.ready",

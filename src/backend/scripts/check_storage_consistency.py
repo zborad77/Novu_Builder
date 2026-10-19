@@ -40,7 +40,7 @@ from app.services.storage_consistency_service import (  # noqa: E402
     StorageConsistencyIssue,
     StorageConsistencyService,
 )
-from app.storage.backend import storage_key_exists  # noqa: E402
+from app.platform.storage.backend import storage_key_exists  # noqa: E402
 
 
 def _sanitize(value: str) -> str:

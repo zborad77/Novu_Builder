@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.seed_runtime import (
+from app.platform.db.seed_runtime import (
     SeedModelPlan,
     SeedPlanReport,
     SeedWriteMode,
@@ -48,7 +48,7 @@ from app.models import (
     WorkTypeParameter,
     WorkTypeParameterOption,
 )
-from app.storage.local_photo_storage import STORAGE_ROOT, ensure_directory
+from app.platform.storage.local_photo_storage import STORAGE_ROOT, ensure_directory
 from app.work_catalog.seeds import GLOBAL_WORK_CATALOG_SEED
 
 logger = structlog.get_logger(__name__)

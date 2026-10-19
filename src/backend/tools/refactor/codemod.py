@@ -117,37 +117,35 @@ class Rewriter(cst.CSTTransformer):
                     return updated.with_changes(body=[node.with_changes(module=_module_expr(new))])
             return updated
         old_module = get_full_name_for_node(node.module) or ""
-        groups: dict[str, list[cst.ImportAlias]] = {}
+        planned: list[tuple[str, cst.ImportAlias]] = []
         for alias in node.names:
             name = get_full_name_for_node(alias.name) or ""
             target_module = self.m.module(old_module)
-            local = alias.asname
             if old_module in self.m.symbols and name in self.m.symbols[old_module]:
                 target_module = self.m.symbols[old_module][name]
-            elif f"{old_module}.{name}" in self.m.modules or any(
-                f"{old_module}.{name}" == p for p in self.m.modules
-            ):
+            elif f"{old_module}.{name}" in self.m.modules:
                 # from pkg import submodule  -> from newpkg import newname [as submodule]
                 new_full = self.m.module(f"{old_module}.{name}")
                 target_module, _, new_name = new_full.rpartition(".")
-                if new_name != name and local is None:
-                    local = cst.AsName(name=cst.Name(name))
-                alias = alias.with_changes(name=cst.Name(new_name))
-            alias = alias.with_changes(asname=local, comma=cst.MaybeSentinel.DEFAULT)
-            groups.setdefault(target_module, []).append(alias)
-        if list(groups) == [old_module]:
+                if new_name != name:
+                    asname = alias.asname or cst.AsName(name=cst.Name(name))
+                    alias = alias.with_changes(name=cst.Name(new_name), asname=asname)
+            planned.append((target_module, alias))
+        targets = list(dict.fromkeys(module for module, _ in planned))
+        if targets == [old_module] and all(a is b for (_, a), b in zip(planned, node.names)):
             return updated
         self.changed = True
-        statements = []
-        for index, (module, aliases) in enumerate(groups.items()):
-            new_node = node.with_changes(
-                module=_module_expr(module),
-                names=aliases,
-                lpar=node.lpar if len(aliases) > 1 else None,
-                rpar=node.rpar if len(aliases) > 1 else None,
+        if len(targets) == 1:
+            # jen jiný modul: formátování (závorky, čárky, komentáře) zůstává
+            return updated.with_changes(
+                body=[node.with_changes(module=_module_expr(targets[0]), names=[a for _, a in planned])]
             )
-            if len(aliases) == 1:
-                new_node = new_node.with_changes(lpar=None, rpar=None)
+        statements = []
+        for index, module in enumerate(targets):
+            aliases = [
+                a.with_changes(comma=cst.MaybeSentinel.DEFAULT) for m, a in planned if m == module
+            ]
+            new_node = node.with_changes(module=_module_expr(module), names=aliases, lpar=None, rpar=None)
             statements.append(
                 updated.with_changes(
                     body=[new_node],
@@ -189,6 +187,15 @@ class Rewriter(cst.CSTTransformer):
         return updated
 
 
+class _CommentRewriter(cst.CSTTransformer):
+    def __init__(self, mapping: Mapping) -> None:
+        self.m = mapping
+
+    def leave_Comment(self, original: cst.Comment, updated: cst.Comment) -> cst.Comment:
+        new_value = self.m.text(updated.value)
+        return updated.with_changes(value=new_value) if new_value != updated.value else updated
+
+
 def rewrite_python(path: Path, mapping: Mapping) -> bool:
     source = path.read_text(encoding="utf-8")
     module = cst.parse_module(source)
@@ -203,6 +210,8 @@ def rewrite_python(path: Path, mapping: Mapping) -> bool:
         changed = second_rewriter.changed
     else:
         result, changed = first, rewriter.changed
+    result = result.visit(_CommentRewriter(mapping))
+    changed = changed or result.code != source
     if changed and result.code != source:
         path.write_bytes(result.code.encode("utf-8"))
         return True

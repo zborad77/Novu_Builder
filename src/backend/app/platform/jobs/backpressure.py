@@ -6,9 +6,9 @@ from unittest.mock import Mock
 
 from fastapi import HTTPException
 
-from app.core.metrics import record_backpressure_rejection
-from app.worker.heavy_queue import get_heavy_job_queue_counts
-from app.worker.queue import get_analysis_job_queue_counts
+from app.platform.metrics import record_backpressure_rejection
+from app.platform.jobs.heavy_queue import get_heavy_job_queue_counts
+from app.platform.jobs.queue import get_analysis_job_queue_counts
 
 PRIORITY_STANDARD = "standard"
 PRIORITY_CRITICAL = "critical"

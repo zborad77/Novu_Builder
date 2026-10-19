@@ -1,7 +1,7 @@
 from httpx import ASGITransport, AsyncClient
 from fastapi.responses import HTMLResponse
 
-from app.core.config import Settings, get_settings
+from app.platform.config import Settings, get_settings
 from app.main import build_content_security_policy, create_app
 
 

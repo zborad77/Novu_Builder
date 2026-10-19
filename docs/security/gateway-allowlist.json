@@ -1,5 +1,5 @@
 {
-  "generatedFrom": "src/backend/app/core/exposure.py",
+  "generatedFrom": "src/backend/app/platform/http/exposure.py",
   "zone": "gateway",
   "count": 91,
   "routes": [

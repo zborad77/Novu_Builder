@@ -45,7 +45,7 @@ def _settings(*, heavy_concurrency: int = 0, analysis_queue_max_depth: int = 50,
 
 
 def _ready_backpressure_snapshot(settings):
-    from app.core.backpressure import BackpressureSnapshot
+    from app.platform.jobs.backpressure import BackpressureSnapshot
     return BackpressureSnapshot(
         runtime_state="ready",
         analysis_queued=0,
@@ -78,7 +78,7 @@ def _case_detail(*, has_final_proposal: bool = True, has_proposal_draft: bool = 
 
 class TestRequireWorkerCapacity:
     def test_raises_503_when_heavy_concurrency_is_zero(self):
-        from app.core.backpressure import require_worker_capacity
+        from app.platform.jobs.backpressure import require_worker_capacity
 
         with pytest.raises(HTTPException) as exc_info:
             require_worker_capacity("test_surface", settings=_settings(heavy_concurrency=0))
@@ -86,13 +86,13 @@ class TestRequireWorkerCapacity:
         assert exc_info.value.status_code == 503
 
     def test_passes_when_heavy_concurrency_is_positive(self):
-        from app.core.backpressure import require_worker_capacity
+        from app.platform.jobs.backpressure import require_worker_capacity
 
         # Must not raise
         require_worker_capacity("test_surface", settings=_settings(heavy_concurrency=2))
 
     def test_error_detail_mentions_worker(self):
-        from app.core.backpressure import require_worker_capacity
+        from app.platform.jobs.backpressure import require_worker_capacity
 
         with pytest.raises(HTTPException) as exc_info:
             require_worker_capacity("test_surface", settings=_settings(heavy_concurrency=0))

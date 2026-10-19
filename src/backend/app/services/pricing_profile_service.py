@@ -8,13 +8,13 @@ from typing import Any
 
 from redis.asyncio import Redis
 
-from app.core.cache import VersionTaggedLocalCache, get_cache_tag
-from app.core.metrics import (
+from app.platform.cache import VersionTaggedLocalCache, get_cache_tag
+from app.platform.metrics import (
     observe_cache_operation,
     observe_work_catalog_resolution,
     record_work_catalog_validation_failure,
 )
-from app.core.tenant_timing import (
+from app.platform.tenant_timing import (
     TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
     enforce_timing_floor,
 )

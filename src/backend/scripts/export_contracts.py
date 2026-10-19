@@ -32,7 +32,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.core.paths import repo_root as _repo_root  # noqa: E402
+from app.platform.paths import repo_root as _repo_root  # noqa: E402
 
 CONTRACTS_DIR = _repo_root() / "src" / "contracts" / "openapi"
 BASELINE_DIR = BACKEND_ROOT / "tests" / "architecture" / "baseline"
@@ -120,7 +120,7 @@ def build_middleware_snapshot(app: Any) -> str:
 def build_security_surface(app: Any) -> str:
     from fastapi.routing import APIRoute
 
-    from app.core.exposure import EXPOSURE
+    from app.platform.http.exposure import EXPOSURE
 
     limiter = app.state.limiter
     route_limits = getattr(limiter, "_route_limits", {})
@@ -151,7 +151,7 @@ def build_security_surface(app: Any) -> str:
 
 
 def build_metadata_snapshot() -> str:
-    from app.db.base import Base
+    from app.platform.db.base import Base
     import app.models  # noqa: F401  (registruje všechny modely)
 
     tables = []

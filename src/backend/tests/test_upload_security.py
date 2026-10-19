@@ -244,7 +244,7 @@ class TestMimeSpoofingAndMagicBytes:
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
     def test_unsafe_decoder_payload_is_rejected(self):
-        from app.storage.local_photo_storage import validate_image_format
+        from app.platform.storage.local_photo_storage import validate_image_format
 
         with patch("PIL.Image.open", side_effect=Image.DecompressionBombError("unsafe image")):
             with pytest.raises(ValueError, match="unsafe or exceeds decoder limits"):
@@ -388,7 +388,7 @@ class TestRouteMapping:
         from app.api.routes.images import upload_case_images
         from app.services.photo_service import PhotoService
         from app.services.project_service import ProjectService
-        from app.storage.backend import UploadValidationError
+        from app.platform.storage.backend import UploadValidationError
 
         project = _make_project()
         mock_request = MagicMock()
@@ -429,7 +429,7 @@ class TestRouteMapping:
         from app.api.routes.images import upload_case_images
         from app.services.photo_service import PhotoService
         from app.services.project_service import ProjectService
-        from app.storage.backend import UploadValidationError
+        from app.platform.storage.backend import UploadValidationError
 
         project = _make_project()
         mock_request = MagicMock()

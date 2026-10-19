@@ -90,7 +90,7 @@ class TestRateLimiting:
         assert "rate_limit_admin_write" in src
 
     def test_rate_limit_admin_write_config_field_exists(self):
-        from app.core.config import Settings
+        from app.platform.config import Settings
         src = inspect.getsource(Settings)
         assert "rate_limit_admin_write" in src
         assert "rate_limit_admin_sensitive" in src

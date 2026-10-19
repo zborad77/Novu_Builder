@@ -7,7 +7,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import Settings, _DEFAULT_JWT_SECRET
+from app.platform.config import Settings, _DEFAULT_JWT_SECRET
 
 _CUSTOM_SECRET = "a-very-strong-and-unique-jwt-secret-for-testing-99!"
 # Minimum valid production companions (satisfy all production validators)

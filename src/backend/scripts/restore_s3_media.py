@@ -11,7 +11,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.storage.s3_photo_storage import _build_s3_client_kwargs  # noqa: E402
+from app.platform.storage.s3_photo_storage import _build_s3_client_kwargs  # noqa: E402
 
 
 def _build_s3_client(*, region: str):

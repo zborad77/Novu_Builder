@@ -70,15 +70,15 @@ class TestLimiterImportHardening:
 
         monkeypatch.setenv("APP_ENV", "production")
         monkeypatch.setattr(builtins, "__import__", _fake_import)
-        sys.modules.pop("app.core.limiter", None)
+        sys.modules.pop("app.platform.http.limiter", None)
 
         with pytest.raises(RuntimeError, match=r"Startup validation failed \[rate_limiter\]"):
-            importlib.import_module("app.core.limiter")
+            importlib.import_module("app.platform.http.limiter")
 
-        sys.modules.pop("app.core.limiter", None)
+        sys.modules.pop("app.platform.http.limiter", None)
         monkeypatch.setenv("APP_ENV", "development")
         monkeypatch.setattr(builtins, "__import__", original_import)
-        importlib.import_module("app.core.limiter")
+        importlib.import_module("app.platform.http.limiter")
 
     def test_missing_slowapi_only_disables_limiter_in_development(self, monkeypatch):
         original_import = builtins.__import__
@@ -90,16 +90,16 @@ class TestLimiterImportHardening:
 
         monkeypatch.setenv("APP_ENV", "development")
         monkeypatch.setattr(builtins, "__import__", _fake_import)
-        sys.modules.pop("app.core.limiter", None)
+        sys.modules.pop("app.platform.http.limiter", None)
 
-        module = importlib.import_module("app.core.limiter")
+        module = importlib.import_module("app.platform.http.limiter")
 
         assert hasattr(module, "limiter")
         assert callable(module.limiter.limit)
 
-        sys.modules.pop("app.core.limiter", None)
+        sys.modules.pop("app.platform.http.limiter", None)
         monkeypatch.setattr(builtins, "__import__", original_import)
-        importlib.import_module("app.core.limiter")
+        importlib.import_module("app.platform.http.limiter")
 
 
 class TestAuthAbuseLogging:

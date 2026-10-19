@@ -23,7 +23,7 @@ from fastapi import Response
 # compose read raised FileNotFoundError in CI and the heartbeat paths silently
 # created a stray "d:" directory.
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
-from app.core.paths import repo_root  # noqa: E402
+from app.platform.paths import repo_root  # noqa: E402
 
 _REPO_ROOT = repo_root()
 _HEARTBEAT_TMP = _BACKEND_ROOT / ".tmp_test_runtime"
@@ -128,7 +128,7 @@ class TestWorkerHeartbeat:
 
 @pytest.mark.asyncio
 async def test_write_worker_heartbeat_sets_ttl():
-    from app.worker.heartbeat import WORKER_HEARTBEAT_TTL, write_worker_heartbeat
+    from app.platform.jobs.heartbeat import WORKER_HEARTBEAT_TTL, write_worker_heartbeat
 
     redis = AsyncMock()
 
@@ -140,7 +140,7 @@ async def test_write_worker_heartbeat_sets_ttl():
 
 @pytest.mark.asyncio
 async def test_write_local_worker_heartbeat_updates_local_file(monkeypatch):
-    from app.worker.heartbeat import (
+    from app.platform.jobs.heartbeat import (
         local_worker_heartbeat_is_fresh,
         worker_local_health_path,
         write_local_worker_heartbeat,
@@ -160,7 +160,7 @@ async def test_write_local_worker_heartbeat_updates_local_file(monkeypatch):
 
 
 def test_local_worker_heartbeat_stale_when_timestamp_too_old(monkeypatch):
-    from app.worker.heartbeat import (
+    from app.platform.jobs.heartbeat import (
         WORKER_HEARTBEAT_FRESHNESS_SECONDS,
         local_worker_heartbeat_is_fresh,
         worker_local_health_path,
@@ -185,7 +185,7 @@ def test_local_worker_heartbeat_stale_when_timestamp_too_old(monkeypatch):
 
 
 def test_local_worker_heartbeat_rejects_missing_or_dead_worker_pid(monkeypatch):
-    from app.worker.heartbeat import (
+    from app.platform.jobs.heartbeat import (
         local_worker_heartbeat_is_fresh,
         worker_local_health_path,
     )

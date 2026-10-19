@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.core.config import get_settings
-from app.worker.queue import LeasedAnalysisJob
+from app.platform.config import get_settings
+from app.platform.jobs.queue import LeasedAnalysisJob
 
 
 def _analysis_lease(

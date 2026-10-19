@@ -25,7 +25,7 @@ _NEEDS_PG = pytest.mark.skipif(
     reason="requires PostgreSQL (set TEST_DATABASE_URL)",
 )
 
-from app.core.events import (
+from app.platform.events.types import (
     AGGREGATE_CASE,
     AGGREGATE_OFFER,
     EVENT_ANALYSIS_STARTED,
@@ -35,7 +35,7 @@ from app.core.events import (
     build_outbox_message,
     sse_id_from_message,
 )
-from app.offer_processing.outbox import (
+from app.platform.events.outbox import (
     build_case_activity_event,
     build_offer_status_changed_event,
     build_outbox_event,
@@ -646,7 +646,7 @@ class TestProposalRecomputeIdempotence:
 
     def test_analysis_completed_event_shape(self):
         """analysis.completed uses the same canonical shape as other case events."""
-        from app.core.events import EVENT_ANALYSIS_COMPLETED  # noqa: PLC0415
+        from app.platform.events.types import EVENT_ANALYSIS_COMPLETED  # noqa: PLC0415
         e = build_outbox_event(
             event_type=EVENT_ANALYSIS_COMPLETED,
             aggregate_type=AGGREGATE_CASE,

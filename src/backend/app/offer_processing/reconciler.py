@@ -63,7 +63,7 @@ from app.offer_processing.domain import (
     OFFER_STATUS_FAILED,
     RETRY_BACKOFF_SECONDS,
 )
-from app.worker.offer_queue import OfferJobPayload, enqueue_offer_job
+from app.platform.jobs.offer_queue import OfferJobPayload, enqueue_offer_job
 
 logger = structlog.get_logger(__name__)
 

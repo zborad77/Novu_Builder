@@ -54,7 +54,7 @@ def _reset_metrics_state():
         _clear_readiness_db_cache,
         _clear_readiness_storage_cache,
     )
-    from app.core import metrics as metrics_module
+    from app.platform import metrics as metrics_module
     from app.main import app as fastapi_app
 
     _clear_operational_metrics_cache(fastapi_app)
@@ -105,7 +105,7 @@ def _reset_metrics_state():
 
 @pytest.fixture(autouse=True)
 def _enforce_metrics_auth():
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
 
     previous_enabled = os.environ.get("METRICS_AUTH_ENABLED")
     previous_token = os.environ.get("METRICS_AUTH_TOKEN")
@@ -166,7 +166,7 @@ class TestMetricsEndpoint:
 
 class TestMetricsModule:
     def test_metrics_module_defines_expected_objects(self):
-        from app.core.metrics import (
+        from app.platform.metrics import (
             AUTH_FAILURES_TOTAL,
             DB_ALIVE,
             DUPLICATE_PREVENTED_COUNT,
@@ -207,7 +207,7 @@ class TestMetricsModule:
         assert DUPLICATE_PREVENTED_COUNT is not None
 
     def test_metric_label_contracts_are_exact(self):
-        from app.core.metrics import (
+        from app.platform.metrics import (
             AUTH_FAILURES_TOTAL,
             BACKPRESSURE_REJECTIONS_TOTAL,
             CACHE_OPERATION_DURATION_SECONDS,
@@ -250,7 +250,7 @@ class TestMetricsModule:
             assert metric_label_names(metric) == label_names
 
     def test_operational_metric_names(self):
-        from app.core.metrics import (
+        from app.platform.metrics import (
             DB_ALIVE,
             DUPLICATE_PREVENTED_COUNT,
             JOB_DURATION_SECONDS,
@@ -288,13 +288,13 @@ class TestMetricsModule:
         assert metric_export_name(DUPLICATE_PREVENTED_COUNT) == "novu_duplicate_prevented_count_total"
 
     def test_failure_counter_names(self):
-        from app.core.metrics import AUTH_FAILURES_TOTAL, UPLOAD_REJECTIONS_TOTAL, metric_export_name
+        from app.platform.metrics import AUTH_FAILURES_TOTAL, UPLOAD_REJECTIONS_TOTAL, metric_export_name
 
         assert metric_export_name(AUTH_FAILURES_TOTAL) == "novu_auth_failures_total"
         assert metric_export_name(UPLOAD_REJECTIONS_TOTAL) == "novu_upload_rejections_total"
 
     def test_metric_labels_enforce_exact_label_set(self):
-        from app.core.metrics import HTTP_REQUESTS_TOTAL, metric_labels
+        from app.platform.metrics import HTTP_REQUESTS_TOTAL, metric_labels
 
         with pytest.raises(ValueError, match="expects labels"):
             metric_labels(HTTP_REQUESTS_TOTAL, method="GET", path_template="/alive")
@@ -309,7 +309,7 @@ class TestMetricsModule:
             )
 
     def test_metric_labels_normalize_keyword_order(self):
-        from app.core.metrics import HTTP_REQUESTS_TOTAL, metric_labels
+        from app.platform.metrics import HTTP_REQUESTS_TOTAL, metric_labels
 
         labeled_metric = metric_labels(
             HTTP_REQUESTS_TOTAL,
@@ -320,7 +320,7 @@ class TestMetricsModule:
         assert labeled_metric is not None
 
     def test_normalize_tenant_metric_label_is_fail_closed(self):
-        from app.core.metrics import normalize_tenant_metric_label
+        from app.platform.metrics import normalize_tenant_metric_label
 
         assert normalize_tenant_metric_label(" tenant-a ") == "tenant-a"
         assert normalize_tenant_metric_label(None) == "unknown"
@@ -351,7 +351,7 @@ class TestOperationalMetricsExported:
 
     @pytest.mark.asyncio
     async def test_job_observability_metrics_are_exported(self, app_client):
-        from app.core.metrics import (
+        from app.platform.metrics import (
             observe_job_outcome,
             record_duplicate_prevented,
             record_reaper_requeues,
@@ -400,7 +400,7 @@ class TestOperationalMetricsExported:
 
     @pytest.mark.asyncio
     async def test_job_duration_histogram_contract_is_stable_for_tenant_context(self, app_client):
-        from app.core.metrics import observe_job_outcome
+        from app.platform.metrics import observe_job_outcome
 
         observe_job_outcome(status="completed", duration_seconds=4.0, tenant_id="tenant-a")
 
@@ -427,7 +427,7 @@ class TestOperationalMetricsExported:
 
     @pytest.mark.asyncio
     async def test_job_outcome_metrics_use_superadmin_tenant_label_when_explicit(self, app_client):
-        from app.core.metrics import observe_job_outcome
+        from app.platform.metrics import observe_job_outcome
 
         observe_job_outcome(
             status="completed",
@@ -532,7 +532,7 @@ class TestOperationalMetricsExported:
 
     @pytest.mark.asyncio
     async def test_upload_rejection_counter_is_exported(self, app_client):
-        from app.core.metrics import UPLOAD_REJECTIONS_TOTAL, metric_labels
+        from app.platform.metrics import UPLOAD_REJECTIONS_TOTAL, metric_labels
 
         metric_labels(
             UPLOAD_REJECTIONS_TOTAL,
@@ -546,7 +546,7 @@ class TestOperationalMetricsExported:
 
     @pytest.mark.asyncio
     async def test_work_catalog_cache_and_validation_metrics_are_exported(self, app_client):
-        from app.core.metrics import (
+        from app.platform.metrics import (
             observe_cache_operation,
             observe_work_catalog_resolution_input,
             observe_work_catalog_resolution,
@@ -698,7 +698,7 @@ class TestMetricsAuthGuard:
 
     @pytest.mark.asyncio
     async def test_no_token_returns_401_when_guard_enabled(self, app_client):
-        from app.core.config import get_settings
+        from app.platform.config import get_settings
 
         get_settings.cache_clear()
         try:
@@ -709,7 +709,7 @@ class TestMetricsAuthGuard:
 
     @pytest.mark.asyncio
     async def test_wrong_token_returns_401(self, app_client):
-        from app.core.config import get_settings
+        from app.platform.config import get_settings
 
         get_settings.cache_clear()
         try:
@@ -720,7 +720,7 @@ class TestMetricsAuthGuard:
 
     @pytest.mark.asyncio
     async def test_correct_token_returns_200(self, app_client):
-        from app.core.config import get_settings
+        from app.platform.config import get_settings
 
         get_settings.cache_clear()
         try:
@@ -734,7 +734,7 @@ class TestMetricsAuthGuard:
     async def test_no_token_configured_returns_401(self, app_client):
         os.environ["METRICS_AUTH_ENABLED"] = "true"
         os.environ.pop("METRICS_AUTH_TOKEN", None)
-        from app.core.config import get_settings
+        from app.platform.config import get_settings
 
         get_settings.cache_clear()
         try:
@@ -746,7 +746,7 @@ class TestMetricsAuthGuard:
     @pytest.mark.asyncio
     async def test_guard_disabled_returns_503(self, app_client):
         os.environ["METRICS_AUTH_ENABLED"] = "false"
-        from app.core.config import get_settings
+        from app.platform.config import get_settings
 
         get_settings.cache_clear()
         try:
@@ -763,7 +763,7 @@ class TestMetricsIpAllowlist:
     async def test_non_allowlisted_ip_returns_403(self, app_client):
         # testclient connects from 127.0.0.1 which is not in 10.0.0.0/8
         os.environ["METRICS_IP_ALLOWLIST"] = "10.0.0.0/8"
-        from app.core.config import get_settings
+        from app.platform.config import get_settings
 
         get_settings.cache_clear()
         try:
@@ -777,7 +777,7 @@ class TestMetricsIpAllowlist:
     async def test_allowlisted_ip_passes_through_to_auth(self, app_client):
         # 127.0.0.1 (testclient) is in 127.0.0.0/8 → IP passes, auth succeeds
         os.environ["METRICS_IP_ALLOWLIST"] = "127.0.0.0/8"
-        from app.core.config import get_settings
+        from app.platform.config import get_settings
 
         get_settings.cache_clear()
         try:
@@ -791,7 +791,7 @@ class TestMetricsIpAllowlist:
     async def test_allowlisted_ip_wrong_token_still_returns_401(self, app_client):
         # IP passes allowlist but token is wrong → 401
         os.environ["METRICS_IP_ALLOWLIST"] = "127.0.0.0/8"
-        from app.core.config import get_settings
+        from app.platform.config import get_settings
 
         get_settings.cache_clear()
         try:
@@ -805,7 +805,7 @@ class TestMetricsIpAllowlist:
     async def test_empty_allowlist_skips_ip_check(self, app_client):
         """No METRICS_IP_ALLOWLIST set → IP check is skipped, only auth matters."""
         os.environ.pop("METRICS_IP_ALLOWLIST", None)
-        from app.core.config import get_settings
+        from app.platform.config import get_settings
 
         get_settings.cache_clear()
         try:
@@ -815,7 +815,7 @@ class TestMetricsIpAllowlist:
             get_settings.cache_clear()
 
     def test_invalid_cidr_rejected_at_startup(self, monkeypatch):
-        from app.core.config import Settings
+        from app.platform.config import Settings
         from pydantic import ValidationError
 
         monkeypatch.setenv("APP_ENV", "development")

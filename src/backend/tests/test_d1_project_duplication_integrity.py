@@ -20,7 +20,7 @@ import pytest
 import pytest_asyncio
 
 def _get_storage_root() -> pathlib.Path:
-    from app.storage.local_photo_storage import STORAGE_ROOT  # noqa: PLC0415
+    from app.platform.storage.local_photo_storage import STORAGE_ROOT  # noqa: PLC0415
     return STORAGE_ROOT
 
 

@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock
 
 from sqlalchemy import event
 
-from app.core.cache import _k
-from app.db.bootstrap import _seed_global_work_catalog
+from app.platform.cache import _k
+from app.composition.bootstrap import _seed_global_work_catalog
 from app.repositories.work_catalog_repository import WorkCatalogRepository
 from app.schemas.work_catalog import TenantWorkTypeSettingWithParametersUpsert
 from app.services.analysis_profile_service import AnalysisProfileService

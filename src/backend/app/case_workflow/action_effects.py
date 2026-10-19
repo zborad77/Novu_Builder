@@ -36,9 +36,9 @@ import structlog
 from sqlalchemy import update
 
 from app.case_workflow.effects import EffectContext, after_transition, before_transition
-from app.core.backpressure import analysis_job_priority_for_type, heavy_job_priority_for_type
-from app.core.config import get_settings
-from app.core.events import (
+from app.platform.jobs.backpressure import analysis_job_priority_for_type, heavy_job_priority_for_type
+from app.platform.config import get_settings
+from app.platform.events.types import (
     AGGREGATE_CASE,
     EVENT_ANALYSIS_STARTED,
     EVENT_PROPOSAL_READY,
@@ -46,8 +46,8 @@ from app.core.events import (
 )
 from app.models.domain import AnalysisJob, ProjectExport, ProjectFinalProposal
 from app.repositories.analysis_repository import ANALYSIS_JOB_TYPE_MANUAL_TRIGGER
-from app.worker.heavy_queue import enqueue_heavy_job
-from app.worker.queue import enqueue_analysis_job
+from app.platform.jobs.heavy_queue import enqueue_heavy_job
+from app.platform.jobs.queue import enqueue_analysis_job
 
 logger = structlog.get_logger(__name__)
 
@@ -76,7 +76,7 @@ async def _create_analysis_job(ctx: EffectContext) -> None:
 @before_transition("intake", "analyzing")
 async def _write_analysis_started_outbox(ctx: EffectContext) -> None:
     """Write analysis.started to the outbox in the same transaction as the status change."""
-    from app.offer_processing.outbox import build_case_activity_event
+    from app.platform.events.outbox import build_case_activity_event
     event = build_case_activity_event(
         event_type=EVENT_ANALYSIS_STARTED,
         project_id=ctx.project.id,
@@ -149,7 +149,7 @@ async def _enqueue_analysis_job(ctx: EffectContext) -> None:
 @before_transition("analyzing", "proposal_ready")
 async def _write_proposal_ready_outbox(ctx: EffectContext) -> None:
     """Write proposal.ready to the outbox in the same transaction as the status change."""
-    from app.offer_processing.outbox import build_case_activity_event
+    from app.platform.events.outbox import build_case_activity_event
     event = build_case_activity_event(
         event_type=EVENT_PROPOSAL_READY,
         project_id=ctx.project.id,

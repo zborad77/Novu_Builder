@@ -12,8 +12,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.core.config import get_settings
-from app.db.base import Base
+from app.platform.config import get_settings
+from app.platform.db.base import Base
 from app.models import domain  # noqa: F401
 from app.models import work_catalog  # noqa: F401
 

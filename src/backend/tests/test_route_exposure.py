@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.core.exposure import (
+from app.platform.http.exposure import (
     EXPOSURE,
     NOWHERE,
     PRODUCTION_ZONES,
@@ -93,7 +93,7 @@ def test_retired_self_service_reset_is_exposed_nowhere():
 
 @pytest.mark.parametrize("zone", sorted(PRODUCTION_ZONES))
 async def test_unclassified_route_is_blocked_in_every_production_zone(zone, monkeypatch):
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
 
     probe = FastAPI()
 
@@ -110,7 +110,7 @@ async def test_unclassified_route_is_blocked_in_every_production_zone(zone, monk
 
 
 async def test_unclassified_route_is_reachable_only_in_dev_zone(monkeypatch):
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
 
     probe = FastAPI()
 
@@ -125,7 +125,7 @@ async def test_unclassified_route_is_reachable_only_in_dev_zone(monkeypatch):
 
 
 async def test_missing_zone_outside_development_serves_nothing(monkeypatch):
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
 
     probe = FastAPI()
 
@@ -154,7 +154,7 @@ async def test_each_zone_serves_exactly_its_routes(app_client, zone, monkeypatch
     Exposed routes reach routing/authentication (401, 422, 200, ...); everything
     else is the guard's 404, indistinguishable from an unknown URL.
     """
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
 
     monkeypatch.setattr(get_settings(), "nc_zone", zone)
     wrong = []
@@ -168,7 +168,7 @@ async def test_each_zone_serves_exactly_its_routes(app_client, zone, monkeypatch
 
 @pytest.mark.parametrize("zone", [ZONE_GATEWAY, ZONE_DESKTOP])
 async def test_cors_preflight_cannot_probe_admin_routes(app_client, zone, monkeypatch):
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
 
     monkeypatch.setattr(get_settings(), "nc_zone", zone)
     response = await app_client.options(
@@ -179,7 +179,7 @@ async def test_cors_preflight_cannot_probe_admin_routes(app_client, zone, monkey
 
 
 async def test_headers_cannot_select_a_zone(app_client, monkeypatch):
-    from app.core.config import get_settings
+    from app.platform.config import get_settings
 
     monkeypatch.setattr(get_settings(), "nc_zone", ZONE_DESKTOP)
     response = await app_client.get(

@@ -4,10 +4,10 @@ import structlog
 import structlog.contextvars
 
 from app.core.audit import bind_request_audit_actor
-from app.core.config import get_settings
+from app.platform.config import get_settings
 from app.core.device_binding import check_device_binding
 from app.core.rbac import is_system_admin, is_tenant_admin, is_tenant_operator
-from app.db.session import get_db_session
+from app.platform.db.session import get_db_session
 from app.case_workflow.case_actions import CaseActionService
 from app.repositories.analysis_repository import AnalysisRepository
 from app.repositories.export_repository import ExportRepository

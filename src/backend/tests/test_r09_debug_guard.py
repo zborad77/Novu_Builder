@@ -2,7 +2,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import Settings
+from app.platform.config import Settings
 
 _STRONG_JWT = "a-strong-secret-that-is-not-the-default-value-99!"
 _STRONG_REDIS = "redis://:a-strong-redis-password-xyz123@localhost:6379/0"

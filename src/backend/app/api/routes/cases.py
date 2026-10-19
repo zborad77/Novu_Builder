@@ -8,8 +8,8 @@ from app.api.deps import (
     resolve_org_id,
 )
 from app.case_workflow.case_actions import CaseActionError, CaseActionService
-from app.core.config import get_settings
-from app.core.limiter import limiter
+from app.platform.config import get_settings
+from app.platform.http.limiter import limiter
 from app.repositories.proposal_draft_repository import ProposalVersionConflictError
 from app.schemas.auth import AuthUserRead
 from app.schemas.project import (
@@ -342,7 +342,7 @@ async def get_case_timeline(
 ) -> list[dict]:
     from sqlalchemy import select  # noqa: PLC0415
     from app.models.offer_processing import OutboxEvent  # noqa: PLC0415
-    from app.core.events import AGGREGATE_CASE  # noqa: PLC0415
+    from app.platform.events.types import AGGREGATE_CASE  # noqa: PLC0415
 
     org_id = resolve_org_id(current_user)
     project = await service.repository.get_project_lean(case_id, organization_id=org_id)
