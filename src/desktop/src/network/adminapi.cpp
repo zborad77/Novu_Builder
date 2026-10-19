@@ -13,7 +13,7 @@ std::vector<AdminUserDto> AdminApi::fetchAdminUsers(const QString &orgId, QStrin
 {
     if (errorMessage) errorMessage->clear();
 
-    QString path = "/api/v1/admin/users";
+    QString path = "/admin/users";
     if (!orgId.isEmpty()) {
         path += "?org_id=" + QString::fromUtf8(QUrl::toPercentEncoding(orgId));
     }
@@ -55,7 +55,7 @@ bool AdminApi::resetUserPassword(const QString &userId, const QString &newPasswo
     body["password"] = newPassword;
 
     QNetworkAccessManager manager;
-    const QUrl url(m_baseUrl + "/api/v1/admin/users/" + userId + "/reset-password");
+    const QUrl url(m_baseUrl + "/admin/users/" + userId + "/reset-password");
     auto *reply = manager.post(makeAuthRequest(url), QJsonDocument(body).toJson(QJsonDocument::Compact));
     const auto payload = waitForReply(reply, 8000, errorMessage);
 
@@ -74,7 +74,7 @@ std::vector<AdminJobDto> AdminApi::fetchAdminJobs(const QString &statusFilter, Q
 {
     if (errorMessage) errorMessage->clear();
 
-    QString path = "/api/v1/admin/jobs";
+    QString path = "/admin/jobs";
     if (!statusFilter.isEmpty()) {
         path += "?status=" + QString::fromUtf8(QUrl::toPercentEncoding(statusFilter));
     }
@@ -114,7 +114,7 @@ QString AdminApi::fetchAdminLogs(int lines, QString *errorMessage) const
 {
     if (errorMessage) errorMessage->clear();
 
-    const QString path = QString("/api/v1/admin/logs?lines=%1").arg(lines);
+    const QString path = QString("/admin/logs?lines=%1").arg(lines);
 
     QNetworkAccessManager manager;
     auto *reply = manager.get(makeAuthRequest(QUrl(m_baseUrl + path)));
@@ -138,7 +138,7 @@ std::vector<AuditLogDto> AdminApi::fetchAdminAudit(const QString &orgId, const Q
 {
     if (errorMessage) errorMessage->clear();
 
-    QString path = QString("/api/v1/admin/audit?limit=%1").arg(limit);
+    QString path = QString("/admin/audit?limit=%1").arg(limit);
     if (!orgId.isEmpty())
         path += "&org_id=" + QString::fromUtf8(QUrl::toPercentEncoding(orgId));
     if (!action.isEmpty())
@@ -180,7 +180,7 @@ ImpersonateDto AdminApi::impersonateUser(const QString &userId, QString *errorMe
     if (errorMessage) errorMessage->clear();
 
     QNetworkAccessManager manager;
-    const QUrl url(m_baseUrl + "/api/v1/admin/impersonate/" + userId);
+    const QUrl url(m_baseUrl + "/admin/impersonate/" + userId);
     QNetworkRequest req = makeAuthRequest(url);
     auto *reply = manager.post(req, QByteArray());
     const auto payload = waitForReply(reply, 8000, errorMessage);
@@ -214,7 +214,7 @@ std::vector<CompanyDto> AdminApi::fetchAdminCompanies(QString *errorMessage) con
     if (errorMessage) errorMessage->clear();
 
     QNetworkAccessManager manager;
-    auto *reply = manager.get(makeAuthRequest(QUrl(m_baseUrl + "/api/v1/admin/companies")));
+    auto *reply = manager.get(makeAuthRequest(QUrl(m_baseUrl + "/admin/companies")));
     const auto payload = waitForReply(reply, 8000, errorMessage);
     if (payload.isNull()) return {};
 

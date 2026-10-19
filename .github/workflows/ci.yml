@@ -53,6 +53,11 @@ jobs:
         working-directory: src/backend
         run: lint-imports
 
+      # Kontrakt desktop <-> API: cesty v src/desktop/src/network/*.cpp musí
+      # existovat v src/contracts/openapi/openapi.json (zachytilo N4).
+      - name: Desktop API usage matches the OpenAPI contract
+        run: python scripts/check_desktop_api_usage.py
+
       - name: pip-audit (known CVE scan on production dependencies)
         working-directory: src/backend
         run: pip-audit -r requirements.txt --progress-spinner=off
