@@ -1,4 +1,5 @@
 """ORM model modulu audit."""
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, JSON, String, func

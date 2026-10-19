@@ -11,7 +11,9 @@ from app.platform.db.seed_runtime import (
     execute_seed_plan,
 )
 from app.modules.identity.auth_service import hash_password, verify_password
-from app.models import AnalysisJob, AnalysisResult, AnalysisProfile, AnalysisProfileConfidenceThreshold, AnalysisProfileExtractionRule, AnalysisProfileIgnoredObject, AnalysisProfileOutputMapping, AnalysisProfileTargetObject, AnalysisProfileValidationRule, CatalogPricingProfile, CatalogPricingProfileAdjustmentRule, CatalogPricingProfileBaseRule, CatalogPricingProfileLaborAssumption, CatalogPricingProfileMaterialAssumption, CatalogPricingProfileRequiredInput, Client, MaterialCatalog, PricingProfile, ProjectWorkItem, ProjectWorkItemValue, Project, ProjectPhoto, QuoteItem, QuoteVariant, Supplier, SupplierMaterialPrice, TenantWorkTypeParameterOverride, TenantWorkTypeSetting, VisionDetection, WorkCategory, WorkType, WorkTypeParameter, WorkTypeParameterOption
+from app.models import AnalysisJob, AnalysisResult, AnalysisProfile, AnalysisProfileConfidenceThreshold, AnalysisProfileExtractionRule, AnalysisProfileIgnoredObject, AnalysisProfileOutputMapping, AnalysisProfileTargetObject, AnalysisProfileValidationRule, CatalogPricingProfile, CatalogPricingProfileAdjustmentRule, CatalogPricingProfileBaseRule, CatalogPricingProfileLaborAssumption, CatalogPricingProfileMaterialAssumption, CatalogPricingProfileRequiredInput, MaterialCatalog, PricingProfile, ProjectWorkItem, ProjectWorkItemValue, QuoteItem, QuoteVariant, Supplier, SupplierMaterialPrice, TenantWorkTypeParameterOverride, TenantWorkTypeSetting, VisionDetection, WorkCategory, WorkType, WorkTypeParameter, WorkTypeParameterOption
+from app.modules.cases.models import Client, Project
+from app.modules.media.models import ProjectPhoto
 from app.modules.identity.models import Organization, User
 from app.platform.storage.local_photo_storage import STORAGE_ROOT, ensure_directory
 from app.work_catalog.seeds import GLOBAL_WORK_CATALOG_SEED

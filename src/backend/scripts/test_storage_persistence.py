@@ -379,7 +379,7 @@ def _clear_export_cache_silent() -> bool:
     """
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        import app.services.export_service as es  # noqa: PLC0415
+        import app.modules.exports.export_service as es  # noqa: PLC0415
         es._EXPORT_STORE.clear()
         return True
     except Exception:  # noqa: BLE001
@@ -543,7 +543,7 @@ def simulate_restart() -> None:
     """Smaže in-memory _EXPORT_STORE — simuluje restart bez zastavení procesu."""
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        import app.services.export_service as es  # noqa: PLC0415
+        import app.modules.exports.export_service as es  # noqa: PLC0415
         before = len(es._EXPORT_STORE)
         es._EXPORT_STORE.clear()
         record("restart.cache_cleared", True, f"vymazáno {before} záznamů")

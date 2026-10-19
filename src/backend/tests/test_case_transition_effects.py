@@ -3,10 +3,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy import select
 
-from app.case_workflow.case_actions import CaseActionService
+from app.modules.workflow.case_actions import CaseActionService
 from app.platform.events.types import AGGREGATE_CASE, EVENT_ANALYSIS_STARTED
-from app.models import AnalysisJob, OutboxEvent, Project, ProjectExport, ProjectFinalProposal
-from app.repositories.project_repository import ProjectRepository
+from app.models import AnalysisJob, OutboxEvent, ProjectFinalProposal
+from app.modules.cases.models import Project
+from app.modules.exports.models import ProjectExport
+from app.modules.cases.repository import ProjectRepository
 
 
 _ORG_ID = "org_e2e_a"
@@ -36,7 +38,7 @@ async def test_start_analysis_creates_job_and_enqueues_transport(db_session):
     service = _service(db_session)
 
     with patch(
-        "app.case_workflow.action_effects.enqueue_analysis_job",
+        "app.modules.workflow.action_effects.enqueue_analysis_job",
         new=AsyncMock(),
     ) as enqueue_job:
         detail = await service.start_analysis(
@@ -134,7 +136,7 @@ async def test_send_quote_creates_supported_export_and_enqueues_heavy_job(db_ses
     await db_session.commit()
 
     with patch(
-        "app.case_workflow.action_effects.enqueue_heavy_job",
+        "app.modules.workflow.action_effects.enqueue_heavy_job",
         new=AsyncMock(),
     ) as enqueue_heavy:
         detail = await _service(db_session).send_quote(
@@ -170,7 +172,7 @@ async def test_complete_creates_case_zip_export_and_enqueues_heavy_job(db_sessio
     project = await _create_project(db_session, project_id="prj_transition_complete", status="sent")
 
     with patch(
-        "app.case_workflow.action_effects.enqueue_heavy_job",
+        "app.modules.workflow.action_effects.enqueue_heavy_job",
         new=AsyncMock(),
     ) as enqueue_heavy:
         detail = await _service(db_session).complete(

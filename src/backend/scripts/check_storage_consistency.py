@@ -30,8 +30,8 @@ if str(BACKEND_DIR) not in sys.path:
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
 
-from app.repositories.storage_consistency_repository import StorageConsistencyRepository  # noqa: E402
-from app.services.storage_consistency_service import (  # noqa: E402
+from app.modules.exports.storage_consistency_repository import StorageConsistencyRepository  # noqa: E402
+from app.modules.exports.storage_consistency_service import (  # noqa: E402
     ConsistencyReport,
     DbToS3ScanResult,
     S3ToDbScanResult,

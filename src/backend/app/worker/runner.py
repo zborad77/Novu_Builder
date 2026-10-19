@@ -49,15 +49,15 @@ from app.repositories.analysis_repository import (
     AnalysisJobLeaseOwnershipError,
     AnalysisRepository,
 )
-from app.repositories.export_repository import ExportRepository
+from app.modules.exports.export_repository import ExportRepository
 from app.repositories.final_proposal_repository import FinalProposalRepository
-from app.repositories.photo_repository import PhotoRepository
-from app.repositories.project_repository import ProjectRepository
+from app.modules.media.photo_repository import PhotoRepository
+from app.modules.cases.repository import ProjectRepository
 from app.repositories.proposal_draft_repository import ProposalDraftRepository
 from app.services.analysis_service import AnalysisService
-from app.services.export_service import ExportService
-from app.services.photo_service import PhotoService
-from app.services.project_service import ProjectService
+from app.modules.exports.export_service import ExportService
+from app.modules.media.photo_service import PhotoService
+from app.modules.workflow.project_service import ProjectService
 from app.platform.jobs.heavy_queue import (
     InvalidHeavyJobPayloadError,
     LeasedHeavyJob,

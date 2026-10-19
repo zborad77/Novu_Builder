@@ -6,27 +6,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
-from app.models import (
-    AnalysisProfile,
-    AnalysisProfileConfidenceThreshold,
-    AnalysisProfileExtractionRule,
-    AnalysisProfileIgnoredObject,
-    AnalysisProfileOutputMapping,
-    AnalysisProfileTargetObject,
-    AnalysisProfileValidationRule,
-    CatalogPricingProfile,
-    CatalogPricingProfileAdjustmentRule,
-    CatalogPricingProfileBaseRule,
-    CatalogPricingProfileLaborAssumption,
-    CatalogPricingProfileMaterialAssumption,
-    CatalogPricingProfileRequiredInput,
-    Project,
-    TenantWorkTypeSetting,
-    WorkCategory,
-    WorkType,
-    WorkTypeParameter,
-    WorkTypeParameterOption,
-)
+from app.models import AnalysisProfile, AnalysisProfileConfidenceThreshold, AnalysisProfileExtractionRule, AnalysisProfileIgnoredObject, AnalysisProfileOutputMapping, AnalysisProfileTargetObject, AnalysisProfileValidationRule, CatalogPricingProfile, CatalogPricingProfileAdjustmentRule, CatalogPricingProfileBaseRule, CatalogPricingProfileLaborAssumption, CatalogPricingProfileMaterialAssumption, CatalogPricingProfileRequiredInput, TenantWorkTypeSetting, WorkCategory, WorkType, WorkTypeParameter, WorkTypeParameterOption
+from app.modules.cases.models import Project
 from app.repositories.quote_variant_repository import QuoteVariantRepository
 from app.repositories.work_catalog_repository import WorkCatalogRepository
 from app.schemas.work_catalog import ProjectWorkItemCreate, ProjectWorkItemValueInput

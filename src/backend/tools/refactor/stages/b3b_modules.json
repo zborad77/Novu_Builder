@@ -1,0 +1,83 @@
+{
+ "modules": {
+  "app.case_workflow.transitions": "app.modules.cases.transitions",
+  "app.case_workflow.effects": "app.modules.cases.effects",
+  "app.repositories.project_repository": "app.modules.cases.repository",
+  "app.services.photo_service": "app.modules.media.photo_service",
+  "app.repositories.photo_repository": "app.modules.media.photo_repository",
+  "app.repositories.marker_repository": "app.modules.media.marker_repository",
+  "app.core.purge_ledger": "app.modules.media.purge_ledger",
+  "app.api.photo_purge": "app.modules.media.photo_purge",
+  "app.schemas.photo": "app.modules.media.schemas.photo",
+  "app.schemas.marker": "app.modules.media.schemas.marker",
+  "app.api.routes.images": "app.modules.media.api.images",
+  "app.api.routes.markers": "app.modules.media.api.markers",
+  "app.api.routes.storage": "app.modules.media.api.storage",
+  "app.services.export_service": "app.modules.exports.export_service",
+  "app.repositories.export_repository": "app.modules.exports.export_repository",
+  "app.services.storage_consistency_service": "app.modules.exports.storage_consistency_service",
+  "app.repositories.storage_consistency_repository": "app.modules.exports.storage_consistency_repository",
+  "app.schemas.export": "app.modules.exports.schemas",
+  "app.api.routes.exports": "app.modules.exports.api.exports",
+  "app.case_workflow.case_actions": "app.modules.workflow.case_actions",
+  "app.case_workflow.action_effects": "app.modules.workflow.action_effects",
+  "app.services.project_service": "app.modules.workflow.project_service",
+  "app.api.routes.cases": "app.modules.workflow.api.cases",
+  "app.api.routes.case_events": "app.modules.workflow.api.case_events",
+  "app.schemas.project": "app.modules.workflow.schemas"
+ },
+ "symbols": {
+  "app.models": {
+   "Client": "app.modules.cases.models",
+   "Project": "app.modules.cases.models",
+   "ProjectStatusHistory": "app.modules.cases.models",
+   "ProjectPhoto": "app.modules.media.models",
+   "Marker": "app.modules.media.models",
+   "ProjectExport": "app.modules.exports.models"
+  },
+  "app.models.domain": {
+   "Client": "app.modules.cases.models",
+   "Project": "app.modules.cases.models",
+   "ProjectStatusHistory": "app.modules.cases.models",
+   "ProjectPhoto": "app.modules.media.models",
+   "Marker": "app.modules.media.models",
+   "ProjectExport": "app.modules.exports.models"
+  },
+  "app.schemas.project": {
+   "ProposalDraftWorkItem": "app.modules.quoting.schemas.proposal",
+   "ProposalDraftMaterial": "app.modules.quoting.schemas.proposal",
+   "ProposalDraftField": "app.modules.quoting.schemas.proposal",
+   "ProposalDraftItem": "app.modules.quoting.schemas.proposal",
+   "ProposalDraftSection": "app.modules.quoting.schemas.proposal",
+   "ProjectProposalDraft": "app.modules.quoting.schemas.proposal",
+   "ProjectFinalProposal": "app.modules.quoting.schemas.proposal",
+   "ProjectProposalDraftPatch": "app.modules.quoting.schemas.proposal"
+  },
+  "app.schemas": {
+   "ProposalDraftWorkItem": "app.modules.quoting.schemas.proposal",
+   "ProposalDraftMaterial": "app.modules.quoting.schemas.proposal",
+   "ProposalDraftField": "app.modules.quoting.schemas.proposal",
+   "ProposalDraftItem": "app.modules.quoting.schemas.proposal",
+   "ProposalDraftSection": "app.modules.quoting.schemas.proposal",
+   "ProjectProposalDraft": "app.modules.quoting.schemas.proposal",
+   "ProjectFinalProposal": "app.modules.quoting.schemas.proposal",
+   "ProjectProposalDraftPatch": "app.modules.quoting.schemas.proposal",
+   "ProjectCreate": "app.modules.workflow.schemas",
+   "ProjectDetail": "app.modules.workflow.schemas",
+   "ProjectListResponse": "app.modules.workflow.schemas",
+   "ProjectLocation": "app.modules.workflow.schemas",
+   "ProjectPatch": "app.modules.workflow.schemas",
+   "ProjectSummary": "app.modules.workflow.schemas",
+   "AnalysisReferencePhotoResponse": "app.modules.media.schemas.photo",
+   "DeletePhotoResponse": "app.modules.media.schemas.photo",
+   "PhotoListMeta": "app.modules.media.schemas.photo",
+   "PhotoListResponse": "app.modules.media.schemas.photo",
+   "PhotoUploadResponse": "app.modules.media.schemas.photo",
+   "PhotoVariant": "app.modules.media.schemas.photo",
+   "PhotoVariants": "app.modules.media.schemas.photo",
+   "PrimaryPhotoResponse": "app.modules.media.schemas.photo",
+   "ProjectPhotoRead": "app.modules.media.schemas.photo",
+   "UploadedPhotoPayload": "app.modules.media.schemas.photo"
+  }
+ }
+}

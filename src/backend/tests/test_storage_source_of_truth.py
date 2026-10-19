@@ -1,7 +1,7 @@
 import inspect
 
 import app.ai.analysis_service as analysis_service_mod
-import app.services.export_service as export_service_mod
+import app.modules.exports.export_service as export_service_mod
 
 
 def test_analysis_service_uses_storage_backend_reader():

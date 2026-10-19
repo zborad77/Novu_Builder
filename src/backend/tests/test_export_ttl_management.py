@@ -5,10 +5,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy import delete
 
-from app.models import Project, ProjectExport
-from app.repositories.export_repository import ExportRepository
-from app.services import export_service as export_service_mod
-from app.services.export_service import ExportService
+from app.modules.cases.models import Project
+from app.modules.exports.models import ProjectExport
+from app.modules.exports.export_repository import ExportRepository
+from app.modules.exports import export_service as export_service_mod
+from app.modules.exports.export_service import ExportService
 
 
 async def _seed_project(db_session, test_tenants) -> str:

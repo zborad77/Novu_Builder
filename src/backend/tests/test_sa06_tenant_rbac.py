@@ -18,7 +18,7 @@ import pytest_asyncio
 from sqlalchemy import select
 
 from app.modules.audit.models import AuditLog
-from app.models import ProjectPhoto
+from app.modules.media.models import ProjectPhoto
 from app.modules.identity.models import User
 from app.modules.identity.auth_service import hash_password
 
@@ -292,8 +292,8 @@ async def test_photo_delete_and_restore_are_tenant_isolated(app_client, sa06_use
 
 async def test_storage_is_purged_only_after_the_restore_window(app_client, sa06_users, db_session_factory, monkeypatch):
     from app.platform.config import get_settings
-    from app.repositories.photo_repository import PhotoRepository
-    from app.services.photo_service import PhotoService
+    from app.modules.media.photo_repository import PhotoRepository
+    from app.modules.media.photo_service import PhotoService
 
     token = await _token(app_client, "sa06_manager_a")
     case_id = await _new_case(app_client, token)
@@ -307,7 +307,7 @@ async def test_storage_is_purged_only_after_the_restore_window(app_client, sa06_
         await session.commit()
 
     monkeypatch.setattr(get_settings(), "photo_delete_retention_hours", 168)
-    with patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock) as purge:
+    with patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock) as purge:
         async with db_session_factory() as session:
             await PhotoService(PhotoRepository(session)).cleanup_pending_deletes(limit=1000)
 

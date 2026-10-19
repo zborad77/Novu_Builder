@@ -42,7 +42,7 @@ class TestProjectRepositoryOrgScope:
 
     @pytest.mark.asyncio
     async def test_get_project_returns_none_for_wrong_org(self):
-        from app.repositories.project_repository import ProjectRepository
+        from app.modules.cases.repository import ProjectRepository
         session = AsyncMock()
         # Simulate that the DB returns no result when org doesn't match
         mock_result = MagicMock()
@@ -55,7 +55,7 @@ class TestProjectRepositoryOrgScope:
 
     @pytest.mark.asyncio
     async def test_get_project_returns_project_for_correct_org(self):
-        from app.repositories.project_repository import ProjectRepository
+        from app.modules.cases.repository import ProjectRepository
         project = _make_project("prj_abc", "org_A")
         session = AsyncMock()
         mock_result = MagicMock()

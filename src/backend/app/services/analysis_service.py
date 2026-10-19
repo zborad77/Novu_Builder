@@ -27,7 +27,8 @@ from app.platform.db.session import (
     AsyncSessionFactory,        # HTTP-originated ops (retry_job, etc.)
     WorkerAsyncSessionFactory,  # background runner only (execute_job, fail_job_before_processing)
 )
-from app.models import AnalysisJob, AnalysisResult, Project
+from app.models import AnalysisJob, AnalysisResult
+from app.modules.cases.models import Project
 from app.repositories.analysis_repository import (
     ANALYSIS_JOB_TYPE_MANUAL_TRIGGER,
     ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
@@ -45,7 +46,7 @@ from app.repositories.analysis_repository import (
     InvalidAnalysisJobStatusTransition,
     normalize_analysis_job_status,
 )
-from app.repositories.photo_repository import PhotoRepository
+from app.modules.media.photo_repository import PhotoRepository
 from app.repositories.work_catalog_repository import WorkCatalogRepository
 from app.schemas.analysis import AnalysisResultRead, parse_json_field
 from app.services.analysis_profile_service import (
@@ -1247,8 +1248,8 @@ class AnalysisService:
         failed; logs a warning instead (e.g. project already advanced or cancelled).
         Other exceptions are logged as errors — they indicate unexpected state.
         """
-        from app.case_workflow.case_actions import CaseActionError, CaseActionService
-        from app.repositories.project_repository import ProjectRepository
+        from app.modules.workflow.case_actions import CaseActionError, CaseActionService
+        from app.modules.cases.repository import ProjectRepository
 
         _log = log or logger.bind(project_id=project_id)
         try:

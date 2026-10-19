@@ -168,7 +168,7 @@ class TestAnalysisTenantIsolationHardening:
 class TestExportTenantIsolationHardening:
     @pytest.mark.asyncio
     async def test_get_export_uses_tenant_scoped_lookup_before_any_global_lookup(self):
-        from app.services.export_service import ExportService
+        from app.modules.exports.export_service import ExportService
 
         repository = AsyncMock()
         repository.get_by_id_in_org = AsyncMock(return_value=None)
@@ -188,7 +188,7 @@ class TestExportTenantIsolationHardening:
 
     @pytest.mark.asyncio
     async def test_get_export_scoped_hit_and_miss_have_consistent_timing(self):
-        from app.services.export_service import ExportService
+        from app.modules.exports.export_service import ExportService
 
         async def _sleepy_lookup(export_id: str, organization_id: str):
             await asyncio.sleep(0.003)

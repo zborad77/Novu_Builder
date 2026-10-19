@@ -21,7 +21,7 @@ from sqlalchemy import select
 
 from app.modules.identity.rbac import is_tenant_operator
 from app.modules.audit.models import AuditLog
-from app.models import Client, Project
+from app.modules.cases.models import Client, Project
 from app.modules.identity.models import RolePermission, User
 from app.modules.identity.schemas.auth import AuthUserRead
 from app.modules.identity.auth_service import hash_password

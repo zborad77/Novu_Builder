@@ -6,22 +6,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
-from app.models import (
-    AnalysisProfile,
-    AnalysisProfileConfidenceThreshold,
-    AnalysisProfileExtractionRule,
-    AnalysisProfileIgnoredObject,
-    AnalysisProfileOutputMapping,
-    AnalysisProfileTargetObject,
-    AnalysisProfileValidationRule,
-    CatalogPricingProfile,
-    Project,
-    TenantWorkTypeSetting,
-    WorkCategory,
-    WorkType,
-    WorkTypeParameter,
-    WorkTypeParameterOption,
-)
+from app.models import AnalysisProfile, AnalysisProfileConfidenceThreshold, AnalysisProfileExtractionRule, AnalysisProfileIgnoredObject, AnalysisProfileOutputMapping, AnalysisProfileTargetObject, AnalysisProfileValidationRule, CatalogPricingProfile, TenantWorkTypeSetting, WorkCategory, WorkType, WorkTypeParameter, WorkTypeParameterOption
+from app.modules.cases.models import Project
 from app.repositories.work_catalog_repository import WorkCatalogRepository
 from app.services.analysis_profile_service import (
     AnalysisProfileResolutionError,

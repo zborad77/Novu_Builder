@@ -23,7 +23,8 @@ from PIL import Image
 from sqlalchemy import select
 
 from app.modules.audit.models import AuditLog
-from app.models import ProjectExport, ProjectPhoto
+from app.modules.exports.models import ProjectExport
+from app.modules.media.models import ProjectPhoto
 from app.modules.identity.models import User
 from app.modules.identity.auth_service import hash_password
 
@@ -125,7 +126,7 @@ async def test_upload_records_the_author_passed_by_the_route():
 
     from fastapi import UploadFile
 
-    from app.services.photo_service import PhotoService
+    from app.modules.media.photo_service import PhotoService
 
     repo = AsyncMock()
     repo.count_photos = AsyncMock(return_value=0)
@@ -138,8 +139,8 @@ async def test_upload_records_the_author_passed_by_the_route():
     project = MagicMock(id="prj_f03", organization_id=ORG_A)
 
     with (
-        patch("app.services.photo_service.save_original_photo", return_value=("projects/prj_f03/roof.png", None)),
-        patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()),
+        patch("app.modules.media.photo_service.save_original_photo", return_value=("projects/prj_f03/roof.png", None)),
+        patch("app.modules.media.photo_service.enqueue_heavy_job", new=AsyncMock()),
     ):
         await PhotoService(repo, work_queue=MagicMock()).create_multipart_photo(
             project, upload, is_primary=False, uploaded_by_user_id="f03_technician_a"
@@ -150,7 +151,7 @@ async def test_upload_records_the_author_passed_by_the_route():
 def test_upload_route_takes_the_author_from_the_verified_identity_only():
     import inspect
 
-    from app.api.routes.images import upload_case_images
+    from app.modules.media.api.images import upload_case_images
 
     source = inspect.getsource(upload_case_images)
     assert "uploaded_by_user_id=current_user.id" in source
@@ -328,7 +329,7 @@ async def test_company_admin_purge_removes_files_exports_and_access(
         )
         await session.commit()
 
-    with patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock) as storage_delete:
+    with patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock) as storage_delete:
         response = await app_client.post(
             f"/api/v1/cases/{case_id}/images/{photo_id}/purge",
             json={"confirmImageId": photo_id},
@@ -373,7 +374,7 @@ async def test_superadmin_purges_through_system_administration(app_client, f03_u
     superadmin = await _token(app_client, "f03_superadmin")
     case_id = await _new_case(app_client, admin)
     photo_id = await _new_photo(db_session_factory, case_id, uploaded_by=None)
-    with patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock):
+    with patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock):
         response = await app_client.post(
             f"/api/v1/admin/photos/{photo_id}/purge",
             json={"confirmImageId": photo_id},
@@ -389,8 +390,8 @@ async def test_superadmin_purges_through_system_administration(app_client, f03_u
 
 
 async def test_storage_outage_leaves_photo_hidden_and_worker_finishes(app_client, f03_users, db_session_factory):
-    from app.repositories.photo_repository import PhotoRepository
-    from app.services.photo_service import PhotoService
+    from app.modules.media.photo_repository import PhotoRepository
+    from app.modules.media.photo_service import PhotoService
 
     admin = await _token(app_client, "f03_admin_a")
     case_id = await _new_case(app_client, admin)
@@ -400,7 +401,7 @@ async def test_storage_outage_leaves_photo_hidden_and_worker_finishes(app_client
         if "/preview/" in relative_storage_key:
             raise OSError("MinIO unavailable")
 
-    with patch("app.services.photo_service.delete_storage_file", side_effect=flaky):
+    with patch("app.modules.media.photo_service.delete_storage_file", side_effect=flaky):
         response = await app_client.post(
             f"/api/v1/cases/{case_id}/images/{photo_id}/purge",
             json={"confirmImageId": photo_id},
@@ -414,7 +415,7 @@ async def test_storage_outage_leaves_photo_hidden_and_worker_finishes(app_client
     assert (await app_client.post(f"/api/v1/cases/{case_id}/images/{photo_id}/restore", headers=_auth(admin))).status_code == 404
 
     # Worker retry (no retention wait for purge_pending) removes every object.
-    with patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock) as storage_delete:
+    with patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock) as storage_delete:
         async with db_session_factory() as session:
             await PhotoService(PhotoRepository(session)).cleanup_pending_deletes(limit=1000)
     assert f"projects/{case_id}/preview/{photo_id}.jpg" in {
@@ -428,9 +429,9 @@ async def test_retrying_a_pending_purge_through_the_api_completes_it(app_client,
     case_id = await _new_case(app_client, admin)
     photo_id = await _new_photo(db_session_factory, case_id, uploaded_by=None)
     body = {"confirmImageId": photo_id}
-    with patch("app.services.photo_service.delete_storage_file", side_effect=OSError("down")):
+    with patch("app.modules.media.photo_service.delete_storage_file", side_effect=OSError("down")):
         first = await app_client.post(f"/api/v1/cases/{case_id}/images/{photo_id}/purge", json=body, headers=_auth(admin))
-    with patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock):
+    with patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock):
         second = await app_client.post(f"/api/v1/cases/{case_id}/images/{photo_id}/purge", json=body, headers=_auth(admin))
     assert (first.status_code, second.status_code) == (202, 200)
     assert (await _photo(db_session_factory, photo_id)).status == "deleted"
@@ -448,8 +449,8 @@ async def test_audit_outage_blocks_the_purge(app_client, f03_users, db_session_f
     case_id = await _new_case(app_client, admin)
     photo_id = await _new_photo(db_session_factory, case_id, uploaded_by=None)
     with (
-        patch("app.api.photo_purge.commit_security_critical_audit", side_effect=SecurityAuditWriteError("down")),
-        patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock) as storage_delete,
+        patch("app.modules.media.photo_purge.commit_security_critical_audit", side_effect=SecurityAuditWriteError("down")),
+        patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock) as storage_delete,
     ):
         response = await app_client.post(
             f"/api/v1/cases/{case_id}/images/{photo_id}/purge",
@@ -467,7 +468,7 @@ async def test_reapply_script_purges_restored_photos_idempotently(app_client, f0
     admin = await _token(app_client, "f03_admin_a")
     case_id = await _new_case(app_client, admin)
     restored = await _new_photo(db_session_factory, case_id, uploaded_by=None)
-    with patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock) as storage_delete:
+    with patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock) as storage_delete:
         assert await _reapply([restored, "pho_absent_from_db"]) == 0
         assert await _reapply([restored]) == 0  # second run: already deleted, skipped
     assert storage_delete.await_count == 3
@@ -507,7 +508,8 @@ async def test_photo_list_reports_author_and_per_user_delete_permission(app_clie
 
 
 async def test_purge_removes_markers_and_keeps_historical_analysis(app_client, f03_users, db_session_factory):
-    from app.models import AnalysisResult, Marker
+    from app.models import AnalysisResult
+    from app.modules.media.models import Marker
 
     admin = await _token(app_client, "f03_admin_a")
     case_id = await _new_case(app_client, admin)
@@ -525,7 +527,7 @@ async def test_purge_removes_markers_and_keeps_historical_analysis(app_client, f
         session.add(AnalysisResult(id=result_id, project_id=case_id, reference_photo_id=photo_id, estimated_area_sqm=12.5))
         await session.commit()
 
-    with patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock):
+    with patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock):
         purged = await app_client.post(
             f"/api/v1/cases/{case_id}/images/{photo_id}/purge",
             json={"confirmImageId": photo_id},
@@ -567,7 +569,7 @@ async def test_purge_ledger_survives_database_restore_and_drives_reapply(
     import json
 
     from app.platform.config import get_settings
-    from app.core.purge_ledger import read_purged_photo_ids
+    from app.modules.media.purge_ledger import read_purged_photo_ids
     from scripts.reapply_photo_purges import _reapply
 
     ledger = tmp_path / "ledger" / "photo-purge-ledger.jsonl"
@@ -577,7 +579,7 @@ async def test_purge_ledger_survives_database_restore_and_drives_reapply(
     backup_taken_at = datetime.now(UTC)
     photo_id = await _new_photo(db_session_factory, case_id, uploaded_by=None)
 
-    with patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock):
+    with patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock):
         purged = await app_client.post(
             f"/api/v1/cases/{case_id}/images/{photo_id}/purge",
             json={"confirmImageId": photo_id},
@@ -607,7 +609,7 @@ async def test_purge_ledger_survives_database_restore_and_drives_reapply(
     ids = read_purged_photo_ids(ledger, since=backup_taken_at)
     assert ids == [photo_id]
     assert read_purged_photo_ids(ledger, since=datetime.now(UTC) + timedelta(seconds=5)) == []
-    with patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock) as storage_delete:
+    with patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock) as storage_delete:
         assert await _reapply(ids) == 0
     assert storage_delete.await_count == 3
     assert (await _photo(db_session_factory, photo_id)).status == "deleted"
@@ -639,7 +641,7 @@ async def test_purge_fails_closed_without_a_writable_ledger(app_client, f03_user
     blocked = tmp_path / "ledger-is-a-directory"
     blocked.mkdir()
     monkeypatch.setattr(get_settings(), "photo_purge_ledger_path", str(blocked))
-    with patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock) as storage_delete:
+    with patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock) as storage_delete:
         failed = await app_client.post(f"/api/v1/cases/{case_id}/images/{photo_id}/purge", json=body, headers=_auth(admin))
     assert failed.status_code == 503
     storage_delete.assert_not_awaited()
@@ -647,7 +649,7 @@ async def test_purge_fails_closed_without_a_writable_ledger(app_client, f03_user
 
 
 async def test_marker_create_and_delete_are_persisted(app_client, f03_users, db_session_factory):
-    from app.models import Marker
+    from app.modules.media.models import Marker
 
     admin = await _token(app_client, "f03_admin_a")
     case_id = await _new_case(app_client, admin)

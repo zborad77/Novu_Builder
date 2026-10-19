@@ -5,7 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from unittest.mock import AsyncMock, patch
 
-from app.models import AnalysisJob, AnalysisResult, Project
+from app.models import AnalysisJob, AnalysisResult
+from app.modules.cases.models import Project
 from app.modules.identity.models import Organization, User
 from app.repositories.analysis_repository import ANALYSIS_JOB_STATUS_COMPLETED
 from app.services.analysis_service import AnalysisService

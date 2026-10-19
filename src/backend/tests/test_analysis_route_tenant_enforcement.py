@@ -15,7 +15,7 @@ class TestMeasurementRouteTenantEnforcement:
         from app.api.routes.measurements import patch_measurement
         from app.schemas.measurement import MeasurementUpsert
         from app.services.analysis_service import AnalysisService
-        from app.services.project_service import ProjectService
+        from app.modules.workflow.project_service import ProjectService
 
         current_user = MagicMock()
         current_user.isSuperAdmin = False
@@ -61,7 +61,7 @@ class TestMeasurementRouteTenantEnforcement:
         from app.api.routes.measurements import patch_measurement
         from app.schemas.measurement import MeasurementUpsert
         from app.services.analysis_service import AnalysisService
-        from app.services.project_service import ProjectService
+        from app.modules.workflow.project_service import ProjectService
 
         current_user = MagicMock()
         current_user.isSuperAdmin = False
@@ -98,7 +98,7 @@ class TestAnalysisSelectionRouteTenantEnforcement:
     async def test_patch_analysis_selection_forwards_org_scope_to_service_update(self):
         from app.api.routes.analysis_jobs import patch_analysis_selection
         from app.services.analysis_service import AnalysisService
-        from app.services.project_service import ProjectService
+        from app.modules.workflow.project_service import ProjectService
 
         current_user = MagicMock()
         current_user.isSuperAdmin = False

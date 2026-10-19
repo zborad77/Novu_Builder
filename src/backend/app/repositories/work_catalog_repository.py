@@ -7,7 +7,9 @@ from sqlalchemy import Select, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
-from app.models import PricingProfile, Project, ProjectPhoto
+from app.models import PricingProfile
+from app.modules.cases.models import Project
+from app.modules.media.models import ProjectPhoto
 from app.models.work_catalog import (
     AnalysisProfile,
     CatalogPricingProfile,

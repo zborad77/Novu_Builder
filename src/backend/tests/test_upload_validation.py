@@ -66,59 +66,59 @@ class TestUploadRouteStructure:
 
     def test_upload_route_validates_org_before_upload(self):
         """upload_case_images must call get_project_lean with organization_id before processing files."""
-        from app.api.routes.images import upload_case_images
+        from app.modules.media.api.images import upload_case_images
         src = inspect.getsource(upload_case_images)
         assert "organization_id=org_id" in src
         assert "get_project_lean" in src
 
     def test_preview_route_requires_authentication(self):
         """get_image_preview must require get_current_user dependency."""
-        from app.api.routes.images import get_image_preview
+        from app.modules.media.api.images import get_image_preview
         src = inspect.getsource(get_image_preview)
         assert "get_current_user" in src
 
     def test_preview_route_validates_org(self):
         """get_image_preview must verify the photo's project belongs to the user's org."""
-        from app.api.routes.images import _get_image_preview_core
+        from app.modules.media.api.images import _get_image_preview_core
         src = inspect.getsource(_get_image_preview_core)
         assert "organization_id=org_id" in src
         assert "get_photo_by_id_in_org" in src
 
     def test_photo_read_model_has_project_id(self):
         """ProjectPhotoRead must expose projectId for org validation."""
-        from app.schemas.photo import ProjectPhotoRead
+        from app.modules.media.schemas.photo import ProjectPhotoRead
         assert "projectId" in ProjectPhotoRead.model_fields
 
     def test_to_read_model_maps_project_id(self):
         """to_read_model must set projectId from photo.project_id."""
-        from app.services.photo_service import to_read_model
+        from app.modules.media.photo_service import to_read_model
         src = inspect.getsource(to_read_model)
         assert "projectId=photo.project_id" in src
 
     def test_upload_route_does_not_support_json_metadata_only_creation(self):
         """Legacy JSON metadata-only uploads must not bypass real file validation/storage."""
-        from app.api.routes.images import upload_case_images
+        from app.modules.media.api.images import upload_case_images
         src = inspect.getsource(upload_case_images)
         assert "JSON metadata-only uploads are not supported" in src
         assert "create_json_photo" not in src
 
     def test_upload_route_keeps_heavy_gate_out_of_http_guards(self):
         """Route-level org/content-type/form guards must run before any heavy-lane gating."""
-        from app.api.routes.images import upload_case_images
+        from app.modules.media.api.images import upload_case_images
         src = inspect.getsource(upload_case_images)
         assert "ensure_heavy_intake_capacity" not in src
         assert "require_worker_capacity" not in src
 
     def test_photo_service_gates_after_upload_validation_and_before_persistence(self):
         """Cheap upload validation must run before runtime gating and before storage writes."""
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
         src = inspect.getsource(PhotoService.create_multipart_photo)
         assert src.index("validate_photo_upload") < src.index("_enforce_upload_backpressure")
         assert src.index("_enforce_upload_backpressure") < src.index("save_original_photo")
 
     def test_export_service_gates_after_filename_prep_and_before_enqueue_persistence(self):
         """Export preconditions/filename sanitization must happen before heavy enqueue gating."""
-        from app.services.export_service import ExportService
+        from app.modules.exports.export_service import ExportService
         src = inspect.getsource(ExportService.create_quote_docx_export)
         assert src.index("sanitize_filename") < src.index("_enforce_export_backpressure")
         assert src.index("_enforce_export_backpressure") < src.index("_create_pending_export_record")
@@ -129,7 +129,7 @@ def test_upload_goes_to_s3_only(monkeypatch):
     import app.platform.storage.backend as backend_mod
     import app.platform.storage.local_photo_storage as local_storage_mod
     import app.platform.storage.s3_photo_storage as s3_storage_mod
-    import app.services.photo_service as photo_service_mod
+    import app.modules.media.photo_service as photo_service_mod
 
     monkeypatch.setenv("STORAGE_BACKEND", "s3")
     reloaded_backend = importlib.reload(backend_mod)
@@ -156,9 +156,9 @@ class TestUploadOwnProject:
     @pytest.mark.asyncio
     async def test_upload_succeeds_when_project_in_org(self):
         """upload_case_images proceeds if project belongs to the user's org."""
-        from app.services.project_service import ProjectService
-        from app.services.photo_service import PhotoService
-        from app.repositories.project_repository import ProjectRepository
+        from app.modules.workflow.project_service import ProjectService
+        from app.modules.media.photo_service import PhotoService
+        from app.modules.cases.repository import ProjectRepository
 
         project = _make_project("prj_A", "org_A")
 
@@ -181,9 +181,9 @@ class TestUploadForeignProject:
     @pytest.mark.asyncio
     async def test_upload_fails_when_project_not_in_org(self):
         """upload_case_images raises 404 if project does not belong to user's org."""
-        from app.api.routes.images import upload_case_images
-        from app.services.project_service import ProjectService
-        from app.services.photo_service import PhotoService
+        from app.modules.media.api.images import upload_case_images
+        from app.modules.workflow.project_service import ProjectService
+        from app.modules.media.photo_service import PhotoService
 
         mock_request = MagicMock()
         mock_request.headers = {"content-type": "multipart/form-data"}
@@ -213,9 +213,9 @@ class TestUploadForeignProject:
     @pytest.mark.asyncio
     async def test_upload_fails_when_project_not_found(self):
         """upload_case_images raises 404 if project does not exist."""
-        from app.api.routes.images import upload_case_images
-        from app.services.project_service import ProjectService
-        from app.services.photo_service import PhotoService
+        from app.modules.media.api.images import upload_case_images
+        from app.modules.workflow.project_service import ProjectService
+        from app.modules.media.photo_service import PhotoService
 
         mock_request = MagicMock()
         mock_request.headers = {"content-type": "application/json"}
@@ -243,9 +243,9 @@ class TestUploadForeignProject:
     @pytest.mark.asyncio
     async def test_upload_json_metadata_only_is_rejected_for_existing_project(self):
         """Existing projects must still reject JSON uploads because they bypass byte validation."""
-        from app.api.routes.images import upload_case_images
-        from app.services.project_service import ProjectService
-        from app.services.photo_service import PhotoService
+        from app.modules.media.api.images import upload_case_images
+        from app.modules.workflow.project_service import ProjectService
+        from app.modules.media.photo_service import PhotoService
 
         mock_request = MagicMock()
         mock_request.headers = {"content-type": "application/json"}
@@ -282,8 +282,8 @@ class TestPreviewOrgCheck:
     @pytest.mark.asyncio
     async def test_preview_fails_for_foreign_org_photo(self):
         """get_image_preview raises 404 if photo's project belongs to a different org."""
-        from app.api.routes.images import _get_image_preview_core
-        from app.services.photo_service import PhotoService
+        from app.modules.media.api.images import _get_image_preview_core
+        from app.modules.media.photo_service import PhotoService
 
         mock_user = MagicMock()
         mock_user.isSuperAdmin = False
@@ -308,8 +308,8 @@ class TestPreviewOrgCheck:
     @pytest.mark.asyncio
     async def test_preview_fails_for_nonexistent_photo(self):
         """get_image_preview raises 404 if photo does not exist."""
-        from app.api.routes.images import _get_image_preview_core
-        from app.services.photo_service import PhotoService
+        from app.modules.media.api.images import _get_image_preview_core
+        from app.modules.media.photo_service import PhotoService
 
         mock_user = MagicMock()
         mock_user.isSuperAdmin = False
@@ -335,8 +335,8 @@ class TestPreviewOrgCheck:
     async def test_preview_succeeds_for_own_org_photo(self):
         """get_image_preview returns RedirectResponse for photo in user's org."""
         from fastapi.responses import RedirectResponse
-        from app.api.routes.images import _get_image_preview_core
-        from app.services.photo_service import PhotoService
+        from app.modules.media.api.images import _get_image_preview_core
+        from app.modules.media.photo_service import PhotoService
 
         mock_user = MagicMock()
         mock_user.isSuperAdmin = False
@@ -368,8 +368,8 @@ class TestPreviewOrgCheck:
     async def test_superadmin_bypasses_org_check_on_preview(self):
         """Superadmin can access preview of any org's photo."""
         from fastapi.responses import RedirectResponse
-        from app.api.routes.images import _get_image_preview_core
-        from app.services.photo_service import PhotoService
+        from app.modules.media.api.images import _get_image_preview_core
+        from app.modules.media.photo_service import PhotoService
 
         mock_user = MagicMock()
         mock_user.isSuperAdmin = True
@@ -406,40 +406,40 @@ class TestStorageRouteAuth:
 
     def test_storage_route_requires_authentication(self):
         """serve_storage_file must require get_current_user dependency."""
-        from app.api.routes.storage import serve_storage_file
+        from app.modules.media.api.storage import serve_storage_file
         src = inspect.getsource(serve_storage_file)
         assert "get_current_user" in src
 
     def test_storage_route_validates_org(self):
         """serve_storage_file must validate org before serving the file."""
-        from app.api.routes.storage import serve_storage_file
+        from app.modules.media.api.storage import serve_storage_file
         src = inspect.getsource(serve_storage_file)
         assert "organization_id=org_id" in src
         assert "get_project" in src
 
     def test_storage_route_guards_path_traversal(self):
         """serve_storage_file must guard against path traversal via relative_to check."""
-        from app.api.routes.storage import serve_storage_file
+        from app.modules.media.api.storage import serve_storage_file
         src = inspect.getsource(serve_storage_file)
         assert "relative_to" in src
 
     def test_storage_route_allows_only_known_prefixes(self):
         """serve_storage_file only serves files under 'projects' and 'exports'."""
-        from app.api.routes.storage import _ALLOWED_PREFIXES
+        from app.modules.media.api.storage import _ALLOWED_PREFIXES
         assert "projects" in _ALLOWED_PREFIXES
         assert "exports" in _ALLOWED_PREFIXES
 
     def test_storage_route_requires_local_backend(self):
         """serve_storage_file must fail fast when local storage is not the active backend."""
-        from app.api.routes.storage import serve_storage_file
+        from app.modules.media.api.storage import serve_storage_file
         src = inspect.getsource(serve_storage_file)
         assert 'settings.storage_backend != "local"' in src
 
     @pytest.mark.asyncio
     async def test_storage_blocks_cross_tenant_photo(self):
         """serve_storage_file returns 404 for a photo from a different org."""
-        from app.api.routes.storage import serve_storage_file
-        from app.services.project_service import ProjectService
+        from app.modules.media.api.storage import serve_storage_file
+        from app.modules.workflow.project_service import ProjectService
 
         mock_user = MagicMock()
         mock_user.isSuperAdmin = False
@@ -461,8 +461,8 @@ class TestStorageRouteAuth:
     @pytest.mark.asyncio
     async def test_storage_blocks_cross_tenant_export(self):
         """serve_storage_file returns 404 for an export from a different org."""
-        from app.api.routes.storage import serve_storage_file
-        from app.services.project_service import ProjectService
+        from app.modules.media.api.storage import serve_storage_file
+        from app.modules.workflow.project_service import ProjectService
 
         mock_user = MagicMock()
         mock_user.isSuperAdmin = False
@@ -484,8 +484,8 @@ class TestStorageRouteAuth:
     @pytest.mark.asyncio
     async def test_storage_rejects_invalid_path_prefix(self):
         """serve_storage_file returns 404 for paths outside projects/ or exports/."""
-        from app.api.routes.storage import serve_storage_file
-        from app.services.project_service import ProjectService
+        from app.modules.media.api.storage import serve_storage_file
+        from app.modules.workflow.project_service import ProjectService
 
         mock_user = MagicMock()
         mock_user.isSuperAdmin = False
@@ -506,8 +506,8 @@ class TestStorageRouteAuth:
     @pytest.mark.asyncio
     async def test_superadmin_can_access_any_org_storage(self):
         """Superadmin bypasses org filter and can access files from any org."""
-        from app.api.routes.storage import serve_storage_file
-        from app.services.project_service import ProjectService
+        from app.modules.media.api.storage import serve_storage_file
+        from app.modules.workflow.project_service import ProjectService
         from fastapi.responses import FileResponse
         from unittest.mock import patch
         from pathlib import Path
@@ -525,7 +525,7 @@ class TestStorageRouteAuth:
         fake_path.exists.return_value = True
         fake_path.is_file.return_value = True
 
-        with patch("app.api.routes.storage.STORAGE_ROOT") as mock_root:
+        with patch("app.modules.media.api.storage.STORAGE_ROOT") as mock_root:
             mock_root.resolve.return_value = Path("/storage")
             resolved = MagicMock(spec=Path)
             resolved.relative_to.return_value = Path("projects/prj_A/photo.jpg")

@@ -16,7 +16,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.repositories.storage_consistency_repository import (  # noqa: E402
+from app.modules.exports.storage_consistency_repository import (  # noqa: E402
     ExportStorageReference,
     PhotoStorageReference,
     StorageConsistencyRepository,

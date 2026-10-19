@@ -1,0 +1,662 @@
+import base64
+import json
+from uuid import uuid4
+
+import structlog
+from sqlalchemy import delete
+
+from app.modules.cases.models import Project
+from app.modules.media.models import ProjectPhoto
+from app.models import PricingProfile
+from app.repositories.final_proposal_repository import FinalProposalRepository
+from app.repositories.proposal_draft_repository import ProposalDraftRepository
+from app.modules.cases.repository import ProjectRepository
+from app.modules.workflow.schemas import (
+    ProjectCreate,
+    ProjectClient,
+    ProjectDetail,
+    ProjectDuplicateRequest,
+    ProjectLocation,
+    ProjectSummary,
+    TransitionRead,
+    ProjectWorkflowPhotoReadiness,
+    ProjectWorkflowStatusSummary,
+)
+from app.modules.exports.export_service import ExportService
+from app.services.proposal_draft_service import (
+    build_final_proposal_from_record,
+    build_final_proposal_snapshot_payload,
+    build_project_proposal_draft,
+    normalize_proposal_patch_payload,
+)
+from app.platform.storage.backend import copy_storage_file, delete_storage_file
+
+logger = structlog.get_logger(__name__)
+
+MIN_READY_PHOTOS_FOR_FINAL_PROPOSAL = 3
+
+
+def is_reference_dataset_project(project: Project) -> bool:
+    return project.id.startswith("ref_case_")
+
+
+def _active_project_photos(project: Project) -> list[ProjectPhoto]:
+    return [photo for photo in (project.photos or []) if getattr(photo, "status", "active") == "active"]
+
+
+def build_project_summary(project: Project) -> ProjectSummary:
+    creator = getattr(project, "created_by_user", None)
+    active_photos = _active_project_photos(project)
+    return ProjectSummary(
+        id=project.id,
+        title=project.title,
+        status=project.status,
+        isReferenceDataset=is_reference_dataset_project(project),
+        propertyType=project.property_type,
+        repairScope=project.repair_scope,
+        addressLabel=project.address_label,
+        photoCount=len(active_photos),
+        estimatedAreaSqm=None,
+        latestQuoteTotal=None,
+        updatedAt=project.updated_at,
+        createdByName=creator.full_name if creator else None,
+    )
+
+
+def build_project_workflow_status_summary(
+    project: Project,
+    *,
+    proposal_draft,
+    latest_final,
+) -> ProjectWorkflowStatusSummary:
+    photos = _active_project_photos(project)
+    ready_photos = [photo for photo in photos if photo.processing_status == "ready"]
+    total_photo_count = len(photos)
+    ready_photo_count = len(ready_photos)
+    has_primary_ready_photo = any(photo.is_primary for photo in ready_photos)
+    has_analysis_reference_ready_photo = any(photo.is_analysis_reference for photo in ready_photos)
+    has_pending_processing = any(photo.processing_status in {"uploaded", "processing"} for photo in photos)
+    has_minimum_recommended_count = ready_photo_count >= MIN_READY_PHOTOS_FOR_FINAL_PROPOSAL
+
+    photo_readiness = ProjectWorkflowPhotoReadiness(
+        totalPhotoCount=total_photo_count,
+        readyPhotoCount=ready_photo_count,
+        minimumRecommendedCount=MIN_READY_PHOTOS_FOR_FINAL_PROPOSAL,
+        hasMinimumRecommendedCount=has_minimum_recommended_count,
+        hasPrimaryReadyPhoto=has_primary_ready_photo,
+        hasAnalysisReferenceReadyPhoto=has_analysis_reference_ready_photo,
+    )
+
+    blocking_reasons: list[str] = []
+    if total_photo_count == 0:
+        analysis_status = "waiting_for_photos"
+        blocking_reasons.append("No photos have been uploaded yet.")
+    elif has_pending_processing:
+        analysis_status = "processing_photos"
+        blocking_reasons.append("Server is still processing uploaded photos.")
+    elif not has_minimum_recommended_count:
+        analysis_status = "awaiting_more_photos"
+        blocking_reasons.append(
+            f"At least {MIN_READY_PHOTOS_FOR_FINAL_PROPOSAL} ready photos are recommended before finalizing."
+        )
+    else:
+        analysis_status = "ready_for_server_analysis"
+
+    if not has_primary_ready_photo:
+        blocking_reasons.append("A primary photo in ready state is required.")
+    if not has_analysis_reference_ready_photo:
+        blocking_reasons.append("An analysis reference photo in ready state is required.")
+
+    draft_status = proposal_draft.status if proposal_draft is not None else "missing"
+    if proposal_draft is None:
+        blocking_reasons.append("Proposal draft is not available.")
+    elif proposal_draft.status != "ready":
+        blocking_reasons.append(f"Proposal draft must be ready. Current status: {proposal_draft.status}.")
+
+    can_create_final_proposal = (
+        proposal_draft is not None
+        and proposal_draft.status == "ready"
+        and has_minimum_recommended_count
+        and has_primary_ready_photo
+        and has_analysis_reference_ready_photo
+    )
+
+    final_proposal_status = latest_final.status if latest_final is not None else None
+    can_send = latest_final is not None
+    if latest_final is None:
+        blocking_reasons.append("Final proposal has not been created yet.")
+
+    deduplicated_blocking_reasons = list(dict.fromkeys(blocking_reasons))
+
+    return ProjectWorkflowStatusSummary(
+        photoReadiness=photo_readiness,
+        analysisStatus=analysis_status,
+        draftStatus=draft_status,
+        finalProposalStatus=final_proposal_status,
+        canCreateFinalProposal=can_create_final_proposal,
+        canSend=can_send,
+        blockingReasons=deduplicated_blocking_reasons,
+    )
+
+
+def _build_latest_analysis_dict(project: Project) -> dict | None:
+    results = getattr(project, "analysis_results", None) or []
+    if not results:
+        return None
+    latest = max(results, key=lambda r: (r.created_at or project.created_at, r.id))
+    workflow_raw = _parse_json(latest.workflow_suggestion_json)
+    materials_raw = _parse_json(latest.materials_suggestion_json)
+    mask_polygon_raw = _parse_json(latest.mask_polygon_json)
+    return {
+        "id": latest.id,
+        "workTypeCode": latest.resolved_work_type_code,
+        "analysisProfileCode": latest.resolved_analysis_profile_code,
+        "analysisProfileVersion": latest.resolved_analysis_profile_version,
+        "objectType": latest.object_type,
+        "surfaceCondition": latest.surface_condition,
+        "recommendedScope": latest.recommended_scope,
+        "estimatedQuantity": latest.estimated_quantity,
+        "estimatedUnit": latest.estimated_unit,
+        "estimatedAreaSqm": latest.estimated_area_sqm,
+        "areaConfidence": latest.area_confidence,
+        "manualAreaSqm": latest.manual_area_sqm,
+        "finalAreaSource": latest.final_area_source,
+        "maskPolygon": mask_polygon_raw if isinstance(mask_polygon_raw, list) else [],
+        "workflowSteps": workflow_raw if isinstance(workflow_raw, list) else [],
+        "materials": materials_raw if isinstance(materials_raw, list) else [],
+        "estimatedDurationDays": latest.estimated_duration_days,
+        "laborHoursTotal": latest.labor_hours_total,
+        "modelName": latest.model_name,
+        "modelVersion": latest.model_version,
+        "createdAt": latest.created_at.isoformat() if latest.created_at else None,
+    }
+
+
+def _build_quote_variants_list(project: Project) -> list:
+    from app.services.quote_variant_service import to_variant_read
+    variants = getattr(project, "quote_variants", None) or []
+    if not variants:
+        return []
+    sorted_variants = sorted(variants, key=lambda v: (v.created_at or project.created_at, v.id))
+    return [to_variant_read(v).model_dump() for v in sorted_variants]
+
+
+def _parse_json(value: str | None):
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def build_project_detail(project: Project, *, actor_role: str = "manager") -> ProjectDetail:
+    from app.modules.cases.transitions import get_available_transitions
+    from app.modules.media.photo_service import to_read_model
+
+    active_photos = _active_project_photos(project)
+    proposal_draft = build_project_proposal_draft(project, active_photos, proposal_record=project.proposal_draft)
+    latest_final = None
+    if getattr(project, "final_proposals", None):
+        latest_final = max(
+            project.final_proposals,
+            key=lambda proposal: ((proposal.created_at or project.created_at), proposal.id),
+        )
+    reference_expectations = None
+    if project.reference_expectations_json:
+        try:
+            reference_expectations = json.loads(project.reference_expectations_json)
+        except json.JSONDecodeError:
+            reference_expectations = None
+
+    available_transitions = [
+        TransitionRead(action=t.action, label=t.label, requires_reason=t.requires_reason)
+        for t in get_available_transitions(project, actor_role)
+    ]
+
+    return ProjectDetail(
+        id=project.id,
+        title=project.title,
+        description=project.description,
+        status=project.status,
+        isReferenceDataset=is_reference_dataset_project(project),
+        source=getattr(project, "source", "mobile") or "mobile",  # backward compatibility fallback — source absent in pre-migration records
+        propertyType=project.property_type,
+        repairScope=project.repair_scope,
+        location=ProjectLocation(
+            lat=project.location_lat,
+            lng=project.location_lng,
+            addressLabel=project.address_label,
+        ),
+        client=(
+            ProjectClient(
+                id=project.client.id,
+                fullName=project.client.full_name,
+                companyName=project.client.company_name,
+                email=project.client.email,
+                phone=project.client.phone,
+            )
+            if project.client
+            else None
+        ),
+        photos=[to_read_model(photo).model_dump(mode="json") for photo in active_photos],
+        latestAnalysis=_build_latest_analysis_dict(project),
+        proposalDraft=proposal_draft,
+        finalProposal=build_final_proposal_from_record(latest_final),
+        workflowStatus=build_project_workflow_status_summary(
+            project,
+            proposal_draft=proposal_draft,
+            latest_final=latest_final,
+        ),
+        quoteVariants=_build_quote_variants_list(project),
+        referenceExpectations=reference_expectations,
+        availableTransitions=available_transitions,
+        createdAt=project.created_at,
+        updatedAt=project.updated_at,
+    )
+
+
+def build_duplicate_project_title(source_title: str, mode: str) -> str:
+    suffix = "Varianta" if mode == "variant" else "Kopie"
+    normalized_title = source_title.strip() if source_title else "Zakazka"
+    duplicate_suffixes = (" - Kopie", " - Varianta")
+    title_changed = True
+    while title_changed:
+        title_changed = False
+        for duplicate_suffix in duplicate_suffixes:
+            if normalized_title.endswith(duplicate_suffix):
+                normalized_title = normalized_title[: -len(duplicate_suffix)].rstrip()
+                title_changed = True
+    return f"{normalized_title} - {suffix}"
+
+
+def build_duplicated_storage_key(source_storage_key: str | None, source_project_id: str, target_project_id: str) -> str | None:
+    if not source_storage_key:
+        return None
+
+    source_prefix = f"projects/{source_project_id}/"
+    target_prefix = f"projects/{target_project_id}/"
+    if source_storage_key.startswith(source_prefix):
+        return target_prefix + source_storage_key[len(source_prefix):]
+    return source_storage_key.replace(source_project_id, target_project_id, 1)
+
+
+class ProjectService:
+    def __init__(
+        self,
+        repository: ProjectRepository,
+        proposal_draft_repository: ProposalDraftRepository,
+        final_proposal_repository: FinalProposalRepository,
+        export_service: ExportService,
+    ):
+        self.repository = repository
+        self.proposal_draft_repository = proposal_draft_repository
+        self.final_proposal_repository = final_proposal_repository
+        self.export_service = export_service
+
+    async def _cleanup_duplicated_storage(self, storage_keys: list[str]) -> None:
+        seen: set[str] = set()
+        for storage_key in storage_keys:
+            if not storage_key or storage_key in seen:
+                continue
+            seen.add(storage_key)
+            try:
+                await delete_storage_file(relative_storage_key=storage_key)
+            except Exception as exc:
+                logger.warning(
+                    "photo.duplicate.rollback_cleanup_failed",
+                    storage_key=storage_key,
+                    error=str(exc),
+                    exc_info=True,
+                )
+
+    async def _rollback_duplicated_project(self, project_id: str) -> None:
+        await self.repository.session.rollback()
+        await self.repository.session.execute(delete(Project).where(Project.id == project_id))
+        await self.repository.session.commit()
+
+    async def _duplicate_project_photos(self, source_project: Project, duplicated_project: Project) -> None:
+        duplicated_photos: list[ProjectPhoto] = []
+        copy_journal: list[str] = []
+
+        try:
+            for source_photo in _active_project_photos(source_project):
+                duplicated_photo_id = f"pho_{uuid4().hex[:8]}"
+                duplicated_storage_key = build_duplicated_storage_key(source_photo.storage_key, source_project.id, duplicated_project.id)
+                duplicated_preview_key = build_duplicated_storage_key(source_photo.preview_storage_key, source_project.id, duplicated_project.id)
+                duplicated_ai_key = build_duplicated_storage_key(source_photo.ai_input_storage_key, source_project.id, duplicated_project.id)
+
+                if duplicated_storage_key and source_photo.storage_key:
+                    await copy_storage_file(source_storage_key=source_photo.storage_key, target_storage_key=duplicated_storage_key)
+                    copy_journal.append(duplicated_storage_key)
+                if duplicated_preview_key and source_photo.preview_storage_key:
+                    await copy_storage_file(source_storage_key=source_photo.preview_storage_key, target_storage_key=duplicated_preview_key)
+                    copy_journal.append(duplicated_preview_key)
+                if duplicated_ai_key and source_photo.ai_input_storage_key:
+                    await copy_storage_file(source_storage_key=source_photo.ai_input_storage_key, target_storage_key=duplicated_ai_key)
+                    copy_journal.append(duplicated_ai_key)
+
+                if not duplicated_storage_key:
+                    # Fail closed if the storage key cannot be mapped to the duplicate.
+                    # No DB row should point at a missing duplicate artifact.
+                    logger.warning(
+                        "photo.duplicate.storage_key_unresolvable",
+                        source_photo_id=source_photo.id,
+                        source_project_id=source_project.id,
+                        duplicated_project_id=duplicated_project.id,
+                    )
+                    continue
+
+                duplicated_photos.append(
+                    ProjectPhoto(
+                        id=duplicated_photo_id,
+                        project_id=duplicated_project.id,
+                        status="active",
+                        storage_key=duplicated_storage_key,
+                        preview_storage_key=duplicated_preview_key,
+                        ai_input_storage_key=duplicated_ai_key,
+                        original_filename=source_photo.original_filename,
+                        mime_type=source_photo.mime_type,
+                        file_size=source_photo.file_size,
+                        width=source_photo.width,
+                        height=source_photo.height,
+                        preview_file_size=source_photo.preview_file_size,
+                        preview_width=source_photo.preview_width,
+                        preview_height=source_photo.preview_height,
+                        ai_input_file_size=source_photo.ai_input_file_size,
+                        ai_input_width=source_photo.ai_input_width,
+                        ai_input_height=source_photo.ai_input_height,
+                        processing_status=source_photo.processing_status,
+                        taken_at=source_photo.taken_at,
+                        exif_lat=source_photo.exif_lat,
+                        exif_lng=source_photo.exif_lng,
+                        is_primary=source_photo.is_primary,
+                        is_analysis_reference=source_photo.is_analysis_reference,
+                        sort_order=source_photo.sort_order,
+                    )
+                )
+
+            self.repository.session.add_all(duplicated_photos)
+            await self.repository.session.commit()
+        except Exception:
+            await self._cleanup_duplicated_storage(copy_journal)
+            raise
+
+    async def get_project(self, project_id: str, *, organization_id: str | None = None) -> Project | None:
+        return await self.repository.get_project(project_id, organization_id=organization_id)
+
+    async def get_project_lean(self, project_id: str, *, organization_id: str | None = None) -> Project | None:
+        return await self.repository.get_project_lean(project_id, organization_id=organization_id)
+
+    async def list_projects(
+        self,
+        *,
+        organization_id: str | None = None,
+        status: str | None = None,
+        search: str | None = None,
+        limit: int = 200,
+        cursor: str | None = None,
+    ) -> tuple[list[ProjectSummary], str | None]:
+        rows = await self.repository.list_projects(
+            organization_id=organization_id,
+            status=status,
+            search=search,
+            limit=limit,
+            cursor=cursor,
+        )
+        has_more = len(rows) > limit
+        page = list(rows[:limit])
+        next_cursor: str | None = None
+        if has_more and page:
+            last = page[-1]
+            raw = f"{last.created_at.isoformat()}:{last.id}"
+            next_cursor = base64.b64encode(raw.encode()).decode()
+        return [build_project_summary(p) for p in page], next_cursor
+
+    async def get_project_detail(
+        self,
+        project_id: str,
+        *,
+        organization_id: str | None = None,
+        actor_role: str = "manager",
+    ) -> ProjectDetail | None:
+        project = await self.repository.get_project(project_id, organization_id=organization_id)
+        if not project:
+            return None
+        return build_project_detail(project, actor_role=actor_role)
+
+    async def create_project(self, payload: ProjectCreate, *, organization_id: str, created_by_user_id: str) -> Project:
+        if payload.clientId is not None:
+            valid = await self.repository.client_belongs_to_org(payload.clientId, organization_id)
+            if not valid:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=400, detail="Client does not belong to this organization.")
+        project_id = f"prj_{uuid4().hex[:8]}"
+        project = await self.repository.create_project(
+            project_id=project_id,
+            organization_id=organization_id,
+            created_by_user_id=created_by_user_id,
+            title=payload.title.strip(),
+            description=payload.description.strip() if payload.description else "",
+            client_id=payload.clientId,
+            property_type=payload.propertyType,
+            repair_scope=payload.repairScope,
+            location_lat=payload.locationLat,
+            location_lng=payload.locationLng,
+            address_label=payload.addressLabel,
+            source=payload.source or "mobile",  # intentional business default — mobile is the canonical source for new projects
+        )
+        # Write the initial history row so every project has a full audit trail
+        # from the moment of creation.  from_status=None signals "initial state"
+        # (not a transition from a previous status).
+        from datetime import datetime, timezone
+        from app.modules.cases.models import ProjectStatusHistory
+        self.repository.session.add(
+            ProjectStatusHistory(
+                id=f"psh_{uuid4().hex[:10]}",
+                project_id=project.id,
+                from_status=None,
+                to_status="draft",
+                transitioned_by_user_id=created_by_user_id,
+                reason="Project created",
+                transitioned_at=datetime.now(timezone.utc),
+            )
+        )
+        await self.repository.session.commit()
+        return project
+
+    async def duplicate_project(self, project_id: str, payload: ProjectDuplicateRequest, *, organization_id: str | None = None) -> Project | None:
+        source_project = await self.repository.get_project(project_id, organization_id=organization_id)
+        if not source_project:
+            return None
+
+        duplicate_title = (
+            payload.title.strip()
+            if payload.title and payload.title.strip()
+            else build_duplicate_project_title(source_project.title, payload.mode)
+        )
+
+        duplicated_project = await self.repository.create_project(
+            project_id=f"prj_{uuid4().hex[:8]}",
+            organization_id=source_project.organization_id,
+            created_by_user_id=source_project.created_by_user_id,
+            title=duplicate_title,
+            description=source_project.description,
+            client_id=source_project.client_id,
+            property_type=source_project.property_type,
+            repair_scope=source_project.repair_scope,
+            location_lat=source_project.location_lat,
+            location_lng=source_project.location_lng,
+            address_label=source_project.address_label,
+        )
+        try:
+            await self._duplicate_project_photos(source_project, duplicated_project)
+        except Exception:
+            await self._rollback_duplicated_project(duplicated_project.id)
+            raise
+        return await self.repository.get_project(duplicated_project.id)
+
+    async def update_proposal_draft(
+        self,
+        project_id: str,
+        payload: dict,
+        *,
+        organization_id: str | None = None,
+        expected_version: int | None = None,
+    ) -> ProjectDetail | None:
+        project = await self.repository.get_project(project_id, organization_id=organization_id)
+        if not project:
+            return None
+
+        normalized_payload = normalize_proposal_patch_payload(payload)
+        updated_draft = await self.proposal_draft_repository.upsert_for_project(
+            project.id,
+            normalized_payload,
+            expected_version=expected_version,
+        )
+        project.proposal_draft = updated_draft
+        return build_project_detail(project)
+
+    async def create_final_proposal(self, project_id: str, *, organization_id: str | None = None) -> ProjectDetail | None:
+        project = await self.repository.get_project(project_id, organization_id=organization_id)
+        if not project:
+            return None
+
+        active_photos = _active_project_photos(project)
+        proposal_draft = build_project_proposal_draft(project, active_photos, proposal_record=project.proposal_draft)
+        ready_photos = [photo for photo in active_photos if photo.processing_status == "ready"]
+        if proposal_draft.status != "ready":
+            raise ValueError(
+                f"Final proposal can only be created from a ready proposal draft. Current status: {proposal_draft.status}."
+            )
+        if len(ready_photos) < MIN_READY_PHOTOS_FOR_FINAL_PROPOSAL:
+            raise ValueError(
+                f"Final proposal requires at least {MIN_READY_PHOTOS_FOR_FINAL_PROPOSAL} ready photos."
+            )
+        if not any(photo.is_primary for photo in ready_photos):
+            raise ValueError("Final proposal requires a primary ready photo.")
+        if not any(photo.is_analysis_reference for photo in ready_photos):
+            raise ValueError("Final proposal requires an analysis reference photo in ready state.")
+        latest_result = max(
+            project.analysis_results,
+            key=lambda r: (r.created_at, r.id),
+            default=None,
+        ) if project.analysis_results else None
+
+        # Snapshot the input versions that produced this proposal so it can be
+        # audited, replayed, or diffed against future proposals.
+        latest_variant = (
+            max(project.quote_variants, key=lambda v: (v.created_at, v.id))
+            if project.quote_variants else None
+        )
+        rep_item = latest_variant.items[0] if latest_variant and latest_variant.items else None
+        pricing_profile: PricingProfile | None = None
+        if latest_variant and latest_variant.pricing_profile_id:
+            pricing_profile = await self.repository.session.get(
+                PricingProfile, latest_variant.pricing_profile_id
+            )
+        input_versions: dict = {
+            "analysisProfileCode": latest_result.resolved_analysis_profile_code if latest_result else None,
+            "analysisProfileVersion": latest_result.resolved_analysis_profile_version if latest_result else None,
+            "catalogPricingProfileCode": rep_item.resolved_catalog_pricing_profile_code if rep_item else None,
+            "catalogPricingProfileVersion": rep_item.resolved_catalog_pricing_profile_version if rep_item else None,
+            "pricingProfileId": latest_variant.pricing_profile_id if latest_variant else None,
+            "pricingProfileSnapshot": {
+                "hourlyRate": float(pricing_profile.hourly_rate),
+                "dailyRate": float(pricing_profile.daily_rate),
+                "laborHoursPerSqm": float(pricing_profile.labor_hours_per_sqm),
+                "marginEconomyPct": float(pricing_profile.margin_economy_pct),
+                "marginStandardPct": float(pricing_profile.margin_standard_pct),
+                "marginPremiumPct": float(pricing_profile.margin_premium_pct),
+                "vatPct": float(pricing_profile.vat_pct),
+                "currency": pricing_profile.currency,
+            } if pricing_profile else None,
+        }
+
+        snapshot_payload = build_final_proposal_snapshot_payload(
+            proposal_draft,
+            analysis_result_id=latest_result.id if latest_result else None,
+            input_versions=input_versions,
+        )
+        created_snapshot = await self.final_proposal_repository.create_for_project(project_id=project.id, payload=snapshot_payload)
+        project.final_proposals = [*(project.final_proposals or []), created_snapshot]
+        detail = build_project_detail(project)
+
+        # Snapshot the timeline up to this moment for the immutable archive.
+        # Events emitted after finalization (e.g. export.completed) are intentionally excluded.
+        from sqlalchemy import select as _sa_select  # noqa: PLC0415
+        from app.models.offer_processing import OutboxEvent  # noqa: PLC0415
+        from app.platform.events.types import AGGREGATE_CASE  # noqa: PLC0415
+        _ARCHIVE_EVENT_TYPES = frozenset({
+            "analysis.started", "analysis.completed", "measurement.confirmed",
+            "proposal.recalculate.started", "proposal.ready", "quote.ready",
+        })
+        _rows = (await self.repository.session.execute(
+            _sa_select(OutboxEvent)
+            .where(
+                OutboxEvent.aggregate_type == AGGREGATE_CASE,
+                OutboxEvent.aggregate_id == project.id,
+                OutboxEvent.event_type.in_(_ARCHIVE_EVENT_TYPES),
+            )
+            .order_by(OutboxEvent.seq.asc())
+            .limit(200)
+        )).scalars().all()
+        timeline_snapshot: list[dict] = [
+            {
+                "eventType": "case.created",
+                "occurredAt": project.created_at.isoformat() if project.created_at else None,
+                "payload": {},
+            }
+        ]
+        timeline_snapshot.extend(
+            {
+                "seq": row.seq,
+                "eventType": row.event_type,
+                "occurredAt": row.created_at.isoformat() if row.created_at else None,
+                "payload": row.payload,
+            }
+            for row in _rows
+        )
+
+        await self.export_service.create_final_proposal_exports(
+            case_detail=detail,
+            timeline_events=timeline_snapshot,
+        )
+        return detail
+
+    async def update_project(self, project_id: str, payload: dict, *, organization_id: str | None = None) -> ProjectDetail | None:
+        # Lean fetch: only existence/org guard needed here.
+        # repository.update_project() re-fetches the full detail graph internally.
+        project = await self.repository.get_project_lean(project_id, organization_id=organization_id)
+        if not project:
+            return None
+
+        changes = {}
+        field_mapping = {
+            "title": "title",
+            "description": "description",
+            # "status" intentionally excluded — all status transitions go through
+            # CaseActionService.apply_transition() to enforce the state machine.
+            "propertyType": "property_type",
+            "repairScope": "repair_scope",
+            "locationLat": "location_lat",
+            "locationLng": "location_lng",
+            "addressLabel": "address_label",
+            "clientId": "client_id",
+        }
+
+        for payload_field, model_field in field_mapping.items():
+            if payload_field in payload:
+                changes[model_field] = payload[payload_field]
+
+        # The client must belong to the case's own tenant (checked against the
+        # project row, so it also holds for superadmin calls with no org scope).
+        new_client_id = changes.get("client_id")
+        if new_client_id is not None and not await self.repository.client_belongs_to_org(
+            new_client_id, project.organization_id
+        ):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="Client does not belong to this organization.")
+
+        updated = await self.repository.update_project(project, changes)
+        return build_project_detail(updated)

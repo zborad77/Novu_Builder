@@ -34,7 +34,7 @@ from app.platform.redis_client import build_queue_redis_client_from_settings
 from app.platform.db.base import Base
 from app.composition.bootstrap import audit_seed_default_passwords, ensure_dev_seed
 from app.platform.db.session import AsyncSessionFactory, engine
-from app.models import Project
+from app.modules.cases.models import Project
 from app.modules.identity.token_repository import TokenRepository
 from app.platform.storage.backend import verify_storage_health
 
@@ -561,7 +561,7 @@ def create_app() -> FastAPI:
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 
     if settings.is_development:
-        from app.api.routes.storage import router as storage_router
+        from app.modules.media.api.storage import router as storage_router
         app.include_router(storage_router)
 
     return app

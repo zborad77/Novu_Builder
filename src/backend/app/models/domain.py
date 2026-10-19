@@ -1,183 +1,16 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.platform.db.base import Base
 from app.platform.db.mixins import TimestampMixin
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from app.modules.cases.models import Project
     from app.modules.identity.models import Organization, User
-
-
-class Client(TimestampMixin, Base):
-    __tablename__ = "clients"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
-    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    company_name: Mapped[str | None] = mapped_column(String(255))
-    email: Mapped[str | None] = mapped_column(String(255))
-    phone: Mapped[str | None] = mapped_column(String(64))
-    notes: Mapped[str | None] = mapped_column(Text)
-
-    organization: Mapped["Organization"] = relationship(back_populates="clients")
-    projects: Mapped[list["Project"]] = relationship(back_populates="client")
-
-
-class Project(TimestampMixin, Base):
-    """A case (zakázka) moving through the estimation workflow.
-
-    Status state machine
-    --------------------
-    draft          → intake | cancelled
-    intake         → analyzing | draft | cancelled
-    analyzing      → proposal_ready | quote_ready | draft | cancelled
-    proposal_ready → quote_ready | draft | cancelled
-    quote_ready    → sent | draft | cancelled
-    sent           → archived | draft | cancelled
-    archived       terminal — work accepted / completed
-    cancelled      terminal — explicitly abandoned
-
-    Locking: cases in {analyzing, proposal_ready, quote_ready, sent} are locked —
-    photo uploads and parameter edits are rejected until back in draft.
-    """
-    __tablename__ = "projects"
-    __table_args__ = (
-        CheckConstraint(
-            "status IN ("
-            "'draft','intake','analyzing','proposal_ready',"
-            "'quote_ready','sent','archived','cancelled')",
-            name="ck_projects_status",
-        ),
-        Index("idx_projects_org_status", "organization_id", "status"),
-    )
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
-    client_id: Mapped[str | None] = mapped_column(ForeignKey("clients.id", ondelete="SET NULL"))
-    created_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(64), default="draft", nullable=False)
-    status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    status_changed_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-    property_type: Mapped[str | None] = mapped_column(String(64))
-    repair_scope: Mapped[str | None] = mapped_column(String(64))
-    location_lat: Mapped[float | None] = mapped_column(Float)
-    location_lng: Mapped[float | None] = mapped_column(Float)
-    address_label: Mapped[str | None] = mapped_column(String(255))
-    source: Mapped[str] = mapped_column(String(32), default="mobile", nullable=False, server_default="mobile")
-    reference_expectations_json: Mapped[str | None] = mapped_column(Text)
-
-    organization: Mapped["Organization"] = relationship(back_populates="projects")
-    client: Mapped["Client | None"] = relationship(back_populates="projects")
-    created_by_user: Mapped["User"] = relationship(back_populates="created_projects", foreign_keys=[created_by_user_id])
-    photos: Mapped[list["ProjectPhoto"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    analysis_jobs: Mapped[list["AnalysisJob"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    analysis_results: Mapped[list["AnalysisResult"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    quote_variants: Mapped[list["QuoteVariant"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-    proposal_draft: Mapped["ProjectProposalDraft | None"] = relationship(
-        back_populates="project",
-        cascade="all, delete-orphan",
-        uselist=False,
-    )
-    exports: Mapped[list["ProjectExport"]] = relationship(
-        back_populates="project",
-        cascade="all, delete-orphan",
-    )
-    final_proposals: Mapped[list["ProjectFinalProposal"]] = relationship(
-        back_populates="project",
-        cascade="all, delete-orphan",
-    )
-    status_history: Mapped[list["ProjectStatusHistory"]] = relationship(
-        back_populates="project",
-        cascade="all, delete-orphan",
-        order_by="ProjectStatusHistory.transitioned_at",
-    )
-
-
-class ProjectStatusHistory(Base):
-    """Immutable log of every Project status transition.
-
-    Written by the transition engine; never updated or deleted (audit trail).
-    """
-    __tablename__ = "project_status_history"
-    __table_args__ = (
-        Index("idx_psh_project_transitioned", "project_id", "transitioned_at"),
-    )
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    from_status: Mapped[str | None] = mapped_column(String(64))          # NULL for the initial draft entry
-    to_status: Mapped[str] = mapped_column(String(64), nullable=False)
-    transitioned_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-    reason: Mapped[str | None] = mapped_column(String(255))              # optional human note
-    transitioned_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-    project: Mapped["Project"] = relationship(back_populates="status_history")
-    transitioned_by_user: Mapped["User | None"] = relationship()
-
-
-class ProjectPhoto(Base):
-    __tablename__ = "project_photos"
-    __table_args__ = (
-        CheckConstraint(
-            "status IN ('active', 'pending_delete', 'purge_pending', 'deleted')",
-            name="ck_project_photos_status",
-        ),
-        CheckConstraint(
-            "processing_status IN ('uploaded', 'processing', 'ready', 'failed')",
-            name="ck_project_photos_processing_status",
-        ),
-        Index("idx_project_photos_project_id", "project_id"),
-        Index(
-            "idx_project_photos_project_sort_created",
-            "project_id",
-            "sort_order",
-            "created_at",
-        ),
-    )
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
-    storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
-    preview_storage_key: Mapped[str | None] = mapped_column(String(512))
-    ai_input_storage_key: Mapped[str | None] = mapped_column(String(512))
-    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
-    mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
-    file_size: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    width: Mapped[int | None] = mapped_column(Integer)
-    height: Mapped[int | None] = mapped_column(Integer)
-    preview_file_size: Mapped[int | None] = mapped_column(Integer)
-    preview_width: Mapped[int | None] = mapped_column(Integer)
-    preview_height: Mapped[int | None] = mapped_column(Integer)
-    ai_input_file_size: Mapped[int | None] = mapped_column(Integer)
-    ai_input_width: Mapped[int | None] = mapped_column(Integer)
-    ai_input_height: Mapped[int | None] = mapped_column(Integer)
-    processing_status: Mapped[str] = mapped_column(String(64), default="ready", nullable=False)
-    taken_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    exif_lat: Mapped[float | None] = mapped_column(Float)
-    exif_lng: Mapped[float | None] = mapped_column(Float)
-    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    is_analysis_reference: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    sort_order: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    # Soft delete (20261017_0058): a pending_delete photo stays restorable until
-    # PHOTO_DELETE_RETENTION_HOURS after deleted_at, then the worker purges storage.
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    deleted_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-    # Set by the server from the authenticated uploader (20261017_0059). NULL for
-    # photos uploaded before then or whose author account was removed; such
-    # photos are managed by managers/company admins only.
-    uploaded_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-
-    project: Mapped["Project"] = relationship(back_populates="photos")
 
 
 class ProjectProposalDraft(TimestampMixin, Base):
@@ -214,30 +47,6 @@ class ProjectFinalProposal(TimestampMixin, Base):
     snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="final_proposals")
-
-
-class ProjectExport(Base):
-    __tablename__ = "project_exports"
-    __table_args__ = (
-        CheckConstraint(
-            "status IN ('pending', 'generating', 'completed', 'failed')",
-            name="ck_project_exports_status",
-        ),
-        Index("idx_project_exports_project_id", "project_id"),
-        Index("idx_project_exports_expires_at", "expires_at"),
-    )
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    export_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    status: Mapped[str] = mapped_column(String(64), nullable=False)
-    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    storage_key: Mapped[str | None] = mapped_column(String(512))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-    project: Mapped["Project"] = relationship(back_populates="exports")
 
 
 class AnalysisJob(Base):
@@ -537,44 +346,5 @@ class QuoteItem(TimestampMixin, Base):
     quote_variant: Mapped["QuoteVariant"] = relationship(back_populates="items")
     material_catalog: Mapped["MaterialCatalog | None"] = relationship(back_populates="quote_items")
     supplier: Mapped["Supplier | None"] = relationship(back_populates="quote_items")
-
-
-class Marker(Base):
-    """User/AI annotation on a project photo or case (normalized 0-1 coordinates).
-
-    marker_source controls mutability:
-      'user' — created by a human operator, editable
-      'ai'   — written by the analysis pipeline, immutable / append-only
-    Who exactly created it (role, superadmin) is derivable from created_by → users.
-    """
-    __tablename__ = "markers"
-    __table_args__ = (
-        CheckConstraint(
-            "marker_type IN ('defect', 'note', 'ai_detection', 'measurement')",
-            name="ck_markers_marker_type",
-        ),
-        CheckConstraint(
-            "marker_source IN ('user', 'ai')",
-            name="ck_markers_marker_source",
-        ),
-        Index("idx_markers_case_id", "case_id"),
-        Index("idx_markers_image_id", "image_id"),
-        Index("idx_markers_case_type", "case_id", "marker_type"),
-        Index("idx_markers_case_source", "case_id", "marker_source"),
-    )
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    case_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    image_id: Mapped[str | None] = mapped_column(ForeignKey("project_photos.id", ondelete="SET NULL"))
-    marker_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    marker_source: Mapped[str] = mapped_column(String(16), nullable=False, server_default="user")
-    x: Mapped[float] = mapped_column(Float, nullable=False)
-    y: Mapped[float] = mapped_column(Float, nullable=False)
-    width: Mapped[float | None] = mapped_column(Float)
-    height: Mapped[float | None] = mapped_column(Float)
-    label: Mapped[str] = mapped_column(Text, nullable=False)
-    severity: Mapped[str | None] = mapped_column(String(32))
-    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 

@@ -8,8 +8,8 @@ from app.platform.http.limiter import limiter
 from app.modules.identity.schemas.auth import AuthUserRead
 from app.schemas.measurement import MeasurementPolygonPoint, MeasurementRead, MeasurementUpsert
 from app.services.analysis_service import AnalysisService
-from app.services.photo_service import PhotoService
-from app.services.project_service import ProjectService
+from app.modules.media.photo_service import PhotoService
+from app.modules.workflow.project_service import ProjectService
 
 logger = structlog.get_logger(__name__)
 

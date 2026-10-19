@@ -2,11 +2,12 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-from app.models import Project, ProjectPhoto
-from app.repositories.photo_repository import PhotoRepository
-from app.repositories.project_repository import ProjectRepository
-from app.services.photo_service import PhotoService
-from app.services.project_service import ProjectService
+from app.modules.cases.models import Project
+from app.modules.media.models import ProjectPhoto
+from app.modules.media.photo_repository import PhotoRepository
+from app.modules.cases.repository import ProjectRepository
+from app.modules.media.photo_service import PhotoService
+from app.modules.workflow.project_service import ProjectService
 
 
 async def _seed_project_photo_rows(db_session, test_tenants):

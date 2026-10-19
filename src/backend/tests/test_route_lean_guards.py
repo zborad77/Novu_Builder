@@ -19,9 +19,9 @@ def _make_project(project_id: str = "prj_A", org_id: str = "org_A"):
 class TestImageLeanGuards:
     @pytest.mark.asyncio
     async def test_set_primary_image_returns_404_when_case_not_found(self):
-        from app.api.routes.images import set_case_primary_image
-        from app.services.photo_service import PhotoService
-        from app.services.project_service import ProjectService
+        from app.modules.media.api.images import set_case_primary_image
+        from app.modules.media.photo_service import PhotoService
+        from app.modules.workflow.project_service import ProjectService
 
         mock_user = MagicMock()
         mock_user.isSuperAdmin = False
@@ -47,15 +47,15 @@ class TestImageLeanGuards:
 
     @pytest.mark.asyncio
     async def test_set_primary_image_succeeds_with_lean_guard(self):
-        from app.api.routes.images import set_case_primary_image
-        from app.services.photo_service import PhotoService
-        from app.services.project_service import ProjectService
+        from app.modules.media.api.images import set_case_primary_image
+        from app.modules.media.photo_service import PhotoService
+        from app.modules.workflow.project_service import ProjectService
 
         mock_user = MagicMock()
         mock_user.isSuperAdmin = False
         mock_user.organizationId = "org_A"
 
-        from app.schemas.photo import ProjectPhotoRead
+        from app.modules.media.schemas.photo import ProjectPhotoRead
 
         variant = {"storageKey": None, "fileSize": None, "width": None, "height": None, "url": None}
         photo = ProjectPhotoRead(
@@ -98,7 +98,7 @@ class TestMeasurementLeanGuards:
         from app.api.routes.measurements import create_or_update_measurement
         from app.schemas.measurement import MeasurementUpsert
         from app.services.analysis_service import AnalysisService
-        from app.services.project_service import ProjectService
+        from app.modules.workflow.project_service import ProjectService
 
         mock_user = MagicMock()
         mock_user.isSuperAdmin = False
@@ -128,7 +128,7 @@ class TestMeasurementLeanGuards:
         from app.api.routes.measurements import create_or_update_measurement
         from app.schemas.measurement import MeasurementUpsert
         from app.services.analysis_service import AnalysisService
-        from app.services.project_service import ProjectService
+        from app.modules.workflow.project_service import ProjectService
 
         mock_user = MagicMock()
         mock_user.isSuperAdmin = False

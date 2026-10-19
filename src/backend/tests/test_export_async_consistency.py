@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.project_service import ProjectService
+from app.modules.workflow.project_service import ProjectService
 
 
 @pytest.mark.asyncio
@@ -56,14 +56,14 @@ async def test_create_final_proposal_awaits_export_generation():
 
     with (
         patch(
-            "app.services.project_service.build_project_proposal_draft",
+            "app.modules.workflow.project_service.build_project_proposal_draft",
             return_value=SimpleNamespace(status="ready"),
         ),
         patch(
-            "app.services.project_service.build_final_proposal_snapshot_payload",
+            "app.modules.workflow.project_service.build_final_proposal_snapshot_payload",
             return_value={"subject": "Test"},
         ),
-        patch("app.services.project_service.build_project_detail", return_value=detail),
+        patch("app.modules.workflow.project_service.build_project_detail", return_value=detail),
     ):
         result = await service.create_final_proposal("prj_001", organization_id="org_001")
 

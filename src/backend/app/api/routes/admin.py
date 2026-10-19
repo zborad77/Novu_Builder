@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.photo_purge import purge_photo_with_audit
+from app.modules.media.photo_purge import purge_photo_with_audit
 from app.api.deps import (
     get_analysis_service,
     get_auth_redis,
@@ -22,7 +22,8 @@ from app.api.deps import (
 from app.platform.jobs.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
 from app.platform.config import get_settings
 from app.platform.db.session import get_db_session
-from app.models.domain import AnalysisJob, Project
+from app.models.domain import AnalysisJob
+from app.modules.cases.models import Project
 from app.modules.audit.models import AuditLog
 from app.modules.identity.models import Organization, User
 from app.modules.identity.schemas.auth import AuthUserRead
@@ -52,9 +53,9 @@ from app.modules.identity.rbac import (
 from app.modules.identity.token_repository import SessionTokenRevocation, TokenRepository
 from app.services.analysis_service import AnalysisService, to_job_read
 from app.modules.identity.company_service import CompanyService
-from app.services.photo_service import PhotoService
-from app.repositories.photo_repository import PhotoRepository
-from app.schemas.photo import PurgePhotoRequest, PurgePhotoResponse
+from app.modules.media.photo_service import PhotoService
+from app.modules.media.photo_repository import PhotoRepository
+from app.modules.media.schemas.photo import PurgePhotoRequest, PurgePhotoResponse
 from app.modules.identity.auth_service import AuthService, hash_password
 
 import structlog

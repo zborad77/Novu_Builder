@@ -7,32 +7,8 @@ import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from app.models import (
-    AnalysisProfile,
-    AnalysisProfileConfidenceThreshold,
-    AnalysisProfileExtractionRule,
-    AnalysisProfileIgnoredObject,
-    AnalysisProfileOutputMapping,
-    AnalysisProfileTargetObject,
-    AnalysisProfileValidationRule,
-    CatalogPricingProfile,
-    CatalogPricingProfileAdjustmentRule,
-    CatalogPricingProfileBaseRule,
-    CatalogPricingProfileLaborAssumption,
-    CatalogPricingProfileMaterialAssumption,
-    CatalogPricingProfileRequiredInput,
-    Project,
-    ProjectWorkItem,
-    ProjectWorkItemValue,
-    TenantWorkTypeExtraParameter,
-    TenantWorkTypeExtraParameterOption,
-    TenantWorkTypeParameterOverride,
-    TenantWorkTypeSetting,
-    WorkCategory,
-    WorkType,
-    WorkTypeParameter,
-    WorkTypeParameterOption,
-)
+from app.models import AnalysisProfile, AnalysisProfileConfidenceThreshold, AnalysisProfileExtractionRule, AnalysisProfileIgnoredObject, AnalysisProfileOutputMapping, AnalysisProfileTargetObject, AnalysisProfileValidationRule, CatalogPricingProfile, CatalogPricingProfileAdjustmentRule, CatalogPricingProfileBaseRule, CatalogPricingProfileLaborAssumption, CatalogPricingProfileMaterialAssumption, CatalogPricingProfileRequiredInput, ProjectWorkItem, ProjectWorkItemValue, TenantWorkTypeExtraParameter, TenantWorkTypeExtraParameterOption, TenantWorkTypeParameterOverride, TenantWorkTypeSetting, WorkCategory, WorkType, WorkTypeParameter, WorkTypeParameterOption
+from app.modules.cases.models import Project
 from app.repositories.work_catalog_repository import WorkCatalogRepository
 from app.schemas.work_catalog import (
     ProjectWorkItemCreate,

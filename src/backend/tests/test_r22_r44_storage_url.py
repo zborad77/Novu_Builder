@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import app.services.export_service as export_svc_mod
-import app.services.photo_service as photo_svc_mod
+import app.modules.exports.export_service as export_svc_mod
+import app.modules.media.photo_service as photo_svc_mod
 import app.platform.storage.local_photo_storage as local_storage_mod
 import app.platform.storage.s3_photo_storage as s3_storage_mod
 

@@ -1,0 +1,11 @@
+{"source": "app/models/domain.py",
+ "moves": {
+   "app/modules/cases/models.py": ["Client", "Project", "ProjectStatusHistory"],
+   "app/modules/media/models.py": ["ProjectPhoto", "Marker"],
+   "app/modules/exports/models.py": ["ProjectExport"]
+ },
+ "headers": {
+   "app/modules/cases/models.py": "\"\"\"ORM modely modulu cases: klient, zakázka a historie jejích stavů.\"\"\"\n",
+   "app/modules/media/models.py": "\"\"\"ORM modely modulu media: fotografie zakázky a značky (markery) na nich.\"\"\"\n",
+   "app/modules/exports/models.py": "\"\"\"ORM model modulu exports: vygenerované exporty a archivy zakázky.\"\"\"\n"
+ }}

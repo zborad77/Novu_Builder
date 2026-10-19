@@ -8,7 +8,7 @@ from app.platform.http.limiter import limiter
 from app.schemas.analysis import AnalysisJobCreateRequest, AnalysisTriggerResponse
 from app.modules.identity.schemas.auth import AuthUserRead
 from app.services.analysis_service import AnalysisService
-from app.services.project_service import ProjectService
+from app.modules.workflow.project_service import ProjectService
 from app.platform.jobs.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
 
 logger = structlog.get_logger(__name__)

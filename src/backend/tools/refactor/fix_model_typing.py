@@ -30,9 +30,12 @@ def _class_index() -> dict[str, str]:
         except SyntaxError:
             continue
         module = ".".join(path.relative_to(BACKEND).with_suffix("").parts)
+        is_model_module = module.endswith(".models") or module.startswith("app.models")
         for node in tree.body:
             if isinstance(node, ast.ClassDef):
-                index.setdefault(node.name, module)
+                # ORM modely mají přednost před stejnojmennými Pydantic schématy
+                if is_model_module or node.name not in index:
+                    index[node.name] = module
     return index
 
 

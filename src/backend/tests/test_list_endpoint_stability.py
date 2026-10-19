@@ -1,7 +1,8 @@
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from app.models import MaterialCatalog, PricingProfile, Project, Supplier
+from app.models import MaterialCatalog, PricingProfile, Supplier
+from app.modules.cases.models import Project
 
 
 async def _seed_list_stability_rows(db_session, test_tenants):

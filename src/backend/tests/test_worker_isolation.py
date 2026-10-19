@@ -70,7 +70,7 @@ class TestExecuteJobOrgScope:
         """If job.project_id != project_id, job is failed and HTTPException(403) is raised."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_1", "prj_A")  # job belongs to prj_A
         session = AsyncMock()
@@ -106,7 +106,7 @@ class TestExecuteJobOrgScope:
         """If project does not belong to the given org, job is failed and HTTPException(403) is raised."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_1", "prj_A")
         session = AsyncMock()
@@ -159,7 +159,7 @@ class TestExecuteJobCrossTenantBlocked:
         """execute_job calls get_project_in_org with project_id and organization_id."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_1", "prj_A")
         project = _make_project("prj_A", "org_A")
@@ -228,7 +228,7 @@ class TestRetryJobOrgScope:
         """retry_job raises HTTPException(403) if project is not in the given organization."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         original_job = _make_job("job_old", "prj_A")
         original_job.status = "failed"  # Must be terminal to pass the state guard
@@ -368,7 +368,7 @@ class TestSuperadminBypass:
         """organization_id=None without is_superadmin_context=True raises 403 guard."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_1", "prj_A")
         service = AnalysisService(
@@ -390,7 +390,7 @@ class TestSuperadminBypass:
         """organization_id=None + is_superadmin_context=True uses session.get path."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_1", "prj_A")
         session = AsyncMock()
@@ -428,7 +428,7 @@ class TestSuperadminBypass:
         """organization_id=None without is_superadmin_context=True raises 403 guard."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
         service = AnalysisService(
@@ -448,7 +448,7 @@ class TestSuperadminBypass:
         """organization_id=None + is_superadmin_context=True proceeds to job lookup."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
         mock_repo.get_analysis_job = AsyncMock(return_value=None)  # job not found → 404
@@ -475,7 +475,7 @@ class TestRetryJobGuards:
     def _make_service(self, job):
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
         mock_repo.get_analysis_job_in_org = AsyncMock(return_value=job)
@@ -536,7 +536,7 @@ class TestRetryJobGuards:
 
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
         mock_repo.get_analysis_job_in_org = AsyncMock(return_value=job)
@@ -571,7 +571,7 @@ class TestRetryJobGuards:
 
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
         mock_repo.get_analysis_job_in_org = AsyncMock(return_value=job)
@@ -606,7 +606,7 @@ class TestRetryJobGuards:
 
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         project = MagicMock(id="prj_A", organization_id="org_A")
         mock_repo = AsyncMock(spec=AnalysisRepository)
@@ -642,7 +642,7 @@ class TestRetryJobGuards:
 
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         mock_repo = AsyncMock(spec=AnalysisRepository)
         mock_repo.get_analysis_job_in_org = AsyncMock(return_value=job)
@@ -676,7 +676,7 @@ class TestRetryJobGuards:
 
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         project = MagicMock(id="prj_A", organization_id="org_A")
         outer_repo = AsyncMock(spec=AnalysisRepository)
@@ -739,7 +739,7 @@ class TestDeadLetterSentinelLog:
         """worker.job_repeated_failure is logged when retry_count >= threshold."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_repeat", "prj_1")
         job.retry_count = 3  # at threshold
@@ -784,7 +784,7 @@ class TestDeadLetterSentinelLog:
         """worker.job_repeated_failure is NOT logged when retry_count is below threshold."""
         from app.services.analysis_service import AnalysisService
         from app.repositories.analysis_repository import AnalysisRepository
-        from app.repositories.photo_repository import PhotoRepository
+        from app.modules.media.photo_repository import PhotoRepository
 
         job = _make_job("job_first", "prj_1")
         job.retry_count = 0  # first attempt — below threshold

@@ -8,7 +8,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.models import AnalysisJob, Project
+from app.models import AnalysisJob
+from app.modules.cases.models import Project
 from app.repositories.analysis_repository import (
     ANALYSIS_JOB_STATUS_COMPLETED,
     ANALYSIS_JOB_STATUS_QUEUED,
@@ -16,7 +17,7 @@ from app.repositories.analysis_repository import (
     ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
     AnalysisRepository,
 )
-from app.repositories.photo_repository import PhotoRepository
+from app.modules.media.photo_repository import PhotoRepository
 from app.repositories.work_catalog_repository import WorkCatalogRepository
 from app.services.analysis_service import AnalysisService
 from app.services.quote_variant_service import QuoteVariantRecalculationResult

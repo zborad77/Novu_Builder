@@ -108,7 +108,7 @@ class TestExportHeavyLaneDisabled:
     """All export methods must raise 503 when worker_heavy_concurrency == 0."""
 
     def _make_service(self):
-        from app.services.export_service import ExportService
+        from app.modules.exports.export_service import ExportService
         repo = MagicMock()
         service = ExportService(repository=repo, work_queue=MagicMock())
         return service
@@ -119,7 +119,7 @@ class TestExportHeavyLaneDisabled:
         settings_stub = _settings(heavy_concurrency=0)
 
         with (
-            patch("app.services.export_service.get_settings", return_value=settings_stub),
+            patch("app.modules.exports.export_service.get_settings", return_value=settings_stub),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await service.create_quote_docx_export(case_detail=_case_detail())
@@ -131,7 +131,7 @@ class TestExportHeavyLaneDisabled:
         service = self._make_service()
         settings_stub = _settings(heavy_concurrency=0)
 
-        with patch("app.services.export_service.get_settings", return_value=settings_stub):
+        with patch("app.modules.exports.export_service.get_settings", return_value=settings_stub):
             with pytest.raises(ValueError, match="Final proposal is required"):
                 await service.create_quote_docx_export(case_detail=_case_detail(has_final_proposal=False))
 
@@ -141,7 +141,7 @@ class TestExportHeavyLaneDisabled:
         settings_stub = _settings(heavy_concurrency=0)
 
         with (
-            patch("app.services.export_service.get_settings", return_value=settings_stub),
+            patch("app.modules.exports.export_service.get_settings", return_value=settings_stub),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await service.create_proposal_docx_export(case_detail=_case_detail())
@@ -154,7 +154,7 @@ class TestExportHeavyLaneDisabled:
         settings_stub = _settings(heavy_concurrency=0)
 
         with (
-            patch("app.services.export_service.get_settings", return_value=settings_stub),
+            patch("app.modules.exports.export_service.get_settings", return_value=settings_stub),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await service.create_quote_pdf_export(case_detail=_case_detail())
@@ -167,7 +167,7 @@ class TestExportHeavyLaneDisabled:
         settings_stub = _settings(heavy_concurrency=0)
 
         with (
-            patch("app.services.export_service.get_settings", return_value=settings_stub),
+            patch("app.modules.exports.export_service.get_settings", return_value=settings_stub),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await service.create_case_zip_export(case_detail=_case_detail())
@@ -183,7 +183,7 @@ class TestPhotoUploadHeavyLaneDisabled:
     @pytest.mark.asyncio
     async def test_photo_upload_raises_503_when_lane_disabled_before_persistence(self):
         """Valid uploads must fail closed before storage persistence when heavy lane is unavailable."""
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         repo = MagicMock()
         service = PhotoService(repository=repo, work_queue=MagicMock())
@@ -203,9 +203,9 @@ class TestPhotoUploadHeavyLaneDisabled:
         )
 
         with (
-            patch("app.services.photo_service.get_settings", return_value=settings_stub),
-            patch("app.services.photo_service.validate_photo_upload", new=AsyncMock(return_value=validated)),
-            patch("app.services.photo_service.save_original_photo", new=AsyncMock()) as mock_save_original,
+            patch("app.modules.media.photo_service.get_settings", return_value=settings_stub),
+            patch("app.modules.media.photo_service.validate_photo_upload", new=AsyncMock(return_value=validated)),
+            patch("app.modules.media.photo_service.save_original_photo", new=AsyncMock()) as mock_save_original,
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await service.create_multipart_photo(project, mock_upload, is_primary=False)
@@ -216,7 +216,7 @@ class TestPhotoUploadHeavyLaneDisabled:
     @pytest.mark.asyncio
     async def test_photo_upload_validation_is_not_masked_when_lane_disabled(self):
         """Invalid filename/path guards must beat 503 heavy-lane unavailability."""
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         service = PhotoService(repository=MagicMock(), work_queue=MagicMock())
         settings_stub = _settings(heavy_concurrency=0)
@@ -225,7 +225,7 @@ class TestPhotoUploadHeavyLaneDisabled:
         mock_upload.content_type = "image/jpeg"
         mock_upload.read = AsyncMock(return_value=b"unused")
 
-        with patch("app.services.photo_service.get_settings", return_value=settings_stub):
+        with patch("app.modules.media.photo_service.get_settings", return_value=settings_stub):
             with pytest.raises(ValueError, match="path traversal"):
                 await service.create_multipart_photo(
                     SimpleNamespace(id="prj_001", organization_id="org_001"),
@@ -241,7 +241,7 @@ class TestPhotoUploadHeavyLaneDisabled:
 class TestExportEnqueuesWhenLaneActive:
     @pytest.mark.asyncio
     async def test_quote_docx_enqueues_when_lane_active(self):
-        from app.services.export_service import ExportService
+        from app.modules.exports.export_service import ExportService
 
         repo = MagicMock()
         pending_export = SimpleNamespace(
@@ -262,11 +262,11 @@ class TestExportEnqueuesWhenLaneActive:
         snapshot = _ready_backpressure_snapshot(settings_stub)
 
         with (
-            patch("app.services.export_service.get_settings", return_value=settings_stub),
-            patch("app.services.export_service.collect_backpressure_snapshot", new=AsyncMock(return_value=snapshot)),
-            patch("app.services.export_service.ensure_heavy_intake_capacity"),
-            patch("app.services.export_service.enqueue_heavy_job", new=AsyncMock()) as mock_enqueue,
-            patch("app.services.export_service._to_export_read", return_value=MagicMock()),
+            patch("app.modules.exports.export_service.get_settings", return_value=settings_stub),
+            patch("app.modules.exports.export_service.collect_backpressure_snapshot", new=AsyncMock(return_value=snapshot)),
+            patch("app.modules.exports.export_service.ensure_heavy_intake_capacity"),
+            patch("app.modules.exports.export_service.enqueue_heavy_job", new=AsyncMock()) as mock_enqueue,
+            patch("app.modules.exports.export_service._to_export_read", return_value=MagicMock()),
         ):
             await service.create_quote_docx_export(case_detail=_case_detail())
 
@@ -284,7 +284,7 @@ class TestExportEnqueuesWhenLaneActive:
 class TestPhotoEnqueuesWhenLaneActive:
     @pytest.mark.asyncio
     async def test_photo_upload_enqueues_when_lane_active(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         repo = MagicMock()
         created_photo = SimpleNamespace(
@@ -318,18 +318,18 @@ class TestPhotoEnqueuesWhenLaneActive:
         )
 
         with (
-            patch("app.services.photo_service.get_settings", return_value=settings_stub),
-            patch("app.services.photo_service.validate_photo_upload", new=AsyncMock(return_value=validated)),
-            patch("app.services.photo_service.get_image_dimensions", return_value=(1920, 1080)),
-            patch("app.services.photo_service.save_original_photo", new=AsyncMock(return_value=("key/path.jpg", 1024))),
-            patch("app.services.photo_service.build_derived_variants", return_value={
+            patch("app.modules.media.photo_service.get_settings", return_value=settings_stub),
+            patch("app.modules.media.photo_service.validate_photo_upload", new=AsyncMock(return_value=validated)),
+            patch("app.modules.media.photo_service.get_image_dimensions", return_value=(1920, 1080)),
+            patch("app.modules.media.photo_service.save_original_photo", new=AsyncMock(return_value=("key/path.jpg", 1024))),
+            patch("app.modules.media.photo_service.build_derived_variants", return_value={
                 "preview_storage_key": "k/p.jpg", "preview_file_size": 100,
                 "preview_width": 800, "preview_height": 600,
                 "ai_input_storage_key": "k/a.jpg", "ai_input_file_size": 80,
                 "ai_input_width": 640, "ai_input_height": 480,
             }),
-            patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()) as mock_enqueue,
-            patch("app.services.photo_service.to_read_model", return_value=MagicMock()),
+            patch("app.modules.media.photo_service.enqueue_heavy_job", new=AsyncMock()) as mock_enqueue,
+            patch("app.modules.media.photo_service.to_read_model", return_value=MagicMock()),
         ):
             await service.create_multipart_photo(project, mock_upload, is_primary=False)
 
@@ -348,7 +348,7 @@ class TestNoInlineHeavyWork:
 
     def test_export_service_create_methods_do_not_call_build_bytes_directly(self):
         import inspect
-        import app.services.export_service as svc_module
+        import app.modules.exports.export_service as svc_module
 
         heavy_functions = [
             "_build_docx_bytes",
@@ -375,7 +375,7 @@ class TestNoInlineHeavyWork:
 
     def test_photo_service_create_multipart_does_not_call_process_variants_inline(self):
         import inspect
-        import app.services.photo_service as svc_module
+        import app.modules.media.photo_service as svc_module
 
         method = getattr(svc_module.PhotoService, "create_multipart_photo")
         src = inspect.getsource(method)

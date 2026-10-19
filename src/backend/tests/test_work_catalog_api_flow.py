@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from app.models import Project
+from app.modules.cases.models import Project
 
 from tests.test_work_catalog_core_subsystem import _ensure_tenant_setting
 

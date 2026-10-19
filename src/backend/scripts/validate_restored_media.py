@@ -18,13 +18,14 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.models import ProjectExport, ProjectPhoto  # noqa: E402
-from app.repositories.storage_consistency_repository import (  # noqa: E402
+from app.modules.exports.models import ProjectExport  # noqa: E402
+from app.modules.media.models import ProjectPhoto  # noqa: E402
+from app.modules.exports.storage_consistency_repository import (  # noqa: E402
     ExportStorageReference,
     PhotoStorageReference,
     StorageConsistencyRepository,
 )
-from app.services.photo_service import to_read_model  # noqa: E402
+from app.modules.media.photo_service import to_read_model  # noqa: E402
 from app.platform.storage.backend import generate_presigned_url, storage_key_exists  # noqa: E402
 
 ValidationStatus = Literal["PASSED", "FAILED", "NOT EXECUTED", "OUT OF SCOPE"]

@@ -3,8 +3,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 import json
 
-from app.models import Project, ProjectFinalProposal, ProjectPhoto, ProjectProposalDraft
-from app.schemas.project import (
+from app.modules.cases.models import Project
+from app.models import ProjectFinalProposal, ProjectProposalDraft
+from app.modules.media.models import ProjectPhoto
+from app.modules.quoting.schemas.proposal import (
     ProjectFinalProposal as ProjectFinalProposalSchema,
     ProjectProposalDraft as ProjectProposalDraftSchema,
     ProposalDraftField,

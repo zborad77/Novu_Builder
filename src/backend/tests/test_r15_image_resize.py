@@ -90,7 +90,7 @@ class TestPhotoServiceUsesResize:
     @pytest.mark.asyncio
     async def test_variants_are_resized_not_original(self):
         """_process_multipart_photo_variants must write resized bytes, not the original."""
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         content = _make_jpeg(3000, 2000)
         written: dict[str, bytes] = {}
@@ -107,7 +107,7 @@ class TestPhotoServiceUsesResize:
         repo.update_photo = AsyncMock(side_effect=lambda p: p)
         service = PhotoService(repo)
 
-        with patch("app.services.photo_service.write_storage_file", side_effect=fake_write):
+        with patch("app.modules.media.photo_service.write_storage_file", side_effect=fake_write):
             await service._process_multipart_photo_variants(photo, content)
 
         assert "projects/p/preview/photo.jpg" in written
@@ -127,7 +127,7 @@ class TestPhotoServiceUsesResize:
 
     @pytest.mark.asyncio
     async def test_process_photo_variants_by_id_reads_original_and_marks_ready(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         content = _make_jpeg(2200, 1800)
         written: dict[str, bytes] = {}
@@ -166,8 +166,8 @@ class TestPhotoServiceUsesResize:
         service = PhotoService(repo)
 
         with (
-            patch("app.services.photo_service.read_storage_file", new=AsyncMock(return_value=content)),
-            patch("app.services.photo_service.write_storage_file", side_effect=fake_write),
+            patch("app.modules.media.photo_service.read_storage_file", new=AsyncMock(return_value=content)),
+            patch("app.modules.media.photo_service.write_storage_file", side_effect=fake_write),
         ):
             result = await service.process_photo_variants_by_id("pho_1")
 

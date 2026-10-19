@@ -57,7 +57,7 @@ def _make_jpeg(width: int = 1200, height: int = 900) -> bytes:
 class TestPhotoPersistenceCleanupHardening:
     @pytest.mark.asyncio
     async def test_create_multipart_photo_cleans_original_when_db_persist_fails(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         content = _make_jpeg()
         validated_upload = _make_validated_upload(content)
@@ -72,11 +72,11 @@ class TestPhotoPersistenceCleanupHardening:
         service = PhotoService(repo, work_queue=MagicMock())
 
         with (
-            patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()),
-            patch("app.services.photo_service.validate_photo_upload", return_value=validated_upload),
-            patch("app.services.photo_service.get_image_dimensions", return_value=(1200, 900)),
-            patch("app.services.photo_service.save_original_photo", return_value=("projects/prj_test/photo.jpg", None)),
-            patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock) as mock_delete,
+            patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings()),
+            patch("app.modules.media.photo_service.validate_photo_upload", return_value=validated_upload),
+            patch("app.modules.media.photo_service.get_image_dimensions", return_value=(1200, 900)),
+            patch("app.modules.media.photo_service.save_original_photo", return_value=("projects/prj_test/photo.jpg", None)),
+            patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock) as mock_delete,
         ):
             with pytest.raises(RuntimeError, match="db insert failed"):
                 await service.create_multipart_photo(project, _make_upload_file(), is_primary=True)
@@ -85,7 +85,7 @@ class TestPhotoPersistenceCleanupHardening:
 
     @pytest.mark.asyncio
     async def test_variant_processing_cleans_partial_files_and_clears_metadata(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         content = _make_jpeg(2400, 1800)
         photo = MagicMock()
@@ -110,8 +110,8 @@ class TestPhotoPersistenceCleanupHardening:
         service = PhotoService(repo)
 
         with (
-            patch("app.services.photo_service.write_storage_file", side_effect=fake_write),
-            patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock) as mock_delete,
+            patch("app.modules.media.photo_service.write_storage_file", side_effect=fake_write),
+            patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock) as mock_delete,
         ):
             result = await service._process_multipart_photo_variants(photo, content)
 

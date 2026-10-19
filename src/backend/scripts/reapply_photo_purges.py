@@ -26,10 +26,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.modules.audit.audit_log import commit_security_critical_audit
 from app.platform.config import get_settings
-from app.core.purge_ledger import read_purged_photo_ids
-from app.models.domain import Project
-from app.repositories.photo_repository import PhotoRepository
-from app.services.photo_service import PhotoService
+from app.modules.media.purge_ledger import read_purged_photo_ids
+from app.modules.cases.models import Project
+from app.modules.media.photo_repository import PhotoRepository
+from app.modules.media.photo_service import PhotoService
 
 SYSTEM_ACTOR = "system:reapply_photo_purges"
 

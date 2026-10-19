@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.repositories.storage_consistency_repository import StorageConsistencyRepository
-from app.services import storage_consistency_service as mod
-from app.services.storage_consistency_service import (
+from app.modules.exports.storage_consistency_repository import StorageConsistencyRepository
+from app.modules.exports import storage_consistency_service as mod
+from app.modules.exports.storage_consistency_service import (
     ConsistencyReport,
     DbToS3ScanResult,
     S3ToDbScanResult,

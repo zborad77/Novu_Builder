@@ -5,12 +5,13 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
-from app.models import Project, ProjectPhoto
+from app.modules.cases.models import Project
+from app.modules.media.models import ProjectPhoto
 from app.repositories.final_proposal_repository import FinalProposalRepository
-from app.repositories.project_repository import ProjectRepository
+from app.modules.cases.repository import ProjectRepository
 from app.repositories.proposal_draft_repository import ProposalDraftRepository
-from app.schemas.project import ProjectDuplicateRequest
-from app.services.project_service import ProjectService
+from app.modules.workflow.schemas import ProjectDuplicateRequest
+from app.modules.workflow.project_service import ProjectService
 
 
 @pytest.mark.asyncio
@@ -68,8 +69,8 @@ async def test_duplicate_project_rolls_back_copied_storage_and_project_row_on_fa
             raise OSError("copy interrupted")
 
     with (
-        patch("app.services.project_service.copy_storage_file", side_effect=failing_copy),
-        patch("app.services.project_service.delete_storage_file", new_callable=AsyncMock) as delete_storage,
+        patch("app.modules.workflow.project_service.copy_storage_file", side_effect=failing_copy),
+        patch("app.modules.workflow.project_service.delete_storage_file", new_callable=AsyncMock) as delete_storage,
     ):
         with pytest.raises(OSError, match="copy interrupted"):
             await service.duplicate_project(

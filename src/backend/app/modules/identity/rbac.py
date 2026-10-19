@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from app.models import ProjectPhoto
+    from app.modules.media.models import ProjectPhoto
     from app.modules.identity.models import User
     from app.modules.identity.schemas.auth import AuthUserRead
 

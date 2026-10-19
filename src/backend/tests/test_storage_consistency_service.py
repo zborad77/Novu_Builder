@@ -5,10 +5,13 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import delete
 
-from app.models import AnalysisJob, Project, ProjectExport, ProjectPhoto
-from app.repositories.storage_consistency_repository import StorageConsistencyRepository
-from app.services import storage_consistency_service as storage_consistency_mod
-from app.services.storage_consistency_service import StorageConsistencyService
+from app.models import AnalysisJob
+from app.modules.cases.models import Project
+from app.modules.exports.models import ProjectExport
+from app.modules.media.models import ProjectPhoto
+from app.modules.exports.storage_consistency_repository import StorageConsistencyRepository
+from app.modules.exports import storage_consistency_service as storage_consistency_mod
+from app.modules.exports.storage_consistency_service import StorageConsistencyService
 
 
 async def _seed_storage_consistency_rows(db_session, test_tenants):

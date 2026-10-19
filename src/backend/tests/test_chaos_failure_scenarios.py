@@ -622,7 +622,7 @@ class TestC5StorageFailure:
     @pytest.mark.asyncio
     async def test_c5_4_storage_failure_blocks_photo_upload_with_503(self):
         """Photo upload must return 503 (not 500) when the storage backend times out."""
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         repo = MagicMock()
         repo.count_photos = AsyncMock(return_value=0)
@@ -652,13 +652,13 @@ class TestC5StorageFailure:
         )
 
         with (
-            patch("app.services.photo_service.get_settings", return_value=settings_stub),
-            patch("app.services.photo_service.collect_backpressure_snapshot", new=AsyncMock(return_value=snapshot)),
-            patch("app.services.photo_service.ensure_heavy_intake_capacity"),
-            patch("app.services.photo_service.validate_photo_upload", new=AsyncMock(return_value=validated)),
-            patch("app.services.photo_service.get_image_dimensions", return_value=(1920, 1080)),
+            patch("app.modules.media.photo_service.get_settings", return_value=settings_stub),
+            patch("app.modules.media.photo_service.collect_backpressure_snapshot", new=AsyncMock(return_value=snapshot)),
+            patch("app.modules.media.photo_service.ensure_heavy_intake_capacity"),
+            patch("app.modules.media.photo_service.validate_photo_upload", new=AsyncMock(return_value=validated)),
+            patch("app.modules.media.photo_service.get_image_dimensions", return_value=(1920, 1080)),
             patch(
-                "app.services.photo_service.save_original_photo",
+                "app.modules.media.photo_service.save_original_photo",
                 new=AsyncMock(side_effect=OSError("storage timeout")),
             ),
         ):

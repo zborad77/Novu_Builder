@@ -57,5 +57,5 @@ disable_error_code = ["union-attr", "assignment", "arg-type", "call-overload"]
 [[tool.mypy.overrides]]
 # export_service: [arg-type] on ExportRead createdAt is a Pydantic schema vs ORM column
 # typing mismatch (column is datetime|None; schema field is datetime with implicit None allowed).
-module = ["app.services.export_service"]
+module = ["app.modules.exports.export_service"]
 disable_error_code = ["arg-type"]

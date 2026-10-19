@@ -1,5 +1,7 @@
 """ORM modely modulu identity: organizace (tenant), uživatelé, session a tokeny."""
+
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -7,10 +9,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.modules.identity.token_limits import JTI_MAX_LENGTH
 from app.platform.db.base import Base
 from app.platform.db.mixins import TimestampMixin
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.models.domain import AnalysisJob, Client, MaterialCatalog, PricingProfile, Project, Supplier
+    from app.models.domain import AnalysisJob, MaterialCatalog, PricingProfile, Supplier
+    from app.modules.cases.models import Client, Project
 
 
 class Organization(TimestampMixin, Base):

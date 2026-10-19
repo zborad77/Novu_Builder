@@ -11,7 +11,8 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.composition.bootstrap import ensure_dev_seed
 from app.platform.db.session import AsyncSessionFactory
-from app.models import Project, ProjectPhoto
+from app.modules.cases.models import Project
+from app.modules.media.models import ProjectPhoto
 from app.platform.storage.backend import sanitize_filename, write_storage_file
 
 

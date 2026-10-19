@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 
 from app.services.analysis_service import AnalysisService
-from app.services.photo_service import PhotoService
+from app.modules.media.photo_service import PhotoService
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -275,7 +275,7 @@ class TestSetPrimaryPhotoContract:
         repo.get_photo = AsyncMock(return_value=photo_b)
         repo.update_photo = AsyncMock(return_value=photo_b)
 
-        with patch("app.services.photo_service.to_read_model", return_value=MagicMock()):
+        with patch("app.modules.media.photo_service.to_read_model", return_value=MagicMock()):
             await service.set_primary_photo("proj-1", "pho-b")
 
         repo.clear_primary.assert_awaited_once_with("proj-1")
@@ -307,7 +307,7 @@ class TestSetAnalysisReferenceContract:
         repo.get_photo = AsyncMock(return_value=photo)
         repo.update_photo = AsyncMock(return_value=photo)
 
-        with patch("app.services.photo_service.to_read_model", return_value=MagicMock()):
+        with patch("app.modules.media.photo_service.to_read_model", return_value=MagicMock()):
             await service.set_analysis_reference_photo("proj-1", "pho-ready")
 
         repo.clear_analysis_reference.assert_awaited_once_with("proj-1")

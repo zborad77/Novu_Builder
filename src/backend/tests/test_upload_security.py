@@ -79,12 +79,12 @@ def _make_created_photo(project_id: str, *, mime_type: str, filename: str, file_
 class TestPathAndFilenameGuards:
     @pytest.mark.asyncio
     async def test_double_dot_in_filename_raises_before_read(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         mock_file = _make_upload_file("../../etc/passwd")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings(heavy_concurrency=0)):
+        with patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings(heavy_concurrency=0)):
             with pytest.raises(ValueError, match="path traversal"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
@@ -92,12 +92,12 @@ class TestPathAndFilenameGuards:
 
     @pytest.mark.asyncio
     async def test_path_separator_in_filename_raises_before_read(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         mock_file = _make_upload_file("nested/photo.jpg")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()):
+        with patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings()):
             with pytest.raises(ValueError, match="path separators"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
@@ -105,12 +105,12 @@ class TestPathAndFilenameGuards:
 
     @pytest.mark.asyncio
     async def test_backslash_in_filename_raises_before_read(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         mock_file = _make_upload_file(r"nested\\photo.jpg")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()):
+        with patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings()):
             with pytest.raises(ValueError, match="path separators"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
@@ -118,12 +118,12 @@ class TestPathAndFilenameGuards:
 
     @pytest.mark.asyncio
     async def test_control_character_in_filename_raises_before_read(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         mock_file = _make_upload_file("photo\x00.jpg")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()):
+        with patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings()):
             with pytest.raises(ValueError, match="control characters"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
@@ -131,12 +131,12 @@ class TestPathAndFilenameGuards:
 
     @pytest.mark.asyncio
     async def test_unsupported_extension_rejected_before_read(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         mock_file = _make_upload_file("malware.exe")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()):
+        with patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings()):
             with pytest.raises(ValueError, match="extension"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
@@ -144,12 +144,12 @@ class TestPathAndFilenameGuards:
 
     @pytest.mark.asyncio
     async def test_dot_only_basename_is_rejected_before_read(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         mock_file = _make_upload_file(".jpg")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()):
+        with patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings()):
             with pytest.raises(ValueError, match="non-empty base name"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
@@ -157,12 +157,12 @@ class TestPathAndFilenameGuards:
 
     @pytest.mark.asyncio
     async def test_reserved_windows_filename_is_rejected_before_read(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         mock_file = _make_upload_file("CON.jpg")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()):
+        with patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings()):
             with pytest.raises(ValueError, match="reserved device names"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
@@ -170,12 +170,12 @@ class TestPathAndFilenameGuards:
 
     @pytest.mark.asyncio
     async def test_overlong_filename_is_rejected_before_read(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         mock_file = _make_upload_file(f"{'a' * 252}.jpg")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()):
+        with patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings()):
             with pytest.raises(ValueError, match="longer than 255 characters"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
@@ -185,12 +185,12 @@ class TestPathAndFilenameGuards:
 class TestMimeSpoofingAndMagicBytes:
     @pytest.mark.asyncio
     async def test_unsupported_declared_content_type_rejected_before_read(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         mock_file = _make_upload_file("photo.jpg", content_type="text/plain")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()):
+        with patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings()):
             with pytest.raises(ValueError, match="Unsupported Content-Type"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
@@ -198,48 +198,48 @@ class TestMimeSpoofingAndMagicBytes:
 
     @pytest.mark.asyncio
     async def test_spoofed_content_type_is_rejected(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         jpeg_bytes = _make_image_bytes("JPEG")
         mock_file = _make_upload_file("photo.jpg", jpeg_bytes, content_type="image/png")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()):
+        with patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings()):
             with pytest.raises(ValueError, match="Content-Type mismatch"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
     @pytest.mark.asyncio
     async def test_extension_mismatch_is_rejected(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         jpeg_bytes = _make_image_bytes("JPEG")
         mock_file = _make_upload_file("photo.png", jpeg_bytes, content_type="image/jpeg")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()):
+        with patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings()):
             with pytest.raises(ValueError, match="File extension mismatch"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
     @pytest.mark.asyncio
     async def test_corrupted_payload_is_rejected(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         corrupted_jpeg = _make_image_bytes("JPEG")[:16]
         mock_file = _make_upload_file("photo.jpg", corrupted_jpeg, content_type="image/jpeg")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()):
+        with patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings()):
             with pytest.raises(ValueError, match="truncated or corrupted"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
     @pytest.mark.asyncio
     async def test_empty_payload_is_rejected(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         mock_file = _make_upload_file("photo.jpg", b"", content_type="image/jpeg")
         service = PhotoService(AsyncMock())
 
-        with patch("app.services.photo_service.get_settings", return_value=_make_fake_settings()):
+        with patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings()):
             with pytest.raises(ValueError, match="payload is empty"):
                 await service.create_multipart_photo(_make_project(), mock_file, is_primary=False)
 
@@ -254,7 +254,7 @@ class TestMimeSpoofingAndMagicBytes:
 class TestValidUploadFlow:
     @pytest.mark.asyncio
     async def test_valid_jpeg_upload_is_preserved(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         jpeg_bytes = _make_image_bytes("JPEG")
         project = _make_project()
@@ -273,10 +273,10 @@ class TestValidUploadFlow:
 
         with (
             patch(
-                "app.services.photo_service.save_original_photo",
+                "app.modules.media.photo_service.save_original_photo",
                 return_value=("projects/prj_test/photo.jpg", None),
             ),
-            patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()),
+            patch("app.modules.media.photo_service.enqueue_heavy_job", new=AsyncMock()),
         ):
             result = await service.create_multipart_photo(project, mock_file, is_primary=True)
 
@@ -285,7 +285,7 @@ class TestValidUploadFlow:
 
     @pytest.mark.asyncio
     async def test_valid_png_upload_is_preserved(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         png_bytes = _make_image_bytes("PNG")
         project = _make_project()
@@ -304,10 +304,10 @@ class TestValidUploadFlow:
 
         with (
             patch(
-                "app.services.photo_service.save_original_photo",
+                "app.modules.media.photo_service.save_original_photo",
                 return_value=("projects/prj_test/photo.png", None),
             ),
-            patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()),
+            patch("app.modules.media.photo_service.enqueue_heavy_job", new=AsyncMock()),
         ):
             result = await service.create_multipart_photo(project, mock_file, is_primary=True)
 
@@ -316,7 +316,7 @@ class TestValidUploadFlow:
 
     @pytest.mark.asyncio
     async def test_missing_content_type_uses_detected_mime_type(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         jpeg_bytes = _make_image_bytes("JPEG")
         project = _make_project()
@@ -335,10 +335,10 @@ class TestValidUploadFlow:
 
         with (
             patch(
-                "app.services.photo_service.save_original_photo",
+                "app.modules.media.photo_service.save_original_photo",
                 return_value=("projects/prj_test/photo.jpg", None),
             ),
-            patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()),
+            patch("app.modules.media.photo_service.enqueue_heavy_job", new=AsyncMock()),
         ):
             result = await service.create_multipart_photo(project, mock_file, is_primary=True)
 
@@ -346,7 +346,7 @@ class TestValidUploadFlow:
 
     @pytest.mark.asyncio
     async def test_missing_filename_uses_safe_generated_name(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         jpeg_bytes = _make_image_bytes("JPEG")
         project = _make_project()
@@ -373,9 +373,9 @@ class TestValidUploadFlow:
         )
 
         with (
-            patch("app.services.photo_service.validate_photo_upload", return_value=validated_upload),
-            patch("app.services.photo_service.save_original_photo", return_value=("projects/prj_test/upload-safe.jpg", None)),
-            patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()),
+            patch("app.modules.media.photo_service.validate_photo_upload", return_value=validated_upload),
+            patch("app.modules.media.photo_service.save_original_photo", return_value=("projects/prj_test/upload-safe.jpg", None)),
+            patch("app.modules.media.photo_service.enqueue_heavy_job", new=AsyncMock()),
         ):
             result = await service.create_multipart_photo(project, mock_file, is_primary=True)
 
@@ -385,9 +385,9 @@ class TestValidUploadFlow:
 class TestRouteMapping:
     @pytest.mark.asyncio
     async def test_route_returns_400_on_filename_validation_error(self):
-        from app.api.routes.images import upload_case_images
-        from app.services.photo_service import PhotoService
-        from app.services.project_service import ProjectService
+        from app.modules.media.api.images import upload_case_images
+        from app.modules.media.photo_service import PhotoService
+        from app.modules.workflow.project_service import ProjectService
         from app.platform.storage.backend import UploadValidationError
 
         project = _make_project()
@@ -426,9 +426,9 @@ class TestRouteMapping:
 
     @pytest.mark.asyncio
     async def test_route_returns_415_on_content_type_spoofing(self):
-        from app.api.routes.images import upload_case_images
-        from app.services.photo_service import PhotoService
-        from app.services.project_service import ProjectService
+        from app.modules.media.api.images import upload_case_images
+        from app.modules.media.photo_service import PhotoService
+        from app.modules.workflow.project_service import ProjectService
         from app.platform.storage.backend import UploadValidationError
 
         project = _make_project()

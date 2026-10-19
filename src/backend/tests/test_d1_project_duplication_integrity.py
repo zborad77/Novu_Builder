@@ -29,7 +29,7 @@ def _get_storage_root() -> pathlib.Path:
 @pytest_asyncio.fixture
 async def source_project_with_photo(app_client, token_a, db_session_factory):
     """Create a project via API, insert a photo record + physical file, yield both."""
-    from app.models import ProjectPhoto  # noqa: PLC0415
+    from app.modules.media.models import ProjectPhoto  # noqa: PLC0415
 
     # Create source project via API
     resp = await app_client.post(
@@ -123,7 +123,7 @@ class TestProjectDuplicationIntegrity:
         self, app_client, token_a, source_project_with_photo, db_session_factory
     ):
         """After duplication, the new project has a photo DB record with remapped storage key."""
-        from app.models import ProjectPhoto  # noqa: PLC0415
+        from app.modules.media.models import ProjectPhoto  # noqa: PLC0415
         from sqlalchemy import select  # noqa: PLC0415
 
         source_id = source_project_with_photo["project_id"]

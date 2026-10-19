@@ -1,0 +1,7 @@
+{"source": "app/schemas/project.py",
+ "moves": {
+   "app/modules/quoting/schemas/proposal.py": ["ProposalDraftWorkItem", "ProposalDraftMaterial", "ProposalDraftField", "ProposalDraftItem", "ProposalDraftSection", "ProjectProposalDraft", "ProjectFinalProposal", "ProjectProposalDraftPatch"]
+ },
+ "headers": {
+   "app/modules/quoting/schemas/proposal.py": "\"\"\"API schémata návrhu nabídky (draft a finální návrh) – modul quoting.\"\"\"\n"
+ }}

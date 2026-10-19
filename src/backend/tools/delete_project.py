@@ -14,7 +14,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.platform.db.session import AsyncSessionFactory
-from app.models import Project
+from app.modules.cases.models import Project
 from app.platform.storage.local_photo_storage import STORAGE_ROOT
 
 

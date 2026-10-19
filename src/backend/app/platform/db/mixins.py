@@ -1,4 +1,5 @@
 """Sdílené ORM mixiny (časová razítka) pro modely všech modulů."""
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, func

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from fastapi import HTTPException
 
-from app.schemas.project import ProjectCreate
+from app.modules.workflow.schemas import ProjectCreate
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -45,8 +45,8 @@ class TestCreateCaseOrgGuard:
     @pytest.mark.asyncio
     async def test_tenant_user_creates_case_in_own_org(self):
         """Regular user with an org creates the case; service receives their org_id."""
-        from app.api.routes.cases import create_case
-        from app.services.project_service import ProjectService
+        from app.modules.workflow.api.cases import create_case
+        from app.modules.workflow.project_service import ProjectService
 
         user = _make_user(is_superadmin=False, org_id="org_abc")
         payload = _make_payload()
@@ -69,8 +69,8 @@ class TestCreateCaseOrgGuard:
     @pytest.mark.asyncio
     async def test_superadmin_without_org_is_rejected(self):
         """Superadmin with organizationId=None must receive HTTP 403."""
-        from app.api.routes.cases import create_case
-        from app.services.project_service import ProjectService
+        from app.modules.workflow.api.cases import create_case
+        from app.modules.workflow.project_service import ProjectService
 
         user = _make_user(is_superadmin=True, org_id=None)
         payload = _make_payload()
@@ -90,8 +90,8 @@ class TestCreateCaseOrgGuard:
     @pytest.mark.asyncio
     async def test_non_superadmin_without_org_is_rejected(self):
         """Regular user with no organization assigned must receive HTTP 403."""
-        from app.api.routes.cases import create_case
-        from app.services.project_service import ProjectService
+        from app.modules.workflow.api.cases import create_case
+        from app.modules.workflow.project_service import ProjectService
 
         user = _make_user(is_superadmin=False, org_id=None)
         payload = _make_payload()
@@ -111,8 +111,8 @@ class TestCreateCaseOrgGuard:
     @pytest.mark.asyncio
     async def test_organization_id_none_never_reaches_service(self):
         """Service.create_project is never called with organization_id=None."""
-        from app.api.routes.cases import create_case
-        from app.services.project_service import ProjectService
+        from app.modules.workflow.api.cases import create_case
+        from app.modules.workflow.project_service import ProjectService
 
         for user in [
             _make_user(is_superadmin=True, org_id=None),

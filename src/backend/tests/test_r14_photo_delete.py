@@ -27,7 +27,7 @@ def _make_photo(
 class TestPhotoSoftDelete:
     @pytest.mark.asyncio
     async def test_delete_marks_photo_pending_delete_without_touching_storage(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         photo = _make_photo()
         repo = AsyncMock()
@@ -36,7 +36,7 @@ class TestPhotoSoftDelete:
 
         service = PhotoService(repo)
 
-        with patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock) as mock_delete:
+        with patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock) as mock_delete:
             result = await service.delete_photo("prj_1", "pho_1")
 
         assert result is True
@@ -47,14 +47,14 @@ class TestPhotoSoftDelete:
 
     @pytest.mark.asyncio
     async def test_delete_returns_false_for_missing_photo(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         repo = AsyncMock()
         repo.get_photo = AsyncMock(return_value=None)
 
         service = PhotoService(repo)
 
-        with patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock) as mock_delete:
+        with patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock) as mock_delete:
             result = await service.delete_photo("prj_1", "missing")
 
         assert result is False
@@ -64,7 +64,7 @@ class TestPhotoSoftDelete:
 class TestPendingDeleteCleanup:
     @pytest.mark.asyncio
     async def test_cleanup_pending_deletes_marks_deleted_after_storage_cleanup(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         photo = _make_photo(status="pending_delete")
         repo = AsyncMock()
@@ -73,7 +73,7 @@ class TestPendingDeleteCleanup:
 
         service = PhotoService(repo)
 
-        with patch("app.services.photo_service.delete_storage_file", new_callable=AsyncMock) as mock_delete:
+        with patch("app.modules.media.photo_service.delete_storage_file", new_callable=AsyncMock) as mock_delete:
             deleted = await service.cleanup_pending_deletes()
 
         assert deleted == 1
@@ -88,7 +88,7 @@ class TestPendingDeleteCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_pending_deletes_leaves_photo_pending_when_interrupted(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         photo = _make_photo(status="pending_delete")
         repo = AsyncMock()
@@ -101,7 +101,7 @@ class TestPendingDeleteCleanup:
             if relative_storage_key.endswith("preview/orig.jpg"):
                 raise OSError("storage unavailable")
 
-        with patch("app.services.photo_service.delete_storage_file", side_effect=failing_delete):
+        with patch("app.modules.media.photo_service.delete_storage_file", side_effect=failing_delete):
             deleted = await service.cleanup_pending_deletes()
 
         assert deleted == 0

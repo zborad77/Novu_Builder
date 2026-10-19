@@ -4,12 +4,12 @@ from app.api.deps import get_current_user
 from app.api.routes.admin import router as admin_router
 from app.api.routes.analysis_jobs import router as analysis_jobs_router
 from app.modules.identity.api.auth import router as auth_router
-from app.api.routes.case_events import router as case_events_router
-from app.api.routes.cases import router as cases_router
+from app.modules.workflow.api.case_events import router as case_events_router
+from app.modules.workflow.api.cases import router as cases_router
 from app.api.routes.estimates import router as estimates_router
-from app.api.routes.exports import router as exports_router
-from app.api.routes.images import router as images_router
-from app.api.routes.markers import router as markers_router
+from app.modules.exports.api.exports import router as exports_router
+from app.modules.media.api.images import router as images_router
+from app.modules.media.api.markers import router as markers_router
 from app.api.routes.material_catalog import router as material_catalog_router
 from app.api.routes.measurements import router as measurements_router
 from app.api.routes.pricebooks import router as pricebooks_router

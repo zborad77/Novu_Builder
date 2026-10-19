@@ -7,7 +7,7 @@ from app.ai.pipeline import PipelineOrchestrator
 from app.ai.providers.claude_vision_provider import ClaudeVisionProvider
 from app.ai.providers.mock_vision_provider import MockVisionProvider
 from app.ai.providers.openai_vision_provider import OpenAIVisionProvider
-from app.models import ProjectPhoto
+from app.modules.media.models import ProjectPhoto
 from app.platform.storage.backend import generate_presigned_url as _generate_presigned_url, read_storage_file
 
 

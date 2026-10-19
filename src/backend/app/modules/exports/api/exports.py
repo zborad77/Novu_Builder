@@ -1,0 +1,131 @@
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+
+from app.api.deps import get_export_service, get_project_service, require_manager, resolve_org_id
+from app.platform.config import get_settings
+from app.platform.http.limiter import limiter
+from app.modules.audit.audit_log import log_cross_tenant_denied
+from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.exports.schemas import ExportCreateResponse, ExportRead
+from app.modules.exports.export_service import ExportService
+from app.modules.workflow.project_service import ProjectService
+
+router = APIRouter(tags=["exports"])
+logger = structlog.get_logger(__name__)
+
+
+@router.post("/cases/{case_id}/exports/report-pdf", response_model=ExportCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+async def create_report_pdf(
+    case_id: str,
+    current_user: AuthUserRead = Depends(require_manager),
+    project_service: ProjectService = Depends(get_project_service),
+    export_service: ExportService = Depends(get_export_service),
+) -> ExportCreateResponse:
+    org_id = resolve_org_id(current_user)
+    project = await project_service.get_project(case_id, organization_id=org_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    export = await export_service.create_export(case_id=case_id, export_type="report-pdf")
+    return ExportCreateResponse(exportId=export.id, status=export.status)
+
+
+@router.post("/cases/{case_id}/exports/proposal-docx", response_model=ExportCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+async def create_proposal_docx(
+    case_id: str,
+    current_user: AuthUserRead = Depends(require_manager),
+    project_service: ProjectService = Depends(get_project_service),
+    export_service: ExportService = Depends(get_export_service),
+) -> ExportCreateResponse:
+    org_id = resolve_org_id(current_user)
+    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    if detail.proposalDraft is None:
+        raise HTTPException(status_code=409, detail="Proposal draft must exist before working DOCX export.")
+    export = await export_service.create_proposal_docx_export(case_detail=detail)
+    return ExportCreateResponse(exportId=export.id, status=export.status)
+
+
+@router.post("/cases/{case_id}/exports/quote-pdf", response_model=ExportCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+async def create_quote_pdf(
+    case_id: str,
+    current_user: AuthUserRead = Depends(require_manager),
+    project_service: ProjectService = Depends(get_project_service),
+    export_service: ExportService = Depends(get_export_service),
+) -> ExportCreateResponse:
+    org_id = resolve_org_id(current_user)
+    project = await project_service.get_project(case_id, organization_id=org_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
+    if not detail or detail.finalProposal is None:
+        raise HTTPException(status_code=409, detail="Final proposal must be created before PDF export.")
+    export = await export_service.create_quote_pdf_export(case_detail=detail)
+    return ExportCreateResponse(exportId=export.id, status=export.status)
+
+
+@router.post("/cases/{case_id}/exports/quote-docx", response_model=ExportCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+async def create_quote_docx(
+    case_id: str,
+    current_user: AuthUserRead = Depends(require_manager),
+    project_service: ProjectService = Depends(get_project_service),
+    export_service: ExportService = Depends(get_export_service),
+) -> ExportCreateResponse:
+    org_id = resolve_org_id(current_user)
+    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    if detail.finalProposal is None:
+        raise HTTPException(status_code=409, detail="Final proposal must be created before DOCX export.")
+    export = await export_service.create_quote_docx_export(case_detail=detail)
+    return ExportCreateResponse(exportId=export.id, status=export.status)
+
+
+@router.post("/cases/{case_id}/exports/case-zip", response_model=ExportCreateResponse, status_code=status.HTTP_201_CREATED)
+async def create_case_zip(
+    case_id: str,
+    current_user: AuthUserRead = Depends(require_manager),
+    project_service: ProjectService = Depends(get_project_service),
+    export_service: ExportService = Depends(get_export_service),
+) -> ExportCreateResponse:
+    org_id = resolve_org_id(current_user)
+    detail = await project_service.get_project_detail(case_id, organization_id=org_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Case not found.")
+    export = await export_service.create_case_zip_export(case_detail=detail)
+    return ExportCreateResponse(exportId=export.id, status=export.status)
+
+
+@router.get("/exports/{export_id}", response_model=ExportRead)
+@limiter.limit(get_settings().rate_limit_read_detail)
+async def get_export(
+    export_id: str,
+    request: Request,
+    current_user: AuthUserRead = Depends(require_manager),
+    project_service: ProjectService = Depends(get_project_service),
+    export_service: ExportService = Depends(get_export_service),
+) -> ExportRead:
+    org_id = resolve_org_id(current_user)
+    export = await export_service.get_export(
+        export_id,
+        organization_id=org_id,
+        is_superadmin_context=current_user.isSuperAdmin,
+    )
+    if not export:
+        if not current_user.isSuperAdmin:
+            log_cross_tenant_denied(
+                logger,
+                resource="export",
+                resource_id=export_id,
+                user_id=current_user.id,
+                org_id=current_user.organizationId,
+            )
+        raise HTTPException(status_code=404, detail="Export not found.")
+    if not current_user.isSuperAdmin:
+        project = await project_service.get_project(
+            export.caseId,
+            organization_id=org_id,
+        )
+        if not project:
+            raise HTTPException(status_code=404, detail="Export not found.")
+    return export

@@ -56,7 +56,7 @@ def _make_validated_upload(content: bytes, *, filename: str = "photo.jpg", mime_
 class TestPhotoServiceSizeFlow:
     @pytest.mark.asyncio
     async def test_file_within_limit_proceeds(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         content = b"x" * (5 * 1024 * 1024)
         validated_upload = _make_validated_upload(content)
@@ -98,10 +98,10 @@ class TestPhotoServiceSizeFlow:
         service = PhotoService(mock_repo, work_queue=MagicMock())
 
         with (
-            patch("app.services.photo_service.get_settings", return_value=_make_fake_settings(20)),
-            patch("app.services.photo_service.validate_photo_upload", return_value=validated_upload),
-            patch("app.services.photo_service.save_original_photo", return_value=("projects/prj_test/photo.jpg", None)),
-            patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()),
+            patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings(20)),
+            patch("app.modules.media.photo_service.validate_photo_upload", return_value=validated_upload),
+            patch("app.modules.media.photo_service.save_original_photo", return_value=("projects/prj_test/photo.jpg", None)),
+            patch("app.modules.media.photo_service.enqueue_heavy_job", new=AsyncMock()),
         ):
             result = await service.create_multipart_photo(project, _make_upload_file(content), is_primary=True)
 
@@ -109,7 +109,7 @@ class TestPhotoServiceSizeFlow:
 
     @pytest.mark.asyncio
     async def test_file_exactly_at_limit_proceeds(self):
-        from app.services.photo_service import PhotoService
+        from app.modules.media.photo_service import PhotoService
 
         limit_mb = 10
         content = b"x" * (limit_mb * 1024 * 1024)
@@ -152,10 +152,10 @@ class TestPhotoServiceSizeFlow:
         service = PhotoService(mock_repo, work_queue=MagicMock())
 
         with (
-            patch("app.services.photo_service.get_settings", return_value=_make_fake_settings(limit_mb)),
-            patch("app.services.photo_service.validate_photo_upload", return_value=validated_upload),
-            patch("app.services.photo_service.save_original_photo", return_value=("projects/prj_test/photo.jpg", None)),
-            patch("app.services.photo_service.enqueue_heavy_job", new=AsyncMock()),
+            patch("app.modules.media.photo_service.get_settings", return_value=_make_fake_settings(limit_mb)),
+            patch("app.modules.media.photo_service.validate_photo_upload", return_value=validated_upload),
+            patch("app.modules.media.photo_service.save_original_photo", return_value=("projects/prj_test/photo.jpg", None)),
+            patch("app.modules.media.photo_service.enqueue_heavy_job", new=AsyncMock()),
         ):
             result = await service.create_multipart_photo(project, _make_upload_file(content), is_primary=False)
 
@@ -251,9 +251,9 @@ class TestValidatePhotoUploadSizeGuard:
 class TestUploadRouteSizeLimit:
     @pytest.mark.asyncio
     async def test_route_returns_413_on_oversize(self):
-        from app.api.routes.images import upload_case_images
-        from app.services.photo_service import PhotoService
-        from app.services.project_service import ProjectService
+        from app.modules.media.api.images import upload_case_images
+        from app.modules.media.photo_service import PhotoService
+        from app.modules.workflow.project_service import ProjectService
         from app.platform.storage.backend import UploadValidationError
 
         project = _make_project()
@@ -291,10 +291,10 @@ class TestUploadRouteSizeLimit:
 
     @pytest.mark.asyncio
     async def test_route_returns_201_within_limit(self):
-        from app.api.routes.images import upload_case_images
-        from app.schemas.photo import ProjectPhotoRead
-        from app.services.photo_service import PhotoService
-        from app.services.project_service import ProjectService
+        from app.modules.media.api.images import upload_case_images
+        from app.modules.media.schemas.photo import ProjectPhotoRead
+        from app.modules.media.photo_service import PhotoService
+        from app.modules.workflow.project_service import ProjectService
 
         project = _make_project()
         variant = {"storageKey": None, "fileSize": None, "width": None, "height": None, "url": None}
