@@ -10,19 +10,19 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.media.photo_purge import purge_photo_with_audit
-from app.modules.analysis.api.deps import get_analysis_service
+from app.modules.media.public import purge_photo_with_audit
+from app.modules.analysis.public import get_analysis_service
 from app.platform.http.deps import get_auth_redis, get_job_queue
-from app.modules.identity.api.deps import require_admin_capability, require_superadmin, require_user_admin
+from app.modules.identity.public import require_admin_capability, require_superadmin, require_user_admin
 from app.platform.jobs.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
 from app.platform.config import get_settings
 from app.platform.db.session import get_db_session
-from app.modules.analysis.models import AnalysisJob
-from app.modules.cases.models import Project
-from app.modules.audit.models import AuditLog
-from app.modules.identity.models import Organization, User
-from app.modules.identity.schemas.auth import AuthUserRead
-from app.modules.identity.schemas.company import (
+from app.modules.analysis.public import AnalysisJob
+from app.modules.cases.public import Project
+from app.modules.audit.public import AuditLog
+from app.modules.identity.public import Organization, User
+from app.modules.identity.public import AuthUserRead
+from app.modules.identity.public import (
     AdminUserCreate,
     AdminUserListResponse,
     AdminUserPatch,
@@ -35,27 +35,27 @@ from app.modules.identity.schemas.company import (
 from app.platform.http.exposure import AUDIENCE_BY_ZONE, ZONE_DEV, ZONE_GATEWAY, current_audience, current_zone
 from app.platform.http.limiter import limiter
 from app.platform.db.sql_like import LIKE_ESCAPE_CHAR, build_contains_ilike_pattern
-from app.modules.identity.security import enforce_password_strength
-from app.modules.audit.audit_log import SecurityAuditWriteError, commit_security_critical_audit, write_audit_log
-from app.modules.identity.rbac import (
+from app.modules.identity.public import enforce_password_strength
+from app.modules.audit.public import SecurityAuditWriteError, commit_security_critical_audit, write_audit_log
+from app.modules.identity.public import (
     assignable_roles,
     can_manage_company,
     can_manage_user,
     can_view_user,
     user_admin_org_scope,
 )
-from app.modules.identity.token_repository import SessionTokenRevocation, TokenRepository
-from app.modules.analysis.analysis_service import AnalysisService, to_job_read
-from app.modules.identity.company_service import CompanyService
-from app.modules.identity.api.deps import get_company_service
-from app.modules.identity.authz import (
+from app.modules.identity.public import SessionTokenRevocation, TokenRepository
+from app.modules.analysis.public import AnalysisService, to_job_read
+from app.modules.identity.public import CompanyService
+from app.modules.identity.public import get_company_service
+from app.modules.identity.public import (
     commit_security_critical_audit_or_503 as _commit_security_critical_audit,
     enforce_rbac_decision as _enforce,
 )
-from app.modules.media.photo_service import PhotoService
-from app.modules.media.photo_repository import PhotoRepository
-from app.modules.media.schemas.photo import PurgePhotoRequest, PurgePhotoResponse
-from app.modules.identity.auth_service import AuthService, hash_password
+from app.modules.media.public import PhotoService
+from app.modules.media.public import PhotoRepository
+from app.modules.media.public import PurgePhotoRequest, PurgePhotoResponse
+from app.modules.identity.public import AuthService, hash_password
 
 import structlog
 

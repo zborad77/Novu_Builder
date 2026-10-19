@@ -30,11 +30,11 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from app.modules.cases.errors import CaseActionError
-from app.modules.cases.effects import EffectContext, run_after_commit, run_before_commit
-from app.modules.cases.transitions import TransitionError, apply_transition
-from app.modules.cases.models import ProjectStatusHistory  # noqa: F401  (imported so ORM sees model)
-from app.modules.cases.repository import ProjectRepository
+from app.modules.cases.public import CaseActionError
+from app.modules.cases.public import EffectContext, run_after_commit, run_before_commit
+from app.modules.cases.public import TransitionError, apply_transition
+from app.modules.cases.public import ProjectStatusHistory  # noqa: F401  (imported so ORM sees model)
+from app.modules.cases.public import ProjectRepository
 from app.modules.workflow.schemas import ProjectDetail
 from app.modules.workflow.project_service import build_project_detail
 
@@ -42,7 +42,7 @@ from app.modules.workflow.project_service import build_project_detail
 import app.modules.workflow.action_effects  # noqa: F401
 
 if TYPE_CHECKING:
-    from app.modules.cases.models import Project
+    from app.modules.cases.public import Project
 
 logger = structlog.get_logger(__name__)
 

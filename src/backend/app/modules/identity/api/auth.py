@@ -11,7 +11,7 @@ from app.modules.identity.account_limiter import (
     record_login_failure,
     reset_login_failures,
 )
-from app.modules.audit.audit_log import SecurityAuditWriteError
+from app.modules.audit.public import SecurityAuditWriteError
 from app.platform.config import get_settings
 from app.modules.identity.device_binding import check_device_binding
 from app.platform.http.limiter import client_ip_rate_limit_key, limiter

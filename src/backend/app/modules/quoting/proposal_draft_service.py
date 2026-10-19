@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 import json
 
-from app.modules.cases.models import Project
+from app.modules.cases.public import Project
 from app.modules.quoting.models import ProjectFinalProposal, ProjectProposalDraft
-from app.modules.media.models import ProjectPhoto
+from app.modules.media.public import ProjectPhoto
 from app.modules.quoting.schemas.proposal import (
     ProjectFinalProposal as ProjectFinalProposalSchema,
     ProjectProposalDraft as ProjectProposalDraftSchema,

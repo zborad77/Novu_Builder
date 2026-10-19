@@ -46,15 +46,15 @@ from app.platform.config import get_settings, startup_failure_message
 from app.platform.logging import configure_logging
 from app.platform.redis_client import build_queue_redis_client_from_settings
 from app.platform.db.session import WorkerAsyncSessionFactory
-from app.modules.offers.budget import (
+from app.modules.offers.public import (
     BudgetExhaustedError,
     BudgetService,
     DEFAULT_TOKEN_ESTIMATE,
     estimate_cost_usd,
 )
-from app.modules.offers.budget_sweeper import BudgetSweeper
-from app.modules.offers.reconciler import OfferReconciler
-from app.modules.offers.domain import (
+from app.modules.offers.public import BudgetSweeper
+from app.modules.offers.public import OfferReconciler
+from app.modules.offers.public import (
     AGENT_OUTCOME_INSUFFICIENT_DATA,
     AGENT_OUTCOME_OFFER_GENERATED,
     ERROR_BUDGET_EXHAUSTED,
@@ -74,7 +74,7 @@ from app.modules.offers.domain import (
     RETRY_BACKOFF_SECONDS,
 )
 from app.platform.events.outbox import OutboxPublisher, build_offer_status_changed_event
-from app.modules.offers.provider import (
+from app.modules.offers.public import (
     AgentRuntime,
     ProviderError,
     ProviderRateLimitedError,
@@ -82,12 +82,12 @@ from app.modules.offers.provider import (
     ProviderUnavailableError,
     build_agent_runtime,
 )
-from app.modules.offers.repository import OfferRepository
-from app.modules.offers.snapshot import build_input_snapshot
-from app.modules.media.photo_repository import PhotoRepository
-from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
+from app.modules.offers.public import OfferRepository
+from app.modules.offers.public import build_input_snapshot
+from app.modules.media.public import PhotoRepository
+from app.modules.catalog.public import WorkCatalogRepository
 from app.platform.storage.backend import generate_presigned_url
-from app.modules.offers.validation import (
+from app.modules.offers.public import (
     InsufficientDataResult,
     OfferOutputValidator,
     OfferValidationError,

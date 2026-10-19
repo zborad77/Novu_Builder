@@ -3,7 +3,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.quoting.schemas.proposal import ProjectFinalProposal, ProjectProposalDraft
+# Pydantic schémata návrhu (stejnojmenné ORM modely jsou v quoting.models).
+from app.modules.quoting.public import (
+    ProjectFinalProposalSchema,
+    ProjectProposalDraftSchema,
+)
 
 
 class ProjectLocation(BaseModel):
@@ -82,8 +86,8 @@ class ProjectDetail(BaseModel):
     client: ProjectClient | None = None
     photos: list = Field(default_factory=list)
     latestAnalysis: dict | None = None
-    proposalDraft: ProjectProposalDraft | None = None
-    finalProposal: ProjectFinalProposal | None = None
+    proposalDraft: ProjectProposalDraftSchema | None = None
+    finalProposal: ProjectFinalProposalSchema | None = None
     workflowStatus: ProjectWorkflowStatusSummary | None = None
     quoteVariants: list = Field(default_factory=list)
     referenceExpectations: ProjectReferenceExpectations | None = None

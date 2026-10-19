@@ -9,9 +9,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.platform.db.base import Base
 
 if TYPE_CHECKING:
-    from app.modules.quoting.models import QuoteVariant
-    from app.modules.cases.models import Project
-    from app.modules.identity.models import User
+    from app.modules.quoting.public import QuoteVariant
+    from app.modules.cases.public import Project
+    from app.modules.identity.public import User
 
 
 class AnalysisJob(Base):

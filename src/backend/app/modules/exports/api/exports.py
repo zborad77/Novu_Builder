@@ -2,15 +2,15 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.modules.exports.api.deps import get_export_service
-from app.modules.workflow.api.deps import get_project_service
-from app.modules.identity.api.deps import require_manager, resolve_org_id
+from app.modules.workflow.public import get_project_service
+from app.modules.identity.public import require_manager, resolve_org_id
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
-from app.modules.audit.audit_log import log_cross_tenant_denied
-from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.audit.public import log_cross_tenant_denied
+from app.modules.identity.public import AuthUserRead
 from app.modules.exports.schemas import ExportCreateResponse, ExportRead
 from app.modules.exports.export_service import ExportService
-from app.modules.workflow.project_service import ProjectService
+from app.modules.workflow.public import ProjectService
 
 router = APIRouter(tags=["exports"])
 logger = structlog.get_logger(__name__)

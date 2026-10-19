@@ -10,11 +10,11 @@ from app.platform.db.base import Base
 from app.platform.db.mixins import TimestampMixin
 
 if TYPE_CHECKING:
-    from app.modules.analysis.models import AnalysisJob, AnalysisResult
-    from app.modules.quoting.models import ProjectFinalProposal, ProjectProposalDraft, QuoteVariant
-    from app.modules.exports.models import ProjectExport
-    from app.modules.media.models import ProjectPhoto
-    from app.modules.identity.models import Organization, User
+    from app.modules.analysis.public import AnalysisJob, AnalysisResult
+    from app.modules.quoting.public import ProjectFinalProposal, ProjectProposalDraft, QuoteVariant
+    from app.modules.exports.public import ProjectExport
+    from app.modules.media.public import ProjectPhoto
+    from app.modules.identity.public import Organization, User
 
 
 class Client(TimestampMixin, Base):

@@ -7,8 +7,8 @@ from app.platform.http.deps import get_redis
 from app.platform.config import get_settings
 from app.platform.db.session import get_db_session
 from app.modules.analysis.analysis_repository import AnalysisRepository
-from app.modules.media.photo_repository import PhotoRepository
-from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
+from app.modules.media.public import PhotoRepository
+from app.modules.catalog.public import WorkCatalogRepository
 from app.modules.analysis.analysis_service import AnalysisService
 
 

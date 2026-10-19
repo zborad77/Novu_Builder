@@ -11,8 +11,8 @@ from app.platform.db.base import Base
 from app.platform.db.mixins import TimestampMixin
 
 if TYPE_CHECKING:
-    from app.modules.quoting.models import QuoteItem, QuoteVariant
-    from app.modules.identity.models import Organization
+    from app.modules.quoting.public import QuoteItem, QuoteVariant
+    from app.modules.identity.public import Organization
 
 
 class PricingProfile(TimestampMixin, Base):

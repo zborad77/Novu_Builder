@@ -12,7 +12,7 @@ from app.platform.jobs.backpressure import (
     require_worker_capacity,
 )
 from app.platform.config import get_settings
-from app.modules.cases.models import Project
+from app.modules.cases.public import Project
 from app.modules.media.models import ProjectPhoto
 from app.modules.media.ports import invalidate_case_exports
 from app.modules.media.photo_repository import PhotoRepository

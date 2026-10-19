@@ -2,15 +2,15 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.identity.api.deps import get_current_user, resolve_org_id
+from app.modules.identity.public import get_current_user, resolve_org_id
 from app.modules.media.api.deps import get_photo_service
-from app.modules.cases.api.deps import CaseReader, get_case_reader
+from app.modules.cases.public import CaseReader, get_case_reader
 from app.platform.db.session import get_db_session
-from app.modules.audit.audit_log import log_cross_tenant_denied
+from app.modules.audit.public import log_cross_tenant_denied
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.modules.media.marker_repository import MarkerRepository
-from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.identity.public import AuthUserRead
 from app.modules.media.schemas.marker import MarkerCreate, MarkerDeleteResponse, MarkerListResponse, MarkerRead
 from app.modules.media.photo_service import PhotoService
 

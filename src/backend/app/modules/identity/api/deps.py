@@ -6,7 +6,7 @@ import structlog
 import structlog.contextvars
 
 from app.platform.http.deps import get_auth_redis
-from app.modules.audit.audit_log import bind_request_audit_actor
+from app.modules.audit.public import bind_request_audit_actor
 from app.modules.identity.device_binding import check_device_binding
 from app.modules.identity.rbac import is_system_admin, is_tenant_admin, is_tenant_operator
 from app.platform.db.session import get_db_session

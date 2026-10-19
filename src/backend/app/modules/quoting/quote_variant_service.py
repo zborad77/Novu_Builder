@@ -1,13 +1,13 @@
 from dataclasses import dataclass
 from typing import Any
 
-from app.modules.analysis.ports import QuoteRecalculationUnavailableError
-from app.modules.analysis.models import AnalysisJob
+from app.modules.analysis.public import QuoteRecalculationUnavailableError
+from app.modules.analysis.public import AnalysisJob
 from app.modules.quoting.models import QuoteItem, QuoteVariant
 from app.modules.quoting.quote_variant_repository import QuoteVariantRepository
-from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.public import WorkCatalogRepository
 from app.modules.quoting.schemas.quote_variant import AnalysisJobRead, QuoteItemRead, QuoteVariantRead
-from app.modules.catalog.pricing_profile_service import PricingProfileResolutionError, PricingProfileService
+from app.modules.catalog.public import PricingProfileResolutionError, PricingProfileService
 
 
 def round_currency(value: float) -> float:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.public import WorkCatalogRepository
 from app.modules.quoting.quote_variant_repository import QuoteVariantRepository
 from app.modules.quoting.quote_variant_service import QuoteVariantRecalculationResult, QuoteVariantService
 

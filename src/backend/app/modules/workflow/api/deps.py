@@ -6,9 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.platform.http.deps import get_job_queue
 from app.platform.db.session import get_db_session
 from app.modules.workflow.case_actions import CaseActionService
-from app.modules.quoting.final_proposal_repository import FinalProposalRepository
-from app.modules.cases.repository import ProjectRepository
-from app.modules.quoting.proposal_draft_repository import ProposalDraftRepository
+from app.modules.quoting.public import FinalProposalRepository
+from app.modules.cases.public import ProjectRepository
+from app.modules.quoting.public import ProposalDraftRepository
 from app.modules.workflow.ports import final_proposal_exporter
 from app.modules.workflow.project_service import ProjectService
 

@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.modules.catalog.models import PricingProfile
-from app.modules.cases.models import Project
-from app.modules.media.models import ProjectPhoto
+from app.modules.cases.public import Project
+from app.modules.media.public import ProjectPhoto
 from app.modules.catalog.work_catalog.models import (
     AnalysisProfile,
     CatalogPricingProfile,

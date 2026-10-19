@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.cases.models import Project
+from app.modules.cases.public import Project
 from app.modules.exports.models import ProjectExport
 
 

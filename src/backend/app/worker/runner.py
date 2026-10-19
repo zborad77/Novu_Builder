@@ -43,21 +43,21 @@ from app.platform.metrics import (
 )
 from app.platform.redis_client import FailoverRedisClient, build_queue_redis_client_from_settings
 from app.platform.db.session import WorkerAsyncSessionFactory
-from app.modules.analysis.analysis_repository import (
+from app.modules.analysis.public import (
     ANALYSIS_JOB_STATUS_QUEUED,
     ANALYSIS_JOB_STATUS_RUNNING,
     AnalysisJobLeaseOwnershipError,
     AnalysisRepository,
 )
-from app.modules.exports.export_repository import ExportRepository
-from app.modules.quoting.final_proposal_repository import FinalProposalRepository
-from app.modules.media.photo_repository import PhotoRepository
-from app.modules.cases.repository import ProjectRepository
-from app.modules.quoting.proposal_draft_repository import ProposalDraftRepository
-from app.modules.analysis.analysis_service import AnalysisService
-from app.modules.exports.export_service import ExportService
-from app.modules.media.photo_service import PhotoService
-from app.modules.workflow.project_service import ProjectService
+from app.modules.exports.public import ExportRepository
+from app.modules.quoting.public import FinalProposalRepository
+from app.modules.media.public import PhotoRepository
+from app.modules.cases.public import ProjectRepository
+from app.modules.quoting.public import ProposalDraftRepository
+from app.modules.analysis.public import AnalysisService
+from app.modules.exports.public import ExportService
+from app.modules.media.public import PhotoService
+from app.modules.workflow.public import ProjectService
 from app.platform.jobs.heavy_queue import (
     InvalidHeavyJobPayloadError,
     LeasedHeavyJob,

@@ -46,6 +46,13 @@ jobs:
         working-directory: src/backend
         run: bandit -r app/ -ll -ii
 
+      # Modulární architektura: moduly závisí jen směrem dolů, bez cyklů
+      # ([tool.importlinter] v src/backend/pyproject.toml). Pravidla „jen přes
+      # public.py“ a „platform nezná domény“ hlídá tests/architecture v jobu test.
+      - name: Import Linter (module boundaries)
+        working-directory: src/backend
+        run: lint-imports
+
       - name: pip-audit (known CVE scan on production dependencies)
         working-directory: src/backend
         run: pip-audit -r requirements.txt --progress-spinner=off

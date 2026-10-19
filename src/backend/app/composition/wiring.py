@@ -25,16 +25,16 @@ def init_modules() -> None:
 
     import_all_models()
 
-    from app.modules.analysis.ports import register_proposal_ready_notifier, register_quote_recalculator
-    from app.modules.audit.audit_log import register_actor_lookup
-    from app.modules.cases.effects import mark_effect_providers_loaded
-    from app.modules.exports.export_repository import ExportRepository
-    from app.modules.exports.export_service import ExportService
-    from app.modules.identity.audit_actor import lookup_audit_actor
-    from app.modules.media.ports import register_export_invalidator
-    from app.modules.quoting.recalculation import QuoteVariantRecalculator
-    from app.modules.workflow.ports import register_final_proposal_exporter_factory
-    from app.modules.workflow.proposal_ready import mark_proposal_ready
+    from app.modules.analysis.public import register_proposal_ready_notifier, register_quote_recalculator
+    from app.modules.audit.public import register_actor_lookup
+    from app.modules.cases.public import mark_effect_providers_loaded
+    from app.modules.exports.public import ExportRepository
+    from app.modules.exports.public import ExportService
+    from app.modules.identity.public import lookup_audit_actor
+    from app.modules.media.public import register_export_invalidator
+    from app.modules.quoting.public import QuoteVariantRecalculator
+    from app.modules.workflow.public import register_final_proposal_exporter_factory
+    from app.modules.workflow.public import mark_proposal_ready
 
     # audit -> identity: e-mail a organizace aktéra audit záznamu
     register_actor_lookup(lookup_audit_actor)
@@ -49,8 +49,8 @@ def init_modules() -> None:
     register_final_proposal_exporter_factory(lambda session: ExportService(ExportRepository(session)))
 
     # Efekty přechodů zakázky: workflow (analýza, outbox, pricing lock) a exports.
-    import app.modules.exports.case_effects  # noqa: F401
-    import app.modules.workflow.action_effects  # noqa: F401
+    from app.modules.exports.public import transition_effects as _export_effects  # noqa: F401
+    from app.modules.workflow.public import transition_effects as _workflow_effects  # noqa: F401
 
     mark_effect_providers_loaded()
     _initialized = True

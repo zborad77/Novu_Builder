@@ -11,9 +11,9 @@ from app.platform.db.base import Base
 from app.platform.db.mixins import TimestampMixin
 
 if TYPE_CHECKING:
-    from app.modules.analysis.models import AnalysisJob
-    from app.modules.catalog.models import MaterialCatalog, PricingProfile, Supplier
-    from app.modules.cases.models import Client, Project
+    from app.modules.analysis.public import AnalysisJob
+    from app.modules.catalog.public import MaterialCatalog, PricingProfile, Supplier
+    from app.modules.cases.public import Client, Project
 
 
 class Organization(TimestampMixin, Base):

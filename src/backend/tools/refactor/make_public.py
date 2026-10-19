@@ -42,7 +42,12 @@ def owner(module: str) -> str | None:
 
 
 def collect() -> dict[str, dict[str, set[str]]]:
-    """modul B -> {interní modul -> {symboly}} importované zvenku."""
+    """modul B -> {interní modul -> {"jméno" nebo "jméno as alias"}} importované zvenku.
+
+    Importuje-li importér symbol pod aliasem (typicky `router as cases_router`),
+    public.py ho exportuje pod tímto aliasem – stejná jména z různých interních
+    modulů by se jinak v public.py přepsala.
+    """
     exports: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
     for path in APP.rglob("*.py"):
         if "__pycache__" in path.parts:
@@ -59,7 +64,8 @@ def collect() -> dict[str, dict[str, set[str]]]:
             if node.module == f"app.modules.{target_owner}.public":
                 continue
             for alias in node.names:
-                exports[target_owner][node.module].add(alias.name)
+                entry = alias.name if not alias.asname or alias.asname == alias.name else f"{alias.name} as {alias.asname}"
+                exports[target_owner][node.module].add(entry)
     return exports
 
 
@@ -77,12 +83,20 @@ def render_public(module: str, symbols: dict[str, set[str]], previous: str | Non
     ]
     for internal in sorted(symbols):
         syms = sorted(symbols[internal])
-        names.extend(syms)
+        names.extend(sym.split(" as ")[-1] for sym in syms)
         joined = ",\n    ".join(syms)
         lines.append(f"from {internal} import (  # noqa: F401\n    {joined},\n)\n")
     text = "".join(lines)
     if manual:
         text += "\n" + manual
+    if manual:
+        manual_tree = ast.parse(manual)
+        for node in ast.walk(manual_tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                names.extend((a.asname or a.name).split(".")[-1] for a in node.names)
+    duplicates = sorted({n for n in names if names.count(n) > 1})
+    if duplicates:
+        raise SystemExit(f"{module}: kolize jmen ve veřejném rozhraní: {duplicates} – použij alias v importéru")
     all_names = sorted(set(names))
     text += "\n__all__ = [\n" + "".join(f'    "{n}",\n' for n in all_names) + "]\n"
     return text
@@ -104,7 +118,16 @@ class _Rewriter(cst.CSTTransformer):
         if name == public:
             return updated
         self.changed = True
-        return updated.with_changes(module=cst.parse_expression(public))
+        if isinstance(updated.names, cst.ImportStar):
+            return updated.with_changes(module=cst.parse_expression(public))
+        names = []
+        for alias in updated.names:
+            if alias.asname is not None:
+                exported = alias.asname.name.value if isinstance(alias.asname.name, cst.Name) else None
+                if exported:
+                    alias = alias.with_changes(name=cst.Name(exported), asname=None)
+            names.append(alias)
+        return updated.with_changes(module=cst.parse_expression(public), names=names)
 
 
 def rewrite_importers(check: bool) -> list[str]:
@@ -136,7 +159,9 @@ def main() -> int:
             for node in tree.body:
                 if isinstance(node, ast.ImportFrom) and node.module and owner(node.module) == module:
                     for alias in node.names:
-                        symbols[node.module].add(alias.name)
+                        symbols[node.module].add(
+                            alias.name if not alias.asname else f"{alias.name} as {alias.asname}"
+                        )
         text = render_public(f"app.modules.{module}", symbols, previous)
         print(f"public.py {module}: {sum(len(v) for v in symbols.values())} symbolů")
         if not args.check:

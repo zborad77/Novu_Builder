@@ -4,7 +4,7 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.audit.audit_log import write_audit_log
+from app.modules.audit.public import write_audit_log
 from app.modules.identity.rbac import SUPERADMIN_ROLE
 from app.modules.identity.models import Organization, User
 from app.modules.identity.schemas.company import (

@@ -3,22 +3,22 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, Upload
 from fastapi.responses import RedirectResponse
 from typing import cast
 
-from app.modules.identity.api.deps import get_current_user, resolve_org_id
+from app.modules.identity.public import get_current_user, resolve_org_id
 from app.modules.media.api.deps import get_photo_service
-from app.modules.cases.api.deps import CaseReader, get_case_reader
+from app.modules.cases.public import CaseReader, get_case_reader
 from app.modules.media.photo_purge import purge_photo_with_audit
-from app.modules.audit.audit_log import log_cross_tenant_denied, mark_request_audited
+from app.modules.audit.public import log_cross_tenant_denied, mark_request_audited
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.platform.metrics import UPLOAD_REJECTIONS_TOTAL, metric_labels
-from app.modules.identity.rbac import (
+from app.modules.identity.public import (
     Decision,
     can_purge_photo_in_tenant,
     can_soft_delete_photo,
     is_tenant_operator,
     may_soft_delete_photo_of,
 )
-from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.identity.public import AuthUserRead
 from app.modules.media.schemas.photo import (
     AnalysisReferencePhotoResponse,
     DeletePhotoResponse,

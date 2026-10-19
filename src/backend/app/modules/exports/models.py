@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.platform.db.base import Base
 
 if TYPE_CHECKING:
-    from app.modules.cases.models import Project
+    from app.modules.cases.public import Project
 
 
 class ProjectExport(Base):

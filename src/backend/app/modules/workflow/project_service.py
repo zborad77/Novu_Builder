@@ -5,12 +5,12 @@ from uuid import uuid4
 import structlog
 from sqlalchemy import delete
 
-from app.modules.cases.models import Project
-from app.modules.media.models import ProjectPhoto
-from app.modules.catalog.models import PricingProfile
-from app.modules.quoting.final_proposal_repository import FinalProposalRepository
-from app.modules.quoting.proposal_draft_repository import ProposalDraftRepository
-from app.modules.cases.repository import ProjectRepository
+from app.modules.cases.public import Project
+from app.modules.media.public import ProjectPhoto
+from app.modules.catalog.public import PricingProfile
+from app.modules.quoting.public import FinalProposalRepository
+from app.modules.quoting.public import ProposalDraftRepository
+from app.modules.cases.public import ProjectRepository
 from app.modules.workflow.schemas import (
     ProjectCreate,
     ProjectClient,
@@ -23,7 +23,7 @@ from app.modules.workflow.schemas import (
     ProjectWorkflowStatusSummary,
 )
 from app.modules.workflow.ports import FinalProposalExporter
-from app.modules.quoting.proposal_draft_service import (
+from app.modules.quoting.public import (
     build_final_proposal_from_record,
     build_final_proposal_snapshot_payload,
     build_project_proposal_draft,
@@ -173,7 +173,7 @@ def _build_latest_analysis_dict(project: Project) -> dict | None:
 
 
 def _build_quote_variants_list(project: Project) -> list:
-    from app.modules.quoting.quote_variant_service import to_variant_read
+    from app.modules.quoting.public import to_variant_read
     variants = getattr(project, "quote_variants", None) or []
     if not variants:
         return []
@@ -191,8 +191,8 @@ def _parse_json(value: str | None):
 
 
 def build_project_detail(project: Project, *, actor_role: str = "manager") -> ProjectDetail:
-    from app.modules.cases.transitions import get_available_transitions
-    from app.modules.media.photo_service import to_read_model
+    from app.modules.cases.public import get_available_transitions
+    from app.modules.media.public import to_read_model
 
     active_photos = _active_project_photos(project)
     proposal_draft = build_project_proposal_draft(project, active_photos, proposal_record=project.proposal_draft)
@@ -450,7 +450,7 @@ class ProjectService:
         # from the moment of creation.  from_status=None signals "initial state"
         # (not a transition from a previous status).
         from datetime import datetime, timezone
-        from app.modules.cases.models import ProjectStatusHistory
+        from app.modules.cases.public import ProjectStatusHistory
         self.repository.session.add(
             ProjectStatusHistory(
                 id=f"psh_{uuid4().hex[:10]}",

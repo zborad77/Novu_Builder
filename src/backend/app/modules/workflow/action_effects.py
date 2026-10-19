@@ -29,7 +29,7 @@ from uuid import uuid4
 import structlog
 from sqlalchemy import update
 
-from app.modules.cases.effects import EffectContext, after_transition, before_transition
+from app.modules.cases.public import EffectContext, after_transition, before_transition
 from app.platform.jobs.backpressure import analysis_job_priority_for_type
 from app.platform.config import get_settings
 from app.platform.events.types import (
@@ -38,9 +38,9 @@ from app.platform.events.types import (
     EVENT_PROPOSAL_READY,
     build_live_message,
 )
-from app.modules.analysis.models import AnalysisJob
-from app.modules.quoting.models import ProjectFinalProposal
-from app.modules.analysis.analysis_repository import ANALYSIS_JOB_TYPE_MANUAL_TRIGGER
+from app.modules.analysis.public import AnalysisJob
+from app.modules.quoting.public import ProjectFinalProposal
+from app.modules.analysis.public import ANALYSIS_JOB_TYPE_MANUAL_TRIGGER
 from app.platform.jobs.queue import enqueue_analysis_job
 
 logger = structlog.get_logger(__name__)

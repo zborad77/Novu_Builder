@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.identity.schemas.auth import AuthUserRead
-from app.modules.audit.audit_log import SecurityAuditWriteError, commit_security_critical_audit
+from app.modules.audit.public import SecurityAuditWriteError, commit_security_critical_audit
 from app.modules.identity.rbac import (
     Decision,
 )

@@ -12,10 +12,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from app.modules.identity.api.deps import get_current_user, resolve_org_id
-from app.modules.cases.api.deps import CaseReader, get_case_reader
+from app.modules.identity.public import get_current_user, resolve_org_id
+from app.modules.cases.public import CaseReader, get_case_reader
 from app.platform.config import get_settings
-from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.identity.public import AuthUserRead
 from app.platform.storage.local_photo_storage import STORAGE_ROOT
 
 router = APIRouter()

@@ -1,24 +1,24 @@
 from fastapi import APIRouter, Depends
 
-from app.modules.identity.api.deps import get_current_user
-from app.modules.admin.api.admin import router as admin_router
-from app.modules.analysis.api.analysis_jobs import router as analysis_jobs_router
-from app.modules.identity.api.auth import router as auth_router
-from app.modules.workflow.api.case_events import router as case_events_router
-from app.modules.workflow.api.cases import router as cases_router
-from app.modules.quoting.api.estimates import router as estimates_router
-from app.modules.exports.api.exports import router as exports_router
-from app.modules.media.api.images import router as images_router
-from app.modules.media.api.markers import router as markers_router
-from app.modules.catalog.api.material_catalog import router as material_catalog_router
-from app.modules.analysis.api.measurements import router as measurements_router
-from app.modules.catalog.api.pricebooks import router as pricebooks_router
-from app.modules.catalog.api.suppliers import router as suppliers_router
+from app.modules.identity.public import get_current_user
+from app.modules.admin.public import admin_router
+from app.modules.analysis.public import analysis_jobs_router
+from app.modules.identity.public import auth_router
+from app.modules.workflow.public import case_events_router
+from app.modules.workflow.public import cases_router
+from app.modules.quoting.public import estimates_router
+from app.modules.exports.public import exports_router
+from app.modules.media.public import images_router
+from app.modules.media.public import markers_router
+from app.modules.catalog.public import material_catalog_router
+from app.modules.analysis.public import measurements_router
+from app.modules.catalog.public import pricebooks_router
+from app.modules.catalog.public import suppliers_router
 from app.composition.api.system import router as system_router
-from app.modules.offers.api.offer_events import router as offer_events_router
-from app.modules.offers.api.offer_requests import router as offer_requests_router
-from app.modules.identity.api.org_users import router as org_users_router
-from app.modules.catalog.api.work_catalog import router as work_catalog_router
+from app.modules.offers.public import offer_events_router
+from app.modules.offers.public import offer_requests_router
+from app.modules.identity.public import org_users_router
+from app.modules.catalog.public import work_catalog_router
 
 # Canonical API uses the /cases/* surface shared by the current clients.
 # Legacy /projects/* aliases are not registered in this package anymore, so

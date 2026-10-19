@@ -24,8 +24,8 @@ from app.platform.config import get_settings
 from app.modules.exports.models import ProjectExport
 from app.modules.exports.export_repository import ExportRepository
 from app.modules.exports.schemas import ExportRead
-from app.modules.workflow.schemas import ProjectDetail
-from app.modules.quoting.schemas.proposal import ProposalDraftField, ProposalDraftItem, ProposalDraftSection
+from app.modules.workflow.public import ProjectDetail
+from app.modules.quoting.public import ProposalDraftField, ProposalDraftItem, ProposalDraftSection
 from app.platform.storage.backend import (
     delete_storage_file,
     generate_presigned_url,

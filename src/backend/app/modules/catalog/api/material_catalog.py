@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.modules.identity.api.deps import get_current_user, require_manager, resolve_org_id
+from app.modules.identity.public import get_current_user, require_manager, resolve_org_id
 from app.modules.catalog.api.deps import get_material_catalog_service
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
-from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.identity.public import AuthUserRead
 from app.modules.catalog.schemas.material_catalog import MaterialCatalogPatch
 from app.modules.catalog.material_catalog_service import MaterialCatalogService
 

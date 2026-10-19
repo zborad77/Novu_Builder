@@ -22,12 +22,12 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.identity.api.deps import get_current_user, require_org_id
+from app.modules.identity.public import get_current_user, require_org_id
 from app.platform.events.types import build_outbox_message, sse_id_from_message
 from app.platform.metrics import observe_sse_connection, observe_sse_reconnect
 from app.platform.db.session import AsyncSessionFactory, get_db_session
 from app.modules.offers.service import OfferNotFoundError, OfferService
-from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.identity.public import AuthUserRead
 
 router = APIRouter(prefix="/offer-requests", tags=["offer-events"])
 

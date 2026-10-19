@@ -4,7 +4,7 @@ from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.modules.identity.api.deps import get_current_user, require_manager, require_org_id
+from app.modules.identity.public import get_current_user, require_manager, require_org_id
 from app.platform.http.deps import get_redis
 from app.modules.catalog.api.deps import get_work_catalog_service
 from app.platform.config import get_settings
@@ -14,7 +14,7 @@ from app.platform.tenant_timing import (
     TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
     enforce_timing_floor,
 )
-from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.identity.public import AuthUserRead
 from app.modules.catalog.schemas.work_catalog import (
     CatalogCategoryListResponse,
     CatalogGroupedResponse,

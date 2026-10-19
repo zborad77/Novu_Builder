@@ -2,16 +2,16 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.modules.analysis.api.deps import get_analysis_service
-from app.modules.identity.api.deps import get_current_user, resolve_org_id
-from app.modules.media.api.deps import get_photo_service
-from app.modules.cases.api.deps import CaseReader, get_case_reader
-from app.modules.audit.audit_log import log_cross_tenant_denied
+from app.modules.identity.public import get_current_user, resolve_org_id
+from app.modules.media.public import get_photo_service
+from app.modules.cases.public import CaseReader, get_case_reader
+from app.modules.audit.public import log_cross_tenant_denied
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
-from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.identity.public import AuthUserRead
 from app.modules.analysis.schemas.measurement import MeasurementPolygonPoint, MeasurementRead, MeasurementUpsert
 from app.modules.analysis.analysis_service import AnalysisService
-from app.modules.media.photo_service import PhotoService
+from app.modules.media.public import PhotoService
 
 logger = structlog.get_logger(__name__)
 

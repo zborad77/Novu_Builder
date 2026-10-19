@@ -10,14 +10,15 @@ from __future__ import annotations
 
 
 def import_all_models() -> None:
-    import app.modules.analysis.models  # noqa: F401
-    import app.modules.audit.models  # noqa: F401
-    import app.modules.catalog.models  # noqa: F401
-    import app.modules.catalog.work_catalog.models  # noqa: F401
-    import app.modules.cases.models  # noqa: F401
-    import app.modules.exports.models  # noqa: F401
-    import app.modules.identity.models  # noqa: F401
-    import app.modules.media.models  # noqa: F401
-    import app.modules.offers.models  # noqa: F401
-    import app.modules.quoting.models  # noqa: F401
+    # Import veřejného rozhraní modulu registruje jeho ORM modely (orm_models).
+    from app.modules.analysis.public import orm_models as _analysis  # noqa: F401
+    from app.modules.audit.public import orm_models as _audit  # noqa: F401
+    from app.modules.cases.public import orm_models as _cases  # noqa: F401
+    from app.modules.catalog.public import orm_models as _catalog  # noqa: F401
+    from app.modules.catalog.public import work_catalog_orm_models as _work_catalog  # noqa: F401
+    from app.modules.exports.public import orm_models as _exports  # noqa: F401
+    from app.modules.identity.public import orm_models as _identity  # noqa: F401
+    from app.modules.media.public import orm_models as _media  # noqa: F401
+    from app.modules.offers.public import orm_models as _offers  # noqa: F401
+    from app.modules.quoting.public import orm_models as _quoting  # noqa: F401
     import app.platform.events.models  # noqa: F401

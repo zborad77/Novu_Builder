@@ -32,7 +32,7 @@ from app.platform.db.session import AsyncSessionFactory
 from app.modules.audit.models import AuditLog
 
 if TYPE_CHECKING:
-    from app.modules.identity.schemas.auth import AuthUserRead
+    from app.modules.identity.public import AuthUserRead
 
 logger = structlog.get_logger(__name__)
 

@@ -2,14 +2,14 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.modules.analysis.api.deps import get_analysis_service
-from app.modules.identity.api.deps import get_current_user, require_manager, resolve_org_id
+from app.modules.identity.public import get_current_user, require_manager, resolve_org_id
 from app.platform.http.deps import get_job_queue
-from app.modules.cases.api.deps import CaseReader, get_case_reader
-from app.modules.audit.audit_log import log_cross_tenant_denied
+from app.modules.cases.public import CaseReader, get_case_reader
+from app.modules.audit.public import log_cross_tenant_denied
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.modules.analysis.schemas.analysis import AnalysisJobCreateRequest, AnalysisTriggerResponse
-from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.identity.public import AuthUserRead
 from app.modules.analysis.analysis_service import AnalysisService
 from app.platform.jobs.queue import AnalysisJobQueueCapacityExceededError, enqueue_analysis_job
 

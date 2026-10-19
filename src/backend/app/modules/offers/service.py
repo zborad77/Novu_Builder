@@ -16,7 +16,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.cases.models import Client
+from app.modules.cases.public import Client
 from app.modules.offers.models import OfferRequest
 from app.modules.offers.domain import (
     OFFER_STATUS_CANCELLED,

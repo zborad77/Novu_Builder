@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.modules.cases.transitions import VALID_STATUSES
+from app.modules.cases.public import VALID_STATUSES
 
 # ---------------------------------------------------------------------------
 # Phase sets — reused across entries to keep the table readable.

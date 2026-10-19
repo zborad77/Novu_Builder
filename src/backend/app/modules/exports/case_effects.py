@@ -19,7 +19,7 @@ from uuid import uuid4
 
 import structlog
 
-from app.modules.cases.effects import EffectContext, after_transition, before_transition
+from app.modules.cases.public import EffectContext, after_transition, before_transition
 from app.platform.jobs.backpressure import heavy_job_priority_for_type
 from app.platform.config import get_settings
 from app.modules.exports.models import ProjectExport

@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.audit.audit_log import commit_security_critical_audit
+from app.modules.audit.public import commit_security_critical_audit
 from app.platform.config import get_settings
 from app.platform.http.exposure import SUPERADMIN_ZONES, current_audience, current_zone
 from app.modules.identity.security import enforce_password_strength

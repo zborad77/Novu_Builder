@@ -7,8 +7,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.identity.api.deps import get_current_user, require_manager, require_org_id
-from app.modules.identity.rbac import is_tenant_operator
+from app.modules.identity.public import get_current_user, require_manager, require_org_id
+from app.modules.identity.public import is_tenant_operator
 from app.platform.db.session import get_db_session
 from app.modules.offers.domain import InvalidOfferTransitionError
 from app.modules.offers.service import (
@@ -19,7 +19,7 @@ from app.modules.offers.service import (
     OfferService,
     OfferTerminalError,
 )
-from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.identity.public import AuthUserRead
 from app.modules.offers.schemas import (
     MoreInfoSubmit,
     OfferApprove,

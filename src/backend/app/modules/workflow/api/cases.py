@@ -1,14 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.modules.workflow.api.deps import get_case_action_service, get_project_service
-from app.modules.identity.api.deps import get_current_user, require_manager, resolve_org_id
+from app.modules.identity.public import get_current_user, require_manager, resolve_org_id
 from app.modules.workflow.case_actions import CaseActionError, CaseActionService
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
-from app.modules.quoting.proposal_draft_repository import ProposalVersionConflictError
-from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.quoting.public import ProposalVersionConflictError
+from app.modules.identity.public import AuthUserRead
 from app.modules.workflow.schemas import CaseActionRequest, ProjectCreate, ProjectCreateResponse, ProjectDetail, ProjectDuplicateRequest, ProjectListResponse, ProjectPatch
-from app.modules.quoting.schemas.proposal import ProjectProposalDraftPatch
+from app.modules.quoting.public import ProjectProposalDraftPatch
 from app.modules.workflow.project_service import ProjectService
 
 router = APIRouter(prefix="/cases", tags=["cases"])

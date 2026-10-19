@@ -5,7 +5,7 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.media.models import Marker, ProjectPhoto
-from app.modules.cases.models import Project
+from app.modules.cases.public import Project
 
 
 class PhotoRepository:

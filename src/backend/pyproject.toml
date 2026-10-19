@@ -59,3 +59,34 @@ disable_error_code = ["union-attr", "assignment", "arg-type", "call-overload"]
 # typing mismatch (column is datetime|None; schema field is datetime with implicit None allowed).
 module = ["app.modules.exports.export_service"]
 disable_error_code = ["arg-type"]
+
+# ---------------------------------------------------------------------------
+# Hranice modulů (docs/architecture/MODULAR_ARCHITECTURE.md). Spouští CI
+# (`lint-imports`) i tests/architecture/test_module_boundaries.py.
+# Moduly smějí záviset jen na vrstvách POD sebou; tím jsou vyloučené i cykly
+# mezi moduly. Importy pod TYPE_CHECKING (typování stringových ORM relací)
+# runtime závislost nevytvářejí, proto se nepočítají.
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_package = "app"
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+id = "layers"
+name = "Moduly závisí jen směrem dolů (bez cyklů)"
+type = "layers"
+layers = [
+    "app.main : app.worker : app.composition",
+    "app.modules.admin",
+    "app.modules.offers",
+    "app.modules.exports",
+    "app.modules.workflow",
+    "app.modules.quoting",
+    "app.modules.analysis",
+    "app.modules.catalog",
+    "app.modules.media",
+    "app.modules.cases",
+    "app.modules.identity",
+    "app.modules.audit",
+    "app.platform",
+]

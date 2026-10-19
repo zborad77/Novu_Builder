@@ -14,7 +14,7 @@ from app.modules.analysis.ports import (
     quote_recalculation_output_summary,
     recalculate_quotes,
 )
-from app.modules.cases.errors import CaseActionError
+from app.modules.cases.public import CaseActionError
 from app.modules.analysis.ai import describe_analysis_provider, run_project_analysis
 from app.platform.jobs.backpressure import (
     analysis_job_priority_for_type,
@@ -35,7 +35,7 @@ from app.platform.db.session import (
     WorkerAsyncSessionFactory,  # background runner only (execute_job, fail_job_before_processing)
 )
 from app.modules.analysis.models import AnalysisJob, AnalysisResult
-from app.modules.cases.models import Project
+from app.modules.cases.public import Project
 from app.modules.analysis.analysis_repository import (
     ANALYSIS_JOB_TYPE_MANUAL_TRIGGER,
     ANALYSIS_JOB_TYPE_QUOTE_RECALCULATION,
@@ -53,15 +53,15 @@ from app.modules.analysis.analysis_repository import (
     InvalidAnalysisJobStatusTransition,
     normalize_analysis_job_status,
 )
-from app.modules.media.photo_repository import PhotoRepository
-from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
+from app.modules.media.public import PhotoRepository
+from app.modules.catalog.public import WorkCatalogRepository
 from app.modules.analysis.schemas.analysis import AnalysisResultRead, parse_json_field
-from app.modules.catalog.analysis_profile_service import (
+from app.modules.catalog.public import (
     AnalysisProfileResolutionError,
     AnalysisProfileService,
 )
 from app.platform.storage.backend import delete_storage_file, write_storage_file
-from app.modules.catalog.work_catalog.domain import CatalogValidationError
+from app.modules.catalog.public import CatalogValidationError
 from app.platform.jobs.queue import (
     AnalysisJobTransportSnapshot,
     AnalysisJobQueueCapacityExceededError,
@@ -1871,7 +1871,7 @@ class AnalysisService:
                     )
                     _resolved_wt_code = mapping["resolved_work_type_code"]
                     if _resolved_wt_code:
-                        from app.modules.catalog.work_catalog.phase_bindings import get_phase_binding
+                        from app.modules.catalog.public import get_phase_binding
                         _binding = get_phase_binding(_resolved_wt_code)
                         if _binding is None or not _binding.vision_detectable:
                             log.warning(

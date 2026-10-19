@@ -13,7 +13,7 @@ from fastapi.responses import Response as RawResponse
 from sqlalchemy import case, func, select, text
 import structlog
 
-from app.modules.identity.api.deps import require_superadmin
+from app.modules.identity.public import require_superadmin
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.platform.metrics import (
@@ -51,8 +51,8 @@ from app.platform.metrics import (
     WORKER_SEEN_INSTANCES,
 )
 from app.platform.db.session import AsyncSessionFactory
-from app.modules.analysis.models import AnalysisJob
-from app.modules.identity.schemas.auth import AuthUserRead
+from app.modules.analysis.public import AnalysisJob
+from app.modules.identity.public import AuthUserRead
 from app.platform.storage.backend import verify_storage_health
 from app.platform.jobs.heartbeat import (
     WORKER_HEARTBEAT_FRESHNESS_SECONDS,
