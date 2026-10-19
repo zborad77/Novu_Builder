@@ -18,12 +18,12 @@ from app.platform.tenant_timing import (
     TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
     enforce_timing_floor,
 )
-from app.models import PricingProfile
-from app.models.work_catalog import CatalogPricingProfile, ProjectWorkItem, ProjectWorkItemValue, WorkType
-from app.repositories.work_catalog_repository import WorkCatalogRepository
-from app.services.tenant_work_type_resolution_service import TenantWorkTypeResolutionService
-from app.work_catalog.cache import LOCAL_RESOLUTION_TTL_SECONDS, pricing_resolution_cache_scope
-from app.work_catalog.domain import CatalogValidationError, normalize_machine_code
+from app.modules.catalog.models import PricingProfile
+from app.modules.catalog.work_catalog.models import CatalogPricingProfile, ProjectWorkItem, ProjectWorkItemValue, WorkType
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.tenant_work_type_resolution_service import TenantWorkTypeResolutionService
+from app.modules.catalog.work_catalog.cache import LOCAL_RESOLUTION_TTL_SECONDS, pricing_resolution_cache_scope
+from app.modules.catalog.work_catalog.domain import CatalogValidationError, normalize_machine_code
 
 
 def _as_float(value: Decimal | float | int | None) -> float | None:

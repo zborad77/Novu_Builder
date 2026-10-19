@@ -9,7 +9,7 @@ from uuid import uuid4
 from redis.asyncio import Redis
 
 from app.platform.metrics import observe_work_catalog_resolution, record_work_catalog_validation_failure
-from app.models.work_catalog import (
+from app.modules.catalog.work_catalog.models import (
     ProjectWorkItem,
     ProjectWorkItemValue,
     TenantWorkTypeExtraParameter,
@@ -17,8 +17,8 @@ from app.models.work_catalog import (
     VisionDetection,
     WorkType,
 )
-from app.repositories.work_catalog_repository import WorkCatalogRepository
-from app.schemas.work_catalog import (
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.schemas.work_catalog import (
     AnalysisProfileConfidenceThresholdRead,
     AnalysisProfileExtractionRuleRead,
     AnalysisProfileFallbackBehaviorRead,
@@ -65,7 +65,7 @@ from app.schemas.work_catalog import (
     WorkTypeParameterRead,
     WorkTypeParameterSectionRead,
 )
-from app.work_catalog.domain import (
+from app.modules.catalog.work_catalog.domain import (
     PROJECT_WORK_ITEM_STATUSES,
     TENANT_PARAMETER_OVERRIDE_STATUSES,
     TENANT_WORK_TYPE_SETTING_STATUSES,
@@ -81,17 +81,17 @@ from app.work_catalog.domain import (
     section_sort_order,
     validate_tenant_extra_parameter_definition,
 )
-from app.services.tenant_work_type_resolution_service import (
+from app.modules.catalog.tenant_work_type_resolution_service import (
     ResolvedParameterDefinition,
     ResolvedTenantWorkTypeConfiguration,
     TenantWorkTypeResolutionService,
 )
-from app.work_catalog.phase_bindings import (
+from app.modules.catalog.work_catalog.phase_bindings import (
     get_phase_binding,
     is_allowed_in_status,
     is_recommended_in_status,
 )
-from app.work_catalog.cache import invalidate_pricing_resolution_cache, invalidate_tenant_effective_cache
+from app.modules.catalog.work_catalog.cache import invalidate_pricing_resolution_cache, invalidate_tenant_effective_cache
 
 
 class WorkCatalogNotFoundError(LookupError):

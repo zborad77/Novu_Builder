@@ -1,5 +1,5 @@
-from app.repositories.supplier_repository import SupplierRepository
-from app.schemas.supplier import SupplierRead
+from app.modules.catalog.supplier_repository import SupplierRepository
+from app.modules.catalog.schemas.supplier import SupplierRead
 
 
 class SupplierService:

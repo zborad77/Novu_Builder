@@ -12,28 +12,28 @@ from app.modules.workflow.case_actions import CaseActionService
 from app.repositories.analysis_repository import AnalysisRepository
 from app.modules.exports.export_repository import ExportRepository
 from app.repositories.final_proposal_repository import FinalProposalRepository
-from app.repositories.material_catalog_repository import MaterialCatalogRepository
+from app.modules.catalog.material_catalog_repository import MaterialCatalogRepository
 from app.modules.media.photo_repository import PhotoRepository
-from app.repositories.pricebook_repository import PricebookRepository
+from app.modules.catalog.pricebook_repository import PricebookRepository
 from app.modules.cases.repository import ProjectRepository
 from app.repositories.proposal_draft_repository import ProposalDraftRepository
 from app.repositories.quote_variant_repository import QuoteVariantRepository
 from app.modules.exports.storage_consistency_repository import StorageConsistencyRepository
-from app.repositories.supplier_repository import SupplierRepository
+from app.modules.catalog.supplier_repository import SupplierRepository
 from app.modules.identity.token_repository import TokenStateBackendUnavailableError
-from app.repositories.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
 from app.modules.identity.schemas.auth import AuthUserRead
 from app.services.analysis_service import AnalysisService
 from app.modules.identity.auth_service import AuthService
 from app.modules.exports.export_service import ExportService
-from app.services.material_catalog_service import MaterialCatalogService
+from app.modules.catalog.material_catalog_service import MaterialCatalogService
 from app.modules.media.photo_service import PhotoService
-from app.services.pricebook_service import PricebookService
+from app.modules.catalog.pricebook_service import PricebookService
 from app.modules.workflow.project_service import ProjectService
 from app.services.quote_variant_service import QuoteVariantService
 from app.modules.exports.storage_consistency_service import StorageConsistencyService
-from app.services.supplier_service import SupplierService
-from app.services.work_catalog_service import WorkCatalogService
+from app.modules.catalog.supplier_service import SupplierService
+from app.modules.catalog.work_catalog_service import WorkCatalogService
 
 logger = structlog.get_logger(__name__)
 

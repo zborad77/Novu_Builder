@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from app.models import MaterialCatalog, PricingProfile, Supplier
+from app.modules.catalog.models import MaterialCatalog, PricingProfile, Supplier
 from app.modules.cases.models import Project
 
 

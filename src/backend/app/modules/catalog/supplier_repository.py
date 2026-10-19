@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Supplier
+from app.modules.catalog.models import Supplier
 
 
 class SupplierRepository:

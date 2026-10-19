@@ -8,7 +8,7 @@ from app.platform.db.seed_runtime import (
     SeedWriteMode,
     apply_seed_model_plan,
 )
-from app.models import WorkCategory
+from app.modules.catalog.work_catalog.models import WorkCategory
 
 
 async def test_authoritative_upsert_updates_existing_seeded_row_and_reports_delta(db_session):

@@ -6,15 +6,15 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
-from app.models import AnalysisProfile, AnalysisProfileConfidenceThreshold, AnalysisProfileExtractionRule, AnalysisProfileIgnoredObject, AnalysisProfileOutputMapping, AnalysisProfileTargetObject, AnalysisProfileValidationRule, CatalogPricingProfile, TenantWorkTypeSetting, WorkCategory, WorkType, WorkTypeParameter, WorkTypeParameterOption
+from app.modules.catalog.work_catalog.models import AnalysisProfile, AnalysisProfileConfidenceThreshold, AnalysisProfileExtractionRule, AnalysisProfileIgnoredObject, AnalysisProfileOutputMapping, AnalysisProfileTargetObject, AnalysisProfileValidationRule, CatalogPricingProfile, TenantWorkTypeSetting, WorkCategory, WorkType, WorkTypeParameter, WorkTypeParameterOption
 from app.modules.cases.models import Project
-from app.repositories.work_catalog_repository import WorkCatalogRepository
-from app.services.analysis_profile_service import (
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.analysis_profile_service import (
     AnalysisProfileResolutionError,
     AnalysisProfileService,
 )
-from app.work_catalog.domain import CatalogValidationError
-from app.work_catalog.seeds import GLOBAL_WORK_CATALOG_SEED
+from app.modules.catalog.work_catalog.domain import CatalogValidationError
+from app.modules.catalog.work_catalog.seeds import GLOBAL_WORK_CATALOG_SEED
 
 
 async def _ensure_global_catalog_seed(db_session) -> None:

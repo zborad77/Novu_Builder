@@ -18,7 +18,7 @@ from app.repositories.analysis_repository import (
     AnalysisRepository,
 )
 from app.modules.media.photo_repository import PhotoRepository
-from app.repositories.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
 from app.services.analysis_service import AnalysisService
 from app.services.quote_variant_service import QuoteVariantRecalculationResult
 from app.platform.jobs.queue import dequeue_analysis_job

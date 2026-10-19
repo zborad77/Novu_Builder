@@ -1,6 +1,6 @@
-from app.models import MaterialCatalog, PricingProfile
-from app.repositories.pricebook_repository import PricebookRepository
-from app.schemas.pricebook import PricebookCreate, PricebookItemRead, PricebookRead
+from app.modules.catalog.models import MaterialCatalog, PricingProfile
+from app.modules.catalog.pricebook_repository import PricebookRepository
+from app.modules.catalog.schemas.pricebook import PricebookCreate, PricebookItemRead, PricebookRead
 
 
 def to_pricebook_read(pricebook: PricingProfile) -> PricebookRead:

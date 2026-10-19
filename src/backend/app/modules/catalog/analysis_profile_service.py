@@ -17,11 +17,11 @@ from app.platform.tenant_timing import (
     TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
     enforce_timing_floor,
 )
-from app.models.work_catalog import AnalysisProfile, WorkType
-from app.repositories.work_catalog_repository import WorkCatalogRepository
-from app.services.tenant_work_type_resolution_service import TenantWorkTypeResolutionService
-from app.work_catalog.cache import LOCAL_RESOLUTION_TTL_SECONDS, tenant_effective_cache_scope
-from app.work_catalog.domain import (
+from app.modules.catalog.work_catalog.models import AnalysisProfile, WorkType
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.tenant_work_type_resolution_service import TenantWorkTypeResolutionService
+from app.modules.catalog.work_catalog.cache import LOCAL_RESOLUTION_TTL_SECONDS, tenant_effective_cache_scope
+from app.modules.catalog.work_catalog.domain import (
     CatalogValidationError,
     coerce_analysis_attribute_value,
     validate_number_bounds,

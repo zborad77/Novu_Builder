@@ -1,0 +1,14 @@
+{
+ "source": "app/models/domain.py",
+ "moves": {
+  "app/modules/catalog/models.py": [
+   "PricingProfile",
+   "Supplier",
+   "MaterialCatalog",
+   "SupplierMaterialPrice"
+  ]
+ },
+ "headers": {
+  "app/modules/catalog/models.py": "\"\"\"ORM modely modulu catalog: cenov\u00e9 profily tenanta, dodavatel\u00e9 a katalog materi\u00e1l\u016f.\"\"\"\n"
+ }
+}

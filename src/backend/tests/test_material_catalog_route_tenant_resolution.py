@@ -3,12 +3,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.api.routes.material_catalog import (
+from app.modules.catalog.api.material_catalog import (
     list_material_catalog,
     list_supplier_prices,
     patch_material,
 )
-from app.schemas.material_catalog import MaterialCatalogPatch
+from app.modules.catalog.schemas.material_catalog import MaterialCatalogPatch
 
 
 def _make_user(*, is_superadmin: bool, org_id: str | None):
@@ -115,7 +115,7 @@ class TestMaterialCatalogRouteTenantResolution:
 
     def test_source_uses_resolve_org_id_in_all_material_catalog_handlers(self):
         import inspect
-        import app.api.routes.material_catalog as material_catalog_module
+        import app.modules.catalog.api.material_catalog as material_catalog_module
 
         source = inspect.getsource(material_catalog_module)
 

@@ -205,7 +205,7 @@ class TestMaterialCatalogDecimalPrecision:
     async def test_update_material_stores_exact_decimal(self, db_session, test_tenants):
         """Repository round-trip: float 10.3 must come back as Decimal('10.3')."""
         from decimal import Decimal
-        from app.repositories.material_catalog_repository import MaterialCatalogRepository
+        from app.modules.catalog.material_catalog_repository import MaterialCatalogRepository
 
         repo = MaterialCatalogRepository(db_session)
         material = await repo.get_material_in_org("mat_e2e_a1", test_tenants["org_a"])
@@ -227,7 +227,7 @@ class TestMaterialCatalogDecimalPrecision:
     async def test_update_material_cross_tenant_isolation(self, db_session, test_tenants):
         """Updating org_a material does not affect org_b material (sanity check)."""
         from decimal import Decimal
-        from app.repositories.material_catalog_repository import MaterialCatalogRepository
+        from app.modules.catalog.material_catalog_repository import MaterialCatalogRepository
 
         repo = MaterialCatalogRepository(db_session)
         mat_b = await repo.get_material_in_org("mat_e2e_b1", test_tenants["org_b"])

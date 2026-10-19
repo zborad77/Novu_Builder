@@ -1,4 +1,4 @@
-from app.work_catalog.domain import (
+from app.modules.catalog.work_catalog.domain import (
     PARAMETER_SECTION_LABELS,
     PARAMETER_SECTION_ORDER,
     PARAMETER_SECTIONS,

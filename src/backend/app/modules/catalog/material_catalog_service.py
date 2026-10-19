@@ -1,5 +1,5 @@
-from app.repositories.material_catalog_repository import MaterialCatalogRepository
-from app.schemas.material_catalog import MaterialCatalogRead, SupplierPriceRead
+from app.modules.catalog.material_catalog_repository import MaterialCatalogRepository
+from app.modules.catalog.schemas.material_catalog import MaterialCatalogRead, SupplierPriceRead
 
 
 class MaterialCatalogService:

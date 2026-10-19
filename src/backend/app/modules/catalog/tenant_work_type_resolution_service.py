@@ -16,12 +16,12 @@ from app.platform.metrics import (
     observe_work_catalog_resolution_input,
     record_work_catalog_validation_failure,
 )
-from app.work_catalog.cache import LOCAL_RESOLUTION_TTL_SECONDS, tenant_effective_cache_scope
+from app.modules.catalog.work_catalog.cache import LOCAL_RESOLUTION_TTL_SECONDS, tenant_effective_cache_scope
 from app.platform.tenant_timing import (
     TENANT_SENSITIVE_TIMING_FLOOR_SECONDS,
     enforce_timing_floor,
 )
-from app.models.work_catalog import (
+from app.modules.catalog.work_catalog.models import (
     AnalysisProfile,
     CatalogPricingProfile,
     TenantWorkTypeExtraParameter,
@@ -29,8 +29,8 @@ from app.models.work_catalog import (
     TenantWorkTypeSetting,
     WorkType,
 )
-from app.repositories.work_catalog_repository import WorkCatalogRepository
-from app.work_catalog.domain import (
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.work_catalog.domain import (
     CatalogValidationError,
     TENANT_WORK_TYPE_SETTING_STATUSES,
     validate_resolved_parameter_contract,

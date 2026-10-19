@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from app.work_catalog.seed_ids import (
+from app.modules.catalog.work_catalog.seed_ids import (
     build_analysis_profile_component_id,
     build_analysis_profile_id,
 )

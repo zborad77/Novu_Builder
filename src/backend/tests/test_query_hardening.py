@@ -9,14 +9,14 @@ from app.api.routes.admin import get_audit_log
 
 def _mock_request() -> StarletteRequest:
     return StarletteRequest({"type": "http", "method": "GET", "path": "/", "headers": []})
-from app.models import MaterialCatalog, PricingProfile, Supplier
+from app.modules.catalog.models import MaterialCatalog, PricingProfile, Supplier
 from app.modules.cases.models import Project
 from app.modules.media.models import ProjectPhoto
 from app.modules.audit.models import AuditLog
 from app.modules.media.photo_repository import PhotoRepository
-from app.repositories.pricebook_repository import PricebookRepository
-from app.repositories.material_catalog_repository import MaterialCatalogRepository
-from app.services.material_catalog_service import MaterialCatalogService
+from app.modules.catalog.pricebook_repository import PricebookRepository
+from app.modules.catalog.material_catalog_repository import MaterialCatalogRepository
+from app.modules.catalog.material_catalog_service import MaterialCatalogService
 
 
 async def _seed_photo_flags(db_session, test_tenants):

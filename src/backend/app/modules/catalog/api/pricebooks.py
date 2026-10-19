@@ -11,9 +11,9 @@ from app.platform.tenant_timing import (
     enforce_timing_floor,
 )
 from app.modules.identity.schemas.auth import AuthUserRead
-from app.schemas.pricebook import PricebookCreate, PricebookItemRead, PricebookListResponse, PricebookRead
-from app.services.pricebook_service import PricebookService
-from app.work_catalog.cache import pricing_resolution_cache_scope
+from app.modules.catalog.schemas.pricebook import PricebookCreate, PricebookItemRead, PricebookListResponse, PricebookRead
+from app.modules.catalog.pricebook_service import PricebookService
+from app.modules.catalog.work_catalog.cache import pricing_resolution_cache_scope
 
 router = APIRouter(tags=["pricebooks"])
 

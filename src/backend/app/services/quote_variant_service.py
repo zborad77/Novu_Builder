@@ -3,9 +3,9 @@ from typing import Any
 
 from app.models import AnalysisJob, QuoteItem, QuoteVariant
 from app.repositories.quote_variant_repository import QuoteVariantRepository
-from app.repositories.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
 from app.schemas.quote_variant import AnalysisJobRead, QuoteItemRead, QuoteVariantRead
-from app.services.pricing_profile_service import PricingProfileResolutionError, PricingProfileService
+from app.modules.catalog.pricing_profile_service import PricingProfileResolutionError, PricingProfileService
 
 
 def round_currency(value: float) -> float:

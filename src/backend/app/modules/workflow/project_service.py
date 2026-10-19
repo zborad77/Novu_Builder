@@ -7,7 +7,7 @@ from sqlalchemy import delete
 
 from app.modules.cases.models import Project
 from app.modules.media.models import ProjectPhoto
-from app.models import PricingProfile
+from app.modules.catalog.models import PricingProfile
 from app.repositories.final_proposal_repository import FinalProposalRepository
 from app.repositories.proposal_draft_repository import ProposalDraftRepository
 from app.modules.cases.repository import ProjectRepository

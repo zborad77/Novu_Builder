@@ -4,8 +4,8 @@ from app.api.deps import get_current_user, get_material_catalog_service, require
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.modules.identity.schemas.auth import AuthUserRead
-from app.schemas.material_catalog import MaterialCatalogPatch
-from app.services.material_catalog_service import MaterialCatalogService
+from app.modules.catalog.schemas.material_catalog import MaterialCatalogPatch
+from app.modules.catalog.material_catalog_service import MaterialCatalogService
 
 router = APIRouter(prefix="/material-catalog", tags=["material-catalog"])
 

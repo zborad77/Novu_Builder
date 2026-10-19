@@ -10,15 +10,15 @@ from app.api.routes.estimates import router as estimates_router
 from app.modules.exports.api.exports import router as exports_router
 from app.modules.media.api.images import router as images_router
 from app.modules.media.api.markers import router as markers_router
-from app.api.routes.material_catalog import router as material_catalog_router
+from app.modules.catalog.api.material_catalog import router as material_catalog_router
 from app.api.routes.measurements import router as measurements_router
-from app.api.routes.pricebooks import router as pricebooks_router
-from app.api.routes.suppliers import router as suppliers_router
+from app.modules.catalog.api.pricebooks import router as pricebooks_router
+from app.modules.catalog.api.suppliers import router as suppliers_router
 from app.api.routes.system import router as system_router
 from app.api.routes.offer_events import router as offer_events_router
 from app.api.routes.offer_requests import router as offer_requests_router
 from app.modules.identity.api.org_users import router as org_users_router
-from app.api.routes.work_catalog import router as work_catalog_router
+from app.modules.catalog.api.work_catalog import router as work_catalog_router
 
 # Canonical API uses the /cases/* surface shared by the current clients.
 # Legacy /projects/* aliases are not registered in this package anymore, so

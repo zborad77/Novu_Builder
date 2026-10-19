@@ -16,7 +16,7 @@ How to add a new work type
 4.  If the type uses an option parameter (e.g. severity, grade), add it via _severity_param() /
     _option_param() and list its choices in _PARAMETER_OPTIONS via _severity_options() /
     _option_options().
-5.  Run:  python -c "import app.work_catalog.seeds"
+5.  Run:  python -c "import app.modules.catalog.work_catalog.seeds"
     — the import-time guard (_validate_catalog_seed) will catch any inconsistency immediately.
 
 Naming conventions
@@ -31,23 +31,23 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.work_catalog.domain import (
+from app.modules.catalog.work_catalog.domain import (
     validate_analysis_profile_definition,
     validate_parameter_definition,
     validate_pricing_profile_definition,
 )
-from app.work_catalog.seed_ids import (
+from app.modules.catalog.work_catalog.seed_ids import (
     assert_valid_seed_id_collection,
     build_analysis_profile_id,
     build_catalog_pricing_profile_id,
     build_work_type_parameter_id,
 )
-from app.work_catalog.analysis_profile_seed_data import build_analysis_profile_catalog
-from app.work_catalog.parameter_seed_data import (
+from app.modules.catalog.work_catalog.analysis_profile_seed_data import build_analysis_profile_catalog
+from app.modules.catalog.work_catalog.parameter_seed_data import (
     WORK_TYPE_PARAMETER_SCHEMAS,
     build_parameter_catalog,
 )
-from app.work_catalog.pricing_profile_seed_data import build_pricing_profile_catalog
+from app.modules.catalog.work_catalog.pricing_profile_seed_data import build_pricing_profile_catalog
 
 
 # ---------------------------------------------------------------------------
@@ -2421,7 +2421,7 @@ def _validate_catalog_seed() -> None:
 
     # Phase-binding coverage — every seeded work type must have an entry in
     # phase_bindings.PHASE_BINDINGS and no entry may reference an unknown code.
-    from app.work_catalog.phase_bindings import _assert_binding_coverage
+    from app.modules.catalog.work_catalog.phase_bindings import _assert_binding_coverage
     _assert_binding_coverage(frozenset(wt["code"] for wt in _WORK_TYPES))
 
     required_inputs_by_profile_id: dict[str, list[dict[str, Any]]] = {}

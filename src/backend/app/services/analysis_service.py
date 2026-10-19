@@ -47,14 +47,14 @@ from app.repositories.analysis_repository import (
     normalize_analysis_job_status,
 )
 from app.modules.media.photo_repository import PhotoRepository
-from app.repositories.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
 from app.schemas.analysis import AnalysisResultRead, parse_json_field
-from app.services.analysis_profile_service import (
+from app.modules.catalog.analysis_profile_service import (
     AnalysisProfileResolutionError,
     AnalysisProfileService,
 )
 from app.platform.storage.backend import delete_storage_file, write_storage_file
-from app.work_catalog.domain import CatalogValidationError
+from app.modules.catalog.work_catalog.domain import CatalogValidationError
 from app.platform.jobs.queue import (
     AnalysisJobTransportSnapshot,
     AnalysisJobQueueCapacityExceededError,
@@ -1881,7 +1881,7 @@ class AnalysisService:
                     )
                     _resolved_wt_code = mapping["resolved_work_type_code"]
                     if _resolved_wt_code:
-                        from app.work_catalog.phase_bindings import get_phase_binding
+                        from app.modules.catalog.work_catalog.phase_bindings import get_phase_binding
                         _binding = get_phase_binding(_resolved_wt_code)
                         if _binding is None or not _binding.vision_detectable:
                             log.warning(

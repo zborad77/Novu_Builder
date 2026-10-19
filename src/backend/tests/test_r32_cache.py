@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.platform.cache import _k, delete_cached, get_cache_tag, get_cached, invalidate_cache_tag, set_cached
-from app.work_catalog.cache import (
+from app.modules.catalog.work_catalog.cache import (
     effective_work_type_item_key,
     effective_work_type_list_key,
     invalidate_tenant_effective_cache,
@@ -248,7 +248,7 @@ class TestVersionTags:
 
 class TestTenantIsolation:
     def test_pricebook_list_keys_differ_by_org(self):
-        from app.api.routes.pricebooks import _list_key
+        from app.modules.catalog.api.pricebooks import _list_key
         key_a = _list_key("org-a")
         key_b = _list_key("org-b")
         assert key_a != key_b
@@ -256,13 +256,13 @@ class TestTenantIsolation:
         assert "org-b" in key_b
 
     def test_supplier_list_keys_differ_by_org(self):
-        from app.api.routes.suppliers import _list_key
+        from app.modules.catalog.api.suppliers import _list_key
         key_a = _list_key("org-a", False)
         key_b = _list_key("org-b", False)
         assert key_a != key_b
 
     def test_supplier_list_keys_differ_by_include_inactive_flag(self):
-        from app.api.routes.suppliers import _list_key
+        from app.modules.catalog.api.suppliers import _list_key
         key_active = _list_key("org-1", False)
         key_all = _list_key("org-1", True)
         assert key_active != key_all
@@ -270,8 +270,8 @@ class TestTenantIsolation:
     @pytest.mark.asyncio
     async def test_pricebook_cache_miss_falls_through_to_db(self):
         """When Redis has no entry, the route must call the service (DB path)."""
-        from app.api.routes.pricebooks import _list_pricebooks_core
-        from app.schemas.pricebook import PricebookListResponse
+        from app.modules.catalog.api.pricebooks import _list_pricebooks_core
+        from app.modules.catalog.schemas.pricebook import PricebookListResponse
 
         mock_redis = AsyncMock()
         mock_redis.get = AsyncMock(return_value=None)  # cache miss
@@ -283,8 +283,8 @@ class TestTenantIsolation:
         mock_user.organizationId = "org-test"
         mock_user.isSuperAdmin = False
 
-        with patch("app.api.routes.pricebooks.get_cached", return_value=None):
-            with patch("app.api.routes.pricebooks.set_cached", new_callable=AsyncMock) as mock_set:
+        with patch("app.modules.catalog.api.pricebooks.get_cached", return_value=None):
+            with patch("app.modules.catalog.api.pricebooks.set_cached", new_callable=AsyncMock) as mock_set:
                 result = await _list_pricebooks_core(
                     current_user=mock_user,
                     service=mock_service,
@@ -297,7 +297,7 @@ class TestTenantIsolation:
     @pytest.mark.asyncio
     async def test_pricebook_cache_hit_skips_db(self):
         """When Redis returns data, the service (DB) must NOT be called."""
-        from app.api.routes.pricebooks import _list_pricebooks_core
+        from app.modules.catalog.api.pricebooks import _list_pricebooks_core
 
         mock_service = AsyncMock()
         mock_service.list_pricebooks = AsyncMock()
@@ -311,7 +311,7 @@ class TestTenantIsolation:
                         "vatPct": 21.0, "currency": "CZK", "isDefault": True,
                         "createdAt": "2025-01-01T00:00:00", "updatedAt": "2025-01-01T00:00:00"}]
 
-        with patch("app.api.routes.pricebooks.get_cached", return_value=cached_data):
+        with patch("app.modules.catalog.api.pricebooks.get_cached", return_value=cached_data):
             result = await _list_pricebooks_core(
                 current_user=mock_user,
                 service=mock_service,
@@ -323,7 +323,7 @@ class TestTenantIsolation:
     @pytest.mark.asyncio
     async def test_superadmin_requires_explicit_org_context(self):
         """Tenant-scoped pricebook route must fail closed without an explicit org context."""
-        from app.api.routes.pricebooks import _list_pricebooks_core
+        from app.modules.catalog.api.pricebooks import _list_pricebooks_core
         from fastapi import HTTPException
 
         mock_service = AsyncMock()
@@ -333,8 +333,8 @@ class TestTenantIsolation:
         mock_user.organizationId = None  # superadmin has no org
         mock_user.isSuperAdmin = True
 
-        with patch("app.api.routes.pricebooks.get_cached", new_callable=AsyncMock) as mock_get:
-            with patch("app.api.routes.pricebooks.set_cached", new_callable=AsyncMock) as mock_set:
+        with patch("app.modules.catalog.api.pricebooks.get_cached", new_callable=AsyncMock) as mock_get:
+            with patch("app.modules.catalog.api.pricebooks.set_cached", new_callable=AsyncMock) as mock_set:
                 with pytest.raises(HTTPException) as exc_info:
                     await _list_pricebooks_core(
                         current_user=mock_user,
@@ -349,8 +349,8 @@ class TestTenantIsolation:
     @pytest.mark.asyncio
     async def test_supplier_create_invalidates_both_variants(self):
         """PATCH supplier must invalidate both active-only and all-suppliers keys."""
-        from app.api.routes.suppliers import _list_key, patch_supplier
-        from app.schemas.supplier import SupplierPatch
+        from app.modules.catalog.api.suppliers import _list_key, patch_supplier
+        from app.modules.catalog.schemas.supplier import SupplierPatch
 
         mock_service = AsyncMock()
         mock_service.update_supplier = AsyncMock(return_value=MagicMock(model_dump=lambda: {}))
@@ -372,7 +372,7 @@ class TestTenantIsolation:
         async def capture_delete(redis, *keys):
             deleted_keys.extend(keys)
 
-        with patch("app.api.routes.suppliers.delete_cached", side_effect=capture_delete):
+        with patch("app.modules.catalog.api.suppliers.delete_cached", side_effect=capture_delete):
             await patch_supplier(
                 supplier_id="sup-1",
                 payload=payload,

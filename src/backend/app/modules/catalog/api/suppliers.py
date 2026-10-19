@@ -11,8 +11,8 @@ from app.platform.tenant_timing import (
     enforce_timing_floor,
 )
 from app.modules.identity.schemas.auth import AuthUserRead
-from app.schemas.supplier import SupplierPatch
-from app.services.supplier_service import SupplierService
+from app.modules.catalog.schemas.supplier import SupplierPatch
+from app.modules.catalog.supplier_service import SupplierService
 
 router = APIRouter(prefix="/suppliers", tags=["suppliers"])
 

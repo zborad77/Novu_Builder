@@ -15,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from app.platform.config import get_settings
 from app.platform.db.base import Base
 from app.models import domain  # noqa: F401
-from app.models import work_catalog  # noqa: F401
+from app.modules.catalog.work_catalog import models as work_catalog  # noqa: F401
 
 
 config = context.config

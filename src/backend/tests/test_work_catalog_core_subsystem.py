@@ -7,19 +7,19 @@ import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from app.models import AnalysisProfile, AnalysisProfileConfidenceThreshold, AnalysisProfileExtractionRule, AnalysisProfileIgnoredObject, AnalysisProfileOutputMapping, AnalysisProfileTargetObject, AnalysisProfileValidationRule, CatalogPricingProfile, CatalogPricingProfileAdjustmentRule, CatalogPricingProfileBaseRule, CatalogPricingProfileLaborAssumption, CatalogPricingProfileMaterialAssumption, CatalogPricingProfileRequiredInput, ProjectWorkItem, ProjectWorkItemValue, TenantWorkTypeExtraParameter, TenantWorkTypeExtraParameterOption, TenantWorkTypeParameterOverride, TenantWorkTypeSetting, WorkCategory, WorkType, WorkTypeParameter, WorkTypeParameterOption
+from app.modules.catalog.work_catalog.models import AnalysisProfile, AnalysisProfileConfidenceThreshold, AnalysisProfileExtractionRule, AnalysisProfileIgnoredObject, AnalysisProfileOutputMapping, AnalysisProfileTargetObject, AnalysisProfileValidationRule, CatalogPricingProfile, CatalogPricingProfileAdjustmentRule, CatalogPricingProfileBaseRule, CatalogPricingProfileLaborAssumption, CatalogPricingProfileMaterialAssumption, CatalogPricingProfileRequiredInput, ProjectWorkItem, ProjectWorkItemValue, TenantWorkTypeExtraParameter, TenantWorkTypeExtraParameterOption, TenantWorkTypeParameterOverride, TenantWorkTypeSetting, WorkCategory, WorkType, WorkTypeParameter, WorkTypeParameterOption
 from app.modules.cases.models import Project
-from app.repositories.work_catalog_repository import WorkCatalogRepository
-from app.schemas.work_catalog import (
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.schemas.work_catalog import (
     ProjectWorkItemCreate,
     ProjectWorkItemValueConfirmationInput,
     ProjectWorkItemValueInput,
     TenantWorkTypeSettingUpsert,
     TenantWorkTypeSettingWithParametersUpsert,
 )
-from app.services.work_catalog_service import WorkCatalogNotFoundError, WorkCatalogService
-from app.work_catalog.domain import CatalogValidationError
-from app.work_catalog.seeds import GLOBAL_WORK_CATALOG_SEED
+from app.modules.catalog.work_catalog_service import WorkCatalogNotFoundError, WorkCatalogService
+from app.modules.catalog.work_catalog.domain import CatalogValidationError
+from app.modules.catalog.work_catalog.seeds import GLOBAL_WORK_CATALOG_SEED
 
 
 async def _ensure_global_catalog_seed(db_session) -> None:

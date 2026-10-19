@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.work_catalog.seed_ids import (
+from app.modules.catalog.work_catalog.seed_ids import (
     MAX_SEED_ID_LENGTH,
     assert_valid_seed_id_collection,
     build_analysis_profile_id,
@@ -14,7 +14,7 @@ from app.work_catalog.seed_ids import (
     build_work_type_parameter_id,
     build_work_type_parameter_option_id,
 )
-from app.work_catalog.seeds import GLOBAL_WORK_CATALOG_SEED
+from app.modules.catalog.work_catalog.seeds import GLOBAL_WORK_CATALOG_SEED
 
 
 def test_seed_id_helpers_preserve_stable_known_ids():
@@ -59,9 +59,9 @@ def test_global_work_catalog_seed_ids_fit_contract_and_remain_unique():
 def test_seed_builder_modules_do_not_inline_dynamic_seed_ids():
     repo_root = Path(__file__).resolve().parents[1]
     guarded_modules = (
-        repo_root / "app" / "work_catalog" / "parameter_seed_data.py",
-        repo_root / "app" / "work_catalog" / "analysis_profile_seed_data.py",
-        repo_root / "app" / "work_catalog" / "pricing_profile_seed_data.py",
+        repo_root / "app" / "modules" / "catalog" / "work_catalog" / "parameter_seed_data.py",
+        repo_root / "app" / "modules" / "catalog" / "work_catalog" / "analysis_profile_seed_data.py",
+        repo_root / "app" / "modules" / "catalog" / "work_catalog" / "pricing_profile_seed_data.py",
     )
 
     forbidden_patterns = (
@@ -72,4 +72,4 @@ def test_seed_builder_modules_do_not_inline_dynamic_seed_ids():
     for path in guarded_modules:
         text = path.read_text(encoding="utf-8")
         for pattern in forbidden_patterns:
-            assert pattern not in text, f"{path.name} must use app.work_catalog.seed_ids instead of inline seed ID building."
+            assert pattern not in text, f"{path.name} must use app.modules.catalog.work_catalog.seed_ids instead of inline seed ID building."

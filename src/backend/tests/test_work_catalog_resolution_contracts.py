@@ -3,12 +3,12 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
-from app.models import TenantWorkTypeParameterOverride
-from app.repositories.work_catalog_repository import WorkCatalogRepository
-from app.schemas.work_catalog import TenantWorkTypeSettingWithParametersUpsert
-from app.services.tenant_work_type_resolution_service import TenantWorkTypeResolutionService
-from app.services.work_catalog_service import WorkCatalogService
-from app.work_catalog.domain import CatalogValidationError
+from app.modules.catalog.work_catalog.models import TenantWorkTypeParameterOverride
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.schemas.work_catalog import TenantWorkTypeSettingWithParametersUpsert
+from app.modules.catalog.tenant_work_type_resolution_service import TenantWorkTypeResolutionService
+from app.modules.catalog.work_catalog_service import WorkCatalogService
+from app.modules.catalog.work_catalog.domain import CatalogValidationError
 from tests.test_work_catalog_core_subsystem import _ensure_global_catalog_seed, _ensure_tenant_setting
 
 

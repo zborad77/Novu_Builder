@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.work_catalog.seed_ids import (
+from app.modules.catalog.work_catalog.seed_ids import (
     build_work_type_parameter_id,
     build_work_type_parameter_option_id,
 )

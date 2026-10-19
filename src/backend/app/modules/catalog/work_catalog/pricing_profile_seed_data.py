@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.work_catalog.seed_ids import (
+from app.modules.catalog.work_catalog.seed_ids import (
     build_catalog_pricing_profile_component_id,
     build_catalog_pricing_profile_id,
 )

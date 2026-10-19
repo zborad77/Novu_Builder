@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.cases.models import Project
 from app.modules.media.models import ProjectPhoto
-from app.repositories.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────

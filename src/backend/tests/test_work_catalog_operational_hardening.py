@@ -6,13 +6,13 @@ from sqlalchemy import event
 
 from app.platform.cache import _k
 from app.composition.bootstrap import _seed_global_work_catalog
-from app.repositories.work_catalog_repository import WorkCatalogRepository
-from app.schemas.work_catalog import TenantWorkTypeSettingWithParametersUpsert
-from app.services.analysis_profile_service import AnalysisProfileService
-from app.services.pricing_profile_service import PricingProfileService
-from app.services.tenant_work_type_resolution_service import TenantWorkTypeResolutionService
-from app.services.work_catalog_service import WorkCatalogService
-from app.work_catalog.cache import tenant_effective_cache_keys
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.schemas.work_catalog import TenantWorkTypeSettingWithParametersUpsert
+from app.modules.catalog.analysis_profile_service import AnalysisProfileService
+from app.modules.catalog.pricing_profile_service import PricingProfileService
+from app.modules.catalog.tenant_work_type_resolution_service import TenantWorkTypeResolutionService
+from app.modules.catalog.work_catalog_service import WorkCatalogService
+from app.modules.catalog.work_catalog.cache import tenant_effective_cache_keys
 from tests.test_work_catalog_core_subsystem import _ensure_global_catalog_seed, _ensure_tenant_setting
 
 

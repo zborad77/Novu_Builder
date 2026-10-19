@@ -76,19 +76,19 @@ class TestPricebookRepositoryOrgScope:
 
     def test_create_pricebook_uses_passed_org_id(self):
         import inspect
-        from app.repositories.pricebook_repository import PricebookRepository
+        from app.modules.catalog.pricebook_repository import PricebookRepository
         source = inspect.getsource(PricebookRepository.create_pricebook)
         assert "org_1" not in source, "Hardcoded org_1 found in create_pricebook"
 
     def test_list_pricebooks_accepts_org_id(self):
         import inspect
-        from app.repositories.pricebook_repository import PricebookRepository
+        from app.modules.catalog.pricebook_repository import PricebookRepository
         source = inspect.getsource(PricebookRepository.list_pricebooks)
         assert "organization_id" in source
 
     @pytest.mark.asyncio
     async def test_list_pricebook_items_returns_none_for_wrong_org(self):
-        from app.repositories.pricebook_repository import PricebookRepository
+        from app.modules.catalog.pricebook_repository import PricebookRepository
         session = AsyncMock()
         # Pricebook belongs to org_A but request is from org_B
         pricebook = MagicMock()
@@ -109,7 +109,7 @@ class TestMaterialCatalogRepositoryOrgScope:
 
     def test_list_material_catalog_requires_org_id(self):
         import inspect
-        from app.repositories.material_catalog_repository import MaterialCatalogRepository
+        from app.modules.catalog.material_catalog_repository import MaterialCatalogRepository
         sig = inspect.signature(MaterialCatalogRepository.list_material_catalog)
         param = sig.parameters.get("organization_id")
         assert param is not None, "organization_id parameter missing"
@@ -118,7 +118,7 @@ class TestMaterialCatalogRepositoryOrgScope:
 
     def test_source_has_no_org_1_string(self):
         import inspect
-        from app.repositories.material_catalog_repository import MaterialCatalogRepository
+        from app.modules.catalog.material_catalog_repository import MaterialCatalogRepository
         source = inspect.getsource(MaterialCatalogRepository)
         assert "org_1" not in source, "Hardcoded org_1 found in MaterialCatalogRepository"
 
@@ -132,7 +132,7 @@ class TestSupplierRepositoryOrgScope:
 
     def test_list_suppliers_requires_org_id(self):
         import inspect
-        from app.repositories.supplier_repository import SupplierRepository
+        from app.modules.catalog.supplier_repository import SupplierRepository
         sig = inspect.signature(SupplierRepository.list_suppliers)
         param = sig.parameters.get("organization_id")
         assert param is not None, "organization_id parameter missing"
@@ -140,7 +140,7 @@ class TestSupplierRepositoryOrgScope:
 
     def test_source_has_no_org_1_string(self):
         import inspect
-        from app.repositories.supplier_repository import SupplierRepository
+        from app.modules.catalog.supplier_repository import SupplierRepository
         source = inspect.getsource(SupplierRepository)
         assert "org_1" not in source, "Hardcoded org_1 found in SupplierRepository"
 

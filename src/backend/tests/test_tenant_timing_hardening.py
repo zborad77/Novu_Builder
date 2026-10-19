@@ -59,7 +59,7 @@ class TestAuthTimingHardening:
 class TestTenantResolutionTimingHardening:
     @pytest.mark.asyncio
     async def test_resolution_cache_hit_and_miss_have_consistent_timing(self):
-        from app.services.tenant_work_type_resolution_service import TenantWorkTypeResolutionService
+        from app.modules.catalog.tenant_work_type_resolution_service import TenantWorkTypeResolutionService
 
         work_type = SimpleNamespace(id="wt-1", code="roof-repair")
         resolved = SimpleNamespace(work_type=work_type)
@@ -99,7 +99,7 @@ class TestTenantResolutionTimingHardening:
             return median(samples)
 
         with patch(
-            "app.services.tenant_work_type_resolution_service.TENANT_SENSITIVE_TIMING_FLOOR_SECONDS",
+            "app.modules.catalog.tenant_work_type_resolution_service.TENANT_SENSITIVE_TIMING_FLOOR_SECONDS",
             0.01,
         ):
             miss_avg = await _median_duration(_measure_miss)

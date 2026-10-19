@@ -85,7 +85,7 @@ from app.offer_processing.provider import (
 from app.offer_processing.repository import OfferRepository
 from app.offer_processing.snapshot import build_input_snapshot
 from app.modules.media.photo_repository import PhotoRepository
-from app.repositories.work_catalog_repository import WorkCatalogRepository
+from app.modules.catalog.work_catalog_repository import WorkCatalogRepository
 from app.platform.storage.backend import generate_presigned_url
 from app.offer_processing.validation import (
     InsufficientDataResult,

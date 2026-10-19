@@ -6,13 +6,14 @@ from app.models.offer_processing import (
     OrganizationAiBudget,
     OutboxEvent,
 )
-from app.models.domain import AnalysisJob, AnalysisResult, MaterialCatalog, PricingProfile, ProjectFinalProposal, ProjectProposalDraft, QuoteItem, QuoteVariant, Supplier, SupplierMaterialPrice
+from app.models.domain import AnalysisJob, AnalysisResult, ProjectFinalProposal, ProjectProposalDraft, QuoteItem, QuoteVariant
+from app.modules.catalog.models import MaterialCatalog, PricingProfile, Supplier, SupplierMaterialPrice
 from app.modules.cases.models import Client, Project, ProjectStatusHistory
 from app.modules.media.models import Marker, ProjectPhoto
 from app.modules.exports.models import ProjectExport
 from app.modules.audit.models import AuditLog
 from app.modules.identity.models import Organization, PasswordResetToken, RolePermission, RevokedToken, UserSession, User
-from app.models.work_catalog import (
+from app.modules.catalog.work_catalog.models import (
     AnalysisProfile,
     AnalysisProfileConfidenceThreshold,
     AnalysisProfileExtractionRule,

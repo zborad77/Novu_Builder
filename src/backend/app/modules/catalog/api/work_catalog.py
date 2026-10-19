@@ -13,7 +13,7 @@ from app.platform.tenant_timing import (
     enforce_timing_floor,
 )
 from app.modules.identity.schemas.auth import AuthUserRead
-from app.schemas.work_catalog import (
+from app.modules.catalog.schemas.work_catalog import (
     CatalogCategoryListResponse,
     CatalogGroupedResponse,
     CatalogWorkTypeDetailRead,
@@ -32,11 +32,11 @@ from app.schemas.work_catalog import (
     VisionDetectionCreate,
     VisionDetectionRead,
 )
-from app.services.work_catalog_service import (
+from app.modules.catalog.work_catalog_service import (
     WorkCatalogNotFoundError,
     WorkCatalogService,
 )
-from app.work_catalog.cache import (
+from app.modules.catalog.work_catalog.cache import (
     GLOBAL_CATALOG_TTL_SECONDS,
     TENANT_EFFECTIVE_TTL_SECONDS,
     WORKFLOW_CONFIGURATION_TTL_SECONDS,
@@ -51,7 +51,7 @@ from app.work_catalog.cache import (
     global_work_type_list_key,
     tenant_effective_cache_scope,
 )
-from app.work_catalog.domain import CatalogValidationError
+from app.modules.catalog.work_catalog.domain import CatalogValidationError
 
 
 router = APIRouter(tags=["work-catalog"])

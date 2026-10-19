@@ -3,7 +3,7 @@ from uuid import uuid4
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import MaterialCatalog, PricingProfile
+from app.modules.catalog.models import MaterialCatalog, PricingProfile
 
 
 class PricebookRepository:
