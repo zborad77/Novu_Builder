@@ -29,6 +29,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -81,10 +82,10 @@ class OfferRequest(TimestampMixin, Base):
     parameters: Mapped[dict | None] = mapped_column(_JSONB)
     photo_ids: Mapped[list | None] = mapped_column(_JSONB)
 
-    status: Mapped[str] = mapped_column(String(32), default="submitted", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="submitted", nullable=False, server_default=text("'submitted'"))
 
-    auto_send: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    auto_review_bypass: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    auto_send: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default=text("false"))
+    auto_review_bypass: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default=text("false"))
 
     needs_more_info_payload: Mapped[dict | None] = mapped_column(_JSONB)
     result_ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -134,24 +135,24 @@ class OfferJob(TimestampMixin, Base):
     )
 
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False, server_default=text("'queued'"))
 
-    attempt: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    max_retries: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default=text("1"))
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default=text("0"))
+    max_retries: Mapped[int] = mapped_column(Integer, default=3, nullable=False, server_default=text("3"))
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     last_error_code: Mapped[str | None] = mapped_column(String(64))
     last_error_detail: Mapped[str | None] = mapped_column(Text)
     # Consecutive failures with the same error_code.
     # When >= POISON_THRESHOLD the worker skips remaining retries.
-    error_repeat_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_repeat_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default=text("0"))
 
     worker_id: Mapped[str | None] = mapped_column(String(128))
     leased_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Fencing token: incremented on each mark_job_running; Phase-3 persist
     # checks WHERE lease_version = :expected to abort stale-worker writes.
-    lease_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lease_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default=text("0"))
 
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -205,7 +206,7 @@ class AgentRun(Base):
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
     estimated_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
 
-    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, server_default=text("'pending'"))
     outcome: Mapped[str | None] = mapped_column(String(32))
 
     raw_output: Mapped[dict | None] = mapped_column(_JSONB)
@@ -277,7 +278,7 @@ class AiBudgetReservation(Base):
         ForeignKey("offer_jobs.id", ondelete="CASCADE"), nullable=False
     )
     token_estimate: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(String(16), default="reserved", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="reserved", nullable=False, server_default=text("'reserved'"))
     reserved_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -309,20 +310,58 @@ class OrganizationAiBudget(TimestampMixin, Base):
     )
 
     # Hard limits — enforced before inference
-    daily_token_limit: Mapped[int] = mapped_column(Integer, default=200_000, nullable=False)
+    daily_token_limit: Mapped[int] = mapped_column(Integer, default=200_000, nullable=False, server_default=text("200000"))
     monthly_cost_limit_usd: Mapped[Decimal] = mapped_column(
-        Numeric(10, 2), default=Decimal("500.00"), nullable=False
-    )
+        Numeric(10, 2), default=Decimal("500.00"), nullable=False,
+    server_default=text("500.00"))
 
     # Soft alert threshold (0–100)
-    alert_threshold_pct: Mapped[int] = mapped_column(Integer, default=80, nullable=False)
+    alert_threshold_pct: Mapped[int] = mapped_column(Integer, default=80, nullable=False, server_default=text("80"))
 
     # Rolling counters (reset by scheduled task)
-    daily_tokens_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    daily_tokens_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default=text("0"))
     monthly_cost_used_usd: Mapped[Decimal] = mapped_column(
-        Numeric(10, 2), default=Decimal("0.00"), nullable=False
-    )
+        Numeric(10, 2), default=Decimal("0.00"), nullable=False,
+    server_default=text("0.00"))
     daily_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # If False, budget exhaustion only triggers an alert (warn mode)
-    is_hard_limit: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_hard_limit: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default=text("true"))
+
+
+class ReconcilerEvent(Base):
+    """Auditní záznam každé akce OfferReconcileru (migrace 20260527_0054).
+
+    N9: tabulka dřív existovala jen v migracích – reconciler do ní zapisuje raw SQL,
+    takže v create_all (testy, dev) chyběla. Bez FK na offer_jobs/offer_requests:
+    auditní řádky musí přežít smazání rodičů.
+    """
+
+    __tablename__ = "reconciler_events"
+    __table_args__ = (
+        CheckConstraint(
+            "check_type IN ('expired_lease','stuck_request','stale_outbox')",
+            name="ck_reconciler_events_check_type",
+        ),
+        CheckConstraint(
+            "outcome IN ('requeued','failed_permanently','reconciled','alert')",
+            name="ck_reconciler_events_outcome",
+        ),
+        Index("idx_reconciler_events_request", "offer_request_id", "created_at"),
+        Index("idx_reconciler_events_check_type", "check_type", "created_at"),
+        Index("idx_reconciler_events_org", "organization_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    check_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(64), nullable=False)
+    offer_job_id: Mapped[str | None] = mapped_column(String(64))
+    offer_request_id: Mapped[str | None] = mapped_column(String(64))
+    organization_id: Mapped[str | None] = mapped_column(String(64))
+    old_status: Mapped[str | None] = mapped_column(String(32))
+    new_status: Mapped[str | None] = mapped_column(String(32))
+    reason: Mapped[str | None] = mapped_column(String(128))
+    extra: Mapped[dict | None] = mapped_column(_JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )

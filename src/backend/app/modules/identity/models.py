@@ -140,9 +140,15 @@ class PasswordResetToken(Base):
     )
 
     token: Mapped[str] = mapped_column(String(128), primary_key=True)
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     user: Mapped["User"] = relationship()
+
+
+# N9: indexy, které vytvářejí migrace (produkční schéma), deklarované i v ORM,
+# aby create_all (testy, dev) a autogenerate odpovídaly migracím.
+Index("idx_password_reset_tokens_user_id", PasswordResetToken.user_id)
+Index("idx_revoked_tokens_expires_at", RevokedToken.expires_at)

@@ -767,18 +767,14 @@ def _normalized_metadata_diff(engine):
 
 
 def test_orm_metadata_matches_migrated_schema(database):
-    """Autogenerate nad hlavou: rozdíl ORM × migrace se refaktorem nesmí změnit.
+    """N9: ORM metadata musí přesně odpovídat schématu vytvořenému migracemi.
 
-    Baseline obsahuje už existující rozdíly (např. tabulky vytvořené jen migrací);
-    přesun modelů mezi moduly nesmí přidat ani odebrat jediný řádek.
+    Testy a dev režim zakládají schéma přes create_all, produkce přes Alembic –
+    jakýkoli rozdíl (index, server default, tabulka) znamená, že testy běží nad
+    jiným schématem než produkce. Autogenerate nad hlavou proto musí být prázdný.
     """
     _cli(database, "upgrade", "head")
     import re
 
     entries = [re.sub(r" at 0x[0-9A-Fa-f]+", "", line) for line in _normalized_metadata_diff(database)]
-    rendered = "\n".join(entries) + "\n"
-    baseline = BACKEND_ROOT / "migration_tests" / "baseline" / "metadata_diff.txt"
-    if os.environ.get("NC_UPDATE_SCHEMA_BASELINE") == "1":
-        baseline.parent.mkdir(parents=True, exist_ok=True)
-        baseline.write_bytes(rendered.encode("utf-8"))
-    assert baseline.read_text(encoding="utf-8") == rendered
+    assert entries == [], "ORM × migrace se liší:\n" + "\n".join(entries)

@@ -126,3 +126,17 @@ class ProjectStatusHistory(Base):
 
     project: Mapped["Project"] = relationship(back_populates="status_history")
     transitioned_by_user: Mapped["User | None"] = relationship()
+
+
+# N9: indexy, které vytvářejí migrace (produkční schéma), deklarované i v ORM,
+# aby create_all (testy, dev) a autogenerate odpovídaly migracím.
+Index("idx_projects_created_at", Project.created_at)
+Index("idx_projects_updated_at", Project.updated_at)
+Index("idx_projects_org_created_id", Project.organization_id, Project.created_at.desc(), Project.id.desc())
+Index(
+    "idx_projects_org_status_created_id",
+    Project.organization_id,
+    Project.status,
+    Project.created_at.desc(),
+    Project.id.desc(),
+)

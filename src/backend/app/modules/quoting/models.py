@@ -3,7 +3,7 @@
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.platform.db.base import Base
@@ -38,8 +38,8 @@ class QuoteVariant(TimestampMixin, Base):
     total_ex_vat: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     vat_amount: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     total_inc_vat: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
-    currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False)
-    vat_pct: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=21, nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False, server_default=text("'CZK'"))
+    vat_pct: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=21, nullable=False, server_default=text("'21'"))
     pricing_summary_json: Mapped[str | None] = mapped_column(Text)
 
     project: Mapped["Project"] = relationship(back_populates="quote_variants")
@@ -109,7 +109,7 @@ class ProjectProposalDraft(TimestampMixin, Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, unique=True)
-    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default=text("1"))
     subject: Mapped[str | None] = mapped_column(String(255))
     summary: Mapped[str | None] = mapped_column(Text)
     material_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
@@ -130,11 +130,16 @@ class ProjectFinalProposal(TimestampMixin, Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     analysis_result_id: Mapped[str | None] = mapped_column(ForeignKey("analysis_results.id", ondelete="SET NULL"))
     draft_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(String(64), default="ready_for_export", nullable=False)
-    currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False)
+    status: Mapped[str] = mapped_column(String(64), default="ready_for_export", nullable=False, server_default=text("'ready_for_export'"))
+    currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False, server_default=text("'CZK'"))
     subject: Mapped[str | None] = mapped_column(String(255))
     summary: Mapped[str | None] = mapped_column(Text)
     total_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="final_proposals")
+
+
+# N9: indexy, které vytvářejí migrace (produkční schéma), deklarované i v ORM,
+# aby create_all (testy, dev) a autogenerate odpovídaly migracím.
+Index("idx_project_final_proposals_analysis_result_id", ProjectFinalProposal.analysis_result_id)

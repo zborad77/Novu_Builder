@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.platform.db.base import Base
@@ -34,7 +34,7 @@ class ProjectPhoto(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False, server_default=text("'active'"))
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
     preview_storage_key: Mapped[str | None] = mapped_column(String(512))
     ai_input_storage_key: Mapped[str | None] = mapped_column(String(512))
@@ -54,7 +54,7 @@ class ProjectPhoto(Base):
     exif_lat: Mapped[float | None] = mapped_column(Float)
     exif_lng: Mapped[float | None] = mapped_column(Float)
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    is_analysis_reference: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_analysis_reference: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default=text("false"))
     sort_order: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     # Soft delete (20261017_0058): a pending_delete photo stays restorable until

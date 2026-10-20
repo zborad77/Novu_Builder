@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.platform.db.base import Base
@@ -48,8 +48,8 @@ class AnalysisJob(Base):
     resolved_analysis_profile_version: Mapped[int | None] = mapped_column(Integer)
     requested_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     parent_job_id: Mapped[str | None] = mapped_column(String(64))   # set when this is a retry
-    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default=text("0"))
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default=text("0"))
     lease_token: Mapped[str | None] = mapped_column(String(128))
     worker_id: Mapped[str | None] = mapped_column(String(255))
     leased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -117,3 +117,24 @@ class AnalysisResult(Base):
     project: Mapped["Project"] = relationship(back_populates="analysis_results")
     analysis_job: Mapped["AnalysisJob | None"] = relationship(back_populates="analysis_results")
     quote_variants: Mapped[list["QuoteVariant"]] = relationship(back_populates="analysis_result")
+
+
+# N9: indexy, které vytvářejí migrace (produkční schéma), deklarované i v ORM,
+# aby create_all (testy, dev) a autogenerate odpovídaly migracím.
+Index("idx_analysis_jobs_project_created", AnalysisJob.project_id, AnalysisJob.created_at)
+Index("idx_analysis_jobs_status", AnalysisJob.status)
+Index(
+    "idx_analysis_jobs_work_type_profile_status",
+    AnalysisJob.project_id,
+    AnalysisJob.requested_work_type_code,
+    AnalysisJob.analysis_profile_id,
+    AnalysisJob.status,
+)
+Index(
+    "idx_analysis_results_work_type_profile_created",
+    AnalysisResult.project_id,
+    AnalysisResult.resolved_work_type_code,
+    AnalysisResult.analysis_profile_id,
+    AnalysisResult.created_at,
+    AnalysisResult.id,
+)

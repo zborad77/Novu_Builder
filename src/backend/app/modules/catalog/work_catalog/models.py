@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -36,9 +37,9 @@ class WorkCategory(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     name_cs: Mapped[str | None] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    catalog_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default=text("true"))
+    catalog_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default=text("1"))
 
     work_types: Mapped[list["WorkType"]] = relationship(
         back_populates="category",
@@ -72,18 +73,18 @@ class AnalysisProfile(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     provider_family: Mapped[str] = mapped_column(String(64), nullable=False)
     task_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    output_contract_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    output_contract_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default=text("1"))
     confidence_threshold: Mapped[float | None] = mapped_column(Numeric(8, 4))
-    max_detections_per_photo: Mapped[int] = mapped_column(Integer, default=25, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    profile_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
-    scope_code: Mapped[str] = mapped_column(String(64), nullable=False)
-    scope_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    max_detections_per_photo: Mapped[int] = mapped_column(Integer, default=25, nullable=False, server_default=text("25"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default=text("true"))
+    profile_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default=text("1"))
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False, server_default=text("'active'"))
+    scope_code: Mapped[str] = mapped_column(String(64), nullable=False, server_default=text("'legacy-generic'"))
+    scope_label: Mapped[str] = mapped_column(String(255), nullable=False, server_default=text("'Legacy Generic Scope'"))
     scope_description: Mapped[str | None] = mapped_column(Text)
-    fallback_mode: Mapped[str] = mapped_column(String(32), default="manual_review", nullable=False)
+    fallback_mode: Mapped[str] = mapped_column(String(32), default="manual_review", nullable=False, server_default=text("'manual_review'"))
     fallback_instructions: Mapped[str | None] = mapped_column(Text)
-    fallback_requires_manual_review: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    fallback_requires_manual_review: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default=text("true"))
 
     work_types: Mapped[list["WorkType"]] = relationship(
         back_populates="default_analysis_profile",
@@ -145,8 +146,8 @@ class AnalysisProfileTargetObject(TimestampMixin, Base):
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     object_role: Mapped[str] = mapped_column(String(32), nullable=False)
-    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default=text("false"))
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
 
     analysis_profile: Mapped["AnalysisProfile"] = relationship(back_populates="target_objects")
 
@@ -166,7 +167,7 @@ class AnalysisProfileIgnoredObject(TimestampMixin, Base):
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     reason: Mapped[str | None] = mapped_column(Text)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
 
     analysis_profile: Mapped["AnalysisProfile"] = relationship(back_populates="ignored_objects")
 
@@ -194,9 +195,9 @@ class AnalysisProfileExtractionRule(TimestampMixin, Base):
     unit: Mapped[str | None] = mapped_column(String(32))
     target_parameter_code: Mapped[str] = mapped_column(String(64), nullable=False)
     source_object_code: Mapped[str] = mapped_column(String(64), nullable=False)
-    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    manual_review_on_missing: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default=text("false"))
+    manual_review_on_missing: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default=text("true"))
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
 
     analysis_profile: Mapped["AnalysisProfile"] = relationship(back_populates="extraction_rules")
 
@@ -229,7 +230,7 @@ class AnalysisProfileValidationRule(TimestampMixin, Base):
     min_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
     max_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
     message: Mapped[str] = mapped_column(Text, nullable=False)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
 
     analysis_profile: Mapped["AnalysisProfile"] = relationship(back_populates="validation_rules")
 
@@ -255,7 +256,7 @@ class AnalysisProfileConfidenceThreshold(TimestampMixin, Base):
     min_confidence: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False)
     preferred_confidence: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False)
     action_below_threshold: Mapped[str] = mapped_column(String(32), nullable=False)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
 
     analysis_profile: Mapped["AnalysisProfile"] = relationship(back_populates="confidence_thresholds")
 
@@ -281,8 +282,8 @@ class AnalysisProfileOutputMapping(TimestampMixin, Base):
     target_field: Mapped[str] = mapped_column(String(64), nullable=False)
     source_attribute_code: Mapped[str] = mapped_column(String(64), nullable=False)
     target_parameter_code: Mapped[str | None] = mapped_column(String(64))
-    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default=text("false"))
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
 
     analysis_profile: Mapped["AnalysisProfile"] = relationship(back_populates="output_mappings")
 
@@ -318,9 +319,9 @@ class CatalogPricingProfile(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
-    pricing_basis: Mapped[str] = mapped_column(String(32), nullable=False)
-    currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False, server_default=text("'active'"))
+    pricing_basis: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'area'"))
+    currency: Mapped[str] = mapped_column(String(8), default="CZK", nullable=False, server_default=text("'CZK'"))
     pricing_strategy: Mapped[str] = mapped_column(String(32), nullable=False)
     labor_rate_source: Mapped[str] = mapped_column(String(32), nullable=False)
     material_pricing_source: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -328,8 +329,8 @@ class CatalogPricingProfile(TimestampMixin, Base):
     default_markup_pct: Mapped[float | None] = mapped_column(Numeric(14, 4))
     min_job_price: Mapped[float | None] = mapped_column(Numeric(14, 4))
     metadata_json: Mapped[str | None] = mapped_column(Text)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    profile_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default=text("true"))
+    profile_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default=text("1"))
 
     work_types: Mapped[list["WorkType"]] = relationship(
         back_populates="default_catalog_pricing_profile",
@@ -392,8 +393,8 @@ class CatalogPricingProfileRequiredInput(TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False)
     source_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    is_required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default=text("true"))
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
 
     catalog_pricing_profile: Mapped["CatalogPricingProfile"] = relationship(back_populates="required_inputs")
 
@@ -426,7 +427,7 @@ class CatalogPricingProfileLaborAssumption(TimestampMixin, Base):
     quantity_source_key: Mapped[str | None] = mapped_column(String(64))
     hours_per_unit: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
     crew_size: Mapped[int | None] = mapped_column(Integer)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
 
     catalog_pricing_profile: Mapped["CatalogPricingProfile"] = relationship(back_populates="labor_assumptions")
 
@@ -461,7 +462,7 @@ class CatalogPricingProfileMaterialAssumption(TimestampMixin, Base):
     unit: Mapped[str] = mapped_column(String(32), nullable=False)
     default_unit_cost: Mapped[float | None] = mapped_column(Numeric(14, 4))
     waste_factor_pct: Mapped[float | None] = mapped_column(Numeric(14, 4))
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
 
     catalog_pricing_profile: Mapped["CatalogPricingProfile"] = relationship(back_populates="material_assumptions")
 
@@ -512,7 +513,7 @@ class CatalogPricingProfileBaseRule(TimestampMixin, Base):
     rate_value: Mapped[float | None] = mapped_column(Numeric(14, 4))
     labor_assumption_code: Mapped[str | None] = mapped_column(String(64))
     material_assumption_code: Mapped[str | None] = mapped_column(String(64))
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
 
     catalog_pricing_profile: Mapped["CatalogPricingProfile"] = relationship(back_populates="base_rules")
 
@@ -580,7 +581,7 @@ class CatalogPricingProfileAdjustmentRule(TimestampMixin, Base):
     condition_number_value: Mapped[float | None] = mapped_column(Numeric(14, 4))
     condition_boolean_value: Mapped[bool | None] = mapped_column(Boolean)
     condition_option_code: Mapped[str | None] = mapped_column(String(64))
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
 
     catalog_pricing_profile: Mapped["CatalogPricingProfile"] = relationship(back_populates="adjustment_rules")
 
@@ -637,11 +638,11 @@ class WorkType(TimestampMixin, Base):
     name_cs: Mapped[str | None] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text)
     default_unit: Mapped[str] = mapped_column(String(32), nullable=False)
-    measurement_kind: Mapped[str] = mapped_column(String(32), default="area", nullable=False)
-    state: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
-    kind: Mapped[str] = mapped_column(String(16), default="leaf", nullable=False)
-    proposal_step: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    geometry_correction_type: Mapped[str] = mapped_column(String(32), default="none", nullable=False)
+    measurement_kind: Mapped[str] = mapped_column(String(32), default="area", nullable=False, server_default=text("'area'"))
+    state: Mapped[str] = mapped_column(String(32), default="active", nullable=False, server_default=text("'active'"))
+    kind: Mapped[str] = mapped_column(String(16), default="leaf", nullable=False, server_default=text("'leaf'"))
+    proposal_step: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default=text("false"))
+    geometry_correction_type: Mapped[str] = mapped_column(String(32), default="none", nullable=False, server_default=text("'none'"))
     output_types_json: Mapped[str | None] = mapped_column(Text)
     default_analysis_profile_id: Mapped[str | None] = mapped_column(
         ForeignKey("catalog_analysis_profiles.id", ondelete="SET NULL")
@@ -649,9 +650,9 @@ class WorkType(TimestampMixin, Base):
     default_catalog_pricing_profile_id: Mapped[str | None] = mapped_column(
         ForeignKey("catalog_pricing_profiles.id", ondelete="SET NULL")
     )
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    catalog_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default=text("true"))
+    catalog_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default=text("1"))
 
     category: Mapped["WorkCategory"] = relationship(back_populates="work_types")
     default_analysis_profile: Mapped["AnalysisProfile | None"] = relationship(
@@ -750,12 +751,12 @@ class WorkTypeParameter(TimestampMixin, Base):
     data_type: Mapped[str] = mapped_column(String(32), nullable=False)
     unit: Mapped[str | None] = mapped_column(String(32))
     section: Mapped[str | None] = mapped_column(String(64))
-    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default=text("false"))
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
     min_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
     max_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
-    vision_extractable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    manual_override_allowed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    vision_extractable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default=text("false"))
+    manual_override_allowed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default=text("true"))
     default_text_value: Mapped[str | None] = mapped_column(Text)
     default_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
     default_boolean_value: Mapped[bool | None] = mapped_column(Boolean)
@@ -788,8 +789,8 @@ class WorkTypeParameterOption(TimestampMixin, Base):
     )
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default=text("true"))
 
     parameter: Mapped["WorkTypeParameter"] = relationship(back_populates="options")
 
@@ -836,9 +837,9 @@ class WorkTypeComponent(TimestampMixin, Base):
         ForeignKey("work_types.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    condition_code: Mapped[str] = mapped_column(String(32), default="always", nullable=False)
-    quantity_multiplier: Mapped[float] = mapped_column(Numeric(14, 4), default=1.0, nullable=False)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    condition_code: Mapped[str] = mapped_column(String(32), default="always", nullable=False, server_default=text("'always'"))
+    quantity_multiplier: Mapped[float] = mapped_column(Numeric(14, 4), default=1.0, nullable=False, server_default=text("1.0"))
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
     notes: Mapped[str | None] = mapped_column(Text)
 
     parent_work_type: Mapped["WorkType"] = relationship(
@@ -872,7 +873,7 @@ class TenantWorkTypeSetting(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     work_type_id: Mapped[str] = mapped_column(ForeignKey("work_types.id", ondelete="CASCADE"), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="inherited", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="inherited", nullable=False, server_default=text("'inherited'"))
     custom_display_name: Mapped[str | None] = mapped_column(String(255))
     analysis_profile_id: Mapped[str | None] = mapped_column(
         ForeignKey("catalog_analysis_profiles.id", ondelete="SET NULL")
@@ -885,7 +886,7 @@ class TenantWorkTypeSetting(TimestampMixin, Base):
     )
     is_billable_override: Mapped[bool | None] = mapped_column(Boolean)
     sort_order_override: Mapped[int | None] = mapped_column(Integer)
-    config_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    config_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default=text("1"))
     updated_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
     work_type: Mapped["WorkType"] = relationship(back_populates="tenant_settings")
@@ -952,14 +953,14 @@ class TenantWorkTypeParameterOverride(TimestampMixin, Base):
         ForeignKey("work_type_parameters.id", ondelete="CASCADE"),
         nullable=False,
     )
-    override_status: Mapped[str] = mapped_column(String(32), default="inherited", nullable=False)
+    override_status: Mapped[str] = mapped_column(String(32), default="inherited", nullable=False, server_default=text("'inherited'"))
     custom_display_name: Mapped[str | None] = mapped_column(String(255))
     sort_order_override: Mapped[int | None] = mapped_column(Integer)
     default_text_value: Mapped[str | None] = mapped_column(Text)
     default_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
     default_boolean_value: Mapped[bool | None] = mapped_column(Boolean)
     default_option_code: Mapped[str | None] = mapped_column(String(64))
-    config_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    config_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default=text("1"))
     updated_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
     tenant_work_type_setting: Mapped["TenantWorkTypeSetting"] = relationship(back_populates="parameter_overrides")
@@ -1057,18 +1058,18 @@ class TenantWorkTypeExtraParameter(TimestampMixin, Base):
     data_type: Mapped[str] = mapped_column(String(32), nullable=False)
     unit: Mapped[str | None] = mapped_column(String(32))
     section: Mapped[str] = mapped_column(String(64), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
-    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False, server_default=text("'active'"))
+    is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default=text("false"))
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
     min_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
     max_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
-    vision_extractable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    manual_override_allowed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    vision_extractable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default=text("false"))
+    manual_override_allowed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default=text("true"))
     default_text_value: Mapped[str | None] = mapped_column(Text)
     default_number_value: Mapped[float | None] = mapped_column(Numeric(18, 4))
     default_boolean_value: Mapped[bool | None] = mapped_column(Boolean)
     default_option_code: Mapped[str | None] = mapped_column(String(64))
-    config_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    config_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default=text("1"))
     updated_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
     tenant_work_type_setting: Mapped["TenantWorkTypeSetting"] = relationship(back_populates="extra_parameters")
@@ -1104,8 +1105,8 @@ class TenantWorkTypeExtraParameterOption(TimestampMixin, Base):
     )
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
-    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False, server_default=text("100"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default=text("true"))
 
     parameter: Mapped["TenantWorkTypeExtraParameter"] = relationship(back_populates="options")
 
@@ -1174,10 +1175,10 @@ class ProjectWorkItem(TimestampMixin, Base):
         ForeignKey("pricing_profiles.id", ondelete="SET NULL")
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
-    source_type: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)
-    confirmation_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
-    item_sequence: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, server_default=text("'draft'"))
+    source_type: Mapped[str] = mapped_column(String(32), default="manual", nullable=False, server_default=text("'manual'"))
+    confirmation_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, server_default=text("'pending'"))
+    item_sequence: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default=text("1"))
     resolved_display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     resolved_work_type_code: Mapped[str] = mapped_column(String(64), nullable=False)
     resolved_category_code: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -1287,13 +1288,13 @@ class ProjectWorkItemValue(TimestampMixin, Base):
         ForeignKey("vision_detections.id", ondelete="SET NULL"),
         nullable=True,
     )
-    source_type: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), default="manual", nullable=False, server_default=text("'manual'"))
     source_confidence: Mapped[float | None] = mapped_column(Numeric(8, 4))
-    confirmation_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    confirmation_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, server_default=text("'pending'"))
     confirmed_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     operator_note: Mapped[str | None] = mapped_column(Text)
-    resolved_parameter_scope: Mapped[str] = mapped_column(String(32), default="global", nullable=False)
+    resolved_parameter_scope: Mapped[str] = mapped_column(String(32), default="global", nullable=False, server_default=text("'global'"))
     resolved_parameter_code: Mapped[str] = mapped_column(String(64), nullable=False)
     resolved_parameter_name: Mapped[str] = mapped_column(String(255), nullable=False)
     resolved_data_type: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -1340,7 +1341,7 @@ class VisionDetection(Base):
         ForeignKey("project_photos.id", ondelete="SET NULL")
     )
     detection_key: Mapped[str] = mapped_column(String(128), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, server_default=text("'pending'"))
     confidence_score: Mapped[float | None] = mapped_column(Numeric(8, 4))
     raw_label: Mapped[str | None] = mapped_column(String(255))
     raw_value: Mapped[str | None] = mapped_column(String(255))

@@ -5,13 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
-    JSON,
     BigInteger,
     Boolean,
     DateTime,
     Index,
+    JSON,
     String,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -49,9 +50,14 @@ class OutboxEvent(Base):
 
     payload: Mapped[dict] = mapped_column(_JSONB, nullable=False)
 
-    published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default=text("false"))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+# N9: indexy, které vytvářejí migrace (produkční schéma), deklarované i v ORM,
+# aby create_all (testy, dev) a autogenerate odpovídaly migracím.
+Index("idx_outbox_events_seq", OutboxEvent.seq, unique=True)
