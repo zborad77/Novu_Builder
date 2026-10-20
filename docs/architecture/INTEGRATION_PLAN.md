@@ -1,5 +1,7 @@
 # Bezpečný postup integrace F0–F6 a modulárního refaktoru (rozhodnutí O7)
 
+> Aktuální stav PR, CI, blokerů, stagingu a rollbacku: [INTEGRATION_REPORT.md](INTEGRATION_REPORT.md) (2026-10-20).
+
 Stav k 2026-10-19. **Nic z tohoto dokumentu se neprovádí bez výslovného schválení**
 (žádný push, PR, merge ani deployment).
 
