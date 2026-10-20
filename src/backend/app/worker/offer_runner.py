@@ -53,6 +53,7 @@ from app.modules.offers.public import (
     estimate_cost_usd,
 )
 from app.modules.offers.public import BudgetSweeper
+from app.modules.offers.public import OfferWorkerNotReadyError, check_offer_provider_ready
 from app.modules.offers.public import OfferReconciler
 from app.modules.offers.public import (
     AGENT_OUTCOME_INSUFFICIENT_DATA,
@@ -859,6 +860,11 @@ async def run_offer_worker(
 # ---------------------------------------------------------------------------
 
 
+async def _check_provider_ready(settings) -> str:
+    async with WorkerAsyncSessionFactory() as session:
+        return await check_offer_provider_ready(settings, session)
+
+
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_file, settings.log_error_file)
@@ -870,8 +876,14 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # AI_OFFER_PROVIDER=claude jen s platným klíčem a tvrdými rozpočtovými limity.
+    try:
+        provider_key = asyncio.run(_check_provider_ready(settings))
+    except OfferWorkerNotReadyError as exc:
+        print(startup_failure_message("ai_offer_provider", str(exc)), file=sys.stderr)
+        sys.exit(1)
+
     worker_id = f"offer-worker-{secrets.token_hex(6)}"
-    provider_key = getattr(settings, "ai_offer_provider", "mock")
     agent_runtime = build_agent_runtime(provider_key, settings)
 
     async def _run():

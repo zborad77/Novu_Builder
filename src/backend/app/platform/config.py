@@ -166,6 +166,11 @@ _RATE_LIMIT_FIELD_NAMES: tuple[str, ...] = (
 )
 
 
+def is_insecure_placeholder(value: str) -> bool:
+    """Veřejná varianta kontroly placeholderů (např. API klíče mimo Settings)."""
+    return _is_insecure_placeholder(value)
+
+
 def _is_insecure_placeholder(value: str) -> bool:
     """Return True if *value* is a well-known insecure placeholder string.
 

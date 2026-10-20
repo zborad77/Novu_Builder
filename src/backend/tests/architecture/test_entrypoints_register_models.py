@@ -24,6 +24,7 @@ ENTRYPOINTS = [
     "scripts.check_storage_consistency",
     "scripts.create_pilot_admin",
     "scripts.export_s3_recovery_manifest",
+    "scripts.offer_backlog_report",
     "scripts.reapply_photo_purges",
     "scripts.restore_s3_media",
     "scripts.validate_restored_media",

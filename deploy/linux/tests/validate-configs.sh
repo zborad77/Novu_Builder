@@ -85,9 +85,10 @@ for unit in nc-api@desktop.service nc-worker.service nc-offer-worker.service; do
     bad "systemd-analyze security $unit: $(tail -n 1 /tmp/sec.txt)"
   fi
 done
-# N2: offer pipeline must run (offer queue, budget sweeper, reconciler, outbox publisher).
-grep -q 'python -m app.worker.offer_runner' "$D/systemd/nc-offer-worker.service" && grep -q 'nc-offer-worker.service' "$D/systemd/nc-core.target" \
-  && ok "offer worker unit present and wanted by nc-core.target" || bad "offer worker not deployed (N2)"
+# N2: offer worker exists but starts only after an explicit, backlog-reviewed enable.
+if grep -q 'python -m app.worker.offer_runner' "$D/systemd/nc-offer-worker.service"; then ok "offer worker unit present"; else bad "offer worker unit missing (N2)"; fi
+if grep -q '^Wants=.*nc-offer-worker' "$D/systemd/nc-core.target"; then bad "nc-core.target auto-starts the offer worker"; else ok "offer worker not auto-started by nc-core.target"; fi
+if grep -q 'NC_CONFIRM_OFFER_BACKLOG' "$D/provision/nc-provision" && grep -q 'nc-offer-backlog' "$D/provision/nc-provision"; then ok "offer worker enabled only after backlog review"; else bad "offer worker enable lacks backlog review"; fi
 grep -q '^Environment=NC_ZONE=%i' "$D/systemd/nc-api@.service" && ok "zone fixed per instance (NC_ZONE=%i)" || bad "NC_ZONE not fixed by the unit"
 grep -q -- '--no-proxy-headers' "$D/systemd/nc-api@.service" && ok "uvicorn --no-proxy-headers" || bad "proxy headers not disabled"
 grep -q -- '--uds ' "$D/systemd/nc-api@.service" && ok "API on unix socket only" || bad "API not on a unix socket"

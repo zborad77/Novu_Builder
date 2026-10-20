@@ -12,6 +12,8 @@
 #   migrate      záloha + `alembic upgrade head` jako nc_owner + práva (bin/nc-migrate)
 #   start        zapne a spustí služby (po migrate)
 #   smoke        ověří běžící stack (služby, naslouchající porty, health přes sockety)
+#   offer-worker zapne offer worker (N2) až po výpisu backlogu a kontrole AI provideru;
+#                vyžaduje NC_CONFIRM_OFFER_BACKLOG=1 (bin/nc-offer-backlog)
 #   firewall     nasadí nftables – JEN s potvrzením a s automatickým návratem
 #   ssh-harden   SSH drop-in – JEN s potvrzením a s automatickým návratem
 #   breakglass   konzolový nouzový účet nc-breakglass (EMERGENCY_ACCESS.md) – s potvrzením
@@ -594,7 +596,7 @@ cmd_start() {
     if [ "$DRY_RUN" -eq 0 ] && ! sh "$DEPLOY_DIR/bin/nc-migrate" status | grep -q "up to date"; then
       die "databáze není na aktuální revizi: nejdřív '$0 migrate'"
     fi
-    run systemctl enable --now nc-worker.service nc-offer-worker.service nc-api@desktop.service nc-api@admin.service
+    run systemctl enable --now nc-worker.service nc-api@desktop.service nc-api@admin.service
     [ "$NC_ENABLE_GATEWAY_ZONE" = 1 ] && run systemctl enable --now nc-api@gateway.service
     run systemctl enable --now nc-core.target
   fi
@@ -607,14 +609,34 @@ cmd_start() {
   fi
 }
 
+cmd_offer_worker() {
+  # N2: offer worker zpracuje frontu offer jobů (volání AI) a zveřejní
+  # nepublikované outbox události – zapíná se jen po kontrole backlogu.
+  has_core || die "offer worker patří do Private Core"
+  info "offer worker: backlog a připravenost AI providera"
+  local rc=0
+  sh "$DEPLOY_DIR/bin/nc-offer-backlog" --require-no-ai-work || rc=$?
+  case $rc in
+    0) ;;
+    2) warn "po startu by worker hned zpracoval offer joby z fronty (volání AI) – zkontroluj výpis výše" ;;
+    3) die "AI_OFFER_PROVIDER není připravený (výpis výše); claude vyžaduje platný ANTHROPIC_API_KEY a tvrdé rozpočtové limity" ;;
+    *) die "kontrola backlogu selhala (exit $rc)" ;;
+  esac
+  [ "${NC_CONFIRM_OFFER_BACKLOG:-0}" = 1 ]     || die "zkontroluj backlog výše a potvrď: NC_CONFIRM_OFFER_BACKLOG=1 $0 offer-worker"
+  run systemctl enable --now nc-offer-worker.service
+}
+
 cmd_smoke() {
   info "smoke test"
   local fail=0 u
   check() { if "$@" >/dev/null 2>&1; then ok "$DESC"; else printf '%sFAIL%s %s\n' "$c_err" "$c_off" "$DESC"; fail=1; fi; }
   if has_core; then
-    for u in "postgresql@$NC_PG_VERSION-main" redis-server nc-worker nc-offer-worker nc-api@desktop nc-api@admin; do
+    for u in "postgresql@$NC_PG_VERSION-main" redis-server nc-worker nc-api@desktop nc-api@admin; do
       DESC="služba $u aktivní"; check systemctl is-active --quiet "$u"
     done
+    if systemctl is-enabled --quiet nc-offer-worker 2>/dev/null; then
+      DESC="služba nc-offer-worker aktivní"; check systemctl is-active --quiet nc-offer-worker
+    fi
     DESC="PostgreSQL bez TCP portu"; check sh -c "! ss -Hltn | awk '{print \$4}' | grep -qE ':5432\$'"
     DESC="Redis jen na loopbacku"; check sh -c "ss -Hltn | awk '{print \$4}' | grep -E ':6379\$' | grep -qvE '^(127\.0\.0\.1|\[::1\]):6379\$' && exit 1 || exit 0"
     # Hesla jen v prostředí (ne v argv, které vidí `ps`).
@@ -774,6 +796,7 @@ case "$CMD" in
   migrate) cmd_migrate ;;
   start) cmd_start ;;
   smoke) cmd_smoke ;;
+  offer-worker) cmd_offer_worker ;;
   firewall) cmd_firewall ;;
   ssh-harden) cmd_ssh_harden ;;
   breakglass) cmd_breakglass ;;

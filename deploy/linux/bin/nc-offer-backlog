@@ -1,0 +1,45 @@
+#!/bin/sh
+# Backlog a připravenost offer workeru – spustit před `nc-provision offer-worker`.
+#
+#   nc-offer-backlog [--json] [--require-no-ai-work]
+#
+# Vypíše offer joby ve frontě/rozpracované (po startu workeru = volání AI),
+# rozpracované offer requesty, nepublikované outbox události a délku Redis fronty,
+# a ověří konfiguraci AI_OFFER_PROVIDER (claude jen s platným ANTHROPIC_API_KEY a
+# tvrdými rozpočtovými limity). Nic nemění.
+# Exit: 0 ok, 2 worker by hned volal AI (--require-no-ai-work), 3 provider není připravený.
+set -eu
+umask 077
+
+APP=/opt/novuconstruct/src/backend
+SECRETS=/etc/novuconstruct/secrets
+
+[ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
+[ -r /etc/novuconstruct/core.env ] || { echo "missing /etc/novuconstruct/core.env" >&2; exit 1; }
+
+# The service environment: core.env (a systemd EnvironmentFile – values may contain
+# spaces, so it is read literally, not sourced) plus every secret file.
+load_service_env() {
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|\#*) continue ;; esac
+    key=${line%%=*}; value=${line#*=}
+    case "$key" in *[!A-Za-z0-9_]*|'') continue ;; esac
+    case "$value" in
+      \"*\") value=${value#\"}; value=${value%\"} ;;
+      \'*\') value=${value#\'}; value=${value%\'} ;;
+    esac
+    export "$key=$value"
+  done < /etc/novuconstruct/core.env
+  for f in "$SECRETS"/*; do
+    name=$(basename "$f")
+    case "$name" in *[!A-Z0-9_]*) continue ;; esac
+    export "$name=$(cat "$f")"
+  done
+}
+
+(
+  load_service_env
+  export NC_ZONE=admin
+  cd "$APP"
+  exec "$APP/.venv/bin/python" -m scripts.offer_backlog_report "$@"
+)

@@ -2,11 +2,11 @@
 # offer reconciler and the transactional outbox publisher (SSE live delivery).
 # Serves no HTTP traffic, needs no zone and opens no listening port.
 # Without it offer requests are accepted but never processed (REFACTOR_FINDINGS N2).
+# Enabled only by `nc-provision offer-worker` (backlog review + explicit confirmation).
 [Unit]
 Description=NovuConstruct offer worker
 After=network-online.target postgresql.service redis-server.service minio.service
 Wants=network-online.target
-PartOf=nc-core.target
 
 [Service]
 Type=exec
@@ -58,4 +58,4 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadOnlyPaths=/opt/novuconstruct
 
 [Install]
-WantedBy=nc-core.target
+WantedBy=multi-user.target

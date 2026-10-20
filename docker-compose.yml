@@ -307,8 +307,11 @@ services:
 
   # Offer pipeline (REFACTOR_FINDINGS N2): offer queue, AI budget sweeper, offer
   # reconciler and the transactional outbox publisher. No HTTP, no healthcheck
-  # heartbeat (restart policy only).
+  # heartbeat (restart policy only). Not started by default: review the backlog
+  # (`docker compose run --rm backend python -m scripts.offer_backlog_report`), then
+  # `docker compose --profile offers up -d offer-worker`.
   offer-worker:
+    profiles: ["offers"]
     build:
       context: ./src/backend
     restart: unless-stopped

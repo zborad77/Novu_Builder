@@ -17,19 +17,24 @@ def test_systemd_unit_runs_offer_runner_like_the_worker():
             assert line in unit, line
 
 
-def test_offer_worker_is_wanted_installed_started_and_checked():
+def test_offer_worker_is_installed_but_enabled_only_after_backlog_review():
     target = (DEPLOY / "systemd" / "nc-core.target").read_text(encoding="utf-8")
     provision = (DEPLOY / "provision" / "nc-provision").read_text(encoding="utf-8")
-    assert "nc-offer-worker.service" in target
+    wants = [line for line in target.splitlines() if line.startswith("Wants=")]
+    assert wants and all("nc-offer-worker" not in line for line in wants)  # žádný automatický start
     assert "nc-worker.service nc-offer-worker.service nc-core.target" in provision  # install_units
-    assert "enable --now nc-worker.service nc-offer-worker.service" in provision  # start
-    assert provision.count("redis-server nc-worker nc-offer-worker") == 2  # smoke + status
+    assert "enable --now nc-worker.service nc-api@desktop.service" in provision  # start bez offer workeru
+    assert "nc-offer-backlog\" --require-no-ai-work" in provision
+    assert 'NC_CONFIRM_OFFER_BACKLOG:-0}" = 1' in provision
+    assert "enable --now nc-offer-worker.service" in provision
+    assert (DEPLOY / "bin" / "nc-offer-backlog").is_file()
 
 
-def test_compose_runs_offer_worker_with_explicit_provider():
+def test_compose_offer_worker_is_opt_in_and_template_defaults_to_mock():
     compose = (repo_root() / "docker-compose.yml").read_text(encoding="utf-8")
     block = compose[compose.index("  offer-worker:"):compose.index("\nnetworks:")]
     assert 'entrypoint: ["python", "-m", "app.worker.offer_runner"]' in block
+    assert 'profiles: ["offers"]' in block
     assert "AI_OFFER_PROVIDER: ${AI_OFFER_PROVIDER}" in block
     template = (BACKEND_ROOT / ".env.production.example").read_text(encoding="utf-8")
-    assert "AI_OFFER_PROVIDER=claude" in template
+    assert "AI_OFFER_PROVIDER=mock" in template

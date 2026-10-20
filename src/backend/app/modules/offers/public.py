@@ -61,6 +61,12 @@ from app.modules.offers.validation import (  # noqa: F401
     OfferOutputValidator,
     OfferValidationError,
 )
+from app.modules.offers.readiness import (  # noqa: F401
+    OfferBacklog,
+    OfferWorkerNotReadyError,
+    check_offer_provider_ready,
+    collect_offer_backlog,
+)
 
 # --- ručně ---
 # Registrace ORM modelů modulu (app.composition.models.import_all_models).
@@ -68,6 +74,10 @@ import app.modules.offers.models as orm_models  # noqa: E402
 # --- konec ---
 
 __all__ = [
+    "OfferBacklog",
+    "OfferWorkerNotReadyError",
+    "check_offer_provider_ready",
+    "collect_offer_backlog",
     "orm_models",
     "AGENT_OUTCOME_INSUFFICIENT_DATA",
     "AGENT_OUTCOME_OFFER_GENERATED",

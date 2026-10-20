@@ -75,6 +75,8 @@ $P install        # balíčky, účty, adresáře, secrets, PostgreSQL, Redis, v
 $P migrate        # pg_dump záloha + alembic upgrade head jako nc_owner + práva (bin/nc-migrate)
 $P start          # služby; vyžaduje připravené objektové úložiště
 $P smoke          # služby, porty jen na loopbacku/socketu, ACL Redisu, práva v DB, health zón
+$P offer-worker   # N2: vypíše backlog offer workeru (bin/nc-offer-backlog), ověří AI_OFFER_PROVIDER;
+                 # zapne nc-offer-worker až s NC_CONFIRM_OFFER_BACKLOG=1 (není součástí nc-core.target)
 $P firewall       # nftables: potvrzení APPLY-FIREWALL + automatický návrat do 120 s
 $P ssh-harden     # SSH jen klíčem: potvrzení APPLY-SSH + automatický návrat
 $P breakglass     # konzolový nouzový účet (EMERGENCY_ACCESS.md): potvrzení CREATE-BREAKGLASS
