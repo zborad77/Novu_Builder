@@ -493,6 +493,77 @@ async def commit_security_critical_audit(
         ) from exc
 
 
+@dataclass(frozen=True)
+class AuditEntry:
+    """Audit záznam s explicitními hodnotami aktéra (NC-007 kap. 6.2 a 6.4).
+
+    Používá se tam, kde aktéra neurčuje JWT požadavku: bezpečnostní události
+    z gateway (aktér je v těle podepsaného požadavku) a stažení souboru (IP
+    klienta, firma a uživatel z ověřené identity).
+    """
+
+    action: str
+    resource_type: str | None
+    resource_id: str | None = None
+    user_id: str | None = None
+    user_email: str | None = None
+    org_id: str | None = None
+    ip: str | None = None
+    detail: dict | None = None
+
+
+async def record_audit_entries(
+    session,
+    entries: list[AuditEntry],
+    *,
+    policy: str = AUDIT_POLICY_OPERATIONAL,
+) -> int:
+    """Zapíše záznamy do ``audit_logs`` v jedné transakci a commitne je.
+
+    Operational politika: selhání se zaloguje jako SECURITY_EVENT a nepropaguje
+    se (vrací 0). Security-critical politika: selhání vyhodí
+    ``SecurityAuditWriteError`` (volající odpoví 503).
+    """
+    if not entries:
+        return 0
+    try:
+        now = datetime.now(UTC)
+        for entry in entries:
+            session.add(
+                AuditLog(
+                    id=uuid4().hex,
+                    user_id=entry.user_id,
+                    user_email=entry.user_email,
+                    org_id=entry.org_id,
+                    action=entry.action,
+                    resource_type=entry.resource_type,
+                    resource_id=entry.resource_id,
+                    detail=entry.detail,
+                    impersonated_by=None,
+                    ip=entry.ip,
+                    created_at=now,
+                )
+            )
+        await session.commit()
+    except Exception as exc:
+        await _safe_rollback(session)
+        first = entries[0]
+        _log_audit_write_failure(
+            error=exc,
+            action=first.action,
+            resource_type=first.resource_type,
+            resource_id=first.resource_id,
+            user_id=first.user_id,
+            policy=policy,
+        )
+        if policy == AUDIT_POLICY_SECURITY_CRITICAL:
+            raise SecurityAuditWriteError(
+                f"Security-critical audit write failed for action={first.action!r}."
+            ) from exc
+        return 0
+    return len(entries)
+
+
 async def _persist_http_audit_log(
     *,
     actor: _AuditActor | None,

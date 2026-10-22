@@ -8,6 +8,9 @@ Vygenerováno tools/refactor/make_public.py; ruční doplňky patří mezi znač
 from app.modules.exports.api.exports import (  # noqa: F401
     router as exports_router,
 )
+from app.modules.exports.api.files import (  # noqa: F401
+    router as export_files_router,
+)
 from app.modules.exports.export_repository import (  # noqa: F401
     ExportRepository,
 )
@@ -31,5 +34,6 @@ __all__ = [
     "ExportRepository",
     "ExportService",
     "ProjectExport",
+    "export_files_router",
     "exports_router",
 ]

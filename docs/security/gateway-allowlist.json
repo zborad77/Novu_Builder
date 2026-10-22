@@ -1,7 +1,7 @@
 {
   "generatedFrom": "src/backend/app/platform/http/exposure.py",
   "zone": "gateway",
-  "count": 91,
+  "count": 94,
   "routes": [
     {
       "method": "GET",
@@ -229,7 +229,19 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/files/exports/{export_id}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/files/images/{image_id}/{variant}"
+    },
+    {
+      "method": "GET",
       "path": "/api/v1/images/{image_id}/preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/security-events"
     },
     {
       "method": "GET",

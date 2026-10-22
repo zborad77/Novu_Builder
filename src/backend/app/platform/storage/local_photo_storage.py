@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from time import time_ns, monotonic as _time_mono
+from typing import AsyncIterator
 from uuid import uuid4
 
 import structlog
@@ -699,3 +700,90 @@ async def delete_storage_file(*, relative_storage_key: str) -> None:
         raise
     finally:
         observe_storage_operation(operation="delete", backend="local", outcome=_outcome, duration_seconds=_time_mono() - _t0)
+
+
+# ── NC-007 kap. 6: čtení po blocích pro streamovací endpointy ────────────────
+
+DEFAULT_STREAM_CHUNK_SIZE = 64 * 1024
+
+
+def validate_storage_key(storage_key: str) -> str:
+    """Přísná kontrola klíče úložiště pro streamování (nezávislá na backendu).
+
+    Klíč pochází vždy z DB, nikdy z požadavku; i tak úložiště odmítne klíč se
+    segmentem ``..`` nebo ``.``, prázdným segmentem, absolutní cestou (``/``,
+    písmeno disku), zpětným lomítkem a řídicími znaky. Na rozdíl od
+    ``_normalize_relative_storage_key`` zpětné lomítko nepřevádí, ale odmítá.
+    """
+    if not isinstance(storage_key, str) or not storage_key:
+        raise ValueError("Invalid storage key: value is required.")
+    if "\\" in storage_key:
+        raise ValueError("Invalid storage key: backslashes are not allowed.")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in storage_key):
+        raise ValueError("Invalid storage key: control characters are not allowed.")
+    if storage_key.startswith("/") or PureWindowsPath(storage_key).drive:
+        raise ValueError("Invalid storage key: absolute paths are not allowed.")
+    segments = storage_key.split("/")
+    if any(segment in {"", ".", ".."} for segment in segments):
+        raise ValueError("Invalid storage key: traversal or empty segments are not allowed.")
+    return storage_key
+
+
+def _sync_get_storage_object_size(*, relative_storage_key: str) -> int | None:
+    validate_storage_key(relative_storage_key)
+    _, absolute_path = _resolve_storage_path(relative_storage_key)
+    if not absolute_path.is_file():
+        return None
+    return absolute_path.stat().st_size
+
+
+async def get_storage_object_size(*, relative_storage_key: str) -> int | None:
+    """Velikost objektu v bajtech, ``None`` když objekt neexistuje."""
+    _t0 = _time_mono()
+    _outcome = "success"
+    try:
+        size = await asyncio.to_thread(
+            _sync_get_storage_object_size,
+            relative_storage_key=relative_storage_key,
+        )
+        if size is None:
+            _outcome = "not_found"
+        return size
+    except Exception:
+        _outcome = "error"
+        raise
+    finally:
+        observe_storage_operation(operation="stat", backend="local", outcome=_outcome, duration_seconds=_time_mono() - _t0)
+
+
+async def iter_storage_file(
+    *,
+    relative_storage_key: str,
+    start: int = 0,
+    end: int | None = None,
+    chunk_size: int = DEFAULT_STREAM_CHUNK_SIZE,
+) -> AsyncIterator[bytes]:
+    """Čte objekt po blocích od ``start`` do ``end`` včetně (``None`` = do konce).
+
+    Blokující I/O běží mimo event loop; soubor se zavře i při přerušení
+    streamu klientem.
+    """
+    validate_storage_key(relative_storage_key)
+    if start < 0 or (end is not None and end < start) or chunk_size < 1:
+        raise ValueError("Invalid byte range.")
+    _, absolute_path = _resolve_storage_path(relative_storage_key)
+    handle = await asyncio.to_thread(absolute_path.open, "rb")
+    try:
+        if start:
+            await asyncio.to_thread(handle.seek, start)
+        remaining = None if end is None else end - start + 1
+        while remaining is None or remaining > 0:
+            size = chunk_size if remaining is None else min(chunk_size, remaining)
+            chunk = await asyncio.to_thread(handle.read, size)
+            if not chunk:
+                break
+            if remaining is not None:
+                remaining -= len(chunk)
+            yield chunk
+    finally:
+        await asyncio.to_thread(handle.close)

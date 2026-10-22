@@ -1,4 +1,9 @@
-"""Signed storage URL generation must stay inside the storage layer."""
+"""Signed storage URL generation must stay inside the storage layer.
+
+NC-007 kap. 6.3: API read modely (fotky, exporty) už podepsané URL úložiště
+nevracejí – jen relativní cestu na streamovací endpoint core. Podepsané URL
+zůstávají jen pro interní použití (AI pipeline, offer worker; F4.7).
+"""
 
 import inspect
 import sys
@@ -31,7 +36,7 @@ class TestLocalSignedUrl:
             raise AssertionError("Expected ValueError for signed URL TTL above 1 hour.")
 
 
-class TestPhotoServiceUsesSignedUrl:
+class TestPhotoServiceUsesFilesEndpoint:
     def _make_photo(self, **kwargs):
         photo = MagicMock()
         photo.id = "pho_001"
@@ -47,7 +52,7 @@ class TestPhotoServiceUsesSignedUrl:
         photo.taken_at = None
         photo.exif_lat = None
         photo.exif_lng = None
-        photo.processing_status = "ready"
+        photo.processing_status = kwargs.get("processing_status", "ready")
         photo.is_primary = False
         photo.is_analysis_reference = False
         photo.sort_order = 1
@@ -59,39 +64,48 @@ class TestPhotoServiceUsesSignedUrl:
         photo.ai_input_height = 480
         return photo
 
-    def test_to_read_model_calls_generate_presigned_url(self):
+    def test_to_read_model_never_signs_storage_urls(self):
         photo = self._make_photo()
         with patch.object(
-            photo_svc_mod,
+            local_storage_mod,
             "generate_presigned_url",
             wraps=local_storage_mod.generate_presigned_url,
         ) as mock_presign:
             photo_svc_mod.to_read_model(photo)
 
-        assert mock_presign.call_count >= 3
+        assert mock_presign.call_count == 0
+        assert not hasattr(photo_svc_mod, "generate_presigned_url")
 
-    def test_to_read_model_url_matches_generate_presigned_url(self):
+    def test_to_read_model_urls_point_to_the_files_endpoint(self):
         photo = self._make_photo(storage_key="projects/myproject/img.jpg")
         result = photo_svc_mod.to_read_model(photo)
-        expected = local_storage_mod.generate_presigned_url("projects/myproject/img.jpg")
-        assert result.url == expected
+        assert result.url == "/api/v1/files/images/pho_001/original"
+        assert result.variants.original.url == "/api/v1/files/images/pho_001/original"
+        assert result.variants.preview.url == "/api/v1/files/images/pho_001/preview"
+        assert result.variants.aiInput.url == "/api/v1/files/images/pho_001/ai-input"
 
     def test_preview_url_none_when_no_preview_key(self):
         photo = self._make_photo(preview_storage_key=None)
         result = photo_svc_mod.to_read_model(photo)
         assert result.variants.preview.url is None
 
+    def test_derived_urls_none_until_processing_is_ready(self):
+        result = photo_svc_mod.to_read_model(self._make_photo(processing_status="processing"))
+        assert result.url == "/api/v1/files/images/pho_001/original"
+        assert result.variants.preview.url is None
+        assert result.variants.aiInput.url is None
+
     def test_service_source_has_no_hardcoded_mock_storage(self):
         import inspect
 
         source = inspect.getsource(photo_svc_mod.to_read_model)
         assert '"/mock-storage/' not in source
-        assert 'generate_presigned_url' in source
+        assert "generate_presigned_url" not in source
 
 
-class TestExportServiceUsesSignedUrl:
-    def test_to_export_read_uses_generate_presigned_url(self):
-        export = SimpleNamespace(
+class TestExportServiceUsesFilesEndpoint:
+    def _export(self, **overrides):
+        values = dict(
             id="exp_abc12345",
             project_id="case-001",
             export_type="quote-pdf",
@@ -102,18 +116,20 @@ class TestExportServiceUsesSignedUrl:
             completed_at=datetime(2026, 3, 30, 10, 0, tzinfo=UTC),
             expires_at=datetime(2026, 4, 6, 10, 0, tzinfo=UTC),
         )
+        values.update(overrides)
+        return SimpleNamespace(**values)
 
-        with patch.object(
-            export_svc_mod,
-            "generate_presigned_url",
-            wraps=local_storage_mod.generate_presigned_url,
-        ) as mock_presign:
-            result = export_svc_mod._to_export_read(export)
+    def test_to_export_read_points_to_the_files_endpoint(self):
+        result = export_svc_mod._to_export_read(self._export())
 
-        mock_presign.assert_called_once_with("exports/case-001/exp_abc12345-report.pdf")
-        assert result.downloadUrl.startswith("/mock-storage/")
+        assert result.downloadUrl == "/api/v1/files/exports/exp_abc12345"
         assert result.storageKey == "exports/case-001/exp_abc12345-report.pdf"
         assert result.expiresAt == datetime(2026, 4, 6, 10, 0, tzinfo=UTC)
+        assert not hasattr(export_svc_mod, "generate_presigned_url")
+
+    def test_download_url_none_until_completed(self):
+        result = export_svc_mod._to_export_read(self._export(status="pending", storage_key=None))
+        assert result.downloadUrl is None
 
     def test_export_service_source_has_no_hardcoded_mock_storage(self):
         import inspect
@@ -170,8 +186,8 @@ class TestS3SignedUrl:
         assert kwargs["config"].read_timeout == 8.0
 
 
-def test_signed_url_not_public():
-    """API-facing read models must expose signed URLs, never raw public object URLs."""
+def test_read_models_expose_no_storage_url():
+    """API read modely nesmí obsahovat URL úložiště (presigned S3, /mock-storage)."""
     photo = MagicMock()
     photo.id = "pho_001"
     photo.project_id = "proj_001"
@@ -208,25 +224,18 @@ def test_signed_url_not_public():
         completed_at=datetime(2026, 3, 30, 10, 0, tzinfo=UTC),
         expires_at=datetime(2026, 4, 6, 10, 0, tzinfo=UTC),
     )
-    signed_photo_url = "https://signed.example.test/projects/proj_001/test.jpg?X-Amz-Signature=abc"
-    signed_export_url = "https://signed.example.test/exports/case-001/report.pdf?X-Amz-Signature=def"
+    signed = "https://signed.example.test/object?X-Amz-Signature=abc"
+    # I kdyby aktivní backend podepisoval (S3), read modely ho nevolají.
+    with patch.object(local_storage_mod, "generate_presigned_url", return_value=signed):
+        photo_dump = photo_svc_mod.to_read_model(photo).model_dump_json()
+        export_dump = export_svc_mod._to_export_read(export).model_dump_json()
 
-    with (
-        patch.object(photo_svc_mod, "generate_presigned_url", return_value=signed_photo_url),
-        patch.object(export_svc_mod, "generate_presigned_url", return_value=signed_export_url),
-    ):
-        photo_result = photo_svc_mod.to_read_model(photo)
-        export_result = export_svc_mod._to_export_read(export)
-
-    assert photo_result.url == signed_photo_url
-    assert "X-Amz-Signature=" in photo_result.url
-    assert photo_result.url != "https://novu-prod.s3.amazonaws.com/projects/proj_001/test.jpg"
-
-    assert export_result.downloadUrl == signed_export_url
-    assert "X-Amz-Signature=" in export_result.downloadUrl
-    assert export_result.downloadUrl != "https://novu-prod.s3.amazonaws.com/exports/case-001/exp_abc12345-report.pdf"
+    for dump in (photo_dump, export_dump):
+        for marker in ("X-Amz-", ":9000", "/mock-storage/", "https://"):
+            assert marker not in dump
 
     photo_source = inspect.getsource(photo_svc_mod.to_read_model)
     export_source = inspect.getsource(export_svc_mod._to_export_read)
-    assert "get_public_url" not in photo_source
-    assert "get_public_url" not in export_source
+    for source in (photo_source, export_source):
+        assert "get_public_url" not in source
+        assert "generate_presigned_url" not in source

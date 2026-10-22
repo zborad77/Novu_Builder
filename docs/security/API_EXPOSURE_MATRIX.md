@@ -18,7 +18,8 @@ Zóny jsou implementované ve větvi `fix/f0-rbac-tenant-isolation` (F3.1–F3.3
   - `GET /api/v1/health` je navíc v zóně D, protože ho volá desktop při nastavení serveru,
   - `POST /api/v1/offer-requests/{offer_id}/more-info` je v zónách G/D,
   - routy z F0.3 (koš, obnova a trvalé smazání fotek, `/admin/photos/{id}/purge`) odpovídají tabulce v kap. 5 a 10.
-- **Allowlist pro gateway** je generovaný soubor [gateway-allowlist.json](gateway-allowlist.json) (91 rout). Hlídá ho test `tests/test_gateway_allowlist.py`.
+- **Allowlist pro gateway** je generovaný soubor [gateway-allowlist.json](gateway-allowlist.json) (94 rout). Hlídá ho test `tests/test_gateway_allowlist.py`.
+- **NC-007 etapa 1 (22. 10. 2026, větev `feat/nc-007-secure-web-platform`):** implementované `GET /api/v1/files/images/{image_id}/{variant}`, `GET /api/v1/files/exports/{export_id}` (G, D) a `POST /api/v1/internal/security-events` (jen G), kontrakt [NC-007_STAGE1_CONTRACT.md](NC-007_STAGE1_CONTRACT.md) kap. 6. Pole URL v odpovědích (`ProjectPhotoRead.url`, `variants.*.url`, `ExportRead.downloadUrl`) nesou relativní cestu na tyto endpointy, žádná odpověď API neobsahuje URL úložiště. `GET /api/v1/images/{image_id}/preview` streamuje místo přesměrování. Interní podepsané URL (AI pipeline, offer worker) zůstávají (F4.7).
 - **JWT** nese `aud` podle zóny (`nc-web`, `nc-desktop`, `nc-admin`), dále `iss` a `iat`. Token z jiné zóny vrací 401. Superadmin se přihlásí jen v zóně A.
 
 ## Legenda
@@ -119,13 +120,13 @@ Vše ostatní na edge vrací 404: `/api/*`, `/docs`, `/openapi.json`, `/metrics`
 
 | Metoda | Cesta | Dnes | Zóna | Role | Poznámka |
 |---|---|---|---|---|---|
-| GET | `/api/v1/cases/{case_id}/images` | any | G, D | any | `previewUrl` → streamovací endpoint (kap. 10) |
+| GET | `/api/v1/cases/{case_id}/images` | any | G, D | any | `url`, `variants.*.url` → `/api/v1/files/images/{id}/{variant}` (NC-007, implementováno) |
 | POST | `/api/v1/cases/{case_id}/images` | any | G, D | any | ⚠ SA-11: limit souborů, validace v threadu. Gateway: tělo 25 MB. |
 | DELETE | `/api/v1/cases/{case_id}/images/{image_id}` | any | G, D | any | rozhodnout, jestli mgr |
 | PATCH | `/api/v1/cases/{case_id}/images/{image_id}/analysis-reference` | any | G, D | any | |
 | PATCH | `/api/v1/cases/{case_id}/images/{image_id}/move` | any | G, D | any | |
 | PATCH | `/api/v1/cases/{case_id}/images/{image_id}/primary` | any | G, D | any | |
-| GET | `/api/v1/images/{image_id}/preview` | any | G, D | any | dnes redirect na presigned URL, cíl streamování (SA-16) |
+| GET | `/api/v1/images/{image_id}/preview` | any | G, D | any | streamuje náhled (dokud není hotový, originál), žádný redirect na úložiště (SA-16, NC-007, implementováno) |
 | POST | `/api/v1/cases/{case_id}/measurements` | any | G, D | any | ⚠ **SA-08: `referenceImageId` v rámci zakázky + kontrola zámku** |
 | PATCH | `/api/v1/measurements/{measurement_id}` | any | G, D | any | |
 | POST | `/api/v1/measurements/{measurement_id}/confirm` | any | G, D | any | |
@@ -164,7 +165,7 @@ Vše ostatní na edge vrací 404: `/api/*`, `/docs`, `/openapi.json`, `/metrics`
 | POST | `/api/v1/cases/{case_id}/exports/quote-docx` | mgr | G, D | mgr | |
 | POST | `/api/v1/cases/{case_id}/exports/quote-pdf` | mgr | G, D | mgr | |
 | POST | `/api/v1/cases/{case_id}/exports/report-pdf` | mgr | G, D | mgr | |
-| GET | `/api/v1/exports/{export_id}` | any | G, D | **mgr** | ⚠ SA-06. `downloadUrl` → streamovací endpoint, audit stažení (SA-14). |
+| GET | `/api/v1/exports/{export_id}` | any | G, D | **mgr** | ⚠ SA-06. `downloadUrl` → `/api/v1/files/exports/{id}`, audit stažení `export.downloaded` (SA-14, NC-007, implementováno). |
 
 ## 8. Katalogy, ceníky, dodavatelé
 
@@ -233,7 +234,7 @@ Vše ostatní na edge vrací 404: `/api/*`, `/docs`, `/openapi.json`, `/metrics`
 
 ---
 
-## 11. Nové endpointy (aditivní, návrh)
+## 11. Nové endpointy (aditivní)
 
 Žádný stávající kontrakt se nemění.
 
@@ -243,25 +244,27 @@ Vše ostatní na edge vrací 404: `/api/*`, `/docs`, `/openapi.json`, `/metrics`
 | POST | `/api/v1/auth/login/mfa` | G, A (později D) | – | krok 2 (TOTP nebo recovery kód) | F5 |
 | GET/POST/DELETE | `/api/v1/auth/mfa/totp` | G, D, A | any | aktivace a deaktivace TOTP (re-auth heslem) | F5 |
 | POST | `/api/v1/auth/mfa/recovery-codes` | G, D, A | any | nové recovery kódy | F5 |
-| GET | `/api/v1/files/images/{image_id}/{variant}` | G, D | any | streamování náhledu nebo originálu (D-03) | F4 |
-| GET | `/api/v1/files/exports/{export_id}` | G, D | mgr | streamování exportu + audit | F4 |
+| GET | `/api/v1/files/images/{image_id}/{variant}` | G, D | any | streamování `original`/`preview`/`ai-input`, Range, bez URL úložiště (D-03) | F4 – **implementováno** (NC-007 etapa 1) |
+| GET | `/api/v1/files/exports/{export_id}` | G, D | mgr | streamování exportu + audit `export.downloaded` | F4 – **implementováno** (NC-007 etapa 1) |
 | POST | `/api/v1/devices/enroll` | G | – (enrollment kód) | registrace veřejného WG klíče zařízení (D-07) | F6 |
 | GET/DELETE | `/api/v1/admin/users/{user_id}/sessions` | A | sa | sessions uživatele | F7 |
 | GET/POST/DELETE | `/api/v1/admin/devices` | A | sa | správa WG peerů | F6 |
 | GET | `/api/v1/admin/system/overview` | A | sa | verze, migrace, fronta, úložiště, certifikáty | F7 |
 | POST | `/api/v1/admin/security/revoke-all-web-sessions` | A | sa + MFA | runbook při kompromitaci gateway | F7 |
-| POST | `/api/v1/internal/security-events` | G | HMAC gateway | zápis bezpečnostních událostí z gateway do `audit_logs` | F4 |
+| POST | `/api/v1/internal/security-events` | G | HMAC gateway, bez `Authorization` (jinak 404) | zápis bezpečnostních událostí z gateway do `audit_logs` (`gateway.<type>`, 120/min na klíč gateway) | F4 – **implementováno** (NC-007 etapa 1) |
 
 ---
 
 ## 12. Souhrn
 
-| Zóna | Počet rout (stávající) |
+Stav k 22. 10. 2026 (NC-007 etapa 1, zdroj `exposure.py`):
+
+| Zóna | Počet rout |
 |---|---|
 | P (core) | **0** |
-| G | 77 business + 7 auth = 84 (+2 po D-05) |
-| D | 77 business + 7 auth = 84 |
-| A | 15 admin + 7 systém + 7 auth = 29 |
-| DEV | 5 |
+| G | 86 business (vč. 2 `/files/*`) + 7 auth + 1 interní (`/internal/security-events`) = **94** (+2 po D-05) |
+| D | 86 business (vč. 2 `/files/*`) + 7 auth + 1 `/health` = **94** |
+| A | 17 admin + 7 systém + 7 auth = **31** |
+| DEV / nikde | 9 vývojových (`/mock-storage`, `/openapi.json`, `/docs`, `/redoc`) + 2 vyřazené (`forgot/reset-password`) |
 
 Allowlist gateway je **podmnožina zóny G**. Vznikne z tabulky výše a generuje se do [`docs/security/gateway-allowlist.json`](gateway-allowlist.json) z `app/platform/http/exposure.py` (`python -m scripts.export_gateway_allowlist`). Test v CI kontroluje, že gateway nepustí nic mimo zónu G a že allowlist neobsahuje žádnou `/admin` routu.

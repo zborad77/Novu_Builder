@@ -2722,6 +2722,75 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/files/images/{image_id}/{variant}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_photo_service",
+        "get_db_session",
+        "get_job_queue"
+      ],
+      "rateLimits": [
+        "600 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/files/exports/{export_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ],
+      "dependencies": [
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "require_manager",
+        "get_current_user",
+        "get_auth_service",
+        "get_db_session",
+        "get_auth_redis",
+        "get_project_service",
+        "get_db_session",
+        "get_export_service",
+        "get_db_session",
+        "get_job_queue",
+        "get_db_session"
+      ],
+      "rateLimits": [
+        "600 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/security-events",
+      "zones": [
+        "gateway"
+      ],
+      "dependencies": [
+        "reject_user_credentials",
+        "get_db_session"
+      ],
+      "rateLimits": [
+        "120 per 1 minute"
+      ],
+      "rateLimitExempt": false
+    },
+    {
+      "method": "GET",
       "path": "/mock-storage/{file_path:path}",
       "zones": [],
       "dependencies": [
@@ -3337,6 +3406,22 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/files/exports/{export_id}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/files/images/{image_id}/{variant}",
+      "zones": [
+        "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/api/v1/health",
       "zones": [
         "admin",
@@ -3355,6 +3440,13 @@
       "path": "/api/v1/images/{image_id}/preview",
       "zones": [
         "desktop",
+        "gateway"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/internal/security-events",
+      "zones": [
         "gateway"
       ]
     },

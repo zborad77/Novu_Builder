@@ -9,6 +9,9 @@ from app.modules.workflow.public import cases_router
 from app.modules.quoting.public import estimates_router
 from app.modules.exports.public import exports_router
 from app.modules.media.public import images_router
+from app.modules.media.public import image_files_router
+from app.modules.exports.public import export_files_router
+from app.modules.identity.public import internal_security_events_router
 from app.modules.media.public import markers_router
 from app.modules.catalog.public import material_catalog_router
 from app.modules.analysis.public import measurements_router
@@ -48,3 +51,10 @@ api_router.include_router(admin_router, dependencies=_protected["dependencies"])
 api_router.include_router(org_users_router, dependencies=_protected["dependencies"])
 api_router.include_router(offer_requests_router, dependencies=_protected["dependencies"])
 api_router.include_router(offer_events_router, dependencies=_protected["dependencies"])
+# NC-007 kap. 6 (aditivně, na konec – pořadí stávajících rout se nemění):
+# streamování fotek a exportů (zóny gateway a desktop, JWT povinné) ...
+api_router.include_router(image_files_router, dependencies=_protected["dependencies"])
+api_router.include_router(export_files_router, dependencies=_protected["dependencies"])
+# ... a interní příjem bezpečnostních událostí z gateway (jen zóna gateway, podpis
+# gateway; JWT se NEPOUŽÍVÁ – požadavek s Authorization dostane 404).
+api_router.include_router(internal_security_events_router)

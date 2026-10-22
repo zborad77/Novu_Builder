@@ -1615,6 +1615,7 @@
           "images"
         ],
         "summary": "Get Image Preview",
+        "description": "Náhled fotky – streamuje se přímo (NC-007 kap. 6.3), žádná URL úložiště.\n\nDřív přesměrování (307) na podepsanou URL úložiště. Přesměrování na\n``/files/images/{id}/preview`` by vyžadovalo druhý požadavek, u kterého\nklienti (Qt, gateway) nemusí znovu poslat ``Authorization``, a relativní\n``/api/v1/...`` cesta není z webu přes ``/bff`` dosažitelná. Proto stejná\nkontrola firmy a stejné streamování jako ``/files/images/{id}/preview``;\ndokud náhled není hotový, vrací originál (jako dřív ``preview.url or url``).",
         "operationId": "get_image_preview_api_v1_images__image_id__preview_get",
         "parameters": [
           {
@@ -6360,6 +6361,194 @@
         "responses": {
           "200": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/images/{image_id}/{variant}": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Download Image File",
+        "operationId": "download_image_file_api_v1_files_images__image_id___variant__get",
+        "parameters": [
+          {
+            "name": "image_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Image Id"
+            }
+          },
+          {
+            "name": "variant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Variant"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Celý soubor (Content-Type podle allowlistu, jinak application/octet-stream).",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Část souboru podle hlavičky Range (Content-Range).",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Neexistuje, cizí firma, smazáno, nehotové nebo expirované."
+          },
+          "416": {
+            "description": "Neplatný nebo nesplnitelný rozsah (Content-Range: bytes */<velikost>)."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/exports/{export_id}": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Download Export File",
+        "operationId": "download_export_file_api_v1_files_exports__export_id__get",
+        "parameters": [
+          {
+            "name": "export_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Export Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Celý soubor (Content-Type podle allowlistu, jinak application/octet-stream).",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Část souboru podle hlavičky Range (Content-Range).",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Neexistuje, cizí firma, smazáno, nehotové nebo expirované."
+          },
+          "416": {
+            "description": "Neplatný nebo nesplnitelný rozsah (Content-Range: bytes */<velikost>)."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/security-events": {
+      "post": {
+        "tags": [
+          "internal"
+        ],
+        "summary": "Ingest Security Events",
+        "operationId": "ingest_security_events_api_v1_internal_security_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecurityEventBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecurityEventsAccepted"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -13600,6 +13789,130 @@
           "message"
         ],
         "title": "RestorePhotoResponse"
+      },
+      "SecurityEventBatch": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/SecurityEventIn"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Events"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "title": "SecurityEventBatch"
+      },
+      "SecurityEventIn": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "login_success",
+              "login_failure",
+              "logout",
+              "logout_all",
+              "session_expired",
+              "session_revoked",
+              "csrf_failure",
+              "origin_failure",
+              "allowlist_miss",
+              "rate_limited",
+              "upstream_unavailable"
+            ],
+            "title": "Type"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Occurredat"
+          },
+          "clientIp": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Clientip"
+          },
+          "userId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Userid"
+          },
+          "organizationId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organizationid"
+          },
+          "sessionRef": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sessionref"
+          },
+          "requestId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requestid"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "occurredAt",
+          "clientIp"
+        ],
+        "title": "SecurityEventIn"
+      },
+      "SecurityEventsAccepted": {
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "title": "Accepted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "accepted"
+        ],
+        "title": "SecurityEventsAccepted"
       },
       "SupplierPatch": {
         "properties": {

@@ -28,7 +28,6 @@ from app.modules.workflow.public import ProjectDetail
 from app.modules.quoting.public import ProposalDraftField, ProposalDraftItem, ProposalDraftSection
 from app.platform.storage.backend import (
     delete_storage_file,
-    generate_presigned_url,
     read_storage_file,
     sanitize_filename,
     storage_key_exists,
@@ -51,6 +50,11 @@ def _as_utc(value: datetime | None) -> datetime | None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
 
+def export_file_url(export_id: str) -> str:
+    """NC-007 kap. 6.3: relativní cesta na streamovací endpoint, nikdy URL úložiště."""
+    return f"{get_settings().api_v1_prefix}/files/exports/{export_id}"
+
+
 def _to_export_read(export: ProjectExport) -> ExportRead:
     """Render API export metadata from the authoritative DB export record."""
     return ExportRead(
@@ -61,7 +65,7 @@ def _to_export_read(export: ProjectExport) -> ExportRead:
         fileName=export.file_name,
         storageKey=export.storage_key,
         downloadUrl=(
-            generate_presigned_url(export.storage_key)
+            export_file_url(export.id)
             if export.status == "completed" and export.storage_key
             else None
         ),
@@ -1410,6 +1414,37 @@ class ExportService:
         if export.status == "completed":
             export = await self._mark_export_failed_if_artifact_missing(export)
         return _to_export_read(export)
+
+    async def get_downloadable_export(
+        self,
+        export_id: str,
+        *,
+        organization_id: str | None = None,
+        is_superadmin_context: bool = False,
+    ) -> ProjectExport | None:
+        """Export ke stažení (NC-007 kap. 6.2), jinak ``None`` (→ 404).
+
+        Stejné vyhledání v rámci firmy jako ``get_export``; navíc jen
+        ``status == "completed"`` s klíčem úložiště a neexpirovaný. Exporty
+        zneplatněné purgem fotky mají ``expires_at`` = okamžik purge.
+        """
+        if organization_id is not None:
+            export = await self.repository.get_by_id_in_org(export_id, organization_id)
+        elif is_superadmin_context:
+            export = await self.repository.get_by_id(export_id)
+        else:
+            return None
+        if export is None or export.status != "completed" or not export.storage_key:
+            return None
+        expires_at = _as_utc(export.expires_at)
+        if expires_at is None or expires_at <= datetime.now(UTC):
+            logger.info(
+                "export.expired_download_rejected",
+                export_id=export.id,
+                project_id=export.project_id,
+            )
+            return None
+        return export
 
     async def delete_expired_exports(self, *, now: datetime | None = None) -> int:
         current_time = now or datetime.now(UTC)

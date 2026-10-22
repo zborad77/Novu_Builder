@@ -1,5 +1,5 @@
 {
-  "count": 119,
+  "count": 122,
   "routes": [
     {
       "order": 0,
@@ -1184,6 +1184,36 @@
     },
     {
       "order": 118,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/files/images/{image_id}/{variant}",
+      "name": "download_image_file",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 119,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/files/exports/{export_id}",
+      "name": "download_export_file",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 120,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/internal/security-events",
+      "name": "ingest_security_events",
+      "kind": "APIRoute",
+      "inSchema": true
+    },
+    {
+      "order": 121,
       "methods": [
         "GET"
       ],

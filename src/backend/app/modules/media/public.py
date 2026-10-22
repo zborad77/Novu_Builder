@@ -8,6 +8,9 @@ Vygenerováno tools/refactor/make_public.py; ruční doplňky patří mezi znač
 from app.modules.media.api.deps import (  # noqa: F401
     get_photo_service,
 )
+from app.modules.media.api.files import (  # noqa: F401
+    router as image_files_router,
+)
 from app.modules.media.api.images import (  # noqa: F401
     router as images_router,
 )
@@ -51,6 +54,7 @@ __all__ = [
     "PurgePhotoRequest",
     "PurgePhotoResponse",
     "get_photo_service",
+    "image_files_router",
     "images_router",
     "markers_router",
     "purge_photo_with_audit",

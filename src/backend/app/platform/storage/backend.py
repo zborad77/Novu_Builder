@@ -23,6 +23,8 @@ if _backend == "s3":
         delete_storage_file,
         generate_presigned_url,
         get_public_url,
+        get_storage_object_size,
+        iter_storage_file,
         list_storage_objects,
         list_storage_keys,
         read_storage_file,
@@ -37,6 +39,8 @@ elif _backend == "local":
         delete_storage_file,
         generate_presigned_url,
         get_public_url,
+        get_storage_object_size,
+        iter_storage_file,
         list_storage_objects,
         list_storage_keys,
         read_storage_file,
@@ -54,6 +58,7 @@ else:
 # Backend-independent helpers — always sourced from local_photo_storage
 # (pure computation, no I/O)
 from app.platform.storage.local_photo_storage import (  # noqa: F401
+    DEFAULT_STREAM_CHUNK_SIZE,
     UploadValidationError,
     ensure_directory,
     get_image_dimensions,
@@ -61,4 +66,5 @@ from app.platform.storage.local_photo_storage import (  # noqa: F401
     sanitize_filename,
     validate_photo_upload,
     validate_image_format,
+    validate_storage_key,
 )

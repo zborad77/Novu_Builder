@@ -78,11 +78,16 @@ class TestUploadRouteStructure:
         assert "get_current_user" in src
 
     def test_preview_route_validates_org(self):
-        """get_image_preview must verify the photo's project belongs to the user's org."""
-        from app.modules.media.api.images import _get_image_preview_core
-        src = inspect.getsource(_get_image_preview_core)
+        """get_image_preview must verify the photo's project belongs to the user's org.
+
+        NC-007: preview streamuje přes sdílený stream_photo_variant (files endpoint).
+        """
+        from app.modules.media.api.files import stream_photo_variant
+        from app.modules.media.api.images import get_image_preview
+        assert "stream_photo_variant" in inspect.getsource(get_image_preview)
+        src = inspect.getsource(stream_photo_variant)
         assert "organization_id=org_id" in src
-        assert "get_photo_by_id_in_org" in src
+        assert "get_active_photo_in_org" in src
 
     def test_photo_read_model_has_project_id(self):
         """ProjectPhotoRead must expose projectId for org validation."""
@@ -278,11 +283,43 @@ class TestUploadForeignProject:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestPreviewOrgCheck:
+    """NC-007 kap. 6.3: preview streamuje (dřív RedirectResponse na URL úložiště)."""
+
+    @staticmethod
+    def _request():
+        request = MagicMock()
+        request.headers = {}
+        return request
+
+    @staticmethod
+    def _photo(processing_status: str = "ready"):
+        photo = MagicMock()
+        photo.id = "pho_X"
+        photo.project_id = "prj_A"
+        photo.storage_key = "projects/prj_A/test.jpg"
+        photo.preview_storage_key = "projects/prj_A/preview/test.jpg"
+        photo.ai_input_storage_key = "projects/prj_A/ai/test.jpg"
+        photo.processing_status = processing_status
+        photo.mime_type = "image/jpeg"
+        photo.original_filename = "test.jpg"
+        return photo
+
+    async def _call(self, user, photo_service, image_id: str = "pho_X"):
+        from app.modules.media.api.files import stream_photo_variant
+
+        return await stream_photo_variant(
+            request=self._request(),
+            image_id=image_id,
+            variant="preview",
+            current_user=user,
+            photo_service=photo_service,
+            resource="image_preview",
+            fallback_to_original=True,
+        )
 
     @pytest.mark.asyncio
     async def test_preview_fails_for_foreign_org_photo(self):
         """get_image_preview raises 404 if photo's project belongs to a different org."""
-        from app.modules.media.api.images import _get_image_preview_core
         from app.modules.media.photo_service import PhotoService
 
         mock_user = MagicMock()
@@ -290,17 +327,13 @@ class TestPreviewOrgCheck:
         mock_user.organizationId = "org_B"
 
         mock_photo_service = AsyncMock(spec=PhotoService)
-        mock_photo_service.get_photo_by_id_in_org = AsyncMock(return_value=None)
+        mock_photo_service.get_active_photo_in_org = AsyncMock(return_value=None)
 
         with pytest.raises(HTTPException) as exc_info:
-            await _get_image_preview_core(
-                image_id="pho_X",
-                current_user=mock_user,
-                photo_service=mock_photo_service,
-            )
+            await self._call(mock_user, mock_photo_service)
 
         assert exc_info.value.status_code == 404
-        mock_photo_service.get_photo_by_id_in_org.assert_awaited_once_with(
+        mock_photo_service.get_active_photo_in_org.assert_awaited_once_with(
             "pho_X",
             organization_id="org_B",
         )
@@ -308,7 +341,6 @@ class TestPreviewOrgCheck:
     @pytest.mark.asyncio
     async def test_preview_fails_for_nonexistent_photo(self):
         """get_image_preview raises 404 if photo does not exist."""
-        from app.modules.media.api.images import _get_image_preview_core
         from app.modules.media.photo_service import PhotoService
 
         mock_user = MagicMock()
@@ -316,83 +348,91 @@ class TestPreviewOrgCheck:
         mock_user.organizationId = "org_A"
 
         mock_photo_service = AsyncMock(spec=PhotoService)
-        mock_photo_service.get_photo_by_id_in_org = AsyncMock(return_value=None)
+        mock_photo_service.get_active_photo_in_org = AsyncMock(return_value=None)
 
         with pytest.raises(HTTPException) as exc_info:
-            await _get_image_preview_core(
-                image_id="pho_nonexistent",
-                current_user=mock_user,
-                photo_service=mock_photo_service,
-            )
+            await self._call(mock_user, mock_photo_service, image_id="pho_nonexistent")
 
         assert exc_info.value.status_code == 404
-        mock_photo_service.get_photo_by_id_in_org.assert_awaited_once_with(
+        mock_photo_service.get_active_photo_in_org.assert_awaited_once_with(
             "pho_nonexistent",
             organization_id="org_A",
         )
 
     @pytest.mark.asyncio
     async def test_preview_succeeds_for_own_org_photo(self):
-        """get_image_preview returns RedirectResponse for photo in user's org."""
-        from fastapi.responses import RedirectResponse
-        from app.modules.media.api.images import _get_image_preview_core
+        """get_image_preview streams the preview of a photo in the user's org (no redirect)."""
+        from unittest.mock import patch
+
+        from starlette.responses import Response
+
         from app.modules.media.photo_service import PhotoService
 
         mock_user = MagicMock()
         mock_user.isSuperAdmin = False
         mock_user.organizationId = "org_A"
 
-        read_model = MagicMock()
-        read_model.projectId = "prj_A"
-        read_model.variants = MagicMock()
-        read_model.variants.preview = MagicMock()
-        read_model.variants.preview.url = "/mock-storage/projects/prj_A/preview/test.jpg"
-        read_model.url = "/mock-storage/projects/prj_A/test.jpg"
-
         mock_photo_service = AsyncMock(spec=PhotoService)
-        mock_photo_service.get_photo_by_id_in_org = AsyncMock(return_value=read_model)
+        mock_photo_service.get_active_photo_in_org = AsyncMock(return_value=self._photo())
 
-        response = await _get_image_preview_core(
-            image_id="pho_X",
-            current_user=mock_user,
-            photo_service=mock_photo_service,
-        )
+        streamed = Response(content=b"img", media_type="image/jpeg")
+        with patch(
+            "app.modules.media.api.files.storage_file_response", AsyncMock(return_value=streamed)
+        ) as stream:
+            response = await self._call(mock_user, mock_photo_service)
 
-        assert isinstance(response, RedirectResponse)
-        mock_photo_service.get_photo_by_id_in_org.assert_awaited_once_with(
+        assert response is streamed
+        assert stream.await_args.kwargs["storage_key"] == "projects/prj_A/preview/test.jpg"
+        assert stream.await_args.kwargs["disposition"] == "inline"
+        mock_photo_service.get_active_photo_in_org.assert_awaited_once_with(
             "pho_X",
             organization_id="org_A",
         )
 
     @pytest.mark.asyncio
+    async def test_preview_falls_back_to_original_until_ready(self):
+        from unittest.mock import patch
+
+        from starlette.responses import Response
+
+        from app.modules.media.photo_service import PhotoService
+
+        mock_user = MagicMock()
+        mock_user.isSuperAdmin = False
+        mock_user.organizationId = "org_A"
+        mock_photo_service = AsyncMock(spec=PhotoService)
+        mock_photo_service.get_active_photo_in_org = AsyncMock(return_value=self._photo("processing"))
+
+        with patch(
+            "app.modules.media.api.files.storage_file_response", AsyncMock(return_value=Response(b"o"))
+        ) as stream:
+            await self._call(mock_user, mock_photo_service)
+
+        assert stream.await_args.kwargs["storage_key"] == "projects/prj_A/test.jpg"
+
+    @pytest.mark.asyncio
     async def test_superadmin_bypasses_org_check_on_preview(self):
         """Superadmin can access preview of any org's photo."""
-        from fastapi.responses import RedirectResponse
-        from app.modules.media.api.images import _get_image_preview_core
+        from unittest.mock import patch
+
+        from starlette.responses import Response
+
         from app.modules.media.photo_service import PhotoService
 
         mock_user = MagicMock()
         mock_user.isSuperAdmin = True
         mock_user.organizationId = None
 
-        read_model = MagicMock()
-        read_model.projectId = "prj_A"
-        read_model.variants = MagicMock()
-        read_model.variants.preview = MagicMock()
-        read_model.variants.preview.url = "/mock-storage/projects/prj_A/preview/test.jpg"
-        read_model.url = "/mock-storage/projects/prj_A/test.jpg"
-
         mock_photo_service = AsyncMock(spec=PhotoService)
-        mock_photo_service.get_photo_by_id_in_org = AsyncMock(return_value=read_model)
+        mock_photo_service.get_active_photo_in_org = AsyncMock(return_value=self._photo())
 
-        response = await _get_image_preview_core(
-            image_id="pho_X",
-            current_user=mock_user,
-            photo_service=mock_photo_service,
-        )
+        with patch(
+            "app.modules.media.api.files.storage_file_response", AsyncMock(return_value=Response(b"img"))
+        ):
+            response = await self._call(mock_user, mock_photo_service)
 
-        assert isinstance(response, RedirectResponse)
-        mock_photo_service.get_photo_by_id_in_org.assert_awaited_once_with(
+        assert response.status_code == 200
+        mock_photo_service.get_active_photo_in_org.assert_awaited_once_with(
             "pho_X",
             organization_id=None,
         )

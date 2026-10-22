@@ -124,16 +124,21 @@ class TestImagePreviewDirectById:
         )
         assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
 
-    async def test_preview_own_redirects(self, app_client, token_a, image_a_id):
-        """Positive path: Tenant A gets a redirect (302/307) for their own image."""
+    async def test_preview_own_streams(self, app_client, token_a, image_a_id):
+        """Positive path: Tenant A gets the image bytes for their own image.
+
+        NC-007 kap. 6.3: preview se streamuje přímo z core (dřív přesměrování
+        na URL úložiště) – žádný Location ani URL úložiště v odpovědi.
+        """
         resp = await app_client.get(
             f"/api/v1/images/{image_a_id}/preview",
             headers={"Authorization": f"Bearer {token_a}"},
             follow_redirects=False,
         )
-        assert resp.status_code in (301, 302, 307, 308), (
-            f"Expected redirect, got {resp.status_code}: {resp.text}"
-        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert "location" not in resp.headers
+        assert resp.headers["content-type"] == "image/jpeg"
+        assert resp.content[:2] == b"\xff\xd8"  # JPEG SOI
 
 
 # ---------------------------------------------------------------------------

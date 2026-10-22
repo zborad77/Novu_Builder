@@ -17,6 +17,7 @@ from app.platform.http.api_versioning import ApiVersioningMiddleware
 from app.modules.audit.public import AuditMiddleware
 from app.platform.http.client_ip import TrustedProxyMiddleware, trusts_unix_socket
 from app.platform.http.exposure import PRODUCTION_ZONES, ExposureGuardMiddleware
+from app.platform.http.file_streaming import FILE_RESPONSE_CSP
 from app.platform.http.gateway_auth import GatewaySignatureMiddleware
 from app.platform.config import get_settings, startup_failure_message
 from app.platform.http.limiter import limiter
@@ -493,8 +494,11 @@ def create_app() -> FastAPI:
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
 
         effective_csp_policy = app.state.content_security_policy
-        if effective_csp_policy:
-            existing_csp_policy = response.headers.get("Content-Security-Policy")
+        existing_csp_policy = response.headers.get("Content-Security-Policy")
+        if existing_csp_policy == FILE_RESPONSE_CSP:
+            # NC-007 kap. 6: odpověď se souborem nese přísnější sandbox politiku – zachovat.
+            pass
+        elif effective_csp_policy:
             if existing_csp_policy and existing_csp_policy != effective_csp_policy:
                 logger.warning(
                     "security.csp.override",

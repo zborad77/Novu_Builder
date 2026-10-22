@@ -162,9 +162,9 @@ async def upload_and_preview(
                 headers=headers,
                 follow_redirects=False,
             ),
-            ok_statuses=(302, 307),
+            ok_statuses=(200,),  # NC-007: náhled se streamuje, žádné přesměrování na úložiště
         )
-        if preview.status_code not in (302, 307):
+        if preview.status_code != 200:
             preview.raise_for_status()
     return image_id if isinstance(image_id, str) else None
 

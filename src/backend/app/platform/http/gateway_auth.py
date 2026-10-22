@@ -57,6 +57,9 @@ _FORWARDING_HEADERS: Final = frozenset(
     {b"x-forwarded-for", b"x-forwarded-proto", b"x-forwarded-host", b"x-real-ip", b"forwarded"}
 )
 
+# Klíč v ``scope["state"]``, pod kterým je id ověřeného klíče gateway (jen zóna gateway).
+GATEWAY_KEY_ID_STATE: Final = "nc_gateway_key_id"
+
 _KEY_ID_RE: Final = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
 _NONCE_RE: Final = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 _SIGNATURE_RE: Final = re.compile(r"^[0-9a-f]{64}$")
@@ -299,6 +302,8 @@ class GatewaySignatureMiddleware:
             return
 
         scope["client"] = (verified["client_ip"], 0)
+        # Ověřená identita gateway pro rate limit interních rout (NC-007 kap. 6.4).
+        scope.setdefault("state", {})[GATEWAY_KEY_ID_STATE] = verified["key_id"]
         scope["headers"] = [
             (name, value)
             for name, value in scope.get("headers", [])

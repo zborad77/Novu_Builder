@@ -29,6 +29,20 @@ def client_ip_rate_limit_key(request) -> str:
     return "unknown"
 
 
+def gateway_key_rate_limit_key(request) -> str:
+    """Bucket per ověřený klíč gateway (interní routy zóny gateway, NC-007 kap. 6.4).
+
+    Id klíče nastaví ``GatewaySignatureMiddleware`` až po platném podpisu, takže
+    ho volající nemůže podvrhnout. Mimo zónu gateway (dev/testy) adresa klienta.
+    """
+    from app.platform.http.gateway_auth import GATEWAY_KEY_ID_STATE
+
+    key_id = getattr(request.state, GATEWAY_KEY_ID_STATE, None)
+    if isinstance(key_id, str) and key_id:
+        return f"gateway:{key_id}"
+    return client_ip_rate_limit_key(request)
+
+
 def _rate_limit_key(request) -> str:
     """Per-tenant (or per-user) rate limit key for authenticated requests; falls back to IP.
 

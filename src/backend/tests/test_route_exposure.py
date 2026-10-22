@@ -45,7 +45,9 @@ _SYSTEM_PREFIXES = (
 # Approved size of the gateway (web) surface. Changing it is a security review:
 # update API_EXPOSURE_MATRIX.md and this number together.
 # 86 + 5 company user administration routes /org/users (D-10, 17. 10. 2026).
-_APPROVED_GATEWAY_ROUTE_COUNT = 91
+# 91 + 2 file streaming routes /files/* + 1 internal /internal/security-events
+# (NC-007 etapa 1, kap. 6, 22. 10. 2026).
+_APPROVED_GATEWAY_ROUTE_COUNT = 94
 
 
 def _app_routes() -> set[tuple[str, str]]:

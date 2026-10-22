@@ -18,6 +18,9 @@ from app.modules.identity.api.deps import (  # noqa: F401
     require_user_admin,
     resolve_org_id,
 )
+from app.modules.identity.api.internal_security_events import (  # noqa: F401
+    router as internal_security_events_router,
+)
 from app.modules.identity.api.org_users import (  # noqa: F401
     router as org_users_router,
 )
@@ -109,6 +112,7 @@ __all__ = [
     "get_company_service",
     "get_current_user",
     "hash_password",
+    "internal_security_events_router",
     "is_tenant_operator",
     "lookup_audit_actor",
     "may_soft_delete_photo_of",

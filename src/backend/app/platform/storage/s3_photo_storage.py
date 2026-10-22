@@ -18,12 +18,17 @@ from datetime import UTC
 import os
 from pathlib import Path
 from time import time_ns, monotonic as _time_mono
+from typing import AsyncIterator
 from uuid import uuid4
 
 import structlog
 
 from app.platform.metrics import observe_storage_operation
-from app.platform.storage.local_photo_storage import sanitize_filename
+from app.platform.storage.local_photo_storage import (
+    DEFAULT_STREAM_CHUNK_SIZE,
+    sanitize_filename,
+    validate_storage_key,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -375,3 +380,86 @@ async def delete_storage_file(*, relative_storage_key: str) -> None:
 
 async def verify_storage_health() -> None:
     await asyncio.to_thread(_sync_verify_storage_health)
+
+
+# ── NC-007 kap. 6: čtení po blocích pro streamovací endpointy ────────────────
+
+
+def _is_missing_object_error(exc: Exception) -> bool:
+    error_code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+    return error_code in {"NoSuchKey", "404", "NotFound"}
+
+
+def _sync_get_storage_object_size(*, relative_storage_key: str) -> int | None:
+    validate_storage_key(relative_storage_key)
+    try:
+        client = _get_s3_client()
+        response = client.head_object(Bucket=_s3_bucket(), Key=relative_storage_key)
+    except Exception as exc:
+        if _is_missing_object_error(exc):
+            return None
+        logger.error(
+            "storage.stat_failed",
+            storage_key=relative_storage_key,
+            error=str(exc),
+            exc_info=True,
+        )
+        raise
+    return int(response["ContentLength"])
+
+
+async def get_storage_object_size(*, relative_storage_key: str) -> int | None:
+    """Velikost objektu v bajtech, ``None`` když objekt neexistuje."""
+    _t0 = _time_mono()
+    _outcome = "success"
+    try:
+        size = await asyncio.to_thread(
+            _sync_get_storage_object_size,
+            relative_storage_key=relative_storage_key,
+        )
+        if size is None:
+            _outcome = "not_found"
+        return size
+    except Exception:
+        _outcome = "error"
+        raise
+    finally:
+        observe_storage_operation(operation="stat", backend="s3", outcome=_outcome, duration_seconds=_time_mono() - _t0)
+
+
+def _sync_open_object_body(*, relative_storage_key: str, start: int, end: int | None):
+    client = _get_s3_client()
+    kwargs = {"Bucket": _s3_bucket(), "Key": relative_storage_key}
+    if start or end is not None:
+        kwargs["Range"] = f"bytes={start}-{'' if end is None else end}"
+    return client.get_object(**kwargs)["Body"]
+
+
+async def iter_storage_file(
+    *,
+    relative_storage_key: str,
+    start: int = 0,
+    end: int | None = None,
+    chunk_size: int = DEFAULT_STREAM_CHUNK_SIZE,
+) -> AsyncIterator[bytes]:
+    """Čte objekt po blocích (HTTP Range na S3) od ``start`` do ``end`` včetně.
+
+    Tělo se nikdy nenačítá celé do paměti a klient nikdy nedostane URL úložiště.
+    """
+    validate_storage_key(relative_storage_key)
+    if start < 0 or (end is not None and end < start) or chunk_size < 1:
+        raise ValueError("Invalid byte range.")
+    body = await asyncio.to_thread(
+        _sync_open_object_body,
+        relative_storage_key=relative_storage_key,
+        start=start,
+        end=end,
+    )
+    try:
+        while True:
+            chunk = await asyncio.to_thread(body.read, chunk_size)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        await asyncio.to_thread(body.close)

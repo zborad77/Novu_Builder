@@ -19,7 +19,6 @@ from app.modules.media.photo_repository import PhotoRepository
 from app.modules.media.schemas.photo import PhotoVariant, PhotoVariants, ProjectPhotoRead
 from app.platform.storage.backend import (
     delete_storage_file,
-    generate_presigned_url,
     get_image_dimensions,
     read_storage_file,
     resize_image_bytes,
@@ -82,15 +81,43 @@ def _author_id(photo: ProjectPhoto) -> str | None:
     return value if isinstance(value, str) else None
 
 
+# NC-007 kap. 6.1/6.3: klienti dostávají jen relativní cestu na streamovací
+# endpoint core, nikdy URL úložiště (presigned S3 ani /mock-storage).
+PHOTO_FILE_VARIANTS: tuple[str, ...] = ("original", "preview", "ai-input")
+
+
+def photo_file_url(photo_id: str, variant: str) -> str:
+    if variant not in PHOTO_FILE_VARIANTS:
+        raise ValueError(f"Unknown photo variant {variant!r}.")
+    return f"{get_settings().api_v1_prefix}/files/images/{photo_id}/{variant}"
+
+
+def variant_storage_key(photo: ProjectPhoto, variant: str) -> str | None:
+    """Klíč úložiště varianty; ``None`` pro neznámou nebo ještě nehotovou variantu.
+
+    Stejná pravidla jako URL v ``to_read_model``: originál je k dispozici hned,
+    náhled a AI vstup až po zpracování (``processing_status == "ready"``).
+    """
+    if variant == "original":
+        return photo.storage_key or None
+    if photo.processing_status != "ready":
+        return None
+    if variant == "preview":
+        return photo.preview_storage_key or None
+    if variant == "ai-input":
+        return photo.ai_input_storage_key or None
+    return None
+
+
 def to_read_model(photo: ProjectPhoto) -> ProjectPhotoRead:
-    original_url = generate_presigned_url(photo.storage_key)
+    original_url = photo_file_url(photo.id, "original")
     preview_url = (
-        generate_presigned_url(photo.preview_storage_key)
+        photo_file_url(photo.id, "preview")
         if photo.processing_status == "ready" and photo.preview_storage_key
         else None
     )
     ai_input_url = (
-        generate_presigned_url(photo.ai_input_storage_key)
+        photo_file_url(photo.id, "ai-input")
         if photo.processing_status == "ready" and photo.ai_input_storage_key
         else None
     )
@@ -284,6 +311,18 @@ class PhotoService:
         if not photo:
             return None
         return to_read_model(photo)
+
+    async def get_active_photo_in_org(
+        self,
+        photo_id: str,
+        *,
+        organization_id: str | None,
+    ) -> ProjectPhoto | None:
+        """Aktivní fotka firmy (ORM řádek) pro streamování; smazaná/purgnutá/cizí = ``None``."""
+        return await self.repository.get_photo_by_id_in_org(
+            photo_id,
+            organization_id=organization_id,
+        )
 
     async def _enforce_upload_backpressure(self, *, settings, surface: str) -> None:
         require_worker_capacity(surface, settings=settings)

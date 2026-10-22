@@ -1,13 +1,13 @@
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, status
-from fastapi.responses import RedirectResponse
 from typing import cast
 
 from app.modules.identity.public import get_current_user, resolve_org_id
 from app.modules.media.api.deps import get_photo_service
+from app.modules.media.api.files import stream_photo_variant
 from app.modules.cases.public import CaseReader, get_case_reader
 from app.modules.media.photo_purge import purge_photo_with_audit
-from app.modules.audit.public import log_cross_tenant_denied, mark_request_audited
+from app.modules.audit.public import mark_request_audited
 from app.platform.config import get_settings
 from app.platform.http.limiter import limiter
 from app.platform.metrics import UPLOAD_REJECTIONS_TOTAL, metric_labels
@@ -179,32 +179,6 @@ async def upload_case_images(
     )
 
 
-async def _get_image_preview_core(
-    image_id: str,
-    current_user: AuthUserRead,
-    photo_service: PhotoService,
-):
-    """Pure application logic: org-scoped photo lookup and preview URL resolution.
-
-    No Request dependency — directly testable without framework context.
-    """
-    org_id = resolve_org_id(current_user)
-    photo = await photo_service.get_photo_by_id_in_org(
-        image_id,
-        organization_id=org_id,
-    )
-    if not photo:
-        if not current_user.isSuperAdmin:
-            log_cross_tenant_denied(
-                logger,
-                resource="image_preview", resource_id=image_id,
-                user_id=current_user.id, org_id=current_user.organizationId,
-            )
-        raise HTTPException(status_code=404, detail="Image not found.")
-    preview_url = photo.variants.preview.url or photo.url
-    return RedirectResponse(url=preview_url)
-
-
 @router.get("/images/{image_id}/preview")
 @limiter.limit(get_settings().rate_limit_read_detail)
 async def get_image_preview(
@@ -212,11 +186,24 @@ async def get_image_preview(
     request: Request,
     current_user: AuthUserRead = Depends(get_current_user),
     photo_service: PhotoService = Depends(get_photo_service),
-):
-    return await _get_image_preview_core(
+) -> Response:
+    """Náhled fotky – streamuje se přímo (NC-007 kap. 6.3), žádná URL úložiště.
+
+    Dřív přesměrování (307) na podepsanou URL úložiště. Přesměrování na
+    ``/files/images/{id}/preview`` by vyžadovalo druhý požadavek, u kterého
+    klienti (Qt, gateway) nemusí znovu poslat ``Authorization``, a relativní
+    ``/api/v1/...`` cesta není z webu přes ``/bff`` dosažitelná. Proto stejná
+    kontrola firmy a stejné streamování jako ``/files/images/{id}/preview``;
+    dokud náhled není hotový, vrací originál (jako dřív ``preview.url or url``).
+    """
+    return await stream_photo_variant(
+        request=request,
         image_id=image_id,
+        variant="preview",
         current_user=current_user,
         photo_service=photo_service,
+        resource="image_preview",
+        fallback_to_original=True,
     )
 
 

@@ -179,6 +179,11 @@ EXPOSURE: Final[dict[tuple[str, str], frozenset[str]]] = {
     ("GET", f"{_P}/offer-requests/{{offer_id}}/events"): TENANT,
     ("GET", f"{_P}/offer-requests/{{offer_id}}/result"): TENANT,
     ("GET", f"{_P}/offer-requests/{{offer_id}}/status"): TENANT,
+    # ── Streamování souborů (NC-007 kap. 6.1/6.2) ────────────────────────
+    ("GET", f"{_P}/files/images/{{image_id}}/{{variant}}"): TENANT,
+    ("GET", f"{_P}/files/exports/{{export_id}}"): TENANT,
+    # ── Interní: jen gateway, podepsaný požadavek bez Authorization (kap. 6.4) ──
+    ("POST", f"{_P}/internal/security-events"): frozenset({_G}),
     # ── Development only (never in a production zone) ────────────────────
     ("GET", "/mock-storage/{file_path:path}"): NOWHERE,
     ("GET", "/openapi.json"): NOWHERE,

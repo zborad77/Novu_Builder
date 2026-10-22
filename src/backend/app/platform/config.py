@@ -163,6 +163,8 @@ _RATE_LIMIT_FIELD_NAMES: tuple[str, ...] = (
     "rate_limit_metrics",
     "rate_limit_read_list",
     "rate_limit_read_detail",
+    "rate_limit_file_download",
+    "rate_limit_security_events",
 )
 
 
@@ -563,6 +565,10 @@ class Settings(BaseSettings):
     rate_limit_metrics: str = Field(default="60/minute", alias="RATE_LIMIT_METRICS")
     rate_limit_read_list: str = Field(default="120/minute", alias="RATE_LIMIT_READ_LIST")
     rate_limit_read_detail: str = Field(default="60/minute", alias="RATE_LIMIT_READ_DETAIL")
+    # NC-007 kap. 6: streamování fotek/exportů (galerie načítá mnoho náhledů
+    # najednou, klíč je firma) a dávky bezpečnostních událostí z gateway (klíč gateway).
+    rate_limit_file_download: str = Field(default="600/minute", alias="RATE_LIMIT_FILE_DOWNLOAD")
+    rate_limit_security_events: str = Field(default="120/minute", alias="RATE_LIMIT_SECURITY_EVENTS")
 
     # Email — password reset and transactional emails (C7)
     smtp_host: str = Field(default="", alias="SMTP_HOST")

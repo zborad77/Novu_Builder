@@ -421,13 +421,13 @@ class PilotLoadRehearsal:
                 follow_redirects=False,
             )
             duration_ms = (time.perf_counter() - started) * 1000.0
-            error = None if response.status_code in (302, 307) else response.text[:200]
+            error = None if response.status_code == 200 else response.text[:200]
             self.buckets["image.preview"].record(
                 duration_ms=duration_ms,
                 status_code=response.status_code,
                 error=error,
             )
-            if response.status_code not in (302, 307):
+            if response.status_code != 200:
                 response.raise_for_status()
         return image_id
 
