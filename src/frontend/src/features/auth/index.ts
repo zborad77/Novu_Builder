@@ -14,3 +14,5 @@ export type {
   LoginResponse,
   SessionResponse,
 } from './types/auth.types'
+
+export type { LogoutAllResult } from './api/authApi'

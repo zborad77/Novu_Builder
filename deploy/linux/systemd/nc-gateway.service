@@ -43,6 +43,8 @@ ExecStart=/opt/novuconstruct/deploy/linux/bin/nc-run \
     /opt/novuconstruct/src/gateway/.venv/bin/python -m nc_gateway
 Restart=on-failure
 RestartSec=3
+# exit 2 = neplatná konfigurace (nc_gateway.__main__): restart by nepomohl, jen zahltil journal
+RestartPreventExitStatus=2
 TimeoutStopSec=25
 
 # ── Sandbox (check: systemd-analyze security nc-gateway) ─────────────────────

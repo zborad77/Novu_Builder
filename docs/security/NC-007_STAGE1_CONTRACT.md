@@ -27,7 +27,7 @@ Všechny odpovědi jsou JSON. Chyba má tvar `{"detail": "<obecná zpráva>", "r
 | GET | `/bff/health` | ne | ne | nic | `{"status":"ok"}` (nic o core) |
 | POST | `/bff/auth/login` | ne | ne (Origin ano) | `POST /api/v1/auth/login` | 200 `{"user": AuthUserRead, "csrfToken": "…"}` + `Set-Cookie`; 401 jednotně `{"detail":"Invalid credentials."}` |
 | POST | `/bff/auth/logout` | ano | ano | `POST /api/v1/auth/logout` | 204, `Set-Cookie` s `Max-Age=0` (i když core neodpoví) |
-| POST | `/bff/auth/logout-all` | ano | ano | `GET /api/v1/auth/sessions` + `DELETE /api/v1/auth/sessions/{id}` pro všechny + `POST /api/v1/auth/logout` | 204; gateway smaže **všechny** své sessions uživatele |
+| POST | `/bff/auth/logout-all` | ano | ano | `GET /api/v1/auth/sessions` + `DELETE /api/v1/auth/sessions/{id}` pro všechny + `POST /api/v1/auth/logout` | 204; gateway smaže **všechny** své sessions uživatele. Když core část revokací nepotvrdí, gateway své sessions i cookie stejně zruší a vrátí 502 `{"code":"LOGOUT_ALL_PARTIAL"}`; web pak přejde do stavu odhlášeno a upozorní, že odhlášení na ostatních zařízeních nebylo potvrzeno |
 | GET | `/bff/session` | volitelně | ne | `GET /api/v1/auth/me` | 200 `{"authenticated": true, "user": AuthUserRead, "csrfToken": "…", "expiresAt": iso, "idleExpiresAt": iso}` nebo 200 `{"authenticated": false}` |
 | * | `/bff/api/<cesta>` | ano | u mutací | `/api/v1/<cesta>` | odpověď core (viz 4) |
 
@@ -56,13 +56,14 @@ Vše ostatní na gateway vrací **404**: `/api/*`, `/docs`, `/openapi.json`, `/m
 
 ## 4. Povinné kontroly na `/bff/api` (pořadí)
 
-1. allowlist → jinak 404 + bezpečnostní událost `allowlist_miss`,
-2. velikost těla: JSON max 256 KiB, `multipart/form-data` max 25 MiB a jen na routách s nahráváním (`POST …/images`, `POST …/upload*`, konfigurovatelný seznam) → jinak 413,
+0. rate limit na IP (Redis, 600/min) **před** allowlistem, aby neautentizovaný provoz nešlo zesilovat do auditu (review M1),
+1. allowlist → jinak 404 + bezpečnostní událost `allowlist_miss` (agregovaná: nejvýš 1 událost na IP za 10 s s počítadlem; při plné frontě se zahazují jen nízkoprioritní typy `allowlist_miss` a `rate_limited`),
+2. velikost těla podle deklarované `Content-Length` (bez čtení těla): JSON max 256 KiB, `multipart/form-data` max 25 MiB a jen na routách s nahráváním (`POST …/images`, `POST …/upload*`, konfigurovatelný seznam) → jinak 413,
 3. `Content-Type` u těla jen `application/json` nebo `multipart/form-data` → jinak 415,
-4. session → jinak 401,
+4. session → jinak 401. Tělo se čte až **po** kontrole session a CSRF (kroky 4–5); upload se streamuje do core nebo přes dočasný soubor, nikdy celý do paměti (review M2),
 5. u `POST/PUT/PATCH/DELETE`: `Origin` přesně rovný `NC_BFF_PUBLIC_ORIGIN` (chybějící Origin → `Sec-Fetch-Site: same-origin`, jinak 403) a `X-CSRF-Token` rovný `csrfSecret` (`hmac.compare_digest`) → jinak 403 + `csrf_failure`/`origin_failure`. Tělo je pevné: CSRF `{"detail":"CSRF validation failed.","code":"CSRF_FAILED","requestId":…}`, Origin `{"detail":"Origin not allowed.","code":"ORIGIN_REJECTED","requestId":…}`. Web opakuje požadavek jen u `CSRF_FAILED`,
 6. rate limit (Redis): na session 300/min, na IP 600/min; `/bff/auth/login` IP 20/5 min a e-mail 10 neúspěchů/15 min → 429 + `Retry-After` + `rate_limited`,
-7. hlavičky do core: jen `Content-Type`, `Accept`, `If-None-Match`, `Range`, `If-Range`. Gateway nastaví `Authorization: Bearer <access>`, `X-Request-Id` a hlavičky `X-NC-*` podle [GATEWAY_CORE_CONTRACT.md](GATEWAY_CORE_CONTRACT.md). Adresu klienta bere **jen** ze spojení (`NC_BFF_TRUSTED_PROXY`: přesně jedna adresa lokálního nginx; `X-Forwarded-For` se čte jen tehdy, když spojení přichází z této adresy, a použije se poslední hodnota),
+7. hlavičky do core: jen `Content-Type`, `Accept`, `If-None-Match`, `Range`, `If-Range` a `Last-Event-ID` (jen u SSE, max 64 znaků `[0-9A-Za-z:._-]`, QA F-1). Query string jen ze znaků RFC 3986, max 4096 B, jinak 400. Gateway nastaví `Authorization: Bearer <access>`, `X-Request-Id` a hlavičky `X-NC-*` podle [GATEWAY_CORE_CONTRACT.md](GATEWAY_CORE_CONTRACT.md). Adresu klienta bere **jen** ze spojení (`NC_BFF_TRUSTED_PROXY`: přesně jedna adresa lokálního nginx; `X-Forwarded-For` se čte jen tehdy, když spojení přichází z této adresy, a použije se poslední hodnota),
 8. odpověď core se streamuje beze změny těla, bez bufferování. U `text/event-stream` (SSE `/cases/{case_id}/activity/stream`) neplatí krátký read timeout (jen idle limit spojení, výchozí 300 s). Hlavičky jen z allowlistu: `Content-Type`, `Content-Length`, `Content-Disposition`, `Content-Range`, `Accept-Ranges`, `ETag`, `Last-Modified`, `Cache-Control`, `Retry-After`, `X-Request-Id`. 5xx se nahradí `{"detail":"Upstream error.","requestId":…}` se stejným kódem. Core nedostupný → 502.
 
 ## 5. Gateway → core

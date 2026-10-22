@@ -25,7 +25,7 @@ export function AppShell() {
   const setMobileMenuOpen = useUIStore((state) => state.setMobileMenuOpen)
 
   // Odhlášení i „odhlásit všude“ řeší gateway; po úspěchu AuthGuard přesměruje na login.
-  async function runLogout(action: () => Promise<void>) {
+  async function runLogout(action: () => Promise<unknown>) {
     setLoggingOut(true)
     try {
       await action()
@@ -38,7 +38,10 @@ export function AppShell() {
 
   function handleLogoutAll() {
     if (!window.confirm(t('auth.logoutAllConfirm'))) return
-    void runLogout(logoutAll)
+    void runLogout(async () => {
+      const result = await logoutAll()
+      if (result.partial) toast.warning(t('auth.logoutAllPartial'))
+    })
   }
 
   return (

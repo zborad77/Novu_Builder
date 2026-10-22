@@ -31,6 +31,7 @@ FORWARD_RESPONSE_HEADERS: Final = frozenset(
         b"cache-control",
         b"retry-after",
         b"x-request-id",
+        b"content-security-policy",
     }
 )
 SECURITY_HEADERS: Final = (

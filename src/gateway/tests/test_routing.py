@@ -76,14 +76,16 @@ async def test_wrong_method_on_bff_endpoint_is_404(offline_harness: Harness, met
         "/bff/api/internal/security-events",
     ],
 )
-async def test_not_passthrough_routes_are_404(offline_harness: Harness, path: str) -> None:
+async def test_not_passthrough_routes_are_404(harness: Harness, path: str) -> None:
     for method in ("GET", "POST"):
-        response = await asgi_request(offline_harness.app, method, path.encode())
+        response = await asgi_request(harness.app, method, path.encode())
         assert response.status == 404, (method, path)
-    assert offline_harness.core.requests == []
-    events = [e for e in offline_harness.app.events.pending if e["type"] == "allowlist_miss"]
-    assert len(events) == 2
+    assert harness.core.requests == []
+    # agregace (review M1): dva missy z jedné IP v okně 10 s = jedna událost
+    events = [e for e in harness.app.events.pending if e["type"] == "allowlist_miss"]
+    assert len(events) == 1
     assert events[0]["detail"]["path"] == path
+    assert events[0]["detail"]["windowSeconds"] == 10
 
 
 @pytest.mark.parametrize(
@@ -108,16 +110,16 @@ async def test_not_passthrough_routes_are_404(offline_harness: Harness, path: st
         b"/bff/api/../api/v1/cases",
     ],
 )
-async def test_traversal_variants_are_404(offline_harness: Harness, raw_path: bytes) -> None:
-    response = await asgi_request(offline_harness.app, "GET", raw_path)
+async def test_traversal_variants_are_404(harness: Harness, raw_path: bytes) -> None:
+    response = await asgi_request(harness.app, "GET", raw_path)
     assert response.status == 404
-    assert offline_harness.core.requests == []
+    assert harness.core.requests == []
 
 
 @pytest.mark.parametrize("method", ["HEAD", "OPTIONS", "TRACE", "CONNECT"])
-async def test_forbidden_methods_on_api_are_404(offline_harness: Harness, method: str) -> None:
+async def test_forbidden_methods_on_api_are_404(harness: Harness, method: str) -> None:
     response = await asgi_request(
-        offline_harness.app,
+        harness.app,
         method,
         b"/bff/api/cases",
         headers=[("Origin", "https://evil.example"), ("Access-Control-Request-Method", "POST")],
@@ -138,6 +140,9 @@ async def test_redis_unavailable_returns_503(offline_harness: Harness) -> None:
         )
         health = await client.get("/bff/health")
     assert api.status_code == 503
+    # i neznámá /bff/api routa potřebuje Redis (IP limit je krok 0) – fail closed
+    unknown = await asgi_request(offline_harness.app, "GET", b"/bff/api/unknown")
+    assert unknown.status == 503
     assert session.status_code == 503
     assert login.status_code == 503
     assert api.json()["detail"] == "Service temporarily unavailable."

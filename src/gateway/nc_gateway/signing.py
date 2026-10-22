@@ -43,8 +43,12 @@ def canonical_string(
     client_ip: str,
     body: bytes,
     authorization: str | None,
+    body_sha256: str | None = None,
 ) -> bytes:
-    """Deset polí oddělených ``\\n`` bez koncového ``\\n`` (kap. 3)."""
+    """Deset polí oddělených ``\\n`` bez koncového ``\\n`` (kap. 3).
+
+    ``body_sha256`` = předem spočítaný hash těla (streamovaný upload), jinak se hashuje ``body``.
+    """
     fields = (
         SIGNATURE_VERSION,
         key_id,
@@ -54,7 +58,7 @@ def canonical_string(
         raw_path,
         query_string,
         client_ip,
-        sha256_hex(body),
+        body_sha256 if body_sha256 is not None else sha256_hex(body),
         sha256_hex((authorization or "").encode("latin-1")),
     )
     return "\n".join(fields).encode("utf-8")
@@ -72,6 +76,7 @@ def sign(
     authorization: str | None,
     timestamp: int | None = None,
     nonce: str | None = None,
+    body_sha256: str | None = None,
 ) -> dict[str, str]:
     """Vrátí hlavičky ``X-NC-*`` pro jeden požadavek (vždy nové nonce, pokud není dáno)."""
     ts = str(int(time.time()) if timestamp is None else timestamp)
@@ -86,6 +91,7 @@ def sign(
         client_ip=client_ip,
         body=body,
         authorization=authorization,
+        body_sha256=body_sha256,
     )
     signature = hmac.new(secret, message, hashlib.sha256).hexdigest()
     return {

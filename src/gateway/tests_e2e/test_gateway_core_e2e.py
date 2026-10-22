@@ -26,7 +26,8 @@ GATEWAY = os.environ.get("NC_E2E_GATEWAY_URL", "")
 ORIGIN = os.environ.get("NC_E2E_ORIGIN", "")
 
 pytestmark = pytest.mark.skipif(
-    not (GATEWAY and ORIGIN), reason="NC_E2E_GATEWAY_URL a NC_E2E_ORIGIN nejsou nastavené (E2E běží jen proti živým službám)"
+    not (GATEWAY and ORIGIN),
+    reason="NC_E2E_GATEWAY_URL a NC_E2E_ORIGIN nejsou nastavené (E2E běží jen proti živým službám)",
 )
 
 MANAGER = ("demo@novu.local", "demo1234")
@@ -202,3 +203,24 @@ def test_logout_all_ends_every_session_of_the_user() -> None:
         assert second.get("/bff/api/cases").status_code == 200
         assert first.post("/bff/auth/logout-all", headers=_csrf(first)).status_code == 204
         assert second.get("/bff/api/cases").status_code == 401
+
+
+def test_proxy_responses_carry_csp(manager: httpx.Client) -> None:
+    """Review L1: odpověď z /bff/api má vždy CSP – vlastní CSP core projde, jinak výchozí gateway."""
+    response = manager.get("/bff/api/cases")
+    assert response.status_code == 200
+    csp = response.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in csp
+    assert "unsafe" not in csp
+
+
+def test_sse_stream_with_last_event_id_passes_through(manager: httpx.Client) -> None:
+    """QA F-1: SSE přes gateway s Last-Event-ID (core ji přijme, stream se otevře)."""
+    case = manager.post("/bff/api/cases", json={"title": f"NC007 sse {uuid.uuid4().hex[:6]}"}, headers=_csrf(manager))
+    assert case.status_code == 201, case.text
+    url = f"/bff/api/cases/{case.json()['id']}/activity/stream"
+    headers = {"Accept": "text/event-stream", "Last-Event-ID": "0"}
+    with manager.stream("GET", url, headers=headers, timeout=httpx.Timeout(10.0, read=5.0)) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert response.headers.get("x-accel-buffering") == "no"

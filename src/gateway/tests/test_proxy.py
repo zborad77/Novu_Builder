@@ -405,8 +405,22 @@ async def test_chunked_body_over_limit_is_413(harness: Harness) -> None:
             yield b" " * 1024
 
     async with harness.client() as client:
-        response = await client.post("/bff/api/cases", content=chunks(), headers={"Content-Type": "application/json"})
+        result = await login(client)
+        response = await client.post(
+            "/bff/api/cases", content=chunks(), headers={**result.mutation(), "Content-Type": "application/json"}
+        )
     assert response.status_code == 413
+    assert harness.core.calls("POST", "/api/v1/cases") == []
+
+
+async def test_chunked_body_without_session_is_401_before_reading(harness: Harness) -> None:
+    async def chunks() -> AsyncIterator[bytes]:
+        for _ in range(300):
+            yield b" " * 1024
+
+    async with harness.client() as client:
+        response = await client.post("/bff/api/cases", content=chunks(), headers={"Content-Type": "application/json"})
+    assert response.status_code == 401
 
 
 async def test_multipart_upload_allowed_on_upload_route_only(harness: Harness) -> None:

@@ -5,7 +5,7 @@ import { resolve } from 'path'
 
 /**
  * Dev server: prohlížeč mluví jen s `/bff/*` na stejném originu (NC-007 kap. 7).
- * `/bff` se proxuje na gateway (`VITE_BFF_PROXY_TARGET`, výchozí http://127.0.0.1:8080).
+ * `/bff` se proxuje na gateway (`VITE_BFF_PROXY_TARGET`, výchozí http://127.0.0.1:8090 = výchozí port gateway).
  * Proxy na `/api` záměrně neexistuje – core není z prohlížeče dosažitelné.
  *
  * Gateway v dev režimu potřebuje `NC_BFF_PUBLIC_ORIGIN` = origin dev serveru
@@ -14,7 +14,7 @@ import { resolve } from 'path'
  */
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_')
-  const bffTarget = env.VITE_BFF_PROXY_TARGET || 'http://127.0.0.1:8080'
+  const bffTarget = env.VITE_BFF_PROXY_TARGET || 'http://127.0.0.1:8090'
 
   return {
     plugins: [react()],

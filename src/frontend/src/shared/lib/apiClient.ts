@@ -28,6 +28,15 @@ const BFF_LOGOUT_PATH = '/bff/auth/logout'
 const BFF_LOGOUT_ALL_PATH = '/bff/auth/logout-all'
 
 const REQUEST_TIMEOUT_MS = 30_000
+/** Multipart upload (fotky až 25 MiB) potřebuje delší limit. */
+export const UPLOAD_TIMEOUT_MS = 120_000
+export const DEFAULT_TIMEOUT_MS = REQUEST_TIMEOUT_MS
+
+/** Kód 403 od gateway při neplatném CSRF tokenu (kontrakt kap. 4 bod 5). */
+export const CSRF_FAILED_CODE = 'CSRF_FAILED'
+
+/** 502 z logout-all: gateway zrušila své sessions i cookie, revokace v core nepotvrzena. */
+export const LOGOUT_ALL_PARTIAL_CODE = 'LOGOUT_ALL_PARTIAL'
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
@@ -58,6 +67,8 @@ interface RequestSpec {
   csrfRetry: boolean
   /** 401 znamená ztrátu session → UNAUTHORIZED_EVENT. */
   signalUnauthorized: boolean
+  /** Časový limit požadavku v ms (výchozí REQUEST_TIMEOUT_MS). */
+  timeoutMs?: number
 }
 
 type ErrorPayload = {
@@ -167,18 +178,16 @@ async function readBody(response: Response): Promise<unknown> {
   }
 }
 
-/** 403 od gateway kvůli CSRF (detail obsahuje „csrf“). Viz otevřená otázka ve zprávě. */
-function mentionsCsrf(data: unknown): boolean {
-  const payload = asErrorPayload(data)
-  const values = [payload?.code, payload?.error, payload?.detail]
-  return values.some((value) => typeof value === 'string' && /csrf/i.test(value))
+/** 403 od gateway kvůli CSRF: jen `code === 'CSRF_FAILED'` (kontrakt kap. 4 bod 5). */
+function isCsrfFailure(data: unknown): boolean {
+  return asErrorPayload(data)?.code === CSRF_FAILED_CODE
 }
 
 /**
  * Spojí volitelný signál volajícího s časovým limitem. Vrací signál a úklid.
  * (AbortSignal.any zatím není všude, proto ručně.)
  */
-function withTimeout(external?: AbortSignal): {
+function withTimeout(timeoutMs: number, external?: AbortSignal): {
   signal: AbortSignal
   timedOut: () => boolean
   cleanup: () => void
@@ -188,7 +197,7 @@ function withTimeout(external?: AbortSignal): {
   const timer = setTimeout(() => {
     didTimeout = true
     controller.abort()
-  }, REQUEST_TIMEOUT_MS)
+  }, timeoutMs)
 
   const onExternalAbort = () => controller.abort()
   if (external) {
@@ -222,7 +231,7 @@ async function send(spec: RequestSpec): Promise<Response> {
     headers[CSRF_HEADER] = csrfToken
   }
 
-  const timeout = withTimeout(spec.signal)
+  const timeout = withTimeout(spec.timeoutMs ?? REQUEST_TIMEOUT_MS, spec.signal)
   try {
     return await fetch(buildUrl(spec.url, spec.params), {
       method: spec.method,
@@ -278,18 +287,17 @@ async function request<T>(spec: RequestSpec): Promise<T> {
 
   if (response.status === 403 && isMutation && spec.csrfRetry) {
     const firstBody = await readBody(response)
-    const sentToken = csrfToken
-    const session = await refreshSession()
 
+    // Jiný 403 (oprávnění z core, Origin) se vrací volajícímu bez dalšího volání.
+    if (!isCsrfFailure(firstBody)) {
+      throw apiErrorFromResponse(403, firstBody)
+    }
+
+    // CSRF_FAILED: jednou obnovit /bff/session a požadavek zopakovat.
+    const session = await refreshSession()
     if (!session.authenticated) {
       if (spec.signalUnauthorized) signalUnauthorized()
       throw apiErrorFromResponse(401, { detail: 'Session expired.' })
-    }
-
-    // Opakujeme jen jednou: když gateway hlásí CSRF, nebo se token mezitím změnil.
-    // Jinak jde o 403 z core (chybějící oprávnění) a ten se vrací volajícímu.
-    if (!mentionsCsrf(firstBody) && session.csrfToken === sentToken) {
-      throw apiErrorFromResponse(403, firstBody)
     }
     response = await send(spec)
   }
@@ -354,7 +362,7 @@ export const apiClient = {
   },
 
   postForm<T>(url: string, formData: FormData, opts?: ApiRequestOptions): Promise<T> {
-    return request<T>(apiSpec('POST', url, opts, { form: formData }))
+    return request<T>(apiSpec('POST', url, opts, { form: formData, timeoutMs: UPLOAD_TIMEOUT_MS }))
   },
 
   /**
@@ -404,10 +412,30 @@ export const bffAuth = {
     return endSession(BFF_LOGOUT_PATH)
   },
 
-  /** `POST /bff/auth/logout-all` – odhlásí všechny webové sessions uživatele. */
-  logoutAll(): Promise<void> {
-    return endSession(BFF_LOGOUT_ALL_PATH)
+  /**
+   * `POST /bff/auth/logout-all` – odhlásí všechny webové sessions uživatele.
+   *
+   * 502 `{"code":"LOGOUT_ALL_PARTIAL"}`: gateway už zrušila všechny své sessions
+   * i cookie, jen core revokaci nepotvrdil. Klient je odhlášený stejně jako po
+   * úspěchu; výsledek `{ partial: true }` umožní UI zobrazit upozornění.
+   */
+  async logoutAll(): Promise<LogoutAllResult> {
+    try {
+      await endSession(BFF_LOGOUT_ALL_PATH)
+      return { partial: false }
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 502 && error.code === LOGOUT_ALL_PARTIAL_CODE) {
+        csrfToken = null
+        return { partial: true }
+      }
+      throw error
+    }
   },
+}
+
+export interface LogoutAllResult {
+  /** Odhlášení na ostatních zařízeních nebylo potvrzeno (core revokace selhala). */
+  partial: boolean
 }
 
 async function endSession(url: string): Promise<void> {

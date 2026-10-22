@@ -24,6 +24,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 import time
 from collections.abc import Callable
@@ -36,6 +37,7 @@ from redis.asyncio import Redis
 from starlette.types import Receive, Scope, Send
 
 from nc_gateway.allowlist import BFF_API_PREFIX, SEGMENT_RE, Allowlist
+from nc_gateway.body import RequestBody, read_request_body
 from nc_gateway.config import Settings
 from nc_gateway.core_client import CoreClient, CoreUnavailableError
 from nc_gateway.crypto import SessionCipher
@@ -86,13 +88,22 @@ DETAIL_RATE_LIMITED: Final = "Too many requests."
 DETAIL_UPSTREAM_ERROR: Final = "Upstream error."
 DETAIL_UPSTREAM_UNAVAILABLE: Final = "Upstream unavailable."
 DETAIL_STORE_UNAVAILABLE: Final = "Service temporarily unavailable."
+DETAIL_LOGOUT_ALL_PARTIAL: Final = "Logout on other devices was not confirmed."
+CODE_LOGOUT_ALL_PARTIAL: Final = "LOGOUT_ALL_PARTIAL"
+# Content-Security-Policy pro odpovědi z /bff/api, když ji core neposlal (review L1)
+DEFAULT_PROXY_CSP: Final = b"default-src 'none'; frame-ancestors 'none'; sandbox"
+LAST_EVENT_ID_RE: Final = re.compile(r"^[0-9A-Za-z:._-]{1,64}$")
+EVENT_AGGREGATION_SECONDS: Final = 10
 
-_LOCK_WAIT_STEPS: Final = 100
 _LOCK_WAIT_INTERVAL: Final = 0.05
 
 
 class SessionRevokedError(Exception):
     """Core odmítl access i refresh token – session byla smazána."""
+
+
+class RefreshPendingError(Exception):
+    """Na zámek obnovy se čekalo, ale token se nezměnil – 503, bez revokace (review L4)."""
 
 
 @dataclass
@@ -139,6 +150,10 @@ class GatewayApp:
         self.limiter = RateLimiter(self.redis, clock)
         self.events = SecurityEvents(self.core, clock=clock, batch_size=settings.events_batch_size)
         self._flusher: asyncio.Task[None] | None = None
+        self._background: set[asyncio.Task[None]] = set()
+        # Zámek obnovy musí přežít celé volání core (timeout + rezerva), čekání stejně dlouho.
+        self.lock_ttl_ms = int((settings.core_timeout_seconds + 5) * 1000)
+        self.lock_wait_seconds = self.lock_ttl_ms / 1000
 
     # ── ASGI ────────────────────────────────────────────────────────────────
 
@@ -155,6 +170,10 @@ class GatewayApp:
             await self._dispatch(ctx, receive, tracker)
         except StoreUnavailableError as exc:
             logger.error("session_store_unavailable", extra={"reason": str(exc), "request_id": ctx.request_id})
+            if not tracker.started:
+                await send_error(tracker, 503, DETAIL_STORE_UNAVAILABLE, request_id=ctx.request_id)
+        except RefreshPendingError:
+            logger.warning("refresh_lock_timeout", extra={"request_id": ctx.request_id})
             if not tracker.started:
                 await send_error(tracker, 503, DETAIL_STORE_UNAVAILABLE, request_id=ctx.request_id)
         except CoreUnavailableError as exc:
@@ -194,6 +213,8 @@ class GatewayApp:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._flusher
             self._flusher = None
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self.drain_background(), timeout=5)
         with contextlib.suppress(Exception):
             await asyncio.wait_for(self.events.flush(), timeout=5)
         await self.core.aclose()
@@ -247,6 +268,59 @@ class GatewayApp:
         logger.error("core_unavailable", extra={"reason": reason, "request_id": ctx.request_id})
         self._emit(ctx, "upstream_unavailable", detail={"reason": reason[:64]})
 
+    async def _emit_aggregated(
+        self,
+        ctx: RequestContext,
+        event_type: str,
+        scope: str,
+        *,
+        session: ActiveSession | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        """Nejvýš 1 událost na (typ, scope, IP) za 10 s; počet za předchozí okno jde do ``detail``.
+
+        Neautentizovaný provoz tak nejde zesílit do audit_logs core (review M1).
+        """
+        index = int(self.clock() // EVENT_AGGREGATION_SECONDS)
+        base = f"nc:bff:evagg:{event_type}:{scope}:{ctx.client_ip}"
+        hits = await self.limiter.counter(f"{base}:{index}", EVENT_AGGREGATION_SECONDS * 3)
+        if hits != 1:
+            return
+        previous = await self.limiter.read(f"{base}:{index - 1}")
+        self._emit(
+            ctx,
+            event_type,
+            session=session,
+            detail={**(detail or {}), "windowSeconds": EVENT_AGGREGATION_SECONDS, "previousWindowCount": previous},
+        )
+
+    def _spawn(self, coro: Any) -> None:
+        task: asyncio.Task[None] = asyncio.create_task(coro)
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    async def drain_background(self) -> None:
+        """Počká na úlohy na pozadí (testy, ukončení procesu)."""
+        while self._background:
+            await asyncio.gather(*list(self._background), return_exceptions=True)
+
+    async def _core_logout_best_effort(self, record: SessionRecord, client_ip: str, request_id: str) -> None:
+        """Odhlášení session v core po expiraci v gateway (review L6) – chyby jen do logu."""
+        body = json.dumps({"refreshToken": record.refreshToken}).encode("utf-8")
+        try:
+            response = await self.core.call(
+                "POST",
+                "/api/v1/auth/logout",
+                json_body=body,
+                access_token=record.accessToken,
+                client_ip=client_ip,
+                request_id=request_id,
+            )
+            if response.status_code != 200:
+                logger.warning("core_logout_after_expiry_failed", extra={"status": response.status_code})
+        except CoreUnavailableError as exc:
+            logger.warning("core_logout_after_expiry_failed", extra={"reason": str(exc)})
+
     def _origin_ok(self, ctx: RequestContext) -> bool:
         if ctx.header_count("origin") > 1:
             return False
@@ -283,6 +357,8 @@ class GatewayApp:
                 hashed=result.hashed,
                 detail={"reason": result.expiry_reason},
             )
+            if result.record is not None:
+                self._spawn(self._core_logout_best_effort(result.record, ctx.client_ip, ctx.request_id))
             return None, True
         if result.status != "ok" or result.record is None:
             return None, True
@@ -295,11 +371,13 @@ class GatewayApp:
         session.record = record
         return True
 
-    async def _rate_limit(self, ctx: RequestContext, send: Send, session: ActiveSession | None) -> bool:
+    async def _rate_limit(
+        self, ctx: RequestContext, send: Send, session: ActiveSession | None, *, include_ip: bool = True
+    ) -> bool:
         """Session 300/min, IP 600/min. Vrátí ``False``, pokud už odešla 429."""
-        checks: list[tuple[str, str, int, int]] = [
-            ("ip", ctx.client_ip, self.settings.rate_ip.limit, self.settings.rate_ip.window_seconds)
-        ]
+        checks: list[tuple[str, str, int, int]] = []
+        if include_ip:
+            checks.append(("ip", ctx.client_ip, self.settings.rate_ip.limit, self.settings.rate_ip.window_seconds))
         if session is not None:
             checks.insert(
                 0,
@@ -308,7 +386,9 @@ class GatewayApp:
         for scope_name, ident, limit, window in checks:
             decision = await self.limiter.hit(scope_name, ident, limit, window)
             if not decision.allowed:
-                self._emit(ctx, "rate_limited", session=session, detail={"scope": scope_name})
+                await self._emit_aggregated(
+                    ctx, "rate_limited", scope_name, session=session, detail={"scope": scope_name}
+                )
                 await send_error(
                     send,
                     429,
@@ -343,14 +423,19 @@ class GatewayApp:
         * Core odmítne refresh (400/401/403) → session smazána, ``SessionRevokedError``.
         * Core nedostupný / 5xx → ``CoreUnavailableError`` (502, session zůstává).
         """
-        lock = await self.sessions.acquire_lock(session.hashed)
+        lock = await self.sessions.acquire_lock(session.hashed, ttl_ms=self.lock_ttl_ms)
         if lock is None:
-            for _ in range(_LOCK_WAIT_STEPS):
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self.lock_wait_seconds
+            while loop.time() < deadline:
                 await asyncio.sleep(_LOCK_WAIT_INTERVAL)
                 if not await self.sessions.lock_held(session.hashed):
                     break
             if not await self._reload(session):
                 raise SessionRevokedError
+            if session.record.accessToken == stale_access:
+                # Obnova jiného požadavku nedoběhla: neopakovat se starým tokenem, nerevokovat.
+                raise RefreshPendingError
             return
         try:
             if not await self._reload(session):
@@ -447,19 +532,6 @@ class GatewayApp:
             await send_error(send, 413, DETAIL_TOO_LARGE, request_id=ctx.request_id)
             return
 
-        ip_limit = self.settings.rate_login_ip
-        decision = await self.limiter.hit("login-ip", ctx.client_ip, ip_limit.limit, ip_limit.window_seconds)
-        if not decision.allowed:
-            self._emit(ctx, "rate_limited", detail={"scope": "login-ip"})
-            await send_error(
-                send,
-                429,
-                DETAIL_RATE_LIMITED,
-                request_id=ctx.request_id,
-                extra_headers=[(b"retry-after", str(decision.retry_after).encode("ascii"))],
-            )
-            return
-
         try:
             payload = json.loads(raw)
             email = payload["email"]
@@ -473,13 +545,28 @@ class GatewayApp:
             await send_error(send, 400, DETAIL_BAD_REQUEST, request_id=ctx.request_id)
             return
 
+        # Klíč login-ip vzniká až po základní validaci těla (review L8).
+        ip_limit = self.settings.rate_login_ip
+        decision = await self.limiter.hit("login-ip", ctx.client_ip, ip_limit.limit, ip_limit.window_seconds)
+        if not decision.allowed:
+            await self._emit_aggregated(ctx, "rate_limited", "login-ip", detail={"scope": "login-ip"})
+            await send_error(
+                send,
+                429,
+                DETAIL_RATE_LIMITED,
+                request_id=ctx.request_id,
+                extra_headers=[(b"retry-after", str(decision.retry_after).encode("ascii"))],
+            )
+            return
+
+        # Limit neúspěchů na e-mail atomicky (review L5): pokus se započítá PŘED voláním
+        # core, takže souběžné pokusy limit nepřeskočí. Neskončí-li špatnými údaji, odečte se.
         email_key = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()
         email_limit = self.settings.rate_login_email_failures
-        email_decision = await self.limiter.exceeded(
-            "login-email", email_key, email_limit.limit, email_limit.window_seconds
-        )
+        email_decision = await self.limiter.hit("login-email", email_key, email_limit.limit, email_limit.window_seconds)
         if not email_decision.allowed:
-            self._emit(ctx, "rate_limited", detail={"scope": "login-email"})
+            await self.limiter.undo("login-email", email_key, email_limit.window_seconds)
+            await self._emit_aggregated(ctx, "rate_limited", "login-email", detail={"scope": "login-email"})
             await send_error(
                 send,
                 429,
@@ -490,17 +577,22 @@ class GatewayApp:
             return
 
         body = json.dumps({"email": email, "password": password}).encode("utf-8")
-        response = await self.core.call(
-            "POST", "/api/v1/auth/login", json_body=body, client_ip=ctx.client_ip, request_id=ctx.request_id
-        )
-        if response.status_code in (400, 401, 403, 404, 422):
-            await self.limiter.record("login-email", email_key, email_limit.window_seconds)
+        try:
+            response = await self.core.call(
+                "POST", "/api/v1/auth/login", json_body=body, client_ip=ctx.client_ip, request_id=ctx.request_id
+            )
+        except CoreUnavailableError:
+            await self.limiter.undo("login-email", email_key, email_limit.window_seconds)
+            raise
+        if response.status_code not in (400, 401, 403, 404, 422):
+            await self.limiter.undo("login-email", email_key, email_limit.window_seconds)
+        else:
             self._emit(ctx, "login_failure", detail={"coreStatus": response.status_code})
             await send_error(send, 401, DETAIL_INVALID_CREDENTIALS, request_id=ctx.request_id)
             return
         if response.status_code == 429:
             retry = response.headers.get("retry-after", "60")
-            self._emit(ctx, "rate_limited", detail={"scope": "core-login"})
+            await self._emit_aggregated(ctx, "rate_limited", "core-login", detail={"scope": "core-login"})
             await send_error(
                 send,
                 429,
@@ -675,7 +767,14 @@ class GatewayApp:
         )
         if not core_ok:
             # Lokální sessions jsou pryč, ale core se nepodařilo odhlásit všude.
-            await send_error(send, 502, DETAIL_UPSTREAM_ERROR, request_id=ctx.request_id, extra_headers=clear)
+            await send_error(
+                send,
+                502,
+                DETAIL_LOGOUT_ALL_PARTIAL,
+                code=CODE_LOGOUT_ALL_PARTIAL,
+                request_id=ctx.request_id,
+                extra_headers=clear,
+            )
             return
         await send_json(send, 204, None, request_id=ctx.request_id, extra_headers=clear)
 
@@ -731,31 +830,34 @@ class GatewayApp:
         rid = ctx.request_id
         core_path = CORE_API_PREFIX + ctx.raw_path[len(BFF_API_PREFIX) :]
 
+        # 0. IP rate limit před allowlistem – neautentizovaný flood nejde zesílit (review M1)
+        if not await self._rate_limit(ctx, send, None):
+            return
+
         # 1. allowlist
         route = self.allowlist.match(ctx.method, core_path)
         if route is None:
-            self._emit(ctx, "allowlist_miss", detail={"method": ctx.method[:16], "path": ctx.raw_path[:256]})
+            await self._emit_aggregated(
+                ctx, "allowlist_miss", "api", detail={"method": ctx.method[:16], "path": ctx.raw_path[:256]}
+            )
             await send_error(send, 404, DETAIL_NOT_FOUND, request_id=rid)
             return
         if not _query_ok(ctx.query):
             await send_error(send, 400, DETAIL_BAD_REQUEST, request_id=rid)
             return
 
-        # 2. velikost těla
+        # 2. velikost těla jen z deklarované Content-Length (tělo se zatím nečte)
         media = ctx.media_type()
         is_upload = self.allowlist.is_upload(route)
         multipart = media == "multipart/form-data"
         limit = self.settings.multipart_body_limit if (multipart and is_upload) else self.settings.json_body_limit
         if not await self._check_declared_length(ctx, send, limit):
             return
-        try:
-            body = await read_body(receive, limit)
-        except BodyTooLargeError:
-            await send_error(send, 413, DETAIL_TOO_LARGE, request_id=rid)
-            return
 
-        # 3. Content-Type těla
-        if body and not (media == "application/json" or (multipart and is_upload)):
+        # 3. Content-Type těla (tělo = nenulová Content-Length nebo Transfer-Encoding)
+        declared = ctx.header("content-length")
+        has_body = (declared is not None and declared != "0") or ctx.header("transfer-encoding") is not None
+        if has_body and not (media == "application/json" or (multipart and is_upload)):
             await send_error(send, 415, DETAIL_MEDIA_TYPE, request_id=rid)
             return
 
@@ -776,24 +878,48 @@ class GatewayApp:
                 await send_error(send, 403, DETAIL_CSRF, code=CODE_CSRF, request_id=rid)
                 return
 
-        # 6. rate limit
-        if not await self._rate_limit(ctx, send, session):
+        # 6. rate limit na session (IP už v kroku 0)
+        if not await self._rate_limit(ctx, send, session, include_ip=False):
             return
 
         if not await self._touch(session):
             await self._unauthenticated(ctx, send, clear=True)
             return
 
+        # Tělo až teď: po session a CSRF, s průběžným limitem (chunked) a mimo paměť (review M2).
+        try:
+            body = await read_request_body(receive, limit)
+        except BodyTooLargeError:
+            await send_error(send, 413, DETAIL_TOO_LARGE, request_id=rid)
+            return
+        try:
+            await self._forward(ctx, session, route.path, core_path, body, send)
+        finally:
+            body.close()
+
+    async def _forward(
+        self,
+        ctx: RequestContext,
+        session: ActiveSession,
+        template: str,
+        core_path: str,
+        body: RequestBody,
+        send: Send,
+    ) -> None:
         # 7. hlavičky do core + podpis, obnova tokenu
         forward: dict[str, str] = {}
         for name in FORWARD_REQUEST_HEADERS:
             value = ctx.header(name)
             if value is not None:
                 forward[name] = value
+        sse = template.endswith("/activity/stream") or "text/event-stream" in (ctx.header("accept") or "")
+        if sse:
+            last_event_id = ctx.header("last-event-id")
+            if last_event_id is not None and LAST_EVENT_ID_RE.match(last_event_id):
+                forward["last-event-id"] = last_event_id  # SSE reconnect (QA F-1); jinak zahodit
+        read_timeout = self.settings.sse_idle_timeout_seconds if sse else None
         try:
             await self._ensure_fresh(ctx, session)
-            sse = route.path.endswith("/activity/stream") or "text/event-stream" in (ctx.header("accept") or "")
-            read_timeout = self.settings.sse_idle_timeout_seconds if sse else None
             response = await self._send_proxied(ctx, session, core_path, body, forward, read_timeout)
             if response.status_code == 401:
                 await response.aclose()
@@ -815,7 +941,7 @@ class GatewayApp:
         ctx: RequestContext,
         session: ActiveSession,
         core_path: str,
-        body: bytes,
+        body: RequestBody,
         headers: dict[str, str],
         read_timeout: float | None,
     ) -> httpx.Response:
@@ -823,7 +949,7 @@ class GatewayApp:
             ctx.method,
             core_path,
             query=ctx.query,
-            body=body,
+            stream_body=body if body.length else None,
             headers=headers,
             access_token=session.record.accessToken,
             client_ip=ctx.client_ip,
@@ -849,6 +975,7 @@ class GatewayApp:
             headers: list[tuple[bytes, bytes]] = list(SECURITY_HEADERS)
             has_request_id = False
             has_cache_control = False
+            has_csp = False
             for name, value in response.headers.raw:
                 lname = name.lower()
                 if lname not in FORWARD_RESPONSE_HEADERS:
@@ -857,7 +984,11 @@ class GatewayApp:
                     has_request_id = True
                 elif lname == b"cache-control":
                     has_cache_control = True
+                elif lname == b"content-security-policy":
+                    has_csp = True
                 headers.append((lname, value))
+            if not has_csp:
+                headers.append((b"content-security-policy", DEFAULT_PROXY_CSP))
             if not has_request_id:
                 headers.append((b"x-request-id", ctx.request_id.encode("ascii")))
             if not has_cache_control:

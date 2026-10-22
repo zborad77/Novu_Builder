@@ -32,6 +32,8 @@ const cs = {
   'auth.logoutAllConfirm': 'Odhlásit všechna webová přihlášení tohoto účtu na všech zařízeních?',
   'auth.loggingOut': 'Odhlašuji…',
   'auth.logoutFailed': 'Odhlášení se nezdařilo. Zkuste to znovu.',
+  'auth.logoutAllPartial':
+    'Byli jste odhlášeni, ale odhlášení na ostatních zařízeních se nepodařilo potvrdit. Zkuste to po přihlášení znovu.',
   'auth.sessionExpired': 'Přihlášení vypršelo. Přihlaste se znovu.',
   'auth.session.loading': 'Ověřuji přihlášení…',
   'auth.session.error': 'Nepodařilo se ověřit přihlášení. Server je možná dočasně nedostupný.',
@@ -104,6 +106,8 @@ const en: Record<TextKey, string> = {
   'auth.logoutAllConfirm': 'Sign out all web sessions of this account on every device?',
   'auth.loggingOut': 'Signing out…',
   'auth.logoutFailed': 'Sign-out failed. Please try again.',
+  'auth.logoutAllPartial':
+    'You have been signed out, but signing out on other devices could not be confirmed. Please try again after signing in.',
   'auth.sessionExpired': 'Your session has expired. Please sign in again.',
   'auth.session.loading': 'Checking your session…',
   'auth.session.error': 'Could not verify your session. The server may be temporarily unavailable.',

@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
-import type { Actor, SessionResponse } from 'features/auth'
+import type { Actor, LogoutAllResult, SessionResponse } from 'features/auth'
 import {
   fetchSession,
   login as loginRequest,
@@ -37,8 +37,11 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<void>
   /** `POST /bff/auth/logout`. */
   logout: () => Promise<void>
-  /** `POST /bff/auth/logout-all` – odhlásí všechny webové sessions uživatele. */
-  logoutAll: () => Promise<void>
+  /**
+   * `POST /bff/auth/logout-all` – odhlásí všechny webové sessions uživatele.
+   * `partial: true` = tento prohlížeč je odhlášený, ostatní zařízení nepotvrzena.
+   */
+  logoutAll: () => Promise<LogoutAllResult>
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -50,7 +53,7 @@ const AuthContext = createContext<AuthContextValue>({
   retry: () => undefined,
   login: () => Promise.resolve(),
   logout: () => Promise.resolve(),
-  logoutAll: () => Promise.resolve(),
+  logoutAll: () => Promise.resolve({ partial: false }),
 })
 
 export function useAuthContext(): AuthContextValue {
@@ -121,8 +124,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [markLoggedOut])
 
   const logoutAll = useCallback(async () => {
-    await logoutAllRequest()
+    const result = await logoutAllRequest()
+    // I při LOGOUT_ALL_PARTIAL gateway zrušila session a cookie → stav odhlášeno.
     markLoggedOut(null)
+    return result
   }, [markLoggedOut])
 
   const { refetch } = sessionQuery

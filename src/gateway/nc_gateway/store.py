@@ -34,6 +34,13 @@ USER_INDEX_PREFIX: Final = "nc:bff:user:"
 LOCK_PREFIX: Final = "nc:bff:lock:"
 RATE_PREFIX: Final = "nc:bff:rl:"
 
+_DECR_IF_POSITIVE_LUA: Final = """
+local v = tonumber(redis.call('get', KEYS[1]) or '0')
+if v > 0 then
+  return redis.call('decr', KEYS[1])
+end
+return 0
+"""
 _RELEASE_LOCK_LUA: Final = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
   return redis.call('del', KEYS[1])
@@ -266,16 +273,19 @@ class RateLimiter:
         results: list[Any] = await _guard(pipe.execute())
         return RateDecision(int(results[0]) <= limit, retry_after)
 
-    async def exceeded(self, scope: str, ident: str, limit: int, window: int) -> RateDecision:
-        """Jen přečte čítač (pro limit neúspěchů – započítává se zvlášť)."""
-        key, retry_after = self._key(scope, ident, window)
-        value: Any = await _guard(self._redis.get(key))
-        count = int(value) if value is not None else 0
-        return RateDecision(count < limit, retry_after)
-
-    async def record(self, scope: str, ident: str, window: int) -> None:
+    async def undo(self, scope: str, ident: str, window: int) -> None:
+        """Vrátí jeden započítaný pokus (např. login, který neskončil špatnými údaji)."""
         key, _ = self._key(scope, ident, window)
+        await _guard(self._redis.eval(_DECR_IF_POSITIVE_LUA, 1, key))
+
+    async def counter(self, key: str, ttl: int) -> int:
+        """INCR libovolného klíče pod ``nc:bff:`` s expirací (agregace událostí)."""
         pipe = self._redis.pipeline(transaction=True)
         pipe.incr(key)
-        pipe.expire(key, window + 1)
-        await _guard(pipe.execute())
+        pipe.expire(key, ttl)
+        results: list[Any] = await _guard(pipe.execute())
+        return int(results[0])
+
+    async def read(self, key: str) -> int:
+        value: Any = await _guard(self._redis.get(key))
+        return int(value) if value is not None else 0

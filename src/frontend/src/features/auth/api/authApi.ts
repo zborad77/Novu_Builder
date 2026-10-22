@@ -1,4 +1,4 @@
-import { bffAuth, UNAUTHORIZED_EVENT } from 'shared/lib/apiClient'
+import { bffAuth, UNAUTHORIZED_EVENT, type LogoutAllResult } from 'shared/lib/apiClient'
 import type { LoginResponse, SessionResponse } from '../types/auth.types'
 
 // API vrstva feature auth (NC-007): přihlášení a session jdou přes gateway (/bff/*).
@@ -16,9 +16,12 @@ export function logout(): Promise<void> {
   return bffAuth.logout()
 }
 
-export function logoutAll(): Promise<void> {
+/** `{ partial: true }` = gateway odhlásila, ale revokace v core nebyla potvrzena. */
+export function logoutAll(): Promise<LogoutAllResult> {
   return bffAuth.logoutAll()
 }
+
+export type { LogoutAllResult }
 
 /** Událost, kterou apiClient vyšle po 401 z /bff/api (session skončila). */
 export { UNAUTHORIZED_EVENT }

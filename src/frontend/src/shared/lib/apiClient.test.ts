@@ -3,8 +3,10 @@ import {
   apiClient,
   bffAuth,
   CSRF_HEADER,
+  DEFAULT_TIMEOUT_MS,
   resetApiClientState,
   UNAUTHORIZED_EVENT,
+  UPLOAD_TIMEOUT_MS,
 } from './apiClient'
 import { resolveApiUrl, toBffApiPath } from './apiUrl'
 import { ApiError, isForbiddenError } from '../types/api.types'
@@ -195,7 +197,7 @@ describe('CSRF hlavička', () => {
   it('403 s CSRF chybou: jednou obnoví /bff/session a zopakuje s novým tokenem', async () => {
     await primeCsrf('old')
     respondWith(
-      json(403, { detail: 'CSRF token invalid.', requestId: 'r1' }),
+      json(403, { detail: 'Forbidden.', code: 'CSRF_FAILED', requestId: 'r1' }),
       session('new'),
       json(200, { done: true }),
     )
@@ -212,9 +214,9 @@ describe('CSRF hlavička', () => {
   it('opakuje jen jednou – druhý 403 se vrátí volajícímu', async () => {
     await primeCsrf('old')
     respondWith(
-      json(403, { detail: 'CSRF token invalid.' }),
+      json(403, { detail: 'Forbidden.', code: 'CSRF_FAILED' }),
       session('new'),
-      json(403, { detail: 'CSRF token invalid.' }),
+      json(403, { detail: 'Forbidden.', code: 'CSRF_FAILED' }),
     )
 
     const error = await apiClient.post('/cases', {}).catch((e: unknown) => e)
@@ -224,15 +226,35 @@ describe('CSRF hlavička', () => {
     expect(calls).toHaveLength(3)
   })
 
-  it('403 z core (oprávnění, token se nezměnil) se neopakuje', async () => {
+  it('403 z core (oprávnění) se neopakuje a nevolá /bff/session', async () => {
     await primeCsrf('tok')
-    respondWith(json(403, { detail: 'Insufficient permissions.' }), session('tok'))
+    respondWith(json(403, { detail: 'Insufficient permissions.' }))
 
     const error = await apiClient.post('/cases', {}).catch((e: unknown) => e)
 
     expect(isForbiddenError(error)).toBe(true)
     expect((error as ApiError).code).toBe('FORBIDDEN')
-    expect(calls.map((c) => c.url)).toEqual(['/bff/api/cases', '/bff/session'])
+    expect(calls.map((c) => c.url)).toEqual(['/bff/api/cases'])
+  })
+
+  it('403 bez code CSRF_FAILED se neopakuje, ani když detail zmiňuje CSRF', async () => {
+    await primeCsrf('tok')
+    respondWith(json(403, { detail: 'CSRF token invalid.' }))
+
+    const error = await apiClient.post('/cases', {}).catch((e: unknown) => e)
+
+    expect((error as ApiError).status).toBe(403)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('403 ORIGIN (jiný code) se neopakuje', async () => {
+    await primeCsrf('tok')
+    respondWith(json(403, { detail: 'Forbidden.', code: 'ORIGIN_FAILED' }))
+
+    const error = await apiClient.delete('/cases/1').catch((e: unknown) => e)
+
+    expect((error as ApiError).code).toBe('ORIGIN_FAILED')
+    expect(calls).toHaveLength(1)
   })
 
   it('403 u GET session neobnovuje', async () => {
@@ -248,7 +270,7 @@ describe('CSRF hlavička', () => {
     await primeCsrf('tok')
     const listener = vi.fn()
     window.addEventListener(UNAUTHORIZED_EVENT, listener)
-    respondWith(json(403, { detail: 'CSRF token invalid.' }), json(200, { authenticated: false }))
+    respondWith(json(403, { detail: 'Forbidden.', code: 'CSRF_FAILED' }), json(200, { authenticated: false }))
 
     const error = await apiClient.post('/cases', {}).catch((e: unknown) => e)
 
@@ -352,6 +374,46 @@ describe('session a odhlášení', () => {
     expect(headersOf(calls[0])[CSRF_HEADER]).toBe('tok2')
   })
 
+  it('logout-all 502 LOGOUT_ALL_PARTIAL = odhlášeno s upozorněním (partial)', async () => {
+    await primeCsrf('tok')
+    respondWith(json(502, { detail: 'Upstream error.', code: 'LOGOUT_ALL_PARTIAL' }))
+
+    const result = await bffAuth.logoutAll()
+    expect(result).toEqual({ partial: true })
+
+    // CSRF token je zahozený jako po úspěšném odhlášení.
+    respondWith(json(200, {}))
+    await apiClient.post('/cases', {}).catch(() => undefined)
+    expect(headersOf(calls[1])[CSRF_HEADER]).toBeUndefined()
+  })
+
+  it('logout-all úspěch vrací partial: false', async () => {
+    await primeCsrf('tok')
+    respondWith(empty(204))
+
+    await expect(bffAuth.logoutAll()).resolves.toEqual({ partial: false })
+  })
+
+  it('logout-all jiné 502 / síťová chyba se propagují beze změny', async () => {
+    await primeCsrf('tok')
+    respondWith(json(502, { detail: 'Upstream error.' }))
+    const upstream = await bffAuth.logoutAll().catch((e: unknown) => e)
+    expect((upstream as ApiError).status).toBe(502)
+
+    fetchMock.mockImplementationOnce((input: string, init?: RequestInit) => {
+      calls.push({ url: input, init: init ?? {} })
+      return Promise.reject(new TypeError('Failed to fetch'))
+    })
+    const network = await bffAuth.logoutAll().catch((e: unknown) => e)
+    expect((network as ApiError).code).toBe('NETWORK_ERROR')
+
+    // Token zůstal – uživatel je pořád přihlášený.
+    respondWith(json(200, {}))
+    calls.length = 0
+    await apiClient.post('/cases', {})
+    expect(headersOf(calls[0])[CSRF_HEADER]).toBe('tok')
+  })
+
   it('logout s 401 (session už neplatí) je úspěch', async () => {
     await primeCsrf('tok')
     respondWith(json(401, { detail: 'Not authenticated.' }))
@@ -375,5 +437,59 @@ describe('session a odhlášení', () => {
 
     const error = await apiClient.get('/cases').catch((e: unknown) => e)
     expect((error as ApiError).code).toBe('NETWORK_ERROR')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Časové limity
+// ---------------------------------------------------------------------------
+
+describe('časové limity', () => {
+  /** fetch, který nikdy neodpoví, jen reaguje na abort. */
+  function hangingFetch(): void {
+    fetchMock.mockImplementation((input: string, init?: RequestInit) => {
+      calls.push({ url: input, init: init ?? {} })
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+      })
+    })
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('běžný požadavek skončí REQUEST_TIMEOUT po 30 s', async () => {
+    vi.useFakeTimers()
+    hangingFetch()
+    const pending = apiClient.post('/cases', {}).catch((e: unknown) => e)
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS)
+    const error = await pending
+
+    expect(DEFAULT_TIMEOUT_MS).toBe(30_000)
+    expect((error as ApiError).code).toBe('REQUEST_TIMEOUT')
+  })
+
+  it('postForm (upload) má delší limit 120 s', async () => {
+    vi.useFakeTimers()
+    hangingFetch()
+    let settled = false
+    const form = new FormData()
+    form.append('file', new Blob(['x']), 'a.jpg')
+    const pending = apiClient.postForm('/cases/1/images', form).catch((e: unknown) => {
+      settled = true
+      return e
+    })
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS + 1_000)
+    expect(settled).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(UPLOAD_TIMEOUT_MS - DEFAULT_TIMEOUT_MS)
+    const error = await pending
+
+    expect(UPLOAD_TIMEOUT_MS).toBe(120_000)
+    expect(settled).toBe(true)
+    expect((error as ApiError).code).toBe('REQUEST_TIMEOUT')
   })
 })

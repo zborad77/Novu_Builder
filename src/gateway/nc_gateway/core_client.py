@@ -17,6 +17,7 @@ from typing import Final
 
 import httpx
 
+from nc_gateway.body import RequestBody
 from nc_gateway.config import Settings
 from nc_gateway.signing import sign
 
@@ -60,6 +61,7 @@ class CoreClient:
         client_ip: str,
         request_id: str,
         read_timeout: float | None = None,
+        stream_body: RequestBody | None = None,
     ) -> httpx.Request:
         target = path + (f"?{query}" if query else "")
         url = self._base.copy_with(raw_path=target.encode("ascii"))
@@ -69,7 +71,12 @@ class CoreClient:
         authorization = f"Bearer {access_token}" if access_token else None
         if authorization:
             out_headers["Authorization"] = authorization
-        request = httpx.Request(method.upper(), url, content=body, headers=out_headers)
+        if stream_body is not None:
+            # streamovaný upload: tělo jde ze (spooled) souboru, hash je spočítaný při příjmu
+            out_headers["Content-Length"] = str(stream_body.length)
+            request = httpx.Request(method.upper(), url, content=stream_body.chunks(), headers=out_headers)
+        else:
+            request = httpx.Request(method.upper(), url, content=body, headers=out_headers)
         if read_timeout is not None:
             # např. SSE: read timeout = idle limit (mezera mezi bloky), ne délka celé odpovědi
             timeout = httpx.Timeout(self._settings.core_timeout_seconds, connect=5.0, read=read_timeout)
@@ -85,6 +92,7 @@ class CoreClient:
                 client_ip=client_ip,
                 body=body,
                 authorization=authorization,
+                body_sha256=stream_body.sha256 if stream_body is not None else None,
             )
         )
         return request
