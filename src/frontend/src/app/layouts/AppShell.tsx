@@ -1,11 +1,9 @@
+import { useState } from 'react'
 import { Link, Outlet } from '@tanstack/react-router'
-import {
-  ImpersonateBanner,
-  useEffectiveActor,
-  useRealActor,
-} from 'features/impersonation'
+import { useAuthContext } from 'app/providers/AuthProvider'
+import { useToast } from 'app/providers/ToastProvider'
 import { paths } from 'app/router/paths'
-import { isSuperAdmin } from 'shared/lib/actorContext'
+import { t } from 'shared/i18n'
 import { useUIStore } from 'store/uiStore'
 
 const MAIN_NAV = [
@@ -17,27 +15,34 @@ const MAIN_NAV = [
   { label: 'Suppliers', to: paths.settingsSuppliers },
 ] as const
 
-const ADMIN_NAV = [
-  { label: 'Companies', to: paths.adminCompanies },
-  { label: 'Users', to: paths.adminUsers },
-  { label: 'Jobs', to: paths.adminJobs },
-  { label: 'Audit', to: paths.adminAudit },
-] as const
-
 export function AppShell() {
-  const effectiveActor = useEffectiveActor()
-  const realActor = useRealActor()
+  const { actor, logout, logoutAll } = useAuthContext()
+  const { toast } = useToast()
+  const [loggingOut, setLoggingOut] = useState(false)
   const sidebarOpen = useUIStore((state) => state.sidebarOpen)
   const mobileMenuOpen = useUIStore((state) => state.mobileMenuOpen)
   const toggleSidebar = useUIStore((state) => state.toggleSidebar)
   const setMobileMenuOpen = useUIStore((state) => state.setMobileMenuOpen)
 
-  const showAdminNav = realActor ? isSuperAdmin(realActor) : false
+  // Odhlášení i „odhlásit všude“ řeší gateway; po úspěchu AuthGuard přesměruje na login.
+  async function runLogout(action: () => Promise<void>) {
+    setLoggingOut(true)
+    try {
+      await action()
+    } catch {
+      toast.error(t('auth.logoutFailed'))
+    } finally {
+      setLoggingOut(false)
+    }
+  }
+
+  function handleLogoutAll() {
+    if (!window.confirm(t('auth.logoutAllConfirm'))) return
+    void runLogout(logoutAll)
+  }
 
   return (
     <div className="min-h-screen">
-      <ImpersonateBanner />
-
       <div className="flex min-h-screen">
         <aside
           className={[
@@ -69,25 +74,6 @@ export function AppShell() {
                 />
               ))}
             </nav>
-
-            {showAdminNav ? (
-              <div className="space-y-2 border-t border-white/10 pt-4">
-                {sidebarOpen ? (
-                  <p className="px-3 text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">
-                    Admin
-                  </p>
-                ) : null}
-                {ADMIN_NAV.map((item) => (
-                  <ShellLink
-                    key={item.to}
-                    label={item.label}
-                    to={item.to}
-                    compact={!sidebarOpen}
-                    onClick={() => setMobileMenuOpen(false)}
-                  />
-                ))}
-              </div>
-            ) : null}
           </div>
         </aside>
 
@@ -119,13 +105,31 @@ export function AppShell() {
                 </div>
               </div>
 
-              <div className="text-right">
-                <p className="text-sm font-semibold text-slate-900">
-                  {effectiveActor?.fullName ?? 'Guest'}
-                </p>
-                <p className="text-xs text-slate-500">
-                  {effectiveActor?.email ?? 'No active session'}
-                </p>
+              <div className="flex items-center gap-3">
+                <div className="text-right">
+                  <p className="text-sm font-semibold text-slate-900">
+                    {actor?.fullName ?? t('shell.guest')}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {actor?.email ?? t('shell.noSession')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={loggingOut}
+                  onClick={() => { void runLogout(logout) }}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:border-emerald-300 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {loggingOut ? t('auth.loggingOut') : t('auth.logout')}
+                </button>
+                <button
+                  type="button"
+                  disabled={loggingOut}
+                  onClick={handleLogoutAll}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:border-emerald-300 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {t('auth.logoutAll')}
+                </button>
               </div>
             </div>
           </header>

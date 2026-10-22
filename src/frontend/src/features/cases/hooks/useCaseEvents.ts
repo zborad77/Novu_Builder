@@ -14,9 +14,10 @@
  *   - Does NOT reconnect when the component unmounts or caseId changes.
  *
  * Authentication:
- *   Uses Fetch API with Authorization header (not native EventSource, which
- *   does not support custom headers).  On 401, stops reconnecting — caller
- *   should redirect to login via the standard logout flow.
+ *   Uses Fetch API (needed for the Last-Event-ID header) against the BFF
+ *   (`/bff/api/...`); the session travels in the HttpOnly cookie, there is no
+ *   token in JS.  On 401, stops reconnecting — apiClient switches the app to
+ *   the logged-out state and AuthGuard redirects to login.
  */
 import { useCallback, useEffect, useReducer, useRef } from 'react'
 import { openCaseEventStream } from '../api/caseEventsApi'
@@ -69,7 +70,7 @@ export function useCaseEvents(caseId: string, opts: CaseEventsOptions): void {
 
         let response: Response
         try {
-          // openCaseEventStream (api vrstva) vlastní base URL a Authorization hlavičku.
+          // openCaseEventStream (api vrstva) vlastní cestu přes BFF; cookie jde sama.
           response = await openCaseEventStream(caseId, {
             headers,
             signal: abortSignal,

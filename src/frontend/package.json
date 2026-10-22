@@ -11,13 +11,13 @@
     "lint:boundaries": "eslint src --rule 'boundaries/element-types: error' --max-warnings 0",
     "dep-cruise": "depcruise --config .dependency-cruiser.cjs src",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "gen:contracts": "node scripts/gen-contracts.mjs",
     "check:contracts": "node scripts/gen-contracts.mjs --check"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.56.2",
     "@tanstack/react-router": "^1.57.1",
-    "axios": "^1.7.7",
     "clsx": "^2.1.1",
     "fflate": "^0.8.3",
     "react": "^18.3.1",
@@ -39,10 +39,12 @@
     "eslint-plugin-boundaries": "^4.2.2",
     "eslint-plugin-import": "^2.30.0",
     "eslint-plugin-react-hooks": "^5.1.0",
+    "jsdom": "^25.0.1",
     "openapi-typescript": "^7.13.0",
     "postcss": "^8.4.45",
     "tailwindcss": "^3.4.11",
     "typescript": "^5.5.3",
-    "vite": "^5.4.2"
+    "vite": "^5.4.2",
+    "vitest": "^2.1.9"
   }
 }

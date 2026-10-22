@@ -1,384 +1,426 @@
 /**
- * SINGLE HTTP TRANSPORT - all *Api.ts wrappers must use this client exclusively.
+ * JEDINÝ HTTP TRANSPORT webu – všechny *Api.ts obaly volají backend jen přes něj.
  *
- * Guarantees implemented here:
- *  - JWT Authorization header injection
- *  - 401 -> refresh flow -> one-shot retry
- *  - retry loop protection via _isRefreshRetry
- *  - centralized ApiError normalization
- *  - logout when refresh fails
- *  - AbortSignal forwarding for TanStack Query cancellation
+ * NC-007 etapa 1 (kontrakt docs/security/NC-007_STAGE1_CONTRACT.md kap. 2–4 a 7):
+ *  - prohlížeč mluví jen s gateway na stejném originu: `/bff/api/*`, `/bff/session`,
+ *    `/bff/auth/*`; `credentials: 'same-origin'`, session nese HttpOnly cookie,
+ *  - v JS není žádný token: žádné `Authorization`, žádný localStorage/sessionStorage,
+ *    žádná obnova tokenů (tu dělá gateway),
+ *  - CSRF token se drží jen v paměti modulu (z `GET /bff/session` nebo z loginu)
+ *    a posílá se jako `X-CSRF-Token` výhradně u POST/PUT/PATCH/DELETE,
+ *  - 403 u mutace → jednou obnovit `/bff/session` a požadavek zopakovat,
+ *  - 401 z `/bff/api` → stav „odhlášeno“ (událost UNAUTHORIZED_EVENT),
+ *  - jednotná normalizace chyb do ApiError, předávání AbortSignal (TanStack Query).
  */
 
-import axios, {
-  AxiosHeaders,
-  type AxiosError,
-  type AxiosHeaderValue,
-  type AxiosInstance,
-  type AxiosRequestConfig,
-  type AxiosResponse,
-  type RawAxiosRequestHeaders,
-} from 'axios'
 import { mapErrorCode } from './errorMap'
+import { toBffApiPath } from './apiUrl'
 import { ApiError } from '../types/api.types'
+import type { BffLoginResponse, BffSessionResponse } from '../types/session.types'
 
-const ACCESS_TOKEN_KEY = 'nb_access_token'
-const REFRESH_TOKEN_KEY = 'nb_refresh_token'
+export const UNAUTHORIZED_EVENT = 'nb:unauthorized' as const
 
-type TokenPair = {
-  accessToken: string
-  refreshToken: string
-}
+export const CSRF_HEADER = 'X-CSRF-Token'
 
-type RefreshResponseShape = {
-  accessToken?: string
-  refreshToken?: string
-  access_token?: string
-  refresh_token?: string
-}
+const BFF_SESSION_PATH = '/bff/session'
+const BFF_LOGIN_PATH = '/bff/auth/login'
+const BFF_LOGOUT_PATH = '/bff/auth/logout'
+const BFF_LOGOUT_ALL_PATH = '/bff/auth/logout-all'
 
-type ErrorPayload = {
-  code?: unknown
-  error?: unknown
-  message?: unknown
-  detail?: unknown
-}
+const REQUEST_TIMEOUT_MS = 30_000
 
-export const tokenStorage = {
-  getAccess(): string | null {
-    return localStorage.getItem(ACCESS_TOKEN_KEY)
-  },
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
-  getRefresh(): string | null {
-    return localStorage.getItem(REFRESH_TOKEN_KEY)
-  },
-
-  setAccess(token: string): void {
-    localStorage.setItem(ACCESS_TOKEN_KEY, token)
-  },
-
-  setRefresh(token: string): void {
-    localStorage.setItem(REFRESH_TOKEN_KEY, token)
-  },
-
-  setTokens(tokens: TokenPair): void {
-    localStorage.setItem(ACCESS_TOKEN_KEY, tokens.accessToken)
-    localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refreshToken)
-  },
-
-  clear(): void {
-    localStorage.removeItem(ACCESS_TOKEN_KEY)
-    localStorage.removeItem(REFRESH_TOKEN_KEY)
-  },
-}
-
-export const LOGOUT_EVENT = 'nb:logout' as const
-
-function dispatchLogout(): void {
-  window.dispatchEvent(new CustomEvent(LOGOUT_EVENT))
-}
-
-const BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? '/api'
-const REFRESH_PATH = '/auth/refresh'
-
-interface RetryConfig extends AxiosRequestConfig {
-  _isRefreshRetry?: boolean
-}
-
-const axiosInstance: AxiosInstance = axios.create({
-  baseURL: BASE_URL,
-  headers: { 'Content-Type': 'application/json' },
-  timeout: 30_000,
-})
-
-let refreshPromise: Promise<string> | null = null
-let logoutDispatched = false
-
-function isRefreshRequest(url: string | undefined): boolean {
-  if (!url) return false
-
-  return url === REFRESH_PATH || url.endsWith(REFRESH_PATH)
-}
-
-type NormalizableHeaders =
-  | AxiosHeaders
-  | RawAxiosRequestHeaders
-  | string
-  | undefined
-
-function ensureHeaders(headers?: NormalizableHeaders): AxiosHeaders {
-  if (headers instanceof AxiosHeaders) {
-    return headers
-  }
-
-  const normalized = new AxiosHeaders()
-
-  if (typeof headers === 'string') {
-    normalized.set(headers)
-    return normalized
-  }
-
-  if (headers && typeof headers === 'object') {
-    for (const [name, value] of Object.entries(headers)) {
-      if (value !== undefined) {
-        normalized.set(name, value as AxiosHeaderValue)
-      }
-    }
-  }
-
-  return normalized
-}
-
-function readRefreshPayload(data: unknown): RefreshResponseShape {
-  if (typeof data !== 'object' || data === null) {
-    return {}
-  }
-
-  return data as RefreshResponseShape
-}
-
-function readAccessToken(payload: RefreshResponseShape): string | null {
-  return payload.accessToken ?? payload.access_token ?? null
-}
-
-function readRefreshToken(payload: RefreshResponseShape): string | null {
-  return payload.refreshToken ?? payload.refresh_token ?? null
-}
-
-function extractPayload(data: unknown): ErrorPayload | undefined {
-  if (typeof data !== 'object' || data === null) {
-    return undefined
-  }
-
-  return data as ErrorPayload
-}
-
-function normalizeError(
-  error: unknown,
-  fallback?: { code?: string; status?: number; detail?: unknown },
-): ApiError {
-  if (error instanceof ApiError) {
-    return error
-  }
-
-  if (axios.isAxiosError(error)) {
-    if (error.code === 'ERR_CANCELED') {
-      return new ApiError({
-        code: 'REQUEST_ABORTED',
-        message: mapErrorCode('REQUEST_ABORTED'),
-        status: 0,
-        detail: fallback?.detail ?? error.message,
-      })
-    }
-
-    const payload = extractPayload(error.response?.data)
-    const code =
-      (typeof payload?.code === 'string' ? payload.code : undefined) ??
-      (typeof payload?.error === 'string' ? payload.error : undefined) ??
-      fallback?.code ??
-      (error.response == null ? 'NETWORK_ERROR' : 'UNKNOWN')
-
-    const status = error.response?.status ?? fallback?.status ?? 0
-
-    return new ApiError({
-      code,
-      message: mapErrorCode(code, status),
-      status,
-      detail: fallback?.detail ?? payload?.detail ?? error.response?.data,
-    })
-  }
-
-  if (error instanceof Error) {
-    const code = fallback?.code ?? 'UNKNOWN'
-    const status = fallback?.status ?? 0
-
-    return new ApiError({
-      code,
-      message: mapErrorCode(code, status),
-      status,
-      detail: fallback?.detail ?? error.message,
-    })
-  }
-
-  return new ApiError({
-    code: fallback?.code ?? 'UNKNOWN',
-    message: mapErrorCode(fallback?.code, fallback?.status),
-    status: fallback?.status ?? 0,
-    detail: fallback?.detail ?? error,
-  })
-}
-
-function handleRefreshFailure(error: unknown): ApiError {
-  tokenStorage.clear()
-
-  if (!logoutDispatched) {
-    logoutDispatched = true
-    dispatchLogout()
-    queueMicrotask(() => {
-      logoutDispatched = false
-    })
-  }
-
-  return normalizeError(error, {
-    code: 'TOKEN_REFRESH_FAILED',
-    status: 401,
-  })
-}
-
-async function refreshAccessToken(): Promise<string> {
-  const refreshToken = tokenStorage.getRefresh()
-
-  if (!refreshToken) {
-    throw new ApiError({
-      code: 'TOKEN_REFRESH_FAILED',
-      message: mapErrorCode('TOKEN_REFRESH_FAILED', 401),
-      status: 401,
-      detail: { reason: 'missing_refresh_token' },
-    })
-  }
-
-  const response = await axios.post<RefreshResponseShape>(
-    `${BASE_URL}${REFRESH_PATH}`,
-    { refresh_token: refreshToken },
-    {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 30_000,
-    },
-  )
-
-  const payload = readRefreshPayload(response.data)
-  const nextAccessToken = readAccessToken(payload)
-
-  if (!nextAccessToken) {
-    throw new ApiError({
-      code: 'TOKEN_REFRESH_FAILED',
-      message: mapErrorCode('TOKEN_REFRESH_FAILED', 401),
-      status: 401,
-      detail: payload,
-    })
-  }
-
-  tokenStorage.setAccess(nextAccessToken)
-
-  const nextRefreshToken = readRefreshToken(payload)
-  if (nextRefreshToken) {
-    tokenStorage.setRefresh(nextRefreshToken)
-  }
-
-  return nextAccessToken
-}
-
-axiosInstance.interceptors.request.use((config) => {
-  const token = tokenStorage.getAccess()
-  if (!token) return config
-
-  const headers = ensureHeaders(
-    config.headers as AxiosHeaders | RawAxiosRequestHeaders | undefined,
-  )
-  headers.set('Authorization', `Bearer ${token}`)
-  config.headers = headers
-
-  return config
-})
-
-axiosInstance.interceptors.response.use(
-  (response: AxiosResponse) => response,
-  async (error: AxiosError) => {
-    const originalRequest = error.config as RetryConfig | undefined
-
-    if (!originalRequest) {
-      return Promise.reject(normalizeError(error))
-    }
-
-    const isUnauthorized = error.response?.status === 401
-    const alreadyRetried = originalRequest._isRefreshRetry === true
-    const requestIsRefresh = isRefreshRequest(originalRequest.url)
-
-    if (!isUnauthorized || alreadyRetried || requestIsRefresh) {
-      return Promise.reject(normalizeError(error))
-    }
-
-    originalRequest._isRefreshRetry = true
-
-    try {
-      refreshPromise ??= refreshAccessToken().finally(() => {
-        refreshPromise = null
-      })
-
-      const nextAccessToken = await refreshPromise
-      const headers = ensureHeaders(
-        originalRequest.headers as AxiosHeaders | RawAxiosRequestHeaders | undefined,
-      )
-      headers.set('Authorization', `Bearer ${nextAccessToken}`)
-      originalRequest.headers = headers
-
-      return await axiosInstance(originalRequest)
-    } catch (refreshError) {
-      return Promise.reject(handleRefreshFailure(refreshError))
-    }
-  },
-)
+const MUTATING_METHODS: ReadonlySet<HttpMethod> = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
 export type ApiRequestOptions = {
   signal?: AbortSignal
 }
 
 export type ApiStreamOptions = ApiRequestOptions & {
-  /** Request-specific headers, e.g. `Accept: text/event-stream`, `Last-Event-ID`. */
+  /** Hlavičky konkrétního požadavku, např. `Accept: text/event-stream`, `Last-Event-ID`. */
   headers?: Record<string, string>
 }
 
-function cfg(opts?: ApiRequestOptions): AxiosRequestConfig {
-  return opts?.signal !== undefined ? { signal: opts.signal } : {}
+type QueryParams = Record<string, unknown>
+
+interface RequestSpec {
+  method: HttpMethod
+  /** Plná same-origin cesta (`/bff/...`). */
+  url: string
+  params?: QueryParams | undefined
+  json?: unknown
+  form?: FormData | undefined
+  signal?: AbortSignal | undefined
+  /** Poslat X-CSRF-Token (jen mutace; login ho nepotřebuje). */
+  withCsrf: boolean
+  /** Při 403 jednou obnovit session a zopakovat. */
+  csrfRetry: boolean
+  /** 401 znamená ztrátu session → UNAUTHORIZED_EVENT. */
+  signalUnauthorized: boolean
 }
 
+type ErrorPayload = {
+  code?: unknown
+  error?: unknown
+  detail?: unknown
+  requestId?: unknown
+}
+
+// ---------------------------------------------------------------------------
+// Stav v paměti (nikdy ne ve Storage)
+// ---------------------------------------------------------------------------
+
+let csrfToken: string | null = null
+let sessionRefreshPromise: Promise<BffSessionResponse> | null = null
+let unauthorizedDispatched = false
+
+/** Zahodí stav klienta v paměti (CSRF token). Volá se po odhlášení a v testech. */
+export function resetApiClientState(): void {
+  csrfToken = null
+  sessionRefreshPromise = null
+  unauthorizedDispatched = false
+}
+
+/**
+ * Session skončila. Událost se vyšle jen jednou (souběžné 401 ji neopakují);
+ * znovu se „nabije“ až s novou platnou session (login nebo /bff/session).
+ */
+function signalUnauthorized(): void {
+  csrfToken = null
+  if (unauthorizedDispatched) return
+  unauthorizedDispatched = true
+  window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT))
+}
+
+// ---------------------------------------------------------------------------
+// Pomocné funkce
+// ---------------------------------------------------------------------------
+
+/** Query parametry jen z primitivních hodnot; null/undefined se vynechají. */
+function paramValue(value: unknown): string | null {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value)
+  }
+  return null
+}
+
+function buildUrl(url: string, params?: QueryParams): string {
+  if (!params) return url
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    const items: unknown[] = Array.isArray(value) ? (value as unknown[]) : [value]
+    for (const item of items) {
+      const text = paramValue(item)
+      if (text !== null) search.append(key, text)
+    }
+  }
+  const query = search.toString()
+  return query ? `${url}?${query}` : url
+}
+
+function asErrorPayload(data: unknown): ErrorPayload | undefined {
+  return typeof data === 'object' && data !== null ? (data as ErrorPayload) : undefined
+}
+
+function codeForStatus(status: number): string {
+  if (status === 401) return 'UNAUTHENTICATED'
+  if (status === 403) return 'FORBIDDEN'
+  if (status === 404) return 'NOT_FOUND'
+  if (status === 429) return 'RATE_LIMITED'
+  if (status >= 500) return 'SERVER_ERROR'
+  return 'UNKNOWN'
+}
+
+function apiErrorFromResponse(status: number, data: unknown): ApiError {
+  const payload = asErrorPayload(data)
+  const code =
+    (typeof payload?.code === 'string' ? payload.code : undefined) ??
+    (typeof payload?.error === 'string' ? payload.error : undefined) ??
+    codeForStatus(status)
+
+  return new ApiError({
+    code,
+    message: mapErrorCode(code, status),
+    status,
+    detail: payload?.detail ?? data,
+  })
+}
+
+function transportError(code: 'REQUEST_ABORTED' | 'REQUEST_TIMEOUT' | 'NETWORK_ERROR', detail: unknown): ApiError {
+  return new ApiError({ code, message: mapErrorCode(code), status: 0, detail })
+}
+
+async function readBody(response: Response): Promise<unknown> {
+  if (response.status === 204 || response.status === 205) return undefined
+  const contentType = response.headers.get('Content-Type') ?? ''
+  try {
+    if (contentType.includes('application/json')) {
+      const text = await response.text()
+      return text ? (JSON.parse(text) as unknown) : undefined
+    }
+    const text = await response.text()
+    return text === '' ? undefined : text
+  } catch {
+    return undefined
+  }
+}
+
+/** 403 od gateway kvůli CSRF (detail obsahuje „csrf“). Viz otevřená otázka ve zprávě. */
+function mentionsCsrf(data: unknown): boolean {
+  const payload = asErrorPayload(data)
+  const values = [payload?.code, payload?.error, payload?.detail]
+  return values.some((value) => typeof value === 'string' && /csrf/i.test(value))
+}
+
+/**
+ * Spojí volitelný signál volajícího s časovým limitem. Vrací signál a úklid.
+ * (AbortSignal.any zatím není všude, proto ručně.)
+ */
+function withTimeout(external?: AbortSignal): {
+  signal: AbortSignal
+  timedOut: () => boolean
+  cleanup: () => void
+} {
+  const controller = new AbortController()
+  let didTimeout = false
+  const timer = setTimeout(() => {
+    didTimeout = true
+    controller.abort()
+  }, REQUEST_TIMEOUT_MS)
+
+  const onExternalAbort = () => controller.abort()
+  if (external) {
+    if (external.aborted) controller.abort()
+    else external.addEventListener('abort', onExternalAbort, { once: true })
+  }
+
+  return {
+    signal: controller.signal,
+    timedOut: () => didTimeout,
+    cleanup: () => {
+      clearTimeout(timer)
+      external?.removeEventListener('abort', onExternalAbort)
+    },
+  }
+}
+
+async function send(spec: RequestSpec): Promise<Response> {
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  let body: BodyInit | undefined
+
+  if (spec.form !== undefined) {
+    // Content-Type s boundary doplní prohlížeč sám.
+    body = spec.form
+  } else if (spec.json !== undefined) {
+    headers['Content-Type'] = 'application/json'
+    body = JSON.stringify(spec.json)
+  }
+
+  if (spec.withCsrf && MUTATING_METHODS.has(spec.method) && csrfToken) {
+    headers[CSRF_HEADER] = csrfToken
+  }
+
+  const timeout = withTimeout(spec.signal)
+  try {
+    return await fetch(buildUrl(spec.url, spec.params), {
+      method: spec.method,
+      headers,
+      credentials: 'same-origin',
+      signal: timeout.signal,
+      ...(body !== undefined ? { body } : {}),
+      ...(spec.url === BFF_SESSION_PATH ? { cache: 'no-store' as const } : {}),
+    })
+  } catch (error) {
+    if (spec.signal?.aborted) throw transportError('REQUEST_ABORTED', error)
+    if (timeout.timedOut()) throw transportError('REQUEST_TIMEOUT', error)
+    throw transportError('NETWORK_ERROR', error)
+  } finally {
+    timeout.cleanup()
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Session (/bff/session)
+// ---------------------------------------------------------------------------
+
+function refreshSession(signal?: AbortSignal): Promise<BffSessionResponse> {
+  sessionRefreshPromise ??= (async () => {
+    const response = await send({
+      method: 'GET',
+      url: BFF_SESSION_PATH,
+      signal,
+      withCsrf: false,
+      csrfRetry: false,
+      signalUnauthorized: false,
+    })
+    const data = await readBody(response)
+    if (!response.ok) throw apiErrorFromResponse(response.status, data)
+
+    const session = data as BffSessionResponse
+    csrfToken = session.authenticated ? session.csrfToken : null
+    if (session.authenticated) unauthorizedDispatched = false
+    return session
+  })().finally(() => {
+    sessionRefreshPromise = null
+  })
+  return sessionRefreshPromise
+}
+
+// ---------------------------------------------------------------------------
+// Jádro požadavku
+// ---------------------------------------------------------------------------
+
+async function request<T>(spec: RequestSpec): Promise<T> {
+  const isMutation = MUTATING_METHODS.has(spec.method)
+  let response = await send(spec)
+
+  if (response.status === 403 && isMutation && spec.csrfRetry) {
+    const firstBody = await readBody(response)
+    const sentToken = csrfToken
+    const session = await refreshSession()
+
+    if (!session.authenticated) {
+      if (spec.signalUnauthorized) signalUnauthorized()
+      throw apiErrorFromResponse(401, { detail: 'Session expired.' })
+    }
+
+    // Opakujeme jen jednou: když gateway hlásí CSRF, nebo se token mezitím změnil.
+    // Jinak jde o 403 z core (chybějící oprávnění) a ten se vrací volajícímu.
+    if (!mentionsCsrf(firstBody) && session.csrfToken === sentToken) {
+      throw apiErrorFromResponse(403, firstBody)
+    }
+    response = await send(spec)
+  }
+
+  const data = await readBody(response)
+
+  if (response.status === 401 && spec.signalUnauthorized) {
+    signalUnauthorized()
+  }
+
+  if (!response.ok) {
+    throw apiErrorFromResponse(response.status, data)
+  }
+
+  return data as T
+}
+
+function apiSpec(
+  method: HttpMethod,
+  path: string,
+  opts: ApiRequestOptions | undefined,
+  extra: Partial<RequestSpec> = {},
+): RequestSpec {
+  return {
+    method,
+    url: toBffApiPath(path),
+    signal: opts?.signal,
+    withCsrf: true,
+    csrfRetry: true,
+    signalUnauthorized: true,
+    ...extra,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Veřejné API
+// ---------------------------------------------------------------------------
+
+/**
+ * Volání průchozího API core přes `/bff/api`. Cesty se zadávají relativně
+ * k `/api/v1` (`/cases/1`) nebo s prefixem `/api/v1/` – obojí se mapuje na `/bff/api/`.
+ */
 export const apiClient = {
-  get<T>(url: string, params?: Record<string, unknown>, opts?: ApiRequestOptions) {
-    return axiosInstance.get<T>(url, { params, ...cfg(opts) }).then((response) => response.data)
+  get<T>(url: string, params?: QueryParams, opts?: ApiRequestOptions): Promise<T> {
+    return request<T>(apiSpec('GET', url, opts, { params }))
   },
 
-  post<T>(url: string, data?: unknown, opts?: ApiRequestOptions) {
-    return axiosInstance.post<T>(url, data, cfg(opts)).then((response) => response.data)
+  post<T>(url: string, data?: unknown, opts?: ApiRequestOptions): Promise<T> {
+    return request<T>(apiSpec('POST', url, opts, { json: data }))
   },
 
-  put<T>(url: string, data?: unknown, opts?: ApiRequestOptions) {
-    return axiosInstance.put<T>(url, data, cfg(opts)).then((response) => response.data)
+  put<T>(url: string, data?: unknown, opts?: ApiRequestOptions): Promise<T> {
+    return request<T>(apiSpec('PUT', url, opts, { json: data }))
   },
 
-  patch<T>(url: string, data?: unknown, opts?: ApiRequestOptions) {
-    return axiosInstance.patch<T>(url, data, cfg(opts)).then((response) => response.data)
+  patch<T>(url: string, data?: unknown, opts?: ApiRequestOptions): Promise<T> {
+    return request<T>(apiSpec('PATCH', url, opts, { json: data }))
   },
 
-  delete<T>(url: string, opts?: ApiRequestOptions) {
-    return axiosInstance.delete<T>(url, cfg(opts)).then((response) => response.data)
+  delete<T>(url: string, opts?: ApiRequestOptions): Promise<T> {
+    return request<T>(apiSpec('DELETE', url, opts))
+  },
+
+  postForm<T>(url: string, formData: FormData, opts?: ApiRequestOptions): Promise<T> {
+    return request<T>(apiSpec('POST', url, opts, { form: formData }))
   },
 
   /**
-   * Open a streaming GET and return the raw Response, unparsed.
+   * Otevře streamovaný GET (SSE) a vrátí syrovou Response.
    *
-   * For endpoints whose body must be read incrementally (SSE): axios' browser
-   * adapter buffers the whole response, so those callers previously reached for
-   * `fetch` directly and re-derived the base URL and auth header themselves.
-   * This keeps both in one place; the caller still owns framing, reconnect and
-   * resume. Response status is NOT checked here — SSE callers branch on 401 vs
-   * other failures themselves.
+   * Prohlížeč pošle session cookie sám (same-origin). Stav odpovědi se tu
+   * nekontroluje – volající si větví 401 vs. ostatní chyby sám; 401 navíc
+   * přepne aplikaci do stavu „odhlášeno“.
    */
-  stream(url: string, opts?: ApiStreamOptions): Promise<Response> {
-    const token = tokenStorage.getAccess()
-    const headers: Record<string, string> = { ...opts?.headers }
-    if (token) headers['Authorization'] = `Bearer ${token}`
-    return fetch(`${BASE_URL}${url}`, {
-      headers,
+  async stream(url: string, opts?: ApiStreamOptions): Promise<Response> {
+    const response = await fetch(toBffApiPath(url), {
+      method: 'GET',
+      headers: { ...opts?.headers },
+      credentials: 'same-origin',
+      cache: 'no-store',
       ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
     })
+    if (response.status === 401) signalUnauthorized()
+    return response
+  },
+}
+
+/** Veřejné endpointy gateway pro přihlášení a session (kontrakt kap. 2). */
+export const bffAuth = {
+  /** `GET /bff/session` – zároveň obnoví CSRF token v paměti. */
+  getSession(opts?: ApiRequestOptions): Promise<BffSessionResponse> {
+    return refreshSession(opts?.signal)
   },
 
-  postForm<T>(url: string, formData: FormData, opts?: ApiRequestOptions) {
-    return axiosInstance
-      .post<T>(url, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        ...cfg(opts),
-      })
-      .then((response) => response.data)
+  /** `POST /bff/auth/login` – 401 znamená neplatné údaje, ne ztrátu session. */
+  async login(email: string, password: string): Promise<BffLoginResponse> {
+    const result = await request<BffLoginResponse>({
+      method: 'POST',
+      url: BFF_LOGIN_PATH,
+      json: { email, password },
+      withCsrf: false,
+      csrfRetry: false,
+      signalUnauthorized: false,
+    })
+    csrfToken = result.csrfToken
+    unauthorizedDispatched = false
+    return result
   },
+
+  /** `POST /bff/auth/logout`. 401 = session už neplatí, bere se jako úspěch. */
+  logout(): Promise<void> {
+    return endSession(BFF_LOGOUT_PATH)
+  },
+
+  /** `POST /bff/auth/logout-all` – odhlásí všechny webové sessions uživatele. */
+  logoutAll(): Promise<void> {
+    return endSession(BFF_LOGOUT_ALL_PATH)
+  },
+}
+
+async function endSession(url: string): Promise<void> {
+  try {
+    await request<void>({
+      method: 'POST',
+      url,
+      withCsrf: true,
+      csrfRetry: true,
+      signalUnauthorized: false,
+    })
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 401)) throw error
+  }
+  csrfToken = null
 }

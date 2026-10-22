@@ -23,17 +23,15 @@ export function isEffectiveTenantActor(actor: Actor): boolean {
 }
 
 /**
- * Used by OrgGuard.
- * Superadmins are allowed on org-scoped routes even without organizationId
- * (they see all tenants or a specific one when impersonating).
+ * Used by OrgGuard (jen směrování UI, o oprávněních rozhoduje core).
+ * Superadmins are allowed on org-scoped routes even without organizationId.
  */
 export function canAccessOrgScopedRoute(actor: Actor): boolean {
   return isSuperAdmin(actor) || hasOrganizationContext(actor)
 }
 
 /**
- * True when the actor is a superadmin operating in global admin context
- * (not impersonating a specific tenant user).
+ * True when the actor is a superadmin operating in global admin context.
  */
 export function isGlobalAdminContext(actor: Actor): boolean {
   return isSuperAdmin(actor)

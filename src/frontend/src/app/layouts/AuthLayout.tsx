@@ -14,7 +14,7 @@ export function AuthLayout() {
               Web front-end shell pripraveny pro auth flow a dalsi feature vrstvy.
             </h1>
             <p className="max-w-lg text-sm leading-6 text-slate-300">
-              Tohle je zakladni vstupni vrstva pro login, reset hesla a dalsi
+              Tohle je zakladni vstupni vrstva pro login a dalsi
               neautentizovane obrazovky.
             </p>
           </div>
@@ -25,18 +25,6 @@ export function AuthLayout() {
               className="rounded-full border border-white/20 px-4 py-2 transition hover:border-emerald-300 hover:text-white"
             >
               Login
-            </Link>
-            <Link
-              to={paths.forgotPassword}
-              className="rounded-full border border-white/20 px-4 py-2 transition hover:border-emerald-300 hover:text-white"
-            >
-              Forgot Password
-            </Link>
-            <Link
-              to={paths.resetPassword}
-              className="rounded-full border border-white/20 px-4 py-2 transition hover:border-emerald-300 hover:text-white"
-            >
-              Reset Password
             </Link>
           </div>
         </section>

@@ -8,8 +8,8 @@ import { canAccessOrgScopedRoute } from 'shared/lib/actorContext'
 /**
  * Redirects if the actor has no organizationId AND is not a superadmin.
  *
- * Superadmins are allowed on org-scoped routes even without organizationId —
- * they see all tenants or a specific one when impersonating.
+ * Superadmins are allowed on org-scoped routes even without organizationId.
+ * Jde jen o směrování UI; data a oprávnění hlídá core.
  * Uses actorContext.canAccessOrgScopedRoute() which encodes this exception.
  */
 export function OrgGuard({ children }: { children: ReactNode }) {

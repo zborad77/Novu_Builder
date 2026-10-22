@@ -10,8 +10,6 @@ export const paths = {
 
   // Auth
   login: '/login',
-  forgotPassword: '/forgot-password',
-  resetPassword: '/reset-password',
 
   // Cases
   cases: '/cases',
@@ -35,11 +33,4 @@ export const paths = {
 
   // Tools
   archiveViewer: '/archive-viewer',
-
-  // Admin
-  adminCompanies: '/admin/companies',
-  adminCompanyDetail: (companyId: string) => `/admin/companies/${companyId}` as const,
-  adminUsers: '/admin/users',
-  adminJobs: '/admin/jobs',
-  adminAudit: '/admin/audit',
 } as const

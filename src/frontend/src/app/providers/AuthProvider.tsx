@@ -3,30 +3,54 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useState,
   type ReactNode,
 } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import type { Actor, AuthMeResponse } from 'features/auth'
-import { fetchCurrentActor, tokenStorage, LOGOUT_EVENT } from 'features/auth'
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import type { Actor, SessionResponse } from 'features/auth'
+import {
+  fetchSession,
+  login as loginRequest,
+  logout as logoutRequest,
+  logoutAll as logoutAllRequest,
+  UNAUTHORIZED_EVENT,
+} from 'features/auth'
 
 // ---------------------------------------------------------------------------
 // Context shape
 // ---------------------------------------------------------------------------
 
+/** Proč uživatel skončil odhlášený – login stránka podle toho zobrazí hlášku. */
+export type LogoutReason = 'expired' | null
+
 interface AuthContextValue {
-  /** The real authenticated actor from JWT. Never the impersonated user. */
+  /** Přihlášený uživatel podle `GET /bff/session`. */
   actor: Actor | null
   isLoading: boolean
+  /** Session se nepodařilo ověřit (gateway nedostupná, 5xx, 503). */
+  isError: boolean
   isAuthenticated: boolean
-  /** Clears tokens and resets auth state — call after logout mutation. */
-  logout: () => void
+  logoutReason: LogoutReason
+  /** Znovu načte `/bff/session`. */
+  retry: () => void
+  /** `POST /bff/auth/login`; při chybě vyhodí ApiError. */
+  login: (email: string, password: string) => Promise<void>
+  /** `POST /bff/auth/logout`. */
+  logout: () => Promise<void>
+  /** `POST /bff/auth/logout-all` – odhlásí všechny webové sessions uživatele. */
+  logoutAll: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue>({
   actor: null,
   isLoading: true,
+  isError: false,
   isAuthenticated: false,
-  logout: () => undefined,
+  logoutReason: null,
+  retry: () => undefined,
+  login: () => Promise.resolve(),
+  logout: () => Promise.resolve(),
+  logoutAll: () => Promise.resolve(),
 })
 
 export function useAuthContext(): AuthContextValue {
@@ -37,7 +61,17 @@ export function useAuthContext(): AuthContextValue {
 // Query key (local to app layer, not a feature key factory)
 // ---------------------------------------------------------------------------
 
-export const AUTH_ME_KEY = ['auth', 'me'] as const
+export const AUTH_SESSION_KEY = ['auth', 'session'] as const
+
+const LOGGED_OUT: SessionResponse = { authenticated: false }
+
+/** Zahodí data všech ostatních dotazů – nesmí přežít do další session. */
+function clearUserData(queryClient: QueryClient): void {
+  const isNotSession = (query: { queryKey: readonly unknown[] }) =>
+    query.queryKey[0] !== AUTH_SESSION_KEY[0]
+  void queryClient.cancelQueries({ predicate: isNotSession })
+  queryClient.removeQueries({ predicate: isNotSession })
+}
 
 // ---------------------------------------------------------------------------
 // Provider
@@ -45,32 +79,70 @@ export const AUTH_ME_KEY = ['auth', 'me'] as const
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
+  const [logoutReason, setLogoutReason] = useState<LogoutReason>(null)
 
-  const logout = useCallback(() => {
-    tokenStorage.clear()
-    queryClient.removeQueries({ queryKey: AUTH_ME_KEY })
-  }, [queryClient])
+  const markLoggedOut = useCallback(
+    (reason: LogoutReason) => {
+      setLogoutReason(reason)
+      queryClient.setQueryData(AUTH_SESSION_KEY, LOGGED_OUT)
+      clearUserData(queryClient)
+    },
+    [queryClient],
+  )
 
-  // Listen for logout events dispatched by apiClient (refresh failure)
+  // apiClient hlásí 401 z /bff/api → session skončila (idle/absolutní limit, revokace).
   useEffect(() => {
-    const handler = () => logout()
-    window.addEventListener(LOGOUT_EVENT, handler)
-    return () => window.removeEventListener(LOGOUT_EVENT, handler)
-  }, [logout])
+    const handler = () => markLoggedOut('expired')
+    window.addEventListener(UNAUTHORIZED_EVENT, handler)
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, handler)
+  }, [markLoggedOut])
 
-  const { data: actor, isLoading } = useQuery({
-    queryKey: AUTH_ME_KEY,
-    queryFn: (): Promise<AuthMeResponse> => fetchCurrentActor(),
-    enabled: tokenStorage.getAccess() !== null,
+  const sessionQuery = useQuery({
+    queryKey: AUTH_SESSION_KEY,
+    queryFn: ({ signal }): Promise<SessionResponse> => fetchSession(signal),
     retry: false,
-    staleTime: 5 * 60 * 1000, // 5 min — actor data changes rarely
+    staleTime: 5 * 60 * 1000,
   })
 
+  const login = useCallback(
+    async (email: string, password: string) => {
+      await loginRequest(email, password)
+      setLogoutReason(null)
+      clearUserData(queryClient)
+      // Načte úplný stav session (expirace, aktuální CSRF token).
+      await queryClient.invalidateQueries({ queryKey: AUTH_SESSION_KEY })
+    },
+    [queryClient],
+  )
+
+  const logout = useCallback(async () => {
+    await logoutRequest()
+    markLoggedOut(null)
+  }, [markLoggedOut])
+
+  const logoutAll = useCallback(async () => {
+    await logoutAllRequest()
+    markLoggedOut(null)
+  }, [markLoggedOut])
+
+  const { refetch } = sessionQuery
+  const retry = useCallback(() => {
+    void refetch()
+  }, [refetch])
+
+  const session = sessionQuery.data
+  const actor = session?.authenticated ? session.user : null
+
   const value: AuthContextValue = {
-    actor: actor ?? null,
-    isLoading,
-    isAuthenticated: actor !== undefined,
+    actor,
+    isLoading: sessionQuery.isLoading,
+    isError: sessionQuery.isError && session === undefined,
+    isAuthenticated: actor !== null,
+    logoutReason,
+    retry,
+    login,
     logout,
+    logoutAll,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

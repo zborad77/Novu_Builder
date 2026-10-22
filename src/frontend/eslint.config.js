@@ -13,7 +13,29 @@ import globals from 'globals'
  *  2. React Hooks rules
  *  3. Feature boundary rules
  *  4. No raw fetch/axios outside apiClient.ts
+ *  5. NC-007 (SECURITY_ARCHITECTURE 4.1, 4.7): žádné dangerouslySetInnerHTML /
+ *     innerHTML, žádný localStorage/sessionStorage, document.cookie ani ruční
+ *     hlavička Authorization – session nese HttpOnly cookie gateway.
  */
+
+// Web nemá žádný UI stav, který by potřeboval Web Storage (uiStore/viewerStore jsou
+// jen v paměti), proto zákaz bez výjimek. Kdyby jednou byl potřeba nesouvisející
+// UI stav (např. sbalený panel), přidá se výjimka jen pro konkrétní soubor.
+const STORAGE_GLOBALS = [
+  {
+    name: 'localStorage',
+    message: 'NC-007: Web Storage je zakázaný (žádné tokeny ani session v JS).',
+  },
+  {
+    name: 'sessionStorage',
+    message: 'NC-007: Web Storage je zakázaný (žádné tokeny ani session v JS).',
+  },
+]
+
+const STORAGE_PROPERTIES = ['window', 'globalThis', 'self'].flatMap((object) => [
+  { object, property: 'localStorage', message: 'NC-007: Web Storage je zakázaný.' },
+  { object, property: 'sessionStorage', message: 'NC-007: Web Storage je zakázaný.' },
+])
 
 const ELEMENTS = [
   { type: 'app', pattern: 'src/app/**/*' },
@@ -76,6 +98,42 @@ export default [
     },
   },
   {
+    // NC-007: bezpečnostní pravidla pro celý web včetně apiClient.ts
+    files: ['src/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'JSXAttribute[name.name="dangerouslySetInnerHTML"]',
+          message: 'NC-007: dangerouslySetInnerHTML je zakázaný (XSS). Renderujte přes React.',
+        },
+        {
+          selector: 'Property[key.name="dangerouslySetInnerHTML"]',
+          message: 'NC-007: dangerouslySetInnerHTML je zakázaný (XSS).',
+        },
+        {
+          selector:
+            'AssignmentExpression > MemberExpression.left[property.name=/^(innerHTML|outerHTML)$/]',
+          message: 'NC-007: přiřazení do innerHTML/outerHTML je zakázané (XSS).',
+        },
+        {
+          selector: 'Property[key.name="Authorization"], Property[key.value="Authorization"]',
+          message: 'NC-007: web neposílá Authorization – session nese HttpOnly cookie gateway.',
+        },
+      ],
+      'no-restricted-globals': ['error', ...STORAGE_GLOBALS],
+      'no-restricted-properties': [
+        'error',
+        ...STORAGE_PROPERTIES,
+        {
+          object: 'document',
+          property: 'cookie',
+          message: 'NC-007: session cookie je HttpOnly; s cookies JS nepracuje.',
+        },
+      ],
+    },
+  },
+  {
     files: ['src/**/*.{ts,tsx}'],
     ignores: ['src/shared/lib/apiClient.ts'],
     rules: {
@@ -107,8 +165,10 @@ export default [
           ],
         },
       ],
+      // Přepisuje stejné pravidlo z bloku výše, proto znovu obsahuje i Web Storage.
       'no-restricted-globals': [
         'error',
+        ...STORAGE_GLOBALS,
         {
           name: 'fetch',
           message:

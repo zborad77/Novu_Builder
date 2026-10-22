@@ -25,6 +25,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   // Transport
   NETWORK_ERROR: 'Sitova chyba. Zkontrolujte pripojeni.',
   REQUEST_ABORTED: 'Pozadavek byl zrusen.',
+  REQUEST_TIMEOUT: 'Server neodpovedel vcas. Zkuste to znovu.',
 
   // Generic
   SERVER_ERROR: 'Chyba serveru. Zkuste to znovu.',

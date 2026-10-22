@@ -22,3 +22,11 @@ export interface PaginatedResponse<T> {
   page: number
   pageSize: number
 }
+
+/**
+ * 403 = core odmítl oprávnění. UI jen zobrazí stav „bez oprávnění“,
+ * o oprávněních nerozhoduje (NC-007 kap. 7).
+ */
+export function isForbiddenError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403
+}

@@ -6,19 +6,12 @@ import {
   redirect,
 } from '@tanstack/react-router'
 import { TanStackRouterDevtools } from '@tanstack/react-router-devtools'
-import { AdminGuard } from 'app/guards/AdminGuard'
 import { AuthGuard } from 'app/guards/AuthGuard'
 import { OrgGuard } from 'app/guards/OrgGuard'
-import { AdminLayout } from 'app/layouts/AdminLayout'
 import { AppShell } from 'app/layouts/AppShell'
 import { AuthLayout } from 'app/layouts/AuthLayout'
 import { CaseLayout } from 'app/layouts/CaseLayout'
-import { AdminAuditPage } from 'pages/AdminAuditPage'
 import { ArchiveViewerPage } from 'pages/ArchiveViewerPage'
-import { AdminCompaniesPage } from 'pages/AdminCompaniesPage'
-import { AdminCompanyDetailPage } from 'pages/AdminCompanyDetailPage'
-import { AdminJobsPage } from 'pages/AdminJobsPage'
-import { AdminUsersPage } from 'pages/AdminUsersPage'
 import { CaseDetailPage } from 'pages/CaseDetailPage'
 import { CaseEstimatesPage } from 'pages/CaseEstimatesPage'
 import { CaseExportsPage } from 'pages/CaseExportsPage'
@@ -29,11 +22,9 @@ import { CaseWorkItemsPage } from 'pages/CaseWorkItemsPage'
 import { CatalogMaterialsPage } from 'pages/CatalogMaterialsPage'
 import { CatalogPricebooksPage } from 'pages/CatalogPricebooksPage'
 import { CatalogWorkTypesPage } from 'pages/CatalogWorkTypesPage'
-import { ForgotPasswordPage } from 'pages/ForgotPasswordPage'
 import { LoginPage } from 'pages/LoginPage'
 import { NotFoundPage } from 'pages/NotFoundPage'
 import { PhotoViewerPage } from 'pages/PhotoViewerPage'
-import { ResetPasswordPage } from 'pages/ResetPasswordPage'
 import { SettingsProfilePage } from 'pages/SettingsProfilePage'
 import { SettingsSuppliersPage } from 'pages/SettingsSuppliersPage'
 import { RouteErrorBoundary } from './RouteErrorBoundary'
@@ -62,14 +53,6 @@ function OrgScopedLayout() {
     <OrgGuard>
       <Outlet />
     </OrgGuard>
-  )
-}
-
-function ProtectedAdminLayout() {
-  return (
-    <AdminGuard>
-      <AdminLayout />
-    </AdminGuard>
   )
 }
 
@@ -104,18 +87,6 @@ const loginRoute = createRoute({
   getParentRoute: () => authRoute,
   path: 'login',
   component: LoginPage,
-})
-
-const forgotPasswordRoute = createRoute({
-  getParentRoute: () => authRoute,
-  path: 'forgot-password',
-  component: ForgotPasswordPage,
-})
-
-const resetPasswordRoute = createRoute({
-  getParentRoute: () => authRoute,
-  path: 'reset-password',
-  component: ResetPasswordPage,
 })
 
 const appRoute = createRoute({
@@ -224,47 +195,11 @@ const settingsSuppliersRoute = createRoute({
   component: SettingsSuppliersPage,
 })
 
-const adminRoute = createRoute({
-  getParentRoute: () => appRoute,
-  path: 'admin',
-  component: ProtectedAdminLayout,
-  errorComponent: RouteErrorBoundary,
-  pendingComponent: RoutePendingBoundary,
-})
-
-const adminCompaniesRoute = createRoute({
-  getParentRoute: () => adminRoute,
-  path: 'companies',
-  component: AdminCompaniesPage,
-})
-
-const adminCompanyDetailRoute = createRoute({
-  getParentRoute: () => adminRoute,
-  path: 'companies/$companyId',
-  component: AdminCompanyDetailPage,
-})
-
-const adminUsersRoute = createRoute({
-  getParentRoute: () => adminRoute,
-  path: 'users',
-  component: AdminUsersPage,
-})
-
-const adminJobsRoute = createRoute({
-  getParentRoute: () => adminRoute,
-  path: 'jobs',
-  component: AdminJobsPage,
-})
-
-const adminAuditRoute = createRoute({
-  getParentRoute: () => adminRoute,
-  path: 'audit',
-  component: AdminAuditPage,
-})
-
 const routeTree = rootRoute.addChildren([
   indexRoute,
-  authRoute.addChildren([loginRoute, forgotPasswordRoute, resetPasswordRoute]),
+  // D-11 / NC-007 etapa 1: obnova hesla (forgot/reset) se nezobrazuje – core vrací 410;
+  // vrátí se v etapě 2. Admin routy z webu odstraněny (NovuAdmin je samostatný).
+  authRoute.addChildren([loginRoute]),
   appRoute.addChildren([
     orgRoute.addChildren([
       casesRoute,
@@ -283,13 +218,6 @@ const routeTree = rootRoute.addChildren([
       catalogPricebooksRoute,
       settingsProfileRoute,
       settingsSuppliersRoute,
-    ]),
-    adminRoute.addChildren([
-      adminCompaniesRoute,
-      adminCompanyDetailRoute,
-      adminUsersRoute,
-      adminJobsRoute,
-      adminAuditRoute,
     ]),
   ]),
 ])

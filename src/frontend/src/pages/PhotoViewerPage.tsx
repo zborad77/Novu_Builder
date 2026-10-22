@@ -4,6 +4,9 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useCaseDetail } from 'features/cases'
 import { usePhotos, CASE_KEYS, saveAnalysisSelection, confirmMeasurement } from 'features/cases'
 import { useToast } from 'app/providers/ToastProvider'
+import { t } from 'shared/i18n'
+import { resolveApiUrl } from 'shared/lib/apiUrl'
+import { ApiError, isForbiddenError } from 'shared/types'
 import type { AnalysisResult, OverlaySelection, PolygonPoint } from 'shared/types/photo.types'
 
 // ---------------------------------------------------------------------------
@@ -83,7 +86,7 @@ function AnalysisField({ label, value }: { label: string; value: string }) {
 
 export function PhotoViewerPage() {
   const { caseId, imageId } = useParams({ strict: false })
-  const { data: photosData, isLoading, isError } = usePhotos(caseId ?? '')
+  const { data: photosData, isLoading, isError, error: photosError } = usePhotos(caseId ?? '')
   const { data: caseDetail, isFetching: isDetailFetching } = useCaseDetail(caseId ?? '')
   const { toast } = useToast()
   const queryClient = useQueryClient()
@@ -146,7 +149,7 @@ export function PhotoViewerPage() {
     prevAnalysisIdRef.current = latestAnalysisId
     if (prev !== undefined && prev !== latestAnalysisId && latestAnalysisId !== undefined) {
       if (userSelectionRef.current?.analysisId === prev) {
-        toast.warning('Analysis updated — your selection was reset.')
+        toast.warning(t('viewer.toastSelectionReset'))
       }
     }
   // toast is stable (useCallback in ToastProvider); latestAnalysisId is the
@@ -221,20 +224,24 @@ export function PhotoViewerPage() {
           if (saveAbortRef.current === controller) setSaveStatus('idle')
           return
         }
-        const httpStatus = (err as { response?: { status?: number } })?.response?.status
-        const errorCode = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+        // apiClient vrací ApiError (status + code z těla odpovědi core).
+        const httpStatus = err instanceof ApiError ? err.status : undefined
+        const errorCode = err instanceof ApiError ? err.code : undefined
         if (httpStatus === 409 && errorCode === 'CASE_FINALIZED') {
           setSaveStatus('idle')
           setUserSelection(null)
-          toast.warning('Case is finalized — selection can no longer be changed.')
+          toast.warning(t('viewer.toastCaseFinalized'))
         } else if (httpStatus === 409) {
           setUserSelection(null)
           setSaveStatus('idle')
           void queryClient.invalidateQueries({ queryKey: CASE_KEYS.detail(caseId) })
-          toast.warning('Analysis was updated — please review the new result.')
+          toast.warning(t('viewer.toastAnalysisUpdated'))
+        } else if (isForbiddenError(err)) {
+          setSaveStatus('error')
+          toast.error(t('viewer.toastSaveForbidden'))
         } else {
           setSaveStatus('error')
-          toast.error('Failed to save selection. Please try again.')
+          toast.error(t('viewer.toastSaveFailed'))
         }
       }
     }
@@ -257,10 +264,18 @@ export function PhotoViewerPage() {
     )
   }
 
+  if (isError && isForbiddenError(photosError)) {
+    return (
+      <section className="rounded-[2rem] border border-amber-200 bg-amber-50 p-6">
+        <p className="text-sm text-amber-800">{t('common.forbidden')}</p>
+      </section>
+    )
+  }
+
   if (isError || !photosData) {
     return (
       <section className="rounded-[2rem] border border-red-100 bg-red-50 p-6">
-        <p className="text-sm text-red-600">Failed to load photo.</p>
+        <p className="text-sm text-red-600">{t('viewer.loadFailed')}</p>
       </section>
     )
   }
@@ -271,13 +286,13 @@ export function PhotoViewerPage() {
   if (!photo) {
     return (
       <section className="rounded-[2rem] border border-slate-200/80 bg-white/90 p-6 shadow-sm">
-        <p className="text-sm text-slate-500">Photo not found.</p>
+        <p className="text-sm text-slate-500">{t('viewer.notFound')}</p>
         <Link
           to="/cases/$caseId/photos"
           params={{ caseId }}
           className="mt-4 inline-block text-sm text-emerald-700 underline-offset-2 hover:underline"
         >
-          ← Back to photos
+          {t('viewer.backToPhotos')}
         </Link>
       </section>
     )
@@ -323,9 +338,11 @@ export function PhotoViewerPage() {
 
   // Use aiInput image when projecting an overlay — coordinate spaces match exactly.
   // Fall back to preview/original for display-only photos.
+  // URL z API (/api/v1/files/...) se převádí na /bff/api/files/... (cookie jde sama).
+  const previewUrl = resolveApiUrl(photo.variants.preview.url) ?? resolveApiUrl(photo.url)
   const displayUrl = overlayGuardPasses
-    ? (aiInput.url ?? photo.variants.preview.url ?? photo.url)
-    : (photo.variants.preview.url ?? photo.url)
+    ? (resolveApiUrl(aiInput.url) ?? previewUrl)
+    : previewUrl
 
   const currentIndex = photos.findIndex((p) => p.id === imageId)
   const prevPhoto = currentIndex > 0 ? photos[currentIndex - 1] : null
@@ -345,7 +362,7 @@ export function PhotoViewerPage() {
           params={{ caseId }}
           className="text-sm font-medium text-slate-600 underline-offset-2 hover:text-emerald-700 hover:underline"
         >
-          ← All photos
+          {t('viewer.allPhotos')}
         </Link>
         <div className="flex gap-2">
           {prevPhoto ? (
@@ -354,7 +371,7 @@ export function PhotoViewerPage() {
               params={{ caseId, imageId: prevPhoto.id }}
               className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:border-emerald-300 hover:text-emerald-700"
             >
-              ← Prev
+              {t('viewer.prev')}
             </Link>
           ) : null}
           {nextPhoto ? (
@@ -363,7 +380,7 @@ export function PhotoViewerPage() {
               params={{ caseId, imageId: nextPhoto.id }}
               className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:border-emerald-300 hover:text-emerald-700"
             >
-              Next →
+              {t('viewer.next')}
             </Link>
           ) : null}
         </div>
@@ -371,11 +388,17 @@ export function PhotoViewerPage() {
 
       {/* Image + overlay */}
       <div className="relative overflow-hidden rounded-2xl bg-slate-950">
-        <img
-          src={displayUrl}
-          alt={photo.originalFilename}
-          className="mx-auto block max-h-[70vh] w-full object-contain"
-        />
+        {displayUrl ? (
+          <img
+            src={displayUrl}
+            alt={photo.originalFilename}
+            className="mx-auto block max-h-[70vh] w-full object-contain"
+          />
+        ) : (
+          <div className="flex aspect-video w-full items-center justify-center text-sm text-slate-400">
+            {t('photos.previewUnavailable')}
+          </div>
+        )}
 
         {/* P2: key on latestAnalysis.id forces full remount when analysis changes */}
         {showAiMask &&
@@ -408,7 +431,7 @@ export function PhotoViewerPage() {
         {isOverlayRefreshing && (
           <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-white backdrop-blur">
             <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
-            Refreshing…
+            {t('viewer.refreshing')}
           </div>
         )}
       </div>
@@ -417,12 +440,12 @@ export function PhotoViewerPage() {
       <div className="flex flex-wrap items-center gap-2">
         {photo.isPrimary && (
           <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-800">
-            Primary
+            {t('viewer.badgePrimary')}
           </span>
         )}
         {photo.isAnalysisReference && (
           <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-violet-800">
-            Analysis reference
+            {t('viewer.badgeReference')}
           </span>
         )}
         {photo.processingStatus !== 'ready' && (
@@ -448,7 +471,7 @@ export function PhotoViewerPage() {
               }
             }}
           >
-            Confirm AI area
+            {t('viewer.confirmAiArea')}
           </button>
         )}
 
@@ -456,14 +479,14 @@ export function PhotoViewerPage() {
         {showUserSelection && (
           <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-800">
             {saveStatus === 'saving'
-              ? 'Saving…'
+              ? t('viewer.saving')
               : saveStatus === 'confirmed'
-                ? 'Confirmed ✓'
+                ? t('viewer.confirmed')
                 : saveStatus === 'saved'
-                  ? 'Saved'
+                  ? t('viewer.saved')
                   : saveStatus === 'error'
-                    ? 'Save error'
-                    : 'Manual repair area'}
+                    ? t('viewer.saveError')
+                    : t('viewer.manualArea')}
           </span>
         )}
         {showUserSelection && (
@@ -472,7 +495,7 @@ export function PhotoViewerPage() {
             className="rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 hover:border-red-300 hover:text-red-600"
             onClick={() => { setUserSelection(null); setSaveStatus('idle') }}
           >
-            Reset to AI
+            {t('viewer.resetToAi')}
           </button>
         )}
       </div>
@@ -482,34 +505,34 @@ export function PhotoViewerPage() {
         <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-4">
           <div className="mb-3 flex items-center justify-between">
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-violet-600">
-              Analysis result
+              {t('viewer.analysisResult')}
             </p>
             {isDetailFetching && (
-              <span className="text-xs text-violet-400">Updating…</span>
+              <span className="text-xs text-violet-400">{t('viewer.updating')}</span>
             )}
           </div>
           <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
             {latestAnalysis.objectType ? (
-              <AnalysisField label="Object" value={latestAnalysis.objectType} />
+              <AnalysisField label={t('viewer.fieldObject')} value={latestAnalysis.objectType} />
             ) : null}
             {latestAnalysis.surfaceCondition ? (
-              <AnalysisField label="Condition" value={latestAnalysis.surfaceCondition} />
+              <AnalysisField label={t('viewer.fieldCondition')} value={latestAnalysis.surfaceCondition} />
             ) : null}
             {latestAnalysis.recommendedScope ? (
-              <AnalysisField label="Scope" value={latestAnalysis.recommendedScope} />
+              <AnalysisField label={t('viewer.fieldScope')} value={latestAnalysis.recommendedScope} />
             ) : null}
             {latestAnalysis.estimatedAreaSqm != null ? (
               <AnalysisField
-                label="Est. area"
+                label={t('viewer.fieldArea')}
                 value={`${latestAnalysis.estimatedAreaSqm.toFixed(1)} m²`}
               />
             ) : null}
             {latestAnalysis.workTypeCode ? (
-              <AnalysisField label="Work type" value={latestAnalysis.workTypeCode} />
+              <AnalysisField label={t('viewer.fieldWorkType')} value={latestAnalysis.workTypeCode} />
             ) : null}
             {latestAnalysis.areaConfidence != null ? (
               <AnalysisField
-                label="Confidence"
+                label={t('viewer.fieldConfidence')}
                 value={`${Math.round(latestAnalysis.areaConfidence * 100)}%`}
               />
             ) : null}

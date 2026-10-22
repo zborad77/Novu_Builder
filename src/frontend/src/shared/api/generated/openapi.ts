@@ -1200,6 +1200,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/files/exports/{export_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Export File */
+        get: operations["download_export_file_api_v1_files_exports__export_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/files/images/{image_id}/{variant}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Image File */
+        get: operations["download_image_file_api_v1_files_images__image_id___variant__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -1227,10 +1261,37 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Image Preview */
+        /**
+         * Get Image Preview
+         * @description Náhled fotky – streamuje se přímo (NC-007 kap. 6.3), žádná URL úložiště.
+         *
+         *     Dřív přesměrování (307) na podepsanou URL úložiště. Přesměrování na
+         *     ``/files/images/{id}/preview`` by vyžadovalo druhý požadavek, u kterého
+         *     klienti (Qt, gateway) nemusí znovu poslat ``Authorization``, a relativní
+         *     ``/api/v1/...`` cesta není z webu přes ``/bff`` dosažitelná. Proto stejná
+         *     kontrola firmy a stejné streamování jako ``/files/images/{id}/preview``;
+         *     dokud náhled není hotový, vrací originál (jako dřív ``preview.url or url``).
+         */
         get: operations["get_image_preview_api_v1_images__image_id__preview_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/internal/security-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest Security Events */
+        post: operations["ingest_security_events_api_v1_internal_security_events_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4000,6 +4061,43 @@ export interface components {
         RestorePhotoResponse: {
             /** Message */
             message: string;
+        };
+        /** SecurityEventBatch */
+        SecurityEventBatch: {
+            /** Events */
+            events: components["schemas"]["SecurityEventIn"][];
+        };
+        /** SecurityEventIn */
+        SecurityEventIn: {
+            /** Clientip */
+            clientIp: string;
+            /** Detail */
+            detail?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Occurredat
+             * Format: date-time
+             */
+            occurredAt: string;
+            /** Organizationid */
+            organizationId?: string | null;
+            /** Requestid */
+            requestId?: string | null;
+            /** Sessionref */
+            sessionRef?: string | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "login_success" | "login_failure" | "logout" | "logout_all" | "session_expired" | "session_revoked" | "csrf_failure" | "origin_failure" | "allowlist_miss" | "rate_limited" | "upstream_unavailable";
+            /** Userid */
+            userId?: string | null;
+        };
+        /** SecurityEventsAccepted */
+        SecurityEventsAccepted: {
+            /** Accepted */
+            accepted: number;
         };
         /** SupplierPatch */
         SupplierPatch: {
@@ -7119,6 +7217,119 @@ export interface operations {
             };
         };
     };
+    download_export_file_api_v1_files_exports__export_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                export_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Celý soubor (Content-Type podle allowlistu, jinak application/octet-stream). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Část souboru podle hlavičky Range (Content-Range). */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Neexistuje, cizí firma, smazáno, nehotové nebo expirované. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Neplatný nebo nesplnitelný rozsah (Content-Range: bytes *\/<velikost>). */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_image_file_api_v1_files_images__image_id___variant__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                image_id: string;
+                variant: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Celý soubor (Content-Type podle allowlistu, jinak application/octet-stream). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Část souboru podle hlavičky Range (Content-Range). */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Neexistuje, cizí firma, smazáno, nehotové nebo expirované. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Neplatný nebo nesplnitelný rozsah (Content-Range: bytes *\/<velikost>). */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     health_api_v1_health_get: {
         parameters: {
             query?: never;
@@ -7161,6 +7372,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_security_events_api_v1_internal_security_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecurityEventBatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityEventsAccepted"];
                 };
             };
             /** @description Validation Error */
