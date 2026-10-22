@@ -1,7 +1,8 @@
 #!/usr/sbin/nft -f
 # NovuConstruct – Public Edge server of the TWO-server production variant (A).
 # Public: 80/443 only. SSH only through the edge's own admin tunnel (wg-edge-admin,
-# D-12) or break-glass. Outbound to the core only on the gateway port (F4).
+# D-12) or break-glass. Outbound to the core only on the gateway port, only for
+# uid nc-gateway (and root). Requires the users www-data and nc-gateway.
 
 flush ruleset
 
@@ -35,13 +36,17 @@ table inet nc_edge {
     chain output {
         type filter hook output priority filter; policy drop;
 
+        # Web Gateway (NC-007): only nginx (and root) connects to the gateway on
+        # loopback; the gateway itself opens nothing on loopback (Redis = unix socket).
+        oif "lo" tcp dport 8300 ct state new meta skuid != { 0, "www-data" } drop
+        oif "lo" meta skuid "nc-gateway" ct state new drop
         oif "lo" accept
         ct state established,related accept
         meta l4proto { icmp, ipv6-icmp } accept
         udp dport { 53, 123 } accept
         tcp dport 53 accept
         udp dport 51830 ip daddr @core_public accept           # WireGuard to core
-        oifname "wg-nc" ip daddr @core_wg tcp dport 8200 accept  # gateway → core (F4)
+        oifname "wg-nc" ip daddr @core_wg tcp dport 8200 meta skuid { 0, "nc-gateway" } accept  # gateway → core
         oifname "wg-edge-admin" accept
         meta skuid { 0, "_apt" } tcp dport { 80, 443 } accept
 

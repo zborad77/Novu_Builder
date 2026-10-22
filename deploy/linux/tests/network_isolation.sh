@@ -3,6 +3,7 @@
 # Run on STAGING from each vantage point; never needs credentials.
 #
 #   VANTAGE=internet  CORE=203.0.113.10 EDGE=203.0.113.11 sh network_isolation.sh
+#                     [APP=app.example.cz]   # with the Web Gateway enabled (NC-007)
 #   VANTAGE=edge                                          sh network_isolation.sh   # on the edge server (variant A)
 #   VANTAGE=desktop-peer                                  sh network_isolation.sh   # inside a desktop tunnel
 #   VANTAGE=admin-peer                                    sh network_isolation.sh   # inside an admin tunnel
@@ -35,12 +36,39 @@ case "${VANTAGE:?set VANTAGE}" in
     expect_open "$EDGE" 443 "N2 edge https open"
     expect_status "https://$EDGE/api/v1/auth/login" 404 "N2 edge does not expose the API" -k -X POST
     expect_status "https://$EDGE/api/v1/admin/users" 404 "N2 edge does not expose admin" -k
+    expect_closed "$EDGE" 8300 "N2 gateway port 8300 not public"
+    if [ -n "${APP:-}" ]; then
+      # NC-007: web app host – /bff/ reaches the gateway, nothing else of the API.
+      expect_status "https://$APP/bff/health" 200 "N2 app /bff/health"
+      for path in /api/v1/health /docs /openapi.json /metrics /admin; do
+        expect_status "https://$APP$path" 404 "N2 app $path not exposed"
+      done
+      if curl -sI --max-time "$T" "https://$APP/" | grep -i '^content-security-policy:' | grep -qi unsafe; then
+        echo "FAIL N2 app CSP contains unsafe-*"; fail=1
+      else
+        echo "OK   N2 app CSP without unsafe-*"
+      fi
+    fi
     ;;
   edge)
     # N3: edge cannot reach core desktop/admin/data ports over WireGuard.
     for port in 8210 8220 5432 6379 9000 22; do
       expect_closed "$CORE_WG" "$port" "N3 edge → core $port blocked"
     done
+    # NC-007: only the gateway user (and root) reaches the core gateway zone; the
+    # gateway listens on loopback only and its Redis has no TCP port.
+    if command -v runuser >/dev/null && id nc-gateway >/dev/null 2>&1; then
+      if runuser -u nobody -- nc -z -w "$T" "$CORE_WG" 8200 >/dev/null 2>&1; then
+        echo "FAIL N3 a non-gateway user reaches core:8200"; fail=1
+      else
+        echo "OK   N3 core:8200 only for uid nc-gateway"
+      fi
+    fi
+    if ss -Hltn | awk '{print $4}' | grep -E ':8300$' | grep -qv '^127\.0\.0\.1:8300$'; then
+      echo "FAIL N3 gateway listens beyond loopback"; fail=1
+    else
+      echo "OK   N3 gateway on loopback only"
+    fi
     # N11: edge has no general egress.
     expect_status "https://example.com/" 000 "N11 edge general egress blocked"
     ;;

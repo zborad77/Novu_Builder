@@ -22,8 +22,19 @@ NC_OBJECT_STORAGE_READY=0
 NC_DOMAIN=
 NC_ACME_EMAIL=
 
-# Instance nc-api@gateway až s gateway (F4); vyžaduje NC_GATEWAY_HMAC_KEYS (generuje nc-gen-secrets).
+# Core: instance nc-api@gateway + nginx zóna gateway (varianta A 10.50.0.1:8200,
+# varianta B 127.0.0.1:8200); vyžaduje NC_GATEWAY_HMAC_KEYS (generuje nc-gen-secrets).
 NC_ENABLE_GATEWAY_ZONE=0
+
+# Edge / single: Web Gateway (BFF, NC-007). 1 = install připraví účty nc-gateway a
+# nc-gw-redis, secrets v /etc/nc-gateway/secrets, vlastní Redis, venv, gateway.env,
+# jednotky a nginx vhost aplikace. NIC nespustí: to dělá jen
+#   NC_CONFIRM_GATEWAY=1 nc-provision gateway        (deploy/linux/GATEWAY_RUNBOOK.md)
+NC_ENABLE_GATEWAY=0
+# Host webové aplikace (SPA + /bff/); NC_BFF_PUBLIC_ORIGIN = https://<NC_APP_DOMAIN>.
+NC_APP_DOMAIN=
+# Prázdné = podle varianty: edge http://10.50.0.1:8200, single http://127.0.0.1:8200.
+NC_GATEWAY_CORE_URL=
 
 # 1 = venv připravil operátor offline (pip se nespouští).
 NC_SKIP_PIP=0

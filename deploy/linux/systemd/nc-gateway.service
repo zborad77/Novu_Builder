@@ -1,0 +1,89 @@
+# NovuConstruct Web Gateway / BFF (NC-007 etapa 1, docs/security/NC-007_STAGE1_CONTRACT.md §8).
+#
+# Public Edge process: nginx :443 → 127.0.0.1:8300 (this unit) → core zone
+# "gateway" (two servers: http://10.50.0.1:8200 over WireGuard; single server:
+# http://127.0.0.1:8200, the core nginx gateway vhost). Sessions live in the
+# gateway's OWN Redis (nc-gateway-redis.service, unix socket, ACL ~nc:bff:*).
+#
+# Not part of nc-core.target: the gateway is edge, not core. It is enabled only
+# by `nc-provision gateway` with NC_CONFIRM_GATEWAY=1 (never by `install`).
+#
+# The gateway has NO access to core secrets (/etc/novuconstruct is masked and
+# owned by group novuconstruct, which nc-gateway is not in), to PostgreSQL, to
+# the core Redis or to the core API sockets. Its own secrets come only through
+# LoadCredential from /etc/nc-gateway/secrets (0600 root:root, read by PID 1).
+[Unit]
+Description=NovuConstruct Web Gateway (BFF)
+Documentation=file:///opt/novuconstruct/deploy/linux/GATEWAY_RUNBOOK.md
+After=network-online.target nftables.service wg-quick@wg-nc.service nc-gateway-redis.service nc-api@gateway.service
+Wants=network-online.target nc-gateway-redis.service
+PartOf=nc-edge.target
+
+[Service]
+Type=exec
+User=nc-gateway
+Group=nc-gateway
+# Only to connect to the gateway Redis socket (/run/nc-gateway-redis, 0750).
+SupplementaryGroups=nc-gw-redis
+UMask=0077
+WorkingDirectory=/opt/novuconstruct/src/gateway
+EnvironmentFile=/etc/nc-gateway/gateway.env
+Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+# Secrets never live in gateway.env or the unit; nc-run exports them from here.
+#   NC_GATEWAY_HMAC_KEY  kid:secret – the same value as ONE entry of the core's
+#                        NC_GATEWAY_HMAC_KEYS (GATEWAY_CORE_CONTRACT.md §6–7)
+#   NC_BFF_SESSION_KEYS  kid:base64(32 B)[,…] – first encrypts, others decrypt only
+#   NC_BFF_REDIS_URL     unix://nc-gateway:<password>@/run/nc-gateway-redis/redis.sock?db=0
+LoadCredential=NC_GATEWAY_HMAC_KEY:/etc/nc-gateway/secrets/NC_GATEWAY_HMAC_KEY
+LoadCredential=NC_BFF_SESSION_KEYS:/etc/nc-gateway/secrets/NC_BFF_SESSION_KEYS
+LoadCredential=NC_BFF_REDIS_URL:/etc/nc-gateway/secrets/NC_BFF_REDIS_URL
+RuntimeDirectory=nc-gateway
+RuntimeDirectoryMode=0750
+ExecStart=/opt/novuconstruct/deploy/linux/bin/nc-run \
+    /opt/novuconstruct/src/gateway/.venv/bin/python -m nc_gateway
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+
+# ── Sandbox (check: systemd-analyze security nc-gateway) ─────────────────────
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+# IPv4 + unix sockets only (WG_NETWORK_DESIGN §6.2): no IPv6, no netlink, no raw.
+RestrictAddressFamilies=AF_UNIX AF_INET
+# Network: loopback (nginx → gateway, single-server core vhost 127.0.0.1:8200)
+# and the core over WireGuard. Nothing else, in or out (nftables adds the
+# per-port rules: nc-edge.nft / nc-single-server.nft).
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1 10.50.0.1
+ReadOnlyPaths=/opt/novuconstruct
+# Core data, secrets and sockets are not even visible ("-": absent on the edge).
+InaccessiblePaths=-/etc/novuconstruct -/var/lib/novuconstruct -/run/novuconstruct
+InaccessiblePaths=-/var/lib/postgresql -/var/run/postgresql -/run/postgresql
+InaccessiblePaths=-/etc/redis -/var/lib/redis -/run/redis -/var/lib/nc-gateway-redis
+InaccessiblePaths=-/srv/novuconstruct -/var/backups/novuconstruct -/var/lib/nc-provision
+InaccessiblePaths=-/etc/wireguard -/etc/letsencrypt -/etc/nc-gateway/secrets -/etc/nc-gateway-redis
+
+[Install]
+WantedBy=nc-edge.target

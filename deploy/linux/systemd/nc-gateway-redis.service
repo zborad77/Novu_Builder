@@ -1,0 +1,64 @@
+# Session store of the Web Gateway (NC-007 §3, §8): a SEPARATE Redis instance,
+# not the core Redis (redis-server.service). Reasons: deploy/linux/GATEWAY_RUNBOOK.md
+# (kap. "Proč vlastní Redis").
+#
+#   * no TCP at all (port 0): unix socket /run/nc-gateway-redis/redis.sock, 0770,
+#     group nc-gw-redis – only nc-gateway (supplementary group) and root connect;
+#   * ACL: default user off, user nc-gateway limited to keys ~nc:bff:* and no
+#     @dangerous commands; the ACL file comes in as a systemd credential
+#     (source /etc/nc-gateway-redis/users.acl, 0600 root:root);
+#   * data dir 0700, never readable by the gateway; values are AES-256-GCM
+#     ciphertext anyway (key NC_BFF_SESSION_KEYS stays with the gateway).
+[Unit]
+Description=NovuConstruct Web Gateway session store (Redis)
+Documentation=file:///opt/novuconstruct/deploy/linux/GATEWAY_RUNBOOK.md
+After=network.target
+PartOf=nc-edge.target
+
+[Service]
+Type=notify
+User=nc-gw-redis
+Group=nc-gw-redis
+UMask=0007
+LoadCredential=users.acl:/etc/nc-gateway-redis/users.acl
+ExecStart=/usr/bin/redis-server /etc/nc-gateway-redis/redis.conf --supervised systemd --daemonize no
+RuntimeDirectory=nc-gateway-redis
+RuntimeDirectoryMode=0750
+StateDirectory=nc-gateway-redis
+StateDirectoryMode=0700
+LimitNOFILE=10032
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+PrivateNetwork=yes
+IPAddressDeny=any
+InaccessiblePaths=-/etc/novuconstruct -/var/lib/novuconstruct -/run/novuconstruct -/etc/nc-gateway
+
+[Install]
+WantedBy=nc-edge.target

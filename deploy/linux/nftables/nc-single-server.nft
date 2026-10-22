@@ -2,7 +2,8 @@
 # NovuConstruct – pilot, ONE Hetzner server (Public Edge + Private Core, variant B).
 # /etc/nftables.conf includes this file. Validate: nft -c -f nc-single-server.nft
 #
-# Public interface: 80/443 (information website), WireGuard handshakes, nothing else.
+# Public interface: 80/443 (information website + web app), WireGuard handshakes, nothing else.
+# Requires the system users novuconstruct, www-data and nc-gateway (nc-provision install).
 # PostgreSQL, Redis, MinIO and the API sockets are never reachable from outside:
 # they listen on loopback/unix sockets AND are dropped here.
 
@@ -57,6 +58,14 @@ table inet nc {
     chain output {
         type filter hook output priority filter; policy drop;
 
+        # Web Gateway (NC-007, variant B – no WireGuard hop on one host):
+        # on loopback only nginx (and root) opens connections to the gateway
+        # (8300), only the gateway (and root) to the core gateway zone (8200),
+        # and the gateway opens nothing else (its Redis is a unix socket).
+        oif "lo" tcp dport 8300 ct state new meta skuid != { 0, "www-data" } drop
+        oif "lo" tcp dport 8200 ct state new meta skuid != { 0, "nc-gateway" } drop
+        oif "lo" meta skuid "nc-gateway" ct state new tcp dport != 8200 drop
+        oif "lo" meta skuid "nc-gateway" ct state new meta l4proto != tcp drop
         oif "lo" accept
         ct state established,related accept
         oifname { "wg-nc", "wg-nc-admin" } accept

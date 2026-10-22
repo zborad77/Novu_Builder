@@ -1,0 +1,12 @@
+# Public Edge application processes: the Web Gateway (BFF) and its session store.
+# Deliberately WITHOUT Wants=: the units join this target only through their
+# [Install] WantedBy=nc-edge.target, i.e. after `nc-provision gateway` with
+# NC_CONFIRM_GATEWAY=1 has enabled them. `install` never starts the gateway.
+# Not related to nc-core.target: the gateway is edge, not core (variant A runs
+# it on another server; variant B on the same host, still as a separate target).
+[Unit]
+Description=NovuConstruct Public Edge (Web Gateway)
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target

@@ -14,6 +14,8 @@
 #   smoke        ověří běžící stack (služby, naslouchající porty, health přes sockety)
 #   offer-worker zapne offer worker (N2) až po výpisu backlogu a kontrole AI provideru;
 #                vyžaduje NC_CONFIRM_OFFER_BACKLOG=1 (bin/nc-offer-backlog)
+#   gateway      zapne Web Gateway (BFF) a její Redis (nc-edge.target) až po kontrolách;
+#                vyžaduje NC_ENABLE_GATEWAY=1 a NC_CONFIRM_GATEWAY=1 (GATEWAY_RUNBOOK.md)
 #   firewall     nasadí nftables – JEN s potvrzením a s automatickým návratem
 #   ssh-harden   SSH drop-in – JEN s potvrzením a s automatickým návratem
 #   breakglass   konzolový nouzový účet nc-breakglass (EMERGENCY_ACCESS.md) – s potvrzením
@@ -62,7 +64,10 @@ NC_S3_BUCKET=novuconstruct
 NC_OBJECT_STORAGE_READY=0
 NC_DOMAIN=""
 NC_ACME_EMAIL=""
-NC_ENABLE_GATEWAY_ZONE=0         # nc-api@gateway až s gateway (F4)
+NC_ENABLE_GATEWAY_ZONE=0         # core: nc-api@gateway + nginx zóna gateway (F4)
+NC_ENABLE_GATEWAY=0              # edge/single: soubory Web Gateway (BFF); spouští jen `gateway`
+NC_APP_DOMAIN=""                 # host webové aplikace (SPA + /bff/), např. app.example.cz
+NC_GATEWAY_CORE_URL=""           # prázdné = podle varianty (edge: 10.50.0.1:8200, single: 127.0.0.1:8200)
 NC_REDIS_MAXMEMORY=512mb
 NC_SKIP_PIP=0                    # offline: venv připraví operátor
 
@@ -83,7 +88,7 @@ run() {  # run CMD...  (v --dry-run jen vypíše)
   "$@"
 }
 
-usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 
 load_config() {
   [ -f "$CONFIG" ] || { warn "konfigurace $CONFIG neexistuje, používám výchozí hodnoty (vzor: $SELF_DIR/provision.conf.example)"; return 0; }
@@ -101,6 +106,8 @@ load_config() {
 
 has_core() { [ "$NC_VARIANT" != edge ]; }
 has_edge() { [ "$NC_VARIANT" != core ]; }
+has_gateway() { has_edge && [ "$NC_ENABLE_GATEWAY" = 1 ]; }
+GW_APP() { echo "$NC_APP_DIR/src/gateway"; }
 
 # ── soubory ───────────────────────────────────────────────────────────────────
 
@@ -226,6 +233,20 @@ preflight() {
     fi
   fi
 
+  if has_gateway; then
+    if [ -d "$(GW_APP)" ] && { [ -f "$(GW_APP)/requirements.txt" ] || [ -f "$(GW_APP)/pyproject.toml" ]; }; then
+      ok "Web Gateway v $(GW_APP)"
+    else
+      block "Web Gateway chybí v $(GW_APP) (requirements.txt nebo pyproject.toml)"
+    fi
+    [ -n "$NC_APP_DOMAIN" ] && ok "NC_APP_DOMAIN $NC_APP_DOMAIN" || warn "NC_APP_DOMAIN není nastavená (nginx app vhost a NC_BFF_PUBLIC_ORIGIN zůstanou zástupné)"
+    [ -s "$NC_APP_DIR/docs/security/gateway-allowlist.json" ] && ok "allowlist gateway" \
+      || warn "$NC_APP_DIR/docs/security/gateway-allowlist.json chybí nebo je prázdný (gateway bez něj nenastartuje)"
+    if ss -Hltnp 2>/dev/null | awk '$4 ~ /:8300$/' | grep -qv python; then
+      block "port 8300 (gateway) drží jiný proces"
+    fi
+  fi
+
   # Porty 80/443 (nginx) a UDP WireGuard.
   local busy
   busy=$(ss -Hltnp 2>/dev/null | awk '$4 ~ /:(80|443)$/' | grep -v nginx || true)
@@ -274,6 +295,7 @@ install_packages() {
     pkgs+=("postgresql-$NC_PG_VERSION" "postgresql-client-$NC_PG_VERSION" redis-server python3-venv python3-dev build-essential)
   fi
   has_edge && pkgs+=(certbot)
+  if has_gateway; then pkgs+=(redis-server python3-venv); fi
   local missing=()
   for p in "${pkgs[@]}"; do dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q "install ok installed" || missing+=("$p"); done
   if [ "${#missing[@]}" -eq 0 ]; then echo "   vše nainstalováno"; return 0; fi
@@ -292,12 +314,28 @@ install_accounts() {
     run useradd --system -g novuconstruct -G nc-api-sock -d /nonexistent -s /usr/sbin/nologin novuconstruct
   fi
   if id www-data >/dev/null 2>&1 && ! id -nG www-data | grep -qw nc-api-sock; then run usermod -aG nc-api-sock www-data; fi
+  if has_edge; then
+    # Web Gateway (NC-007 §8): vlastní účty bez skupin core (novuconstruct, nc-api-sock).
+    # Zakládají se na každém edge/single hostu, protože na ně odkazují pravidla nftables.
+    getent group nc-gateway >/dev/null || run groupadd --system nc-gateway
+    getent group nc-gw-redis >/dev/null || run groupadd --system nc-gw-redis
+    id nc-gateway >/dev/null 2>&1 || run useradd --system -g nc-gateway -G nc-gw-redis -d /nonexistent -s /usr/sbin/nologin nc-gateway
+    id nc-gw-redis >/dev/null 2>&1 || run useradd --system -g nc-gw-redis -d /nonexistent -s /usr/sbin/nologin nc-gw-redis
+    if id nc-gateway >/dev/null 2>&1 && id -nG nc-gateway | grep -qwE 'novuconstruct|nc-api-sock'; then
+      die "nc-gateway je ve skupině core (novuconstruct/nc-api-sock) – oprav ručně, gateway nesmí vidět secrets ani sockety core"
+    fi
+  fi
 }
 
 install_dirs() {
   info "adresáře (data mimo $NC_APP_DIR)"
   ensure_dir /etc/novuconstruct 0750 root:novuconstruct
   ensure_dir $STATE 0700 root:root
+  if has_gateway; then
+    ensure_dir /etc/nc-gateway 0750 root:nc-gateway
+    ensure_dir /etc/nc-gateway-redis 0700 root:root
+    ensure_dir /var/www/novuconstruct/app 0755 root:root
+  fi
   has_core || return 0
   # /var/lib/novuconstruct spravuje systemd (StateDirectory= služeb), ne instalátor.
   ensure_dir /var/backups/novuconstruct 0700 root:root
@@ -307,11 +345,25 @@ install_dirs() {
 install_secrets() {
   has_core || return 0
   info "secrets (/etc/novuconstruct/secrets, existující se nemění)"
-  local name missing=0
+  local name absent=0
   for name in POSTGRES_PASSWORD POSTGRES_OWNER_PASSWORD POSTGRES_ADMIN_PASSWORD REDIS_PASSWORD REDIS_WORKER_PASSWORD               JWT_SECRET METRICS_AUTH_TOKEN S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY NC_GATEWAY_HMAC_KEYS DATABASE_URL               DATABASE_URL_SYNC DATABASE_URL_OWNER DATABASE_URL_OWNER_SYNC REDIS_URL REDIS_URL_WORKER ANTHROPIC_API_KEY; do
-    [ -f "/etc/novuconstruct/secrets/$name" ] || missing=1
+    [ -f "/etc/novuconstruct/secrets/$name" ] || absent=1
   done
-  if [ "$missing" -eq 1 ]; then run sh "$DEPLOY_DIR/bin/nc-gen-secrets"; else echo "   všechny secrets existují"; fi
+  if [ "$absent" -eq 1 ]; then run sh "$DEPLOY_DIR/bin/nc-gen-secrets"; else echo "   všechny secrets existují"; fi
+}
+
+install_gateway_secrets() {
+  has_gateway || return 0
+  info "secrets Web Gateway (/etc/nc-gateway/secrets, 0600 root:root, existující se nemění)"
+  local name absent=0
+  for name in NC_BFF_SESSION_KEYS REDIS_GATEWAY_PASSWORD NC_BFF_REDIS_URL NC_GATEWAY_HMAC_KEY; do
+    [ -f "/etc/nc-gateway/secrets/$name" ] || absent=1
+  done
+  [ -f /etc/nc-gateway-redis/users.acl ] || absent=1
+  if [ "$absent" -eq 1 ]; then run sh "$DEPLOY_DIR/bin/nc-gen-secrets" --gateway; else echo "   všechny secrets gateway existují"; fi
+  if [ "$DRY_RUN" -eq 0 ] && [ ! -f /etc/nc-gateway/secrets/NC_GATEWAY_HMAC_KEY ]; then
+    warn "NC_GATEWAY_HMAC_KEY chybí: na core 'nc-gen-secrets --export-gateway-hmac' → zde 'nc-gen-secrets --gateway --hmac-stdin' (GATEWAY_RUNBOOK.md)"
+  fi
 }
 
 pg_sql() {  # SQL ze stdin, jako postgres přes socket; hesla nikdy v argv. Idempotentní (srovná stav).
@@ -434,6 +486,96 @@ EOF
   enable_unit redis-server
 }
 
+install_gateway_redis() {
+  has_gateway || return 0
+  info "Redis Web Gateway (samostatná instance nc-gateway-redis, jen unix socket, ACL ~nc:bff:*)"
+  install_file "$DEPLOY_DIR/redis/nc-gateway-redis.conf" /etc/nc-gateway-redis/redis.conf 0644 root:root
+  if [ "$NC_VARIANT" = edge ] && [ -f /lib/systemd/system/redis-server.service ] \
+     && [ "$(systemctl is-enabled redis-server.service 2>/dev/null || true)" != masked ]; then
+    # Edge nepotřebuje Redis core; výchozí instance balíčku (TCP 6379) se vypne a zamaskuje.
+    run systemctl disable --now --quiet redis-server.service
+    run systemctl mask --quiet redis-server.service
+  fi
+}
+
+install_gateway_app() {
+  has_gateway || return 0
+  info "Web Gateway: venv a gateway.env"
+  local dir venv stamp want src
+  dir=$(GW_APP); venv="$dir/.venv"; stamp="$STATE/gateway-requirements.sha256"
+  if [ -f "$dir/requirements.txt" ]; then src="$dir/requirements.txt"; else src="$dir/pyproject.toml"; fi
+  if [ ! -f "$src" ]; then
+    warn "$dir: chybí requirements.txt i pyproject.toml, venv gateway se nepřipraví"
+  else
+    want=$(sha256sum "$src" | awk '{print $1}')
+    if [ "$NC_SKIP_PIP" = 1 ]; then
+      [ -x "$venv/bin/python" ] || die "NC_SKIP_PIP=1, ale $venv chybí"
+    elif [ ! -x "$venv/bin/python" ] || [ "$(cat "$stamp" 2>/dev/null)" != "$want" ]; then
+      [ -x "$venv/bin/python" ] || run python3 -m venv "$venv"
+      if [ "$src" = "$dir/requirements.txt" ]; then
+        run "$venv/bin/pip" install --quiet --disable-pip-version-check -r "$src"
+      else
+        run "$venv/bin/pip" install --quiet --disable-pip-version-check "$dir"
+      fi
+      [ "$DRY_RUN" -eq 1 ] || echo "$want" > "$stamp"
+    fi
+  fi
+  build_gateway_env
+}
+
+# gateway.env: deploy/linux/env/gateway.env.example + provision.conf + gateway.env.local.
+# Secrets ani NC_BFF_DEV_INSECURE_COOKIE sem nesmí (LoadCredential, kontrakt §3 a §8).
+build_gateway_env() {
+  local out core_url origin
+  out=$(mktemp "$WORK/gateway.env.XXXXXX")
+  if [ -n "$NC_GATEWAY_CORE_URL" ]; then core_url=$NC_GATEWAY_CORE_URL
+  elif [ "$NC_VARIANT" = single ]; then core_url=http://127.0.0.1:8200
+  else core_url=http://10.50.0.1:8200; fi
+  origin=""; [ -z "$NC_APP_DOMAIN" ] || origin="https://$NC_APP_DOMAIN"
+  {
+    echo "# $MARKER (NC-007): generováno z deploy/linux/env/gateway.env.example."
+    echo "# Secrets tu nejsou (LoadCredential). Vlastní úpravy patří do /etc/nc-gateway/gateway.env.local."
+    python3 - "$DEPLOY_DIR/env/gateway.env.example" /etc/nc-gateway/gateway.env.local "$core_url" "$origin" "$NC_APP_DIR" <<'PY'
+import os, re, sys
+template, local, core_url, origin, app_dir = sys.argv[1:6]
+FORBIDDEN = re.compile(r"^(NC_GATEWAY_HMAC_KEYS?|NC_BFF_SESSION_KEYS|NC_BFF_REDIS_URL|REDIS_\w*PASSWORD\w*|"
+                       r"JWT_SECRET\w*|DATABASE_URL\w*|NC_BFF_DEV_INSECURE_COOKIE)$")
+def parse(path):
+    out = {}
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+values = parse(template)
+values["NC_BFF_CORE_URL"] = core_url
+if origin:
+    values["NC_BFF_PUBLIC_ORIGIN"] = origin
+values["NC_BFF_ALLOWLIST_PATH"] = os.path.join(app_dir, "docs/security/gateway-allowlist.json")
+if os.path.exists(local):
+    for k, v in parse(local).items():
+        if FORBIDDEN.match(k):
+            sys.exit(f"gateway.env.local: {k} sem nepatří (secret nebo jen-development volba)")
+        values[k] = v
+for k in values:
+    if FORBIDDEN.match(k):
+        sys.exit(f"gateway.env: {k} sem nepatří")
+if values.get("NC_ENV", "") in ("", "development", "dev"):
+    sys.exit("gateway.env: NC_ENV musí být produkční (ne development)")
+if not values.get("NC_BFF_PUBLIC_ORIGIN", "").startswith("https://"):
+    sys.exit("gateway.env: NC_BFF_PUBLIC_ORIGIN musí být https://…")
+for k in sorted(values):
+    print(f"{k}={values[k]}")
+PY
+  } > "$out"
+  install_file "$out" /etc/nc-gateway/gateway.env 0640 root:nc-gateway
+  if grep -q 'example\.invalid' "$out"; then
+    warn "gateway.env má zástupnou doménu (NC_APP_DOMAIN v provision.conf); 'gateway' bez ní nic nespustí"
+  fi
+}
+
 install_app() {
   has_core || return 0
   info "aplikace: venv a core.env"
@@ -513,6 +655,12 @@ install_units() {
     install_file "$DEPLOY_DIR/systemd/nc-api@gateway.service.d/10-gateway-hmac.conf" \
       /etc/systemd/system/nc-api@gateway.service.d/10-gateway-hmac.conf 0644 root:root
   fi
+  if has_gateway; then
+    # Jen instalace souborů: nic se nezapíná ani nespouští (to dělá až `gateway`).
+    for u in nc-gateway.service nc-gateway-redis.service nc-edge.target; do
+      install_file "$DEPLOY_DIR/systemd/$u" "/etc/systemd/system/$u" 0644 root:root
+    done
+  fi
   install_file "$DEPLOY_DIR/systemd/nginx.service.d/10-novuconstruct.conf" \
     /etc/systemd/system/nginx.service.d/10-novuconstruct.conf 0644 root:root
   if [ "$CHANGES" -gt "$units_before" ]; then run systemctl daemon-reload; fi
@@ -527,6 +675,20 @@ install_nginx() {
   install_file "$DEPLOY_DIR/nginx/nc-http-common.conf" /etc/nginx/conf.d/00-nc-http-common.conf 0644 root:root
   has_core && install_file "$DEPLOY_DIR/nginx/nc-core-private.conf" /etc/nginx/conf.d/nc-core-private.conf 0644 root:root
   has_edge && install_file "$DEPLOY_DIR/nginx/nc-edge-public.conf" /etc/nginx/conf.d/nc-edge-public.conf 0644 root:root
+  if has_core && [ "$NC_ENABLE_GATEWAY_ZONE" = 1 ]; then
+    # Zóna gateway na core: varianta A na WG adrese, varianta B jen na loopbacku.
+    if [ "$NC_VARIANT" = single ]; then f=nc-core-gateway-single.conf; else f=nc-core-gateway.conf; fi
+    install_file "$DEPLOY_DIR/nginx/$f" /etc/nginx/conf.d/nc-core-gateway.conf 0644 root:root
+  fi
+  if has_gateway; then
+    if [ -n "$NC_APP_DOMAIN" ]; then
+      [[ "$NC_APP_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || die "NC_APP_DOMAIN má neplatné znaky"
+      sed "s/server_name app\.example\.invalid;/server_name $NC_APP_DOMAIN;/" "$DEPLOY_DIR/nginx/nc-edge-webapp.conf" \
+        | write_managed /etc/nginx/conf.d/nc-edge-webapp.conf 0644 root:root
+    else
+      warn "NC_APP_DOMAIN chybí: nginx vhost webové aplikace se neinstaluje"
+    fi
+  fi
   ensure_dir /etc/novuconstruct/tls 0750 root:www-data
   ensure_dir /var/www/novuconstruct/public 0755 root:root
   ensure_dir /var/www/letsencrypt 0755 root:root
@@ -563,9 +725,12 @@ cmd_install() {
   install_accounts
   install_dirs
   install_secrets
+  install_gateway_secrets
   install_postgres
   install_redis
+  install_gateway_redis
   install_app
+  install_gateway_app
   install_units
   install_nginx
   install_wireguard
@@ -573,6 +738,8 @@ cmd_install() {
   if [ "$DRY_RUN" -eq 1 ]; then info "plan: $CHANGES změn, $WARNINGS varování"; return 0; fi
   info "install hotový ($WARNINGS varování). Dál: objektové úložiště (S-1), '$0 migrate', '$0 start', '$0 smoke';"
   info "firewall a SSH: '$0 firewall', '$0 ssh-harden' (s potvrzením)."
+  if has_gateway; then info "Web Gateway: nainstalována, NEspuštěna. Zapnutí: NC_CONFIRM_GATEWAY=1 '$0 gateway' (GATEWAY_RUNBOOK.md)."; fi
+  return 0
 }
 
 wait_for() {  # wait_for POPIS CMD...
@@ -626,6 +793,41 @@ cmd_offer_worker() {
   run systemctl enable --now nc-offer-worker.service
 }
 
+cmd_gateway() {
+  # NC-007 §8: Web Gateway se nikdy nespouští automaticky (install ji jen připraví).
+  has_edge || die "Web Gateway patří na edge nebo single (NC_VARIANT=core ji nemá)"
+  [ "$NC_ENABLE_GATEWAY" = 1 ] || die "nastav NC_ENABLE_GATEWAY=1 v provision.conf a spusť nejdřív '$0 install'"
+  info "Web Gateway: kontroly před zapnutím"
+  local n
+  for n in NC_GATEWAY_HMAC_KEY NC_BFF_SESSION_KEYS NC_BFF_REDIS_URL; do
+    if [ -s "/etc/nc-gateway/secrets/$n" ]; then ok "secret $n"; else block "secret $n chybí (nc-gen-secrets --gateway, GATEWAY_RUNBOOK.md)"; fi
+  done
+  if [ -s /etc/nc-gateway-redis/users.acl ]; then ok "ACL Redis gateway"; else block "/etc/nc-gateway-redis/users.acl chybí"; fi
+  if [ -f /etc/nc-gateway/gateway.env ]; then ok "gateway.env"; else block "/etc/nc-gateway/gateway.env chybí ('$0 install')"; fi
+  if grep -q 'example\.invalid' /etc/nc-gateway/gateway.env 2>/dev/null; then block "gateway.env má zástupnou doménu (NC_APP_DOMAIN)"; fi
+  if [ -x "$(GW_APP)/.venv/bin/python" ]; then ok "venv gateway"; else block "$(GW_APP)/.venv chybí ('$0 install')"; fi
+  if [ -s "$NC_APP_DIR/docs/security/gateway-allowlist.json" ]; then ok "allowlist"; else block "allowlist chybí nebo je prázdný"; fi
+  if [ -f /etc/nginx/conf.d/nc-edge-webapp.conf ]; then ok "nginx vhost aplikace"; else block "nginx vhost aplikace chybí (NC_APP_DOMAIN)"; fi
+  if [ -f /var/www/novuconstruct/app/index.html ]; then ok "SPA (dist) v /var/www/novuconstruct/app"
+  else warn "SPA chybí v /var/www/novuconstruct/app (zkopíruj src/frontend/dist); /bff/ poběží i tak"; fi
+  if [ "$NC_VARIANT" = single ]; then
+    if systemctl is-active --quiet nc-api@gateway; then ok "zóna gateway na core běží"
+    else warn "nc-api@gateway neběží (NC_ENABLE_GATEWAY_ZONE=1 + '$0 start'); gateway bude vracet 502"; fi
+  fi
+  [ "$BLOCKERS" -eq 0 ] || die "Web Gateway se nezapne, oprav chyby výše"
+  [ "${NC_CONFIRM_GATEWAY:-0}" = 1 ] || die "kontroly prošly; zapnutí potvrď: NC_CONFIRM_GATEWAY=1 $0 gateway"
+  run systemctl daemon-reload
+  run systemctl enable --quiet nc-gateway-redis.service nc-gateway.service
+  run systemctl enable --now --quiet nc-edge.target
+  run systemctl restart nc-gateway-redis.service nc-gateway.service
+  if [ "$DRY_RUN" -eq 0 ]; then
+    wait_for "Web Gateway (/bff/health)" curl -fsS http://127.0.0.1:8300/bff/health
+  fi
+  run nginx -t -q
+  run systemctl reload nginx
+  info "Web Gateway běží. Ověř: '$0 smoke'."
+}
+
 cmd_smoke() {
   info "smoke test"
   local fail=0 u
@@ -661,11 +863,49 @@ cmd_smoke() {
   if has_edge; then
     DESC="nginx konfigurace"; check nginx -t -q
   fi
+  if has_gateway && systemctl is-enabled --quiet nc-gateway 2>/dev/null; then
+    smoke_gateway
+  fi
   DESC="stav instalátoru jen pro root ($STATE)"
   check sh -c "[ \"\$(stat -c '%U:%a' '$STATE')\" = root:700 ]"
   DESC="secrets nejsou čitelné pro ostatní"
   check sh -c "! find /etc/novuconstruct/secrets -type f -perm /o+r | grep -q ."
   [ "$fail" -eq 0 ] && info "smoke: OK" || die "smoke: selhalo"
+}
+
+smoke_gateway() {  # volá cmd_smoke (sdílí check/DESC/fail)
+  local u path sock=/run/nc-gateway-redis/redis.sock
+  for u in nc-gateway-redis nc-gateway; do DESC="služba $u aktivní"; check systemctl is-active --quiet "$u"; done
+  DESC="gateway /bff/health"; check sh -c "curl -fsS http://127.0.0.1:8300/bff/health | grep -q ok"
+  DESC="gateway naslouchá jen na 127.0.0.1:8300"
+  check sh -c "! ss -Hltn | awk '{print \$4}' | grep -E ':8300\$' | grep -qv '^127\.0\.0\.1:8300\$'"
+  DESC="Redis gateway jen unix socket (proces bez TCP)"
+  check sh -c "! ss -Hltnp | grep -q 'pid=$(systemctl show -p MainPID --value nc-gateway-redis),'"
+  if [ -n "$NC_APP_DOMAIN" ]; then
+    for path in /api/v1/health /docs /openapi.json /metrics /admin; do
+      DESC="edge $path je 404"
+      check sh -c "[ \"\$(curl -sk -o /dev/null -w '%{http_code}' --resolve '$NC_APP_DOMAIN:443:127.0.0.1' 'https://$NC_APP_DOMAIN$path')\" = 404 ]"
+    done
+    DESC="edge CSP bez unsafe-*"
+    check sh -c "curl -skI --resolve '$NC_APP_DOMAIN:443:127.0.0.1' 'https://$NC_APP_DOMAIN/' | grep -i '^content-security-policy:' | grep -vq unsafe"
+  fi
+  export REDISCLI_AUTH
+  REDISCLI_AUTH=$(cat /etc/nc-gateway/secrets/REDIS_GATEWAY_PASSWORD)
+  DESC="Redis gateway: výchozí uživatel bez přístupu"
+  check sh -c "env -u REDISCLI_AUTH redis-cli -s $sock ping 2>&1 | grep -qE 'NOAUTH|NOPERM|WRONGPASS|AUTH'"
+  DESC="Redis gateway: nc-gateway smí jen klíče nc:bff:*"
+  check sh -c "redis-cli --no-auth-warning -s $sock --user nc-gateway set nc:core:smoke 1 2>&1 | grep -q NOPERM"
+  DESC="Redis gateway: nc-gateway nesmí FLUSHALL"
+  check sh -c "redis-cli --no-auth-warning -s $sock --user nc-gateway flushall 2>&1 | grep -q NOPERM"
+  DESC="gateway nečte secrets core"; check sh -c "! runuser -u nc-gateway -- test -r /etc/novuconstruct/secrets/JWT_SECRET"
+  DESC="gateway nečte své secrets mimo LoadCredential"
+  check sh -c "! runuser -u nc-gateway -- test -r /etc/nc-gateway/secrets/NC_BFF_SESSION_KEYS"
+  if id novuconstruct >/dev/null 2>&1; then
+    DESC="core nečte session klíče gateway"
+    check sh -c "! runuser -u novuconstruct -- test -r /etc/nc-gateway/secrets/NC_BFF_SESSION_KEYS"
+  fi
+  DESC="secrets gateway jen pro root"
+  check sh -c "! find /etc/nc-gateway/secrets /etc/nc-gateway-redis -type f -perm /077 | grep -q ."
 }
 
 # ── firewall / SSH / nouzový účet: s potvrzením a automatickým návratem ───────
@@ -757,7 +997,9 @@ cmd_breakglass() {
 cmd_tls() {
   has_edge || die "tls patří na edge"
   [ -n "$NC_DOMAIN" ] && [ -n "$NC_ACME_EMAIL" ] || die "nastav NC_DOMAIN a NC_ACME_EMAIL"
-  run certbot certonly --webroot -w /var/www/letsencrypt -d "$NC_DOMAIN" --non-interactive --agree-tos -m "$NC_ACME_EMAIL" --keep-until-expiring
+  local domains=(-d "$NC_DOMAIN")
+  [ -z "$NC_APP_DOMAIN" ] || domains+=(-d "$NC_APP_DOMAIN")
+  run certbot certonly --webroot -w /var/www/letsencrypt --cert-name "$NC_DOMAIN" "${domains[@]}" --expand --non-interactive --agree-tos -m "$NC_ACME_EMAIL" --keep-until-expiring
   run ln -sfn "/etc/letsencrypt/live/$NC_DOMAIN/fullchain.pem" /etc/novuconstruct/tls/fullchain.pem
   run ln -sfn "/etc/letsencrypt/live/$NC_DOMAIN/privkey.pem" /etc/novuconstruct/tls/privkey.pem
   run nginx -t -q
@@ -766,7 +1008,7 @@ cmd_tls() {
 
 cmd_status() {
   local u
-  for u in "postgresql@$NC_PG_VERSION-main" redis-server nc-worker nc-offer-worker nc-api@desktop nc-api@admin nc-api@gateway nginx nftables wg-quick@wg-nc wg-quick@wg-nc-admin; do
+  for u in "postgresql@$NC_PG_VERSION-main" redis-server nc-worker nc-offer-worker nc-api@desktop nc-api@admin nc-api@gateway nc-gateway-redis nc-gateway nginx nftables wg-quick@wg-nc wg-quick@wg-nc-admin; do
     printf '  %-28s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"
   done
   [ -x "$DEPLOY_DIR/bin/nc-migrate" ] || [ -f "$DEPLOY_DIR/bin/nc-migrate" ] && has_core && sh "$DEPLOY_DIR/bin/nc-migrate" status 2>/dev/null || true
@@ -797,6 +1039,7 @@ case "$CMD" in
   start) cmd_start ;;
   smoke) cmd_smoke ;;
   offer-worker) cmd_offer_worker ;;
+  gateway) cmd_gateway ;;
   firewall) cmd_firewall ;;
   ssh-harden) cmd_ssh_harden ;;
   breakglass) cmd_breakglass ;;

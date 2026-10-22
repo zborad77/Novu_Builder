@@ -14,7 +14,8 @@
                     ▼                                  │
 ┌────────────── Public Edge ─────────────┐             │
 │ nginx: informační web (nc-edge-public) │             │
-│ /api, /bff, /admin → 404 (bez proxy)   │             │
+│ app.<doména>: SPA + /bff/ → nc-gateway │  (NC-007)   │
+│ /api, /docs, /admin → 404 (bez proxy)  │             │
 └────────────────────────────────────────┘             │
                                                        ▼
 ┌──────────────────────────── Private Core ──────────────────────────────────┐
@@ -103,6 +104,27 @@ $P breakglass     # konzolový nouzový účet (EMERGENCY_ACCESS.md): potvrzení
 
 **Desktop (pilot):** oficiální klient WireGuard pro Windows podle `wireguard/desktop-peer.conf.example`. V aplikaci se jako server nastaví `http://10.50.0.1:8210/api/v1`.
 
+## 4a. Web Gateway / BFF (NC-007 etapa 1)
+
+Kontrakt: [NC-007_STAGE1_CONTRACT.md](../../docs/security/NC-007_STAGE1_CONTRACT.md) kap. 8. Provoz, rotace klíčů a diagnostika: [GATEWAY_RUNBOOK.md](GATEWAY_RUNBOOK.md).
+
+| Prvek | Soubor | Poznámka |
+|---|---|---|
+| Proces gateway | `systemd/nc-gateway.service` | uživatel `nc-gateway`, `python -m nc_gateway` z `src/gateway/.venv`, 127.0.0.1:8300, `IPAddressAllow=127.0.0.1 10.50.0.1`, `AF_UNIX AF_INET`, core cesty maskované |
+| Session store | `systemd/nc-gateway-redis.service`, `redis/nc-gateway-redis.conf` | **samostatná** instance Redis, jen unix socket, ACL `nc-gateway` → `~nc:bff:*` |
+| Target | `systemd/nc-edge.target` | edge, ne core; bez `Wants=` – jednotky se přidají až explicitním `nc-provision gateway` |
+| Konfigurace | `env/gateway.env.example` → `/etc/nc-gateway/gateway.env` | bez secrets |
+| Secrets | `bin/nc-gen-secrets --gateway` → `/etc/nc-gateway/secrets` (0700/0600 root) | jen `LoadCredential`; gateway nevidí secrets core, core nevidí session klíče gateway |
+| nginx edge | `nginx/nc-edge-webapp.conf`, `nginx/snippets/nc-proxy-bff.conf` | `/` SPA s CSP bez `unsafe-*`, `/bff/` → gateway, `/api/`, `/docs`, `/openapi.json`, `/metrics`, `/admin` → 404 |
+| Zóna gateway na core | `nginx/nc-core-gateway.conf` (A: 10.50.0.1:8200) / `nginx/nc-core-gateway-single.conf` (B: 127.0.0.1:8200) | jen s `NC_ENABLE_GATEWAY_ZONE=1` |
+
+```sh
+# provision.conf: NC_ENABLE_GATEWAY=1, NC_APP_DOMAIN=app.<doména> (+ na core NC_ENABLE_GATEWAY_ZONE=1)
+$P install                          # připraví vše, NIC nespustí
+NC_CONFIRM_GATEWAY=1 $P gateway     # kontroly → enable nc-gateway-redis + nc-gateway (nc-edge.target)
+$P smoke
+```
+
 ## 5. Testy
 
 | Co | Jak |
@@ -110,5 +132,5 @@ $P breakglass     # konzolový nouzový účet (EMERGENCY_ACCESS.md): potvrzení
 | Zařazení všech rout, zóna × route, nezařazená route, CORS preflight, hlavičky nemění zónu | `pytest tests/test_route_exposure.py` |
 | JWT `iss`/`aud`/`iat`/`exp`, podpis, `alg=none`, token z jiné zóny, superadmin jen v admin zóně | `pytest tests/test_f3_jwt_zones.py` |
 | Proxy přes unix socket, podvržené `X-Forwarded-For` | `pytest tests/test_sa05_client_ip.py` |
-| `nginx -t`, `nft -c`, `systemd-analyze verify`, žádné klíče v šablonách | `tests/validate-configs.sh` (CI job `deploy-linux-config`) |
+| `nginx -t`, `nft -c`, `systemd-analyze verify` + `security`, shellcheck, žádné klíče v šablonách; Web Gateway: edge vhost proti stub gateway (404, CSP, `X-Forwarded-For`, `X-NC-*`, limity těla), izolace jednotky od secrets core, práva `nc-gen-secrets`, ACL Redisu gateway | `tests/validate-configs.sh` (CI job `deploy-linux-config`) |
 | Síťová izolace N1–N12 na stagingu | `tests/network_isolation.sh` |
