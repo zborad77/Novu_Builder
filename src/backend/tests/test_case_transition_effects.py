@@ -15,6 +15,8 @@ from app.modules.cases.repository import ProjectRepository
 
 _ORG_ID = "org_e2e_a"
 _USER_ID = "usr_e2e_a1"
+# N11: Project odkazuje (FK) na organizaci a uživatele ze seedu fixture
+# test_tenants – každý test si ji proto vyžaduje explicitně a nespoléhá na pořadí.
 
 
 async def _create_project(db_session, *, project_id: str, status: str) -> Project:
@@ -35,7 +37,7 @@ def _service(db_session, *, work_queue=object()) -> CaseActionService:
 
 
 @pytest.mark.asyncio
-async def test_start_analysis_creates_job_and_enqueues_transport(db_session):
+async def test_start_analysis_creates_job_and_enqueues_transport(db_session, test_tenants):
     project = await _create_project(db_session, project_id="prj_transition_analysis", status="intake")
     service = _service(db_session)
 
@@ -83,7 +85,7 @@ async def test_start_analysis_creates_job_and_enqueues_transport(db_session):
 
 
 @pytest.mark.asyncio
-async def test_approve_proposal_locks_pricing_snapshots(db_session):
+async def test_approve_proposal_locks_pricing_snapshots(db_session, test_tenants):
     project = await _create_project(db_session, project_id="prj_transition_approve", status="proposal_ready")
     db_session.add_all(
         [
@@ -124,7 +126,7 @@ async def test_approve_proposal_locks_pricing_snapshots(db_session):
 
 
 @pytest.mark.asyncio
-async def test_send_quote_creates_supported_export_and_enqueues_heavy_job(db_session):
+async def test_send_quote_creates_supported_export_and_enqueues_heavy_job(db_session, test_tenants):
     project = await _create_project(db_session, project_id="prj_transition_send", status="quote_ready")
     db_session.add(
         ProjectFinalProposal(
@@ -170,7 +172,7 @@ async def test_send_quote_creates_supported_export_and_enqueues_heavy_job(db_ses
 
 
 @pytest.mark.asyncio
-async def test_complete_creates_case_zip_export_and_enqueues_heavy_job(db_session):
+async def test_complete_creates_case_zip_export_and_enqueues_heavy_job(db_session, test_tenants):
     project = await _create_project(db_session, project_id="prj_transition_complete", status="sent")
 
     with patch(

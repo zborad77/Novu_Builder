@@ -110,7 +110,7 @@ na skutečné místo volání a ověřeno (B4a).
 | R6 | ORM relace mezi moduly zůstávají (stringové, bez runtime importu); `public.py` některých modulů exponuje repozitáře a ORM modely. | Postupně zužovat veřejná rozhraní (další iterace). |
 | R7 | N1: duplicitní zápis `proposal.ready` (repozitář vs. registr efektů) a mrtvá cesta `_transition_to_proposal_ready`. | Sjednotit/odstranit samostatně (zamčeno testy). |
 | R8 | N9: testy (`create_all`) běží nad jiným schématem než produkce (migrace). | Samostatná oprava modelů/migrací. |
-| R9 | N11: `test_case_transition_effects` závisí na pořadí testů. | Přidat fixture `test_tenants`. |
+| R9 | N11: `test_case_transition_effects` závisí na pořadí testů. | Přidat fixture `test_tenants`. – 2026-10-24: oprava připravena (necommitnuto), runtime **NEOVĚŘENO**; viz `REFACTOR_FINDINGS.md`, oddíl „N11 – záznam realizace“. Run #20: kandidát staticky odpovídá FK příčině, runtime matice a build stále BLOCKED. Run #20 fix round 1: spouštění znovu zamítnuto, F1/F2 otevřené. Run #20 fix round 2: venv Python, `git worktree add`, `build.bat` i `git diff --check` zamítnuty, F1/F2 otevřené. Run #22: FK příčina staticky potvrzena (SQLite FK nevynucuje), pytest i `build.bat` znovu zamítnuty, runtime NEOVĚŘENO. Run #23: Python, PostgreSQL i `build.bat` zamítnuty, runtime NEOVĚŘENO. Run #23 fix round 1: venv Python i `build.bat` znovu zamítnuty, F1/F2 otevřené. Run #23 fix round 2: venv Python i `build.bat` zamítnuty potřetí, F1/F2 otevřené. |
 | R10 | N7 (desktop): Qt má vlastní výpočty cen a slovník stavů. | Generovat slovník z `src/contracts/workflow`. |
 | R11 | N8: docstring purge routy (`{image_id}`) je zároveň `description` v OpenAPI. | Opravit jako schválenou změnu kontraktu. |
 
