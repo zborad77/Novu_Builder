@@ -60,6 +60,13 @@ mimo CI a je opraven.
 
 ## 5. Doporučený postup integrace (ke schválení)
 
+> **Nahrazeno (2026-10-21, NC-001):** body 4–6 níže jsou historické. Platný postup je
+> [INTEGRATION_REPORT.md §1](INTEGRATION_REPORT.md): **řetězené PR bez rebase** (PR 1 F0 → `master`,
+> PR 2 refaktor → `fix/f0-…`, PR 3 N9 → `refactor/…`), merge merge-commitem se zachováním hashů;
+> opravy N1, N2/N2b/N2c, N4, N10, N12 jsou součástí PR 2 (ne samostatné PR), N9 je PR 3;
+> N5 je neplatný nález (viz [REFACTOR_FINDINGS.md](REFACTOR_FINDINGS.md)).
+> Body 1–3 a 7 (CI, review, staging, rollback tag) platí dál.
+
 1. **Push `fix/f0-rbac-tenant-isolation` na origin a PR do `master`** (ne merge). Nechat proběhnout plné GitHub CI včetně `deployment-config`.
 2. Review po commitech; merge **merge-commitem** (ne squash) – dokumentace F0–F6 odkazuje na jednotlivé hashe.
 3. Před merge zkouška na stagingu: záloha DB → `nc-provision migrate` (0056→0059) na kopii produkčních dat → `deploy/linux/tests/network_isolation.sh`.
