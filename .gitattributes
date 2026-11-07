@@ -13,3 +13,6 @@ src/backend/tools/refactor/baseline/** text eol=lf
 .novu-repo-root text eol=lf
 # Vygenerované TS kontrakty frontendu (gen-contracts.mjs píše LF).
 src/frontend/src/shared/api/generated/** text eol=lf
+# Windows dávkové skripty potřebují CRLF – cmd.exe s LF chybně skáče na návěští (call :x / goto).
+*.bat text eol=crlf
+*.cmd text eol=crlf

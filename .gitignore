@@ -27,6 +27,10 @@ __pycache__/
 
 src/backend/.venv/
 
+# Coverage data (pytest --cov) – lokální artefakt, necommitovat
+.coverage
+.coverage.*
+
 # =========================================
 # DATABASES (LOCAL / TEST ONLY)
 # =========================================
@@ -103,6 +107,7 @@ src/desktop/.qtcreator/
 # Personal editor / AI-tool metadata and generated code indexes (not shared)
 .workspace/
 .novuai/
+.novu/
 *.code-workspace
 
 # =========================================
