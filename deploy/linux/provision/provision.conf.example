@@ -13,10 +13,20 @@ NC_PG_VERSION=16
 NC_S3_BUCKET=novuconstruct
 NC_REDIS_MAXMEMORY=512mb
 
-# Objektové úložiště: MinIO je archivovaný (dl.min.io 410 Gone); náhrada čeká na
-# rozhodnutí S-1 (docs/security/OBJECT_STORAGE_OPTIONS.md). Instalátor ho neinstaluje.
-# 1 = úložiště provozuje operátor na 127.0.0.1 a core.env.local na něj míří.
-NC_OBJECT_STORAGE_READY=0
+# Objektové úložiště (S-1, docs/security/OBJECT_STORAGE_OPTIONS.md): úložiště běží na
+# tomto serveru. garage = install nainstaluje Garage (nc-garage.service, jen 127.0.0.1),
+# založí bucket NC_S3_BUCKET a klíč aplikace; start spustí API až po zdravém úložišti.
+# external = úložiště provozuje operátor (S3_* v secrets a core.env.local míří na něj).
+NC_OBJECT_STORAGE=garage
+# Release Garage a SHA-256 jeho binárky (x86_64-unknown-linux-musl nebo aarch64-…)
+# z oficiální stránky release. Bez platného SHA-256 install binárku nestáhne.
+NC_GARAGE_VERSION=v2.3.0
+NC_GARAGE_SHA256=
+# Prázdné = https://garagehq.deuxfleurs.fr/_releases/<verze>/<arch>/garage;
+# offline: absolutní cesta k ověřené binárce (SHA-256 se kontroluje i tak).
+NC_GARAGE_URL=
+# Kapacita uzlu v layoutu (např. 200G); prázdné = 90 % velikosti NC_DATA_ROOT.
+NC_GARAGE_CAPACITY=
 
 # Edge / single: veřejná doména informačního webu a e-mail pro Let's Encrypt.
 NC_DOMAIN=

@@ -1,0 +1,74 @@
+#
+# Copyright (c) 2026 Novusion
+# Website: https://novusion.com
+# Contact: info@novusion.com
+#
+# Author: Pavel Dostál
+# Project: NovuConstruct
+# Module: deploy/linux/systemd
+# Description: Garage S3 object store for the Private Core (loopback only)
+# Created: 2026-11-08
+#
+# Object store of the Private Core (S-1, docs/security/OBJECT_STORAGE_OPTIONS.md).
+# Installed and started by `nc-provision install`; nc-provision replaces
+# /srv/novuconstruct with NC_DATA_ROOT. S3 API 127.0.0.1:3900, RPC 127.0.0.1:3901,
+# admin 127.0.0.1:3903 – no port is reachable from outside the host.
+[Unit]
+Description=NovuConstruct object storage (Garage S3, loopback only)
+Documentation=file:///opt/novuconstruct/docs/security/OBJECT_STORAGE_OPTIONS.md
+After=network-online.target local-fs.target
+Wants=network-online.target
+RequiresMountsFor=/srv/novuconstruct
+
+[Service]
+Type=exec
+User=nc-garage
+Group=nc-garage
+UMask=0077
+# Secrets only via LoadCredential (0600 root:root files, read by PID 1); Garage
+# reads them from the credentials directory, never from the unit or the config.
+LoadCredential=GARAGE_RPC_SECRET:/etc/nc-garage/secrets/GARAGE_RPC_SECRET
+LoadCredential=GARAGE_ADMIN_TOKEN:/etc/nc-garage/secrets/GARAGE_ADMIN_TOKEN
+Environment=GARAGE_RPC_SECRET_FILE=%d/GARAGE_RPC_SECRET
+Environment=GARAGE_ADMIN_TOKEN_FILE=%d/GARAGE_ADMIN_TOKEN
+Environment=GARAGE_METRICS_TOKEN_FILE=%d/GARAGE_ADMIN_TOKEN
+Environment=RUST_LOG=garage=info
+ExecStart=/usr/local/bin/garage -c /etc/nc-garage/garage.toml server
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+TimeoutStopSec=30
+
+# ── Sandbox (check: systemd-analyze security nc-garage) ──────────────────────
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/novuconstruct/garage
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=localhost
+InaccessiblePaths=-/etc/novuconstruct -/etc/nc-gateway -/run/novuconstruct -/var/lib/postgresql -/var/run/postgresql
+
+[Install]
+WantedBy=multi-user.target

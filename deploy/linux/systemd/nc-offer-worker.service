@@ -5,7 +5,7 @@
 # Enabled only by `nc-provision offer-worker` (backlog review + explicit confirmation).
 [Unit]
 Description=NovuConstruct offer worker
-After=network-online.target postgresql.service redis-server.service minio.service
+After=network-online.target postgresql.service redis-server.service nc-garage.service
 Wants=network-online.target
 
 [Service]

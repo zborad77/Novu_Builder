@@ -7,8 +7,8 @@
 #   preflight    kontroly před instalací, nic nemění; exit 1 při blokující chybě
 #   plan         preflight + co by `install` změnil (install --dry-run)
 #   install      balíčky, uživatelé, adresáře, secrets, PostgreSQL, Redis,
-#                venv aplikace, core.env, systemd jednotky, nginx, WireGuard klíče
-#                (objektové úložiště: čeká na rozhodnutí S-1, viz níže)
+#                venv aplikace, core.env, systemd jednotky, nginx, WireGuard klíče,
+#                objektové úložiště Garage (nc-garage, bucket a klíč aplikace; viz níže)
 #   migrate      záloha + `alembic upgrade head` jako nc_owner + práva (bin/nc-migrate)
 #   start        zapne a spustí služby (po migrate)
 #   smoke        ověří běžící stack (služby, naslouchající porty, health přes sockety)
@@ -33,10 +33,13 @@
 #     se samy vrátí do původního stavu, když změnu do 120 s nepotvrdíš.
 #   * Data (PostgreSQL, objektové úložiště, stav aplikace) leží mimo /opt/novuconstruct.
 #
-# Objektové úložiště: open-source MinIO je archivovaný (dl.min.io: 410 Gone).
-# Instalace náhrady je pozastavená do rozhodnutí S-1
-# (docs/security/OBJECT_STORAGE_OPTIONS.md); instalátor úložiště neinstaluje a
-# `start` bez něj API nespustí.
+# Objektové úložiště (S-1, docs/security/OBJECT_STORAGE_OPTIONS.md): na serveru běží
+# Garage (NC_OBJECT_STORAGE=garage, výchozí). `install` stáhne binárku z oficiálního
+# release a ověří ji proti NC_GARAGE_SHA256, nainstaluje nc-garage.service (jen
+# 127.0.0.1), secrets (/etc/nc-garage/secrets, LoadCredential), založí layout
+# jednoho uzlu, bucket NC_S3_BUCKET a klíč aplikace s právy jen na ten bucket.
+# `start` spustí API až po zdravém úložišti. NC_OBJECT_STORAGE=external = úložiště
+# provozuje operátor (S3_* v secrets a core.env.local míří na něj).
 set -Eeuo pipefail
 umask 022
 
@@ -50,6 +53,13 @@ MARKER="managed-by: nc-provision"
 STATE=/var/lib/nc-provision
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 CONFIG=/etc/novuconstruct/provision.conf
+# Garage (S-1): konfigurace a secrets mimo /etc/novuconstruct (core je nečte).
+GARAGE_BIN=/usr/local/bin/garage
+GARAGE_ETC=/etc/nc-garage
+GARAGE_CONF=$GARAGE_ETC/garage.toml
+GARAGE_SECRETS=$GARAGE_ETC/secrets
+GARAGE_KEY_NAME=nc-app
+GARAGE_HEALTH=http://127.0.0.1:3903/health
 DRY_RUN=0
 CMD=""
 
@@ -59,9 +69,14 @@ NC_APP_DIR=/opt/novuconstruct
 NC_DATA_ROOT=/srv/novuconstruct  # data objektového úložiště; samostatné (LUKS, F6.7) volume
 NC_PG_VERSION=16
 NC_S3_BUCKET=novuconstruct
-# Objektové úložiště (S-1): 1 = operátor ho provozuje sám na 127.0.0.1 a
-# S3_ENDPOINT_URL/S3_BUCKET + S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY míří na něj.
-NC_OBJECT_STORAGE_READY=0
+# Objektové úložiště (S-1): garage = instalátor ho nainstaluje a spustí na tomto
+# serveru; external = provozuje ho operátor (S3_* v secrets a core.env.local).
+NC_OBJECT_STORAGE=garage
+NC_GARAGE_VERSION=v2.3.0
+NC_GARAGE_SHA256=""              # SHA-256 binárky z oficiálního release (povinné pro instalaci)
+NC_GARAGE_URL=""                 # prázdné = oficiální release; jinak https://… nebo absolutní cesta
+NC_GARAGE_CAPACITY=""            # kapacita uzlu v layoutu, prázdné = 90 % velikosti NC_DATA_ROOT
+NC_OBJECT_STORAGE_READY=0        # zastaralé: 1 bez NC_OBJECT_STORAGE = external
 NC_DOMAIN=""
 NC_ACME_EMAIL=""
 NC_ENABLE_GATEWAY_ZONE=0         # core: nc-api@gateway + nginx zóna gateway (F4)
@@ -91,18 +106,34 @@ run() {  # run CMD...  (v --dry-run jen vypíše)
 usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 
 load_config() {
-  [ -f "$CONFIG" ] || { warn "konfigurace $CONFIG neexistuje, používám výchozí hodnoty (vzor: $SELF_DIR/provision.conf.example)"; return 0; }
+  [ -f "$CONFIG" ] || { warn "konfigurace $CONFIG neexistuje, používám výchozí hodnoty (vzor: $SELF_DIR/provision.conf.example)"; validate_storage_config; return 0; }
   # Jen řádky KEY=VALUE s klíčem NC_*: soubor se nevykonává jako skript.
-  local line key value
+  local line key value storage_set=0
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in ''|\#*) continue ;; esac
     key=${line%%=*}; value=${line#*=}
     [[ "$key" =~ ^NC_[A-Z0-9_]+$ ]] || die "$CONFIG: neplatný řádek: $line"
     value=${value%\"}; value=${value#\"}; value=${value%\'}; value=${value#\'}
     printf -v "$key" '%s' "$value"
+    [ "$key" != NC_OBJECT_STORAGE ] || storage_set=1
   done < "$CONFIG"
   case "$NC_VARIANT" in single|core|edge) ;; *) die "NC_VARIANT musí být single, core nebo edge" ;; esac
+  if [ "$NC_OBJECT_STORAGE_READY" = 1 ] && [ "$storage_set" -eq 0 ]; then
+    NC_OBJECT_STORAGE=external
+    warn "NC_OBJECT_STORAGE_READY je zastaralé: beru NC_OBJECT_STORAGE=external (nastav ho v $CONFIG výslovně)"
+  fi
+  validate_storage_config
 }
+
+validate_storage_config() {
+  case "$NC_OBJECT_STORAGE" in garage|external) ;; *) die "NC_OBJECT_STORAGE musí být garage nebo external" ;; esac
+  # NC_DATA_ROOT se dosazuje do garage.toml a nc-garage.service.
+  [[ "$NC_DATA_ROOT" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "NC_DATA_ROOT musí být absolutní cesta ze znaků A-Za-z0-9._/-"
+  [[ "$NC_S3_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || die "NC_S3_BUCKET není platný název bucketu"
+  NC_GARAGE_SHA256=${NC_GARAGE_SHA256,,}
+}
+
+has_garage() { has_core && [ "$NC_OBJECT_STORAGE" = garage ]; }
 
 has_core() { [ "$NC_VARIANT" != edge ]; }
 has_edge() { [ "$NC_VARIANT" != core ]; }
@@ -213,8 +244,16 @@ preflight() {
     if mountpoint -q "$NC_DATA_ROOT" 2>/dev/null; then ok "NC_DATA_ROOT $NC_DATA_ROOT je samostatný svazek"
     else warn "NC_DATA_ROOT $NC_DATA_ROOT není samostatný svazek (F6.7: šifrovaný Hetzner Volume)"; fi
 
-    if [ "$NC_OBJECT_STORAGE_READY" = 1 ]; then ok "objektové úložiště zajišťuje operátor"
-    else warn "objektové úložiště: rozhodnutí S-1 čeká (docs/security/OBJECT_STORAGE_OPTIONS.md); API bez něj nenaběhne"; fi
+    if [ "$NC_OBJECT_STORAGE" = garage ]; then
+      if [ -x "$GARAGE_BIN" ]; then ok "Garage $GARAGE_BIN"
+      elif [[ "$NC_GARAGE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then ok "Garage $NC_GARAGE_VERSION se stáhne a ověří (SHA-256)"
+      else block "NC_GARAGE_SHA256 chybí: doplň do provision.conf SHA-256 binárky Garage $NC_GARAGE_VERSION z oficiálního release"; fi
+      local gbusy
+      gbusy=$(ss -Hltnp 2>/dev/null | awk '$4 ~ /:(3900|3901|3903)$/' | grep -v '"garage"' || true)
+      [ -z "$gbusy" ] && ok "porty 3900/3901/3903 volné nebo patří Garage" || block "porty Garage (3900/3901/3903) drží jiný proces: $gbusy"
+    else
+      ok "objektové úložiště zajišťuje operátor (NC_OBJECT_STORAGE=external)"
+    fi
     local py
     py=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo none)
     case "$py" in 3.1[2-9]) ok "python $py" ;; 3.11) warn "python 3.11 (testováno na 3.12/3.13)" ;; *) block "python3 >= 3.11 chybí ($py)" ;; esac
@@ -486,6 +525,183 @@ EOF
   enable_unit redis-server
 }
 
+# ── objektové úložiště (S-1: Garage na tomto serveru) ──────────────────────────
+garage_cli() {  # garage CLI jako root; RPC secret ze souboru 0600 (nikdy v argv)
+  GARAGE_RPC_SECRET_FILE=$GARAGE_SECRETS/GARAGE_RPC_SECRET "$GARAGE_BIN" -c "$GARAGE_CONF" "$@"
+}
+garage_rpc_ready() { garage_cli status >/dev/null 2>&1; }
+garage_healthy() { curl -fsS -o /dev/null --max-time 5 "$GARAGE_HEALTH"; }
+garage_field() {  # garage_field POPISEK < výstup CLI – hodnota řádku "Popisek: hodnota"
+  awk -v f="$1" 'index($0, f ":") { sub(/^[^:]*:[ \t]*/, ""); sub(/[ \t]+$/, ""); print; exit }'
+}
+
+put_core_secret() {  # put_core_secret NAME VALUE – atomicky, 0640 root:novuconstruct; hodnota není v argv
+  local tmp
+  tmp=$(mktemp /etc/novuconstruct/secrets/.tmp.XXXXXX)
+  printf '%s' "$2" > "$tmp"
+  chown root:novuconstruct "$tmp"; chmod 0640 "$tmp"
+  mv -f "$tmp" "/etc/novuconstruct/secrets/$1"
+  CHANGES=$((CHANGES + 1))
+  info "zapsáno: /etc/novuconstruct/secrets/$1"
+}
+
+install_garage_binary() {  # oficiální release, ověřený proti NC_GARAGE_SHA256
+  local want=$NC_GARAGE_SHA256 have="" url triple tmp
+  [ -x "$GARAGE_BIN" ] && have=$(sha256sum "$GARAGE_BIN" | awk '{print $1}')
+  if [ -n "$have" ] && { [ -z "$want" ] || [ "$have" = "$want" ]; }; then
+    [ -n "$want" ] || warn "$GARAGE_BIN je nainstalovaný, ale NC_GARAGE_SHA256 chybí: verzi nelze ověřit"
+    echo "   $GARAGE_BIN ověřený ($have)"
+    return 0
+  fi
+  [[ "$want" =~ ^[0-9a-f]{64}$ ]] || die "NC_GARAGE_SHA256 chybí nebo není SHA-256 (64 hex): doplň ho z oficiálního release Garage $NC_GARAGE_VERSION"
+  case "$(uname -m)" in
+    x86_64) triple=x86_64-unknown-linux-musl ;;
+    aarch64) triple=aarch64-unknown-linux-musl ;;
+    *) die "Garage: nepodporovaná architektura $(uname -m)" ;;
+  esac
+  url=${NC_GARAGE_URL:-https://garagehq.deuxfleurs.fr/_releases/$NC_GARAGE_VERSION/$triple/garage}
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '   would: stáhnout %s, ověřit SHA-256 a nainstalovat %s\n' "$url" "$GARAGE_BIN"; CHANGES=$((CHANGES + 1)); return 0
+  fi
+  tmp=$(mktemp "$WORK/garage.XXXXXX")
+  case "$url" in
+    https://*) curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$tmp" "$url" || die "Garage: stažení $url selhalo" ;;
+    /*) cp "$url" "$tmp" ;;
+    *) die "NC_GARAGE_URL musí být https://… nebo absolutní cesta" ;;
+  esac
+  [ "$(sha256sum "$tmp" | awk '{print $1}')" = "$want" ] \
+    || die "Garage: SHA-256 souboru z $url nesouhlasí s NC_GARAGE_SHA256; nic se neinstaluje"
+  [ -e "$GARAGE_BIN" ] && run cp -p "$GARAGE_BIN" "$GARAGE_BIN.nc-bak.$TS"
+  run install -m 0755 -o root -g root "$tmp" "$GARAGE_BIN"
+  GARAGE_RESTART=1
+  info "nainstalováno: $GARAGE_BIN (SHA-256 $want)"
+}
+
+install_object_storage() {
+  has_core || return 0
+  if [ "$NC_OBJECT_STORAGE" != garage ]; then
+    info "objektové úložiště: external (provozuje operátor; S3_* v secrets a core.env.local)"
+    return 0
+  fi
+  info "objektové úložiště: Garage (nc-garage, jen 127.0.0.1:3900/3901/3903, data v $NC_DATA_ROOT/garage)"
+  GARAGE_RESTART=0
+  getent group nc-garage >/dev/null || run groupadd --system nc-garage
+  id nc-garage >/dev/null 2>&1 || run useradd --system -g nc-garage -d /nonexistent -s /usr/sbin/nologin nc-garage
+  if id nc-garage >/dev/null 2>&1 && id -nG nc-garage | grep -qwE 'novuconstruct|nc-api-sock|nc-gateway'; then
+    die "nc-garage je ve skupině jiné služby – oprav ručně, úložiště nesmí číst cizí secrets"
+  fi
+  ensure_dir "$NC_DATA_ROOT/garage" 0750 nc-garage:nc-garage
+  ensure_dir "$NC_DATA_ROOT/garage/meta" 0700 nc-garage:nc-garage
+  ensure_dir "$NC_DATA_ROOT/garage/data" 0700 nc-garage:nc-garage
+  if [ ! -s "$GARAGE_SECRETS/GARAGE_RPC_SECRET" ] || [ ! -s "$GARAGE_SECRETS/GARAGE_ADMIN_TOKEN" ]; then
+    run sh "$DEPLOY_DIR/bin/nc-gen-secrets" --garage
+  else
+    echo "   secrets Garage existují"
+  fi
+  install_garage_binary
+  ensure_dir "$GARAGE_ETC" 0755 root:root
+  local before after
+  before=$(digest "$GARAGE_CONF" /etc/systemd/system/nc-garage.service)
+  write_managed "$GARAGE_CONF" 0644 root:root < <(sed "s#/srv/novuconstruct#$NC_DATA_ROOT#g" "$DEPLOY_DIR/garage/garage.toml")
+  write_managed /etc/systemd/system/nc-garage.service 0644 root:root < <(sed "s#/srv/novuconstruct#$NC_DATA_ROOT#g" "$DEPLOY_DIR/systemd/nc-garage.service")
+  after=$(digest "$GARAGE_CONF" /etc/systemd/system/nc-garage.service)
+  if [ "$before" != "$after" ]; then run systemctl daemon-reload; GARAGE_RESTART=1; fi
+  enable_unit nc-garage.service
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "   would: spustit nc-garage, layout jednoho uzlu, bucket $NC_S3_BUCKET, klíč $GARAGE_KEY_NAME jen na bucket"
+    return 0
+  fi
+  if ! systemctl is-active --quiet nc-garage; then run systemctl start nc-garage
+  elif [ "$GARAGE_RESTART" = 1 ]; then run systemctl restart nc-garage; fi
+  wait_for "Garage (RPC 127.0.0.1:3901)" garage_rpc_ready
+  garage_layout
+  wait_for "Garage ($GARAGE_HEALTH)" garage_healthy
+  garage_bucket_and_key
+}
+
+garage_layout() {  # jeden uzel s rolí; existující layout se nemění
+  local node cap ver
+  ver=$(garage_cli layout show 2>/dev/null | awk -F': *' 'tolower($0) ~ /current cluster layout version/ {print $2; exit}')
+  [[ "$ver" =~ ^[0-9]+$ ]] || ver=0
+  if [ "$ver" -gt 0 ] && ! garage_cli status 2>/dev/null | grep -q 'NO ROLE ASSIGNED'; then
+    echo "   layout: verze $ver, uzel má roli"; return 0
+  fi
+  node=$(garage_cli node id -q 2>/dev/null | cut -d@ -f1)
+  [[ "$node" =~ ^[0-9a-f]{16,64}$ ]] || die "Garage: ID uzlu nejde zjistit (garage node id)"
+  cap=$NC_GARAGE_CAPACITY
+  [ -n "$cap" ] || cap="$(df -P -BG "$NC_DATA_ROOT" | awk 'NR==2 {v = int($2 * 0.9); if (v < 1) v = 1; print v}')G"
+  [[ "$cap" =~ ^[0-9]+[KMGT]?$ ]] || die "NC_GARAGE_CAPACITY má neplatný tvar ($cap), např. 200G"
+  run garage_cli layout assign -z nc1 -c "$cap" "$node"
+  run garage_cli layout apply --version $((ver + 1))
+}
+
+garage_bucket_and_key() {  # bucket + klíč nc-app s read/write jen na něj; existující klíč se nemění
+  local cur id key_secret out
+  if garage_cli bucket info "$NC_S3_BUCKET" >/dev/null 2>&1; then echo "   bucket $NC_S3_BUCKET existuje"
+  else run garage_cli bucket create "$NC_S3_BUCKET"; fi
+  cur=$(secret S3_ACCESS_KEY_ID 2>/dev/null || true)
+  if out=$(garage_cli key info "$GARAGE_KEY_NAME" 2>/dev/null); then
+    id=$(printf '%s\n' "$out" | garage_field "Key ID")
+    [ "$id" = "$cur" ] || die "klíč Garage $GARAGE_KEY_NAME ($id) neodpovídá secrets/S3_ACCESS_KEY_ID; nic neměním – srovnej ručně"
+    echo "   klíč $GARAGE_KEY_NAME existuje ($id)"
+  else
+    # nc-gen-secrets zapisuje jen zástupný klíč "nc-app-…"; klíč "GK…" bez protějšku
+    # v Garage znamená ztracená metadata – ten se nepřepisuje (obnova ze snapshotu).
+    if [[ "$cur" =~ ^GK[0-9a-f]{24}$ ]]; then
+      die "secrets/S3_ACCESS_KEY_ID ($cur) je klíč Garage, který v Garage chybí; nic neměním – obnov metadata (F9.2) nebo rozhodni ručně"
+    fi
+    # Klíč vygeneruje Garage; hodnoty jdou z výstupu rovnou do secrets, nikdy do argv.
+    out=$(garage_cli key create "$GARAGE_KEY_NAME")
+    id=$(printf '%s\n' "$out" | garage_field "Key ID")
+    key_secret=$(printf '%s\n' "$out" | garage_field "Secret key")
+    if ! [[ "$id" =~ ^GK[0-9a-f]{24}$ ]] || ! [[ "$key_secret" =~ ^[0-9a-f]{64}$ ]]; then
+      die "Garage: výstup 'key create' nejde přečíst; klíč $GARAGE_KEY_NAME v Garage vznikl, secrets se nezměnily"
+    fi
+    put_core_secret S3_ACCESS_KEY_ID "$id"
+    put_core_secret S3_SECRET_ACCESS_KEY "$key_secret"
+    if systemctl is-active --quiet nc-api@desktop 2>/dev/null; then
+      warn "nový klíč S3: restartuj API a worker (systemctl restart nc-core.target)"
+    fi
+  fi
+  # Idempotentní: read + write, bez owner (aplikace nemění nastavení bucketu).
+  garage_cli bucket allow --read --write --key "$id" "$NC_S3_BUCKET" >/dev/null
+}
+
+start_object_storage() {  # před API: úložiště běží a je zdravé
+  if [ "$NC_OBJECT_STORAGE" != garage ]; then info "objektové úložiště: external (operátor)"; return 0; fi
+  { [ -x "$GARAGE_BIN" ] && [ -f /etc/systemd/system/nc-garage.service ]; } || die "Garage není nainstalovaný: nejdřív '$0 install'"
+  [[ "$(secret S3_ACCESS_KEY_ID 2>/dev/null || true)" =~ ^GK[0-9a-f]{24}$ ]] \
+    || die "secrets/S3_ACCESS_KEY_ID není klíč Garage (bucket a klíč zakládá '$0 install')"
+  run systemctl enable --now --quiet nc-garage.service
+  [ "$DRY_RUN" -eq 1 ] || wait_for "Garage ($GARAGE_HEALTH)" garage_healthy
+}
+
+s3_roundtrip() {  # put/head/get/list/delete klientem backendu (stejná konfigurace jako API)
+  local py="$NC_APP_DIR/src/backend/.venv/bin/python"
+  [ -x "$py" ] || return 1
+  (
+    cd "$NC_APP_DIR/src/backend" || exit 1
+    S3_ACCESS_KEY_ID=$(secret S3_ACCESS_KEY_ID) S3_SECRET_ACCESS_KEY=$(secret S3_SECRET_ACCESS_KEY) \
+      "$py" -B - /etc/novuconstruct/core.env <<'PY'
+import os, sys, uuid
+for line in open(sys.argv[1], encoding="utf-8"):
+    line = line.strip()
+    if line.startswith("S3_") and "=" in line:
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k, v)
+from app.platform.storage.s3_photo_storage import _get_s3_client
+client, bucket = _get_s3_client(), os.environ["S3_BUCKET"]
+key = f"nc-smoke/{uuid.uuid4().hex}"
+client.head_bucket(Bucket=bucket)
+client.put_object(Bucket=bucket, Key=key, Body=b"nc-smoke")
+assert client.head_object(Bucket=bucket, Key=key)["ContentLength"] == 8
+assert client.get_object(Bucket=bucket, Key=key)["Body"].read() == b"nc-smoke"
+assert any(o["Key"] == key for o in client.list_objects_v2(Bucket=bucket, Prefix="nc-smoke/").get("Contents", []))
+client.delete_object(Bucket=bucket, Key=key)
+PY
+  )
+}
+
 install_gateway_redis() {
   has_gateway || return 0
   info "Redis Web Gateway (samostatná instance nc-gateway-redis, jen unix socket, ACL ~nc:bff:*)"
@@ -728,6 +944,7 @@ cmd_install() {
   install_gateway_secrets
   install_postgres
   install_redis
+  install_object_storage
   install_gateway_redis
   install_app
   install_gateway_app
@@ -736,7 +953,7 @@ cmd_install() {
   install_wireguard
   echo
   if [ "$DRY_RUN" -eq 1 ]; then info "plan: $CHANGES změn, $WARNINGS varování"; return 0; fi
-  info "install hotový ($WARNINGS varování). Dál: objektové úložiště (S-1), '$0 migrate', '$0 start', '$0 smoke';"
+  info "install hotový ($WARNINGS varování). Dál: '$0 migrate', '$0 start', '$0 smoke';"
   info "firewall a SSH: '$0 firewall', '$0 ssh-harden' (s potvrzením)."
   if has_gateway; then info "Web Gateway: nainstalována, NEspuštěna. Zapnutí: NC_CONFIRM_GATEWAY=1 '$0 gateway' (GATEWAY_RUNBOOK.md)."; fi
   return 0
@@ -758,7 +975,7 @@ cmd_migrate() {
 
 cmd_start() {
   if has_core; then
-    [ "$NC_OBJECT_STORAGE_READY" = 1 ] || die "objektové úložiště není připravené (rozhodnutí S-1, docs/security/OBJECT_STORAGE_OPTIONS.md); API by nenaběhlo"
+    start_object_storage
     run systemctl enable --now nc-egress-refresh.timer
     if [ "$DRY_RUN" -eq 0 ] && ! sh "$DEPLOY_DIR/bin/nc-migrate" status | grep -q "up to date"; then
       die "databáze není na aktuální revizi: nejdřív '$0 migrate'"
@@ -838,6 +1055,14 @@ cmd_smoke() {
     done
     if systemctl is-enabled --quiet nc-offer-worker 2>/dev/null; then
       DESC="služba nc-offer-worker aktivní"; check systemctl is-active --quiet nc-offer-worker
+    fi
+    if [ "$NC_OBJECT_STORAGE" = garage ]; then
+      DESC="služba nc-garage aktivní"; check systemctl is-active --quiet nc-garage
+      DESC="Garage: S3 na 127.0.0.1:3900, žádný port Garage mimo loopback"
+      check sh -c "ss -Hltn | awk '{print \$4}' | grep -qx '127\.0\.0\.1:3900' && ! ss -Hltn | awk '{print \$4}' | grep -E ':(3900|3901|3903)\$' | grep -qv '^127\.0\.0\.1:'"
+      DESC="Garage $GARAGE_HEALTH"; check garage_healthy
+      DESC="secrets Garage jen pro root"; check sh -c "! find $GARAGE_SECRETS -type f -perm /077 | grep -q ."
+      DESC="S3: klíč aplikace zapíše, přečte, vypíše a smaže objekt v $NC_S3_BUCKET"; check s3_roundtrip
     fi
     DESC="PostgreSQL bez TCP portu"; check sh -c "! ss -Hltn | awk '{print \$4}' | grep -qE ':5432\$'"
     DESC="Redis jen na loopbacku"; check sh -c "ss -Hltn | awk '{print \$4}' | grep -E ':6379\$' | grep -qvE '^(127\.0\.0\.1|\[::1\]):6379\$' && exit 1 || exit 0"
@@ -1027,7 +1252,7 @@ cmd_tls() {
 
 cmd_status() {
   local u
-  for u in "postgresql@$NC_PG_VERSION-main" redis-server nc-worker nc-offer-worker nc-api@desktop nc-api@admin nc-api@gateway nc-gateway-redis nc-gateway nginx nftables wg-quick@wg-nc wg-quick@wg-nc-admin; do
+  for u in "postgresql@$NC_PG_VERSION-main" redis-server nc-garage nc-worker nc-offer-worker nc-api@desktop nc-api@admin nc-api@gateway nc-gateway-redis nc-gateway nginx nftables wg-quick@wg-nc wg-quick@wg-nc-admin; do
     printf '  %-28s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"
   done
   [ -x "$DEPLOY_DIR/bin/nc-migrate" ] || [ -f "$DEPLOY_DIR/bin/nc-migrate" ] && has_core && sh "$DEPLOY_DIR/bin/nc-migrate" status 2>/dev/null || true

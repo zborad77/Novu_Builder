@@ -47,13 +47,24 @@ def _configured_s3_timeout(env_name: str, default: float) -> float:
 def _build_s3_client_kwargs() -> dict:
     from botocore.config import Config  # type: ignore[import]
 
+    endpoint_url = os.getenv("S3_ENDPOINT_URL", "")
+    config_kwargs: dict = {
+        "connect_timeout": _configured_s3_timeout("S3_CONNECT_TIMEOUT_SECONDS", 3.0),
+        "read_timeout": _configured_s3_timeout("S3_READ_TIMEOUT_SECONDS", 10.0),
+        "retries": {"mode": "standard", "max_attempts": 3},
+    }
+    if endpoint_url:
+        # Self-hosted S3-compatible store (Garage on 127.0.0.1, see
+        # docs/security/OBJECT_STORAGE_OPTIONS.md §5.1): path-style addressing
+        # (no virtual-host DNS for the bucket) and checksums only where the
+        # operation requires them (the boto3 default CRC32 is not universal).
+        config_kwargs["s3"] = {"addressing_style": "path"}
+        config_kwargs["request_checksum_calculation"] = "when_required"
+        config_kwargs["response_checksum_validation"] = "when_required"
+
     kwargs: dict = {
         "region_name": os.getenv("S3_REGION", "us-east-1"),
-        "config": Config(
-            connect_timeout=_configured_s3_timeout("S3_CONNECT_TIMEOUT_SECONDS", 3.0),
-            read_timeout=_configured_s3_timeout("S3_READ_TIMEOUT_SECONDS", 10.0),
-            retries={"mode": "standard", "max_attempts": 3},
-        ),
+        "config": Config(**config_kwargs),
     }
     access_key = os.getenv("S3_ACCESS_KEY_ID", "")
     secret_key = os.getenv("S3_SECRET_ACCESS_KEY", "")
@@ -61,7 +72,6 @@ def _build_s3_client_kwargs() -> dict:
         kwargs["aws_access_key_id"] = access_key
         kwargs["aws_secret_access_key"] = secret_key
 
-    endpoint_url = os.getenv("S3_ENDPOINT_URL", "")
     if endpoint_url:
         kwargs["endpoint_url"] = endpoint_url
     return kwargs

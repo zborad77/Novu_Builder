@@ -3,7 +3,7 @@
 # except the optional metrics endpoint bound to the admin WireGuard address.
 [Unit]
 Description=NovuConstruct worker
-After=network-online.target postgresql.service redis-server.service minio.service
+After=network-online.target postgresql.service redis-server.service nc-garage.service
 Wants=network-online.target
 PartOf=nc-core.target
 

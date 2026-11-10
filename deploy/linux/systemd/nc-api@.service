@@ -9,7 +9,7 @@
 [Unit]
 Description=NovuConstruct API (%i zone)
 Documentation=file:///opt/novuconstruct/deploy/linux/README.md
-After=network-online.target postgresql.service redis-server.service minio.service
+After=network-online.target postgresql.service redis-server.service nc-garage.service
 Wants=network-online.target
 PartOf=nc-core.target
 

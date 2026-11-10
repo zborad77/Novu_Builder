@@ -1,0 +1,38 @@
+#
+# Copyright (c) 2026 Novusion
+# Website: https://novusion.com
+# Contact: info@novusion.com
+#
+# Author: Pavel Dostál
+# Project: NovuConstruct
+# Module: deploy/linux/garage
+# Description: Garage object store config (single node, loopback only), installed by nc-provision
+# Created: 2026-11-08
+#
+# managed-by: nc-provision (S-1, docs/security/OBJECT_STORAGE_OPTIONS.md).
+# Installed as /etc/nc-garage/garage.toml; nc-provision replaces /srv/novuconstruct
+# with NC_DATA_ROOT. No secrets here: rpc_secret and admin/metrics token come from
+# GARAGE_*_FILE (systemd LoadCredential, /etc/nc-garage/secrets 0600 root:root).
+
+metadata_dir = "/srv/novuconstruct/garage/meta"
+data_dir = "/srv/novuconstruct/garage/data"
+db_engine = "lmdb"
+
+# Pilot: one node, one copy. Metadata safety via fsync + periodic snapshots,
+# shipped off-host by the backups (F9.1) and rehearsed by the restore test (F9.2).
+replication_factor = 1
+metadata_fsync = true
+data_fsync = false
+metadata_auto_snapshot_interval = "6h"
+
+# Everything on loopback: nothing is public, nftables stays unchanged.
+rpc_bind_addr = "127.0.0.1:3901"
+rpc_public_addr = "127.0.0.1:3901"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "127.0.0.1:3900"
+
+[admin]
+# /health (unauthenticated) for nc-provision start/smoke; the rest needs the token.
+api_bind_addr = "127.0.0.1:3903"

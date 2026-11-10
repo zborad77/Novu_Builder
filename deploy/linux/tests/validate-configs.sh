@@ -38,6 +38,9 @@ getent group nc-gateway >/dev/null || groupadd --system nc-gateway
 getent group nc-gw-redis >/dev/null || groupadd --system nc-gw-redis
 id nc-gateway >/dev/null 2>&1 || useradd --system -g nc-gateway -G nc-gw-redis -d /nonexistent -s /usr/sbin/nologin nc-gateway
 id nc-gw-redis >/dev/null 2>&1 || useradd --system -g nc-gw-redis -d /nonexistent -s /usr/sbin/nologin nc-gw-redis
+# Object store account (S-1, Garage) exactly as nc-provision creates it.
+getent group nc-garage >/dev/null || groupadd --system nc-garage
+id nc-garage >/dev/null 2>&1 || useradd --system -g nc-garage -d /nonexistent -s /usr/sbin/nologin nc-garage
 
 # ── nginx ────────────────────────────────────────────────────────────────────
 mkdir -p /etc/nginx/snippets /etc/novuconstruct/tls /var/www/novuconstruct/public /var/www/novuconstruct/app/assets /var/www/letsencrypt
@@ -185,11 +188,11 @@ for ruleset in "$D"/nftables/*.nft; do
   if nft -c -f "$ruleset"; then ok "nft -c $(basename "$ruleset")"; else bad "nft -c $(basename "$ruleset")"; fi
 done
 for ruleset in "$D"/nftables/nc-single-server.nft "$D"/nftables/nc-core.nft "$D"/nftables/nc-edge.nft; do
-  for port in 5432 6379 6380 9000 9001 8000 8300; do
+  for port in 5432 6379 6380 9000 9001 8000 8300 3900 3901 3903; do
     if grep -E "dport[^;]*\b$port\b" "$ruleset" | grep -q accept; then bad "$(basename "$ruleset") opens $port"; fi
   done
 done
-ok "no ruleset opens PostgreSQL/Redis/MinIO/raw API/gateway ports"
+ok "no ruleset opens PostgreSQL/Redis/object store/raw API/gateway ports"
 # T5.1: a ruleset replaces only its own table; other services' tables survive.
 for ruleset in "$D"/nftables/*.nft; do
   grep -qE '^[[:space:]]*flush[[:space:]]+ruleset' "$ruleset" && bad "$(basename "$ruleset") flushes the whole ruleset"
@@ -230,6 +233,8 @@ mkdir -p /opt/novuconstruct/src/backend/.venv/bin /opt/novuconstruct/src/gateway
 cp "$D"/bin/* /opt/novuconstruct/deploy/linux/bin/ && chmod 0755 /opt/novuconstruct/deploy/linux/bin/*
 for exe in uvicorn python; do printf '#!/bin/sh\n' > "/opt/novuconstruct/src/backend/.venv/bin/$exe"; chmod 0755 "/opt/novuconstruct/src/backend/.venv/bin/$exe"; done
 printf '#!/bin/sh\n' > /opt/novuconstruct/src/gateway/.venv/bin/python; chmod 0755 /opt/novuconstruct/src/gateway/.venv/bin/python
+[ -e /usr/local/bin/garage ] || { printf '#!/bin/sh\n' > /usr/local/bin/garage; chmod 0755 /usr/local/bin/garage; }
+mkdir -p /srv/novuconstruct/garage
 touch /etc/novuconstruct/core.env /etc/nc-gateway/gateway.env
 units=$(mktemp -d)
 cp "$D"/systemd/*.service "$D"/systemd/*.target "$units/"
@@ -243,11 +248,11 @@ chmod 0644 "$units/nc-api@gateway.service.d/"*
 cp "$units/nc-api@.service" "$units/nc-api@desktop.service"
 cp "$units/nc-api@.service" "$units/nc-api@admin.service"
 chmod 0644 "$units"/*
-if SYSTEMD_LOG_LEVEL=warning systemd-analyze verify --man=no "$units/nc-api@gateway.service" "$units/nc-api@desktop.service" "$units/nc-api@admin.service" "$units/nc-worker.service" "$units/nc-offer-worker.service" "$units/nc-core.target" "$units/nc-gateway.service" "$units/nc-gateway-redis.service" "$units/nc-edge.target" 2>&1 | grep -v -E "Failed to (connect|open|create).*bus|Unit.*not found|postgresql|redis-server.service|minio|wg-quick|nftables.service" | grep . ; then
+if SYSTEMD_LOG_LEVEL=warning systemd-analyze verify --man=no "$units/nc-api@gateway.service" "$units/nc-api@desktop.service" "$units/nc-api@admin.service" "$units/nc-worker.service" "$units/nc-offer-worker.service" "$units/nc-core.target" "$units/nc-gateway.service" "$units/nc-gateway-redis.service" "$units/nc-edge.target" "$units/nc-garage.service" 2>&1 | grep -v -E "Failed to (connect|open|create).*bus|Unit.*not found|postgresql|redis-server.service|minio|wg-quick|nftables.service" | grep . ; then
   bad "systemd-analyze verify reported problems"
 else ok "systemd-analyze verify (core + gateway units)"; fi
 # F6.1: sandbox exposure below 3.0 ("threshold" is exposure x 10).
-for unit in nc-api@desktop.service nc-worker.service nc-offer-worker.service nc-gateway.service nc-gateway-redis.service; do
+for unit in nc-api@desktop.service nc-worker.service nc-offer-worker.service nc-gateway.service nc-gateway-redis.service nc-garage.service; do
   if systemd-analyze security --offline=yes --threshold=30 "$units/$unit" >/tmp/sec.txt 2>&1; then
     ok "systemd-analyze security $unit: $(tail -n 1 /tmp/sec.txt | sed 's/.*exposure level for [^:]*: //')"
   else
@@ -387,6 +392,34 @@ fi
 pidof redis-server | xargs -r kill 2>/dev/null || true
 unset REDISCLI_AUTH
 
+# ── object store (S-1, Garage): loopback only, secrets via LoadCredential ────
+GT="$D/garage/garage.toml"
+binds=$(grep -E '^\s*(rpc_bind_addr|rpc_public_addr|api_bind_addr)\s*=' "$GT")
+[ "$(printf '%s\n' "$binds" | grep -c .)" -eq 4 ] && ! printf '%s\n' "$binds" | grep -qv '"127\.0\.0\.1:' \
+  && ok "garage.toml: S3, RPC and admin on 127.0.0.1 only" || bad "garage.toml binds beyond loopback: $binds"
+grep -qE '^\s*(rpc_secret|admin_token|metrics_token)\s*=' "$GT" && bad "garage.toml holds a secret" || ok "garage.toml holds no secret"
+grep -qx 'replication_factor = 1' "$GT" && grep -qx 'metadata_fsync = true' "$GT" && grep -q '^metadata_auto_snapshot_interval' "$GT" \
+  && ok "garage.toml: single node with fsync + metadata snapshots" || bad "garage.toml durability settings"
+GA="$D/systemd/nc-garage.service"
+grep -qx 'User=nc-garage' "$GA" && grep -qx 'IPAddressDeny=any' "$GA" && grep -qx 'IPAddressAllow=localhost' "$GA" \
+  && ok "nc-garage: own user, loopback only" || bad "nc-garage user / IP allow list"
+grep -q '^LoadCredential=GARAGE_RPC_SECRET:/etc/nc-garage/secrets/GARAGE_RPC_SECRET$' "$GA" && grep -q '^Environment=GARAGE_RPC_SECRET_FILE=%d/GARAGE_RPC_SECRET$' "$GA" \
+  && ok "nc-garage: RPC secret via LoadCredential" || bad "nc-garage RPC secret"
+grep -E '^(LoadCredential|EnvironmentFile|ReadWritePaths)=' "$GA" | grep -q '/etc/novuconstruct' && bad "nc-garage reads core secrets" || ok "nc-garage loads nothing from /etc/novuconstruct"
+sh "$G" --garage >/dev/null
+[ "$(perm /etc/nc-garage/secrets)" = "700 root:root" ] && ok "Garage secrets dir 0700 root:root" || bad "Garage secrets dir $(perm /etc/nc-garage/secrets)"
+for f in GARAGE_RPC_SECRET GARAGE_ADMIN_TOKEN; do
+  grep -qxE '[0-9a-f]{64}' "/etc/nc-garage/secrets/$f" || bad "$f is not 32 B hex"
+  [ "$(perm "/etc/nc-garage/secrets/$f")" = "600 root:root" ] || bad "$f $(perm "/etc/nc-garage/secrets/$f")"
+done
+ok "Garage secrets: 32 B hex, 0600 root:root"
+for u in nc-garage novuconstruct nc-gateway; do
+  runuser -u "$u" -- cat /etc/nc-garage/secrets/GARAGE_RPC_SECRET >/dev/null 2>&1 && bad "$u reads the Garage RPC secret"
+done
+ok "Garage RPC secret readable only by root / PID 1"
+body cmd_start | grep -q 'NC_OBJECT_STORAGE_READY' && bad "nc-provision start still needs NC_OBJECT_STORAGE_READY" || ok "nc-provision start without manual NC_OBJECT_STORAGE_READY"
+body cmd_install | grep -q '^  install_object_storage$' && ok "nc-provision install installs the object store" || bad "nc-provision install skips the object store"
+body install_garage_binary | grep -q 'NC_GARAGE_SHA256' && ok "Garage binary verified against NC_GARAGE_SHA256" || bad "Garage binary not verified"
 # T5.1: nc-provision firewall backs up, rolls back and persists only its own table.
 fw=$(body cmd_firewall)
 printf '%s\n' "$fw" | grep -qE 'nft list ruleset|nft flush ruleset|\\nflush ruleset' && bad "nc-provision firewall backs up / flushes the whole ruleset" || ok "nc-provision firewall: backup and rollback only of its own table"
