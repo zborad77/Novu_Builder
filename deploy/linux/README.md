@@ -125,6 +125,37 @@ NC_CONFIRM_GATEWAY=1 $P gateway     # kontroly → enable nc-gateway-redis + nc-
 $P smoke
 ```
 
+## 4b. Deploy a rollback: `deploy.sh` (F6.6, T8.1)
+
+```sh
+git -C /opt/novuconstruct-src.git fetch --quiet origin       # zdroj commitů (holý klon)
+/opt/novuconstruct/deploy/linux/deploy.sh <sha>               # 7–40 hex, musí být jednoznačné
+```
+
+Release se nasazuje jako adresář `/opt/novuconstruct-releases/<plné SHA>` (vlastní venv) a `/opt/novuconstruct` je **symlink** na aktivní release. Jednorázový převod po `nc-provision install`: `mv /opt/novuconstruct /opt/novuconstruct-releases/<sha>` a `ln -s /opt/novuconstruct-releases/<sha> /opt/novuconstruct` (se zastavenými službami). Skript s adresářem místo symlinku odmítne pokračovat.
+
+| Fáze | Co dělá |
+|---|---|
+| 1. Kontroly | root, zámek `/var/lib/nc-deploy/lock`, SHA existuje v repu, aktuální release je symlink, revize DB je novému kódu známá (`nc-migrate status` stagovaného releasu) |
+| 2. Staging | `git archive` + venv do `/opt/novuconstruct-releases/<sha>`; běžící služby se nemění |
+| 3. Stop | `nc-worker`, `nc-api@desktop`, `nc-api@admin` + běžící `nc-api@gateway`, `nc-offer-worker`, `nc-gateway` |
+| 4. Záloha | **povinná** a i bez migrace: `pg_dump -Fc` ověřený `pg_restore --list` → `/var/backups/novuconstruct/pre-deploy-*.dump` (0600); volitelně hook `NC_DEPLOY_STORAGE_BACKUP <adresář> <čas>` pro úložiště, jeho selhání deploy zastaví |
+| 5. Přepnutí | atomický symlink `/opt/novuconstruct` → nový release |
+| 6. Migrace | `nc-migrate upgrade` (jen `upgrade head`, nikdy downgrade) |
+| 7. Ověření | do `NC_DEPLOY_VERIFY_TIMEOUT` (120 s): `/api/v1/health` v zónách desktop a admin, `/api/v1/ready` v admin zóně (`"ready": true`), čerstvý (< 90 s) heartbeat **nového** procesu workeru `worker:heartbeat:<host>-<MainPID>`; starý klíč předchozího procesu kontrolu nesplní |
+| 8. Záznam | `/var/lib/nc-deploy/deployed.env` (`NC_DEPLOYED_SHA`, `NC_DEPLOYED_ALEMBIC_REVISION` – skutečná revize DB, předchozí SHA, záloha) a řádek v `history.log` |
+
+**Politika rollbacku (T8.1).** Backend se nespustí, pokud DB není přesně na head revizi jeho vlastního kódu (`app/main.py`). Předchozí kód proto po změně schématu nastartovat nemůže, a to ani u expand-only migrace.
+
+| Situace | Postup | Exit |
+|---|---|---|
+| Selhání před přepnutím (SHA, staging, stop, záloha) | release se nemění, služby předchozího releasu se znovu spustí a ověří | 1 |
+| Selhání, revize DB se **nezměnila** (selhaná transakční migrace, health, READY, heartbeat) | automatický návrat na předchozí release + ověření | 2 |
+| Selhání, revize DB se **změnila** nebo ji nelze zjistit | **žádný automatický rollback ani restore**; nový release zůstává, skript vypíše zálohu, stav zapíše do `last-failure.env`. Vlastník rozhodne: oprava dopředu novým releasem, nebo ručně `pg_restore` zálohy a přepnutí symlinku na předchozí release | 3 |
+| Selže i návrat | ruční zásah (záloha je vypsaná) | 4 |
+
+Automatický downgrade (`alembic downgrade`) se nikdy nespouští. Destruktivní (contract) migrace patří až do releasu po ověřeném expand kroku (SECURITY_ARCHITECTURE §8.3).
+
 ## 5. Testy
 
 | Co | Jak |
@@ -133,4 +164,5 @@ $P smoke
 | JWT `iss`/`aud`/`iat`/`exp`, podpis, `alg=none`, token z jiné zóny, superadmin jen v admin zóně | `pytest tests/test_f3_jwt_zones.py` |
 | Proxy přes unix socket, podvržené `X-Forwarded-For` | `pytest tests/test_sa05_client_ip.py` |
 | `nginx -t`, `nft -c`, `systemd-analyze verify` + `security`, shellcheck, žádné klíče v šablonách; Web Gateway: edge vhost proti stub gateway (404, CSP, `X-Forwarded-For`, `X-NC-*`, limity těla), izolace jednotky od secrets core, práva `nc-gen-secrets`, ACL Redisu gateway | `tests/validate-configs.sh` (CI job `deploy-linux-config`) |
+| `deploy.sh`: úspěch s migrací i bez, neplatné SHA, selhání zálohy, selhání health a migrace s rollbackem, selhání po změně revize bez rollbacku, starý heartbeat | `tests/deploy_test.sh` (stuby, součást `validate-configs.sh`) |
 | Síťová izolace N1–N12 na stagingu | `tests/network_isolation.sh` |

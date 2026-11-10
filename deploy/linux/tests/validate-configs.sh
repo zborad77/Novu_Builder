@@ -17,12 +17,12 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 need=""
-for tool in nginx nft systemd-analyze shellcheck redis-server redis-cli curl python3 ss; do
+for tool in nginx nft systemd-analyze shellcheck redis-server redis-cli curl python3 ss git; do
   command -v "$tool" >/dev/null || need=1
 done
 if [ -n "$need" ]; then
   apt-get update -qq
-  apt-get install -y -qq nginx nftables systemd openssl shellcheck redis-server curl python3 iproute2 >/dev/null
+  apt-get install -y -qq nginx nftables systemd openssl shellcheck redis-server curl python3 iproute2 git >/dev/null
 fi
 
 fail=0
@@ -427,12 +427,15 @@ printf '%s\n' "$fw" | grep -qE 'install .*"\$ruleset" /etc/nftables\.conf' && ba
 
 # ── shell helpers ────────────────────────────────────────────────────────────
 if bash -n "$D/provision/nc-provision"; then ok "bash -n nc-provision"; else bad "bash -n nc-provision"; fi
-for script in "$D"/bin/* "$D"/tests/*.sh; do
+for script in "$D"/bin/* "$D"/tests/*.sh "$D"/deploy.sh; do
   if sh -n "$script"; then ok "sh -n $(basename "$script")"; else bad "sh -n $(basename "$script")"; fi
 done
 if shellcheck -S warning -f gcc "$D/provision/nc-provision"; then ok "shellcheck nc-provision"; else bad "shellcheck nc-provision"; fi
 # shellcheck disable=SC2046
-if shellcheck -S warning -s sh -f gcc $(ls "$D"/bin/* "$D"/tests/*.sh); then ok "shellcheck bin/* tests/*.sh"; else bad "shellcheck bin/* tests/*.sh"; fi
+if shellcheck -S warning -s sh -f gcc $(ls "$D"/bin/* "$D"/tests/*.sh "$D"/deploy.sh); then ok "shellcheck bin/* tests/*.sh deploy.sh"; else bad "shellcheck bin/* tests/*.sh deploy.sh"; fi
+
+# ── deploy.sh behaviour (F6.6, T8.1 rollback policy) against stubs ───────────
+if sh "$D/tests/deploy_test.sh"; then ok "deploy_test.sh"; else bad "deploy_test.sh"; fi
 
 # ── templates carry placeholders only ────────────────────────────────────────
 if grep -rEn '(PrivateKey|PresharedKey)\s*=\s*[A-Za-z0-9+/]{43}=' "$D/wireguard"; then
