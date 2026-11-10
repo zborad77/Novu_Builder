@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    # DOČASNÉ (ST-00001): feat/nc-007-secure-web-platform jen kvůli ověření
+    # deploy-linux-config (nft -c) bez PR. Před merge do master odstranit.
+    branches: [master, feat/nc-007-secure-web-platform]
   pull_request:
     branches: [master]
 
