@@ -7,7 +7,11 @@
 # PostgreSQL, Redis, MinIO and the API sockets are never reachable from outside:
 # they listen on loopback/unix sockets AND are dropped here.
 
-flush ruleset
+# Only the NovuConstruct table is replaced (T5.1): no `flush ruleset`, tables of
+# other services on the host stay untouched. `table` + `delete table` make the
+# reload idempotent – the old table goes away in the same atomic transaction.
+table inet nc
+delete table inet nc
 
 table inet nc {
     # ── Peers (WG_NETWORK_DESIGN.md §1.1). Keep nginx allow lists in sync. ──

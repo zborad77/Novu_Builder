@@ -4,7 +4,11 @@
 # D-12) or break-glass. Outbound to the core only on the gateway port, only for
 # uid nc-gateway (and root). Requires the users www-data and nc-gateway.
 
-flush ruleset
+# Only the NovuConstruct table is replaced (T5.1): no `flush ruleset`, tables of
+# other services on the host stay untouched. `table` + `delete table` make the
+# reload idempotent – the old table goes away in the same atomic transaction.
+table inet nc_edge
+delete table inet nc_edge
 
 table inet nc_edge {
     set core_wg       { type ipv4_addr; elements = { 10.50.0.1 } }

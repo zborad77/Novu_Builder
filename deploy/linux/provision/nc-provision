@@ -257,7 +257,7 @@ preflight() {
     warn "ufw je aktivní; příkaz 'firewall' ho nevypíná – vyřeš ručně (konflikt s nftables)"
   fi
   if command -v nft >/dev/null 2>&1 && [ "$(nft list ruleset 2>/dev/null | wc -l)" -gt 0 ]; then
-    warn "nftables už obsahuje pravidla; 'firewall' je nahradí jen po potvrzení (záloha + automatický návrat)"
+    warn "nftables už obsahuje pravidla; 'firewall' změní jen tabulku NovuConstructu (cizí tabulky zůstanou), ale její policy drop zahodí i provoz, který cizí tabulky povolují (T5)"
   fi
   if sshd -T 2>/dev/null | grep -qi '^passwordauthentication yes'; then
     warn "SSH povoluje hesla; 'ssh-harden' to vypne (po potvrzení)"
@@ -931,26 +931,45 @@ guarded_change() {  # guarded_change NAME ROLLBACK_SCRIPT – spustí návrat, p
 }
 
 cmd_firewall() {
-  local ruleset="$DEPLOY_DIR/nftables/nc-${NC_VARIANT/single/single-server}.nft" backup ssh_ip rollback
+  # T5.1: mění se jen tabulka NovuConstructu (inet nc / inet nc_edge). Cizí tabulky
+  # (např. NovuServer) se nezálohují, nemažou ani nepřepisují – ani při návratu.
+  local ruleset="$DEPLOY_DIR/nftables/nc-${NC_VARIANT/single/single-server}.nft" backup ssh_ip rollback table
+  local saved=/etc/nftables.d/novuconstruct.nft inc
   [ -f "$ruleset" ] || die "$ruleset neexistuje"
+  grep -q '^[[:space:]]*flush[[:space:]]\+ruleset' "$ruleset" && die "$ruleset obsahuje 'flush ruleset' – smazal by cizí pravidla"
+  table=$(awk '$1 == "table" && $2 == "inet" && $4 == "{" {print $3; exit}' "$ruleset")
+  [[ "$table" =~ ^nc(_[a-z]+)?$ ]] || die "$ruleset nedefinuje tabulku inet nc* (nalezeno: '${table:-nic}')"
   nft -c -f "$ruleset" || die "pravidla neprošla kontrolou (nft -c)"
-  backup="$STATE/nftables-before-$TS.nft"
+  backup="$STATE/nftables-$table-before-$TS.nft"
   ssh_ip=${SSH_CLIENT:-}; ssh_ip=${ssh_ip%% *}
-  echo "Nasadí se $ruleset (varianta $NC_VARIANT)."
-  echo "Aktuální pravidla se zálohují do $backup."
-  echo "Veřejné SSH bude zavřené; přístup jen přes wg-nc-admin nebo nouzovou sadu ssh_emergency."
+  echo "Nasadí se $ruleset (varianta $NC_VARIANT); mění se jen tabulka inet $table, cizí tabulky zůstanou."
+  echo "Dosavadní stav tabulky inet $table se zálohuje do $backup."
+  echo "Veřejné SSH bude zavřené; přístup jen přes admin tunel nebo nouzovou sadu ssh_emergency."
   [ -n "$ssh_ip" ] && echo "Tvoje aktuální adresa $ssh_ip se dočasně (2 h) přidá do ssh_emergency, aby se spojení neztratilo."
   confirm APPLY-FIREWALL "Mění se firewall serveru."
-  if [ "$DRY_RUN" -eq 0 ]; then nft list ruleset > "$backup"; chmod 0600 "$backup"; fi
+  if [ "$DRY_RUN" -eq 0 ]; then
+    nft list table inet "$table" > "$backup" 2>/dev/null || : > "$backup"   # prázdná = tabulka dosud neexistovala
+    chmod 0600 "$backup"
+  fi
   rollback=$(mktemp $STATE/rollback-fw.XXXXXX)
-  printf 'nft -f - <<EOF\nflush ruleset\nEOF\nnft -f %s\n' "$backup" > "$rollback"
+  # Návrat v jedné atomické transakci: odstranit novou tabulku, obnovit předchozí (je-li).
+  printf '{ printf "table inet %s\\ndelete table inet %s\\n"; cat %s; } | nft -f -\n' "$table" "$table" "$backup" > "$rollback"
   run nft -f "$ruleset"
-  if [ -n "$ssh_ip" ] && [[ "$ssh_ip" =~ ^[0-9.]+$ ]]; then run nft add element inet nc ssh_emergency "{ $ssh_ip timeout 2h }"; fi
+  if [ -n "$ssh_ip" ] && [[ "$ssh_ip" =~ ^[0-9.]+$ ]]; then run nft add element inet "$table" ssh_emergency "{ $ssh_ip timeout 2h }"; fi
   if guarded_change firewall "$rollback"; then
-    [ -f /etc/nftables.conf ] && run cp -p /etc/nftables.conf "/etc/nftables.conf.nc-bak.$TS"
-    run install -m 0644 -o root -g root "$ruleset" /etc/nftables.conf
+    # Trvale: vlastní soubor + include v /etc/nftables.conf; cizí obsah souboru zůstává.
+    run install -d -m 0755 /etc/nftables.d
+    run install -m 0644 -o root -g root "$ruleset" "$saved"
+    inc="include \"$saved\""
+    if ! grep -qxF "$inc" /etc/nftables.conf 2>/dev/null; then
+      [ -f /etc/nftables.conf ] && run cp -p /etc/nftables.conf "/etc/nftables.conf.nc-bak.$TS"
+      run tee -a /etc/nftables.conf >/dev/null <<<"$inc"
+    fi
+    if grep -q "^[[:space:]]*table inet $table[[:space:]]*{" /etc/nftables.conf 2>/dev/null; then
+      warn "/etc/nftables.conf ještě obsahuje starou kopii tabulky inet $table (dřívější verze nc-provision); odstraň ji ručně, platí $saved"
+    fi
     run systemctl enable --quiet nftables
-    info "firewall uložen jako /etc/nftables.conf. Hetzner Cloud Firewall nastav podle README (TCP 80/443, UDP 51830/51831)."
+    info "firewall uložen do $saved (include v /etc/nftables.conf). Hetzner Cloud Firewall nastav podle README (TCP 80/443, UDP 51830/51831)."
   fi
 }
 

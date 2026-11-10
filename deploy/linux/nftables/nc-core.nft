@@ -3,7 +3,11 @@
 # No TCP port on the public interface at all: only WireGuard handshakes (and
 # break-glass SSH from the Hetzner console). Validate: nft -c -f nc-core.nft
 
-flush ruleset
+# Only the NovuConstruct table is replaced (T5.1): no `flush ruleset`, tables of
+# other services on the host stay untouched. `table` + `delete table` make the
+# reload idempotent – the old table goes away in the same atomic transaction.
+table inet nc
+delete table inet nc
 
 table inet nc {
     set gateway_peer  { type ipv4_addr; elements = { 10.50.0.2 } }

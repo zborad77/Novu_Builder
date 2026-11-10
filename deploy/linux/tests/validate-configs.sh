@@ -190,6 +190,33 @@ for ruleset in "$D"/nftables/nc-single-server.nft "$D"/nftables/nc-core.nft "$D"
   done
 done
 ok "no ruleset opens PostgreSQL/Redis/MinIO/raw API/gateway ports"
+# T5.1: a ruleset replaces only its own table; other services' tables survive.
+for ruleset in "$D"/nftables/*.nft; do
+  grep -qE '^[[:space:]]*flush[[:space:]]+ruleset' "$ruleset" && bad "$(basename "$ruleset") flushes the whole ruleset"
+  if grep -E '^[[:space:]]*(table|delete table|flush table|add table|create table)[[:space:]]' "$ruleset" | grep -vqE '[[:space:]]inet nc(_edge)?([[:space:]]|$)'; then
+    bad "$(basename "$ruleset") touches a table other than inet nc / inet nc_edge"
+  fi
+done
+ok "rulesets without flush ruleset, only tables inet nc / inet nc_edge"
+nft -f - <<'NFT' || bad "cannot load the foreign test table inet novuserver"
+table inet novuserver {
+    set peers { type ipv4_addr; elements = { 10.20.0.2 } }
+    chain input { type filter hook input priority filter; policy accept; iifname "wg-platform" accept; }
+}
+NFT
+foreign_before=$(nft list table inet novuserver 2>/dev/null || true)
+for ruleset in "$D"/nftables/*.nft; do
+  name=$(basename "$ruleset")
+  t=$(awk '$1 == "table" && $2 == "inet" && $4 == "{" {print $3; exit}' "$ruleset")
+  if nft -f "$ruleset" && first=$(nft -a list table inet "$t" | wc -l) && nft -f "$ruleset"; then
+    [ "$(nft -a list table inet "$t" | wc -l)" -eq "$first" ] && ok "$name: reload replaces inet $t (no duplicate rules)" || bad "$name: reload duplicates rules"
+  else
+    bad "$name: nft -f failed next to a foreign table"
+  fi
+  [ "$(nft list table inet novuserver 2>/dev/null)" = "$foreign_before" ] && ok "$name: foreign table inet novuserver unchanged" || bad "$name: foreign table changed or removed"
+  nft delete table inet "$t" 2>/dev/null || true
+done
+nft delete table inet novuserver 2>/dev/null || true
 grep -qE 'tcp dport 8200 meta skuid \{ 0, "nc-gateway" \} accept' "$D/nftables/nc-edge.nft" \
   && ok "edge: only uid nc-gateway reaches core:8200" || bad "edge: core:8200 not limited to nc-gateway"
 grep -qE 'tcp dport 8200 ct state new meta skuid != \{ 0, "nc-gateway" \} drop' "$D/nftables/nc-single-server.nft" \
@@ -359,6 +386,11 @@ else
 fi
 pidof redis-server | xargs -r kill 2>/dev/null || true
 unset REDISCLI_AUTH
+
+# T5.1: nc-provision firewall backs up, rolls back and persists only its own table.
+fw=$(body cmd_firewall)
+printf '%s\n' "$fw" | grep -qE 'nft list ruleset|nft flush ruleset|\\nflush ruleset' && bad "nc-provision firewall backs up / flushes the whole ruleset" || ok "nc-provision firewall: backup and rollback only of its own table"
+printf '%s\n' "$fw" | grep -qE 'install .*"\$ruleset" /etc/nftables\.conf' && bad "nc-provision firewall overwrites /etc/nftables.conf" || ok "nc-provision firewall: /etc/nftables.conf only gets an include"
 
 # ── shell helpers ────────────────────────────────────────────────────────────
 if bash -n "$D/provision/nc-provision"; then ok "bash -n nc-provision"; else bad "bash -n nc-provision"; fi

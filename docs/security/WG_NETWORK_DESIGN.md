@@ -81,7 +81,9 @@ Odchozí provoz omezuje nftables, protože Hetzner Firewall řeší hlavně př�
 ```nft
 #!/usr/sbin/nft -f
 # NovuConstruct core – REFERENCE ONLY, not applied.
-flush ruleset
+# Only the own table is replaced (T5.1), never `flush ruleset`.
+table inet nc
+delete table inet nc
 
 table inet nc {
     set gateway_peer  { type ipv4_addr; elements = { 10.50.0.2 } }
