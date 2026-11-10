@@ -436,9 +436,18 @@ if bash -n "$D/provision/nc-provision"; then ok "bash -n nc-provision"; else bad
 for script in "$D"/bin/* "$D"/tests/*.sh "$D"/deploy.sh; do
   if sh -n "$script"; then ok "sh -n $(basename "$script")"; else bad "sh -n $(basename "$script")"; fi
 done
-if shellcheck -S warning -f gcc "$D/provision/nc-provision"; then ok "shellcheck nc-provision"; else bad "shellcheck nc-provision"; fi
+# shellcheck_gate POPIS ARGS… – při nálezu vypíše i prvních 8 nálezů jako FAIL,
+# aby byly vidět v anotacích GitHub Actions (log jobu bez přihlášení nejde číst).
+shellcheck_gate() {
+  label=$1; shift
+  if sc_out=$(shellcheck "$@" 2>&1); then ok "shellcheck $label"; return 0; fi
+  printf '%s\n' "$sc_out"
+  bad "shellcheck $label"
+  printf '%s\n' "$sc_out" | sed "s#^$D/##" | head -n 8 | while IFS= read -r sc_line; do bad "  $sc_line"; done
+}
+shellcheck_gate nc-provision -S warning -f gcc "$D/provision/nc-provision"
 # shellcheck disable=SC2046
-if shellcheck -S warning -s sh -f gcc $(ls "$D"/bin/* "$D"/tests/*.sh "$D"/deploy.sh); then ok "shellcheck bin/* tests/*.sh deploy.sh"; else bad "shellcheck bin/* tests/*.sh deploy.sh"; fi
+shellcheck_gate "bin/* tests/*.sh deploy.sh" -S warning -s sh -f gcc $(ls "$D"/bin/* "$D"/tests/*.sh "$D"/deploy.sh)
 
 # ── deploy.sh behaviour (F6.6, T8.1 rollback policy) against stubs ───────────
 if sh "$D/tests/deploy_test.sh"; then ok "deploy_test.sh"; else bad "deploy_test.sh"; fi
