@@ -556,7 +556,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate deploy/linux in a disposable Ubuntu 24.04 container
         run: >-
-          docker run --rm --cap-add NET_ADMIN -v "$PWD:/src:ro" ubuntu:24.04
+          docker run --rm --cap-add NET_ADMIN -e GITHUB_ACTIONS -v "$PWD:/src:ro" ubuntu:24.04
           sh /src/deploy/linux/tests/validate-configs.sh
 
   # ── Release gate ─────────────────────────────────────────────────────────────

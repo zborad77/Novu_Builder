@@ -27,7 +27,13 @@ fi
 
 fail=0
 ok()   { echo "OK   $*"; }
-bad()  { echo "FAIL $*"; fail=1; }
+bad()  {
+  echo "FAIL $*"; fail=1
+  # V GitHub Actions i anotace: ty jsou čitelné přes API bez přihlášení,
+  # na rozdíl od logu jobu (diagnostika CI, ST-00001).
+  [ "${GITHUB_ACTIONS:-}" = "true" ] && echo "::error title=validate-configs::FAIL $*"
+  return 0
+}
 
 # ── users/groups referenced by units and rulesets ─────────────────────────────
 getent group nc-api-sock >/dev/null || groupadd --system nc-api-sock
