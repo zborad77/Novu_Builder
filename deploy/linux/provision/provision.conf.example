@@ -46,5 +46,12 @@ NC_APP_DOMAIN=
 # Prázdné = podle varianty: edge http://10.50.0.1:8200, single http://127.0.0.1:8200.
 NC_GATEWAY_CORE_URL=
 
+# nginx sdílený s NovuServerem (T5.3). 0 = dedikovaný nginx: NovuConstruct drží
+# default_server na 80/443 (nc-edge-default.conf) a vypne distribuční
+# sites-enabled/default. 1 = sdílený: žádný default_server, sites-enabled/default
+# i cizí vhosty zůstanou, drop-in nginx bez Requires=nftables.service. Preflight
+# blokuje, když nginx má cizí vhosty a hodnota je 0.
+NC_NGINX_SHARED=0
+
 # 1 = venv připravil operátor offline (pip se nespouští).
 NC_SKIP_PIP=0

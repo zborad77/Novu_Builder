@@ -82,6 +82,7 @@ NC_ACME_EMAIL=""
 NC_ENABLE_GATEWAY_ZONE=0         # core: nc-api@gateway + nginx zóna gateway (F4)
 NC_ENABLE_GATEWAY=0              # edge/single: soubory Web Gateway (BFF); spouští jen `gateway`
 NC_APP_DOMAIN=""                 # host webové aplikace (SPA + /bff/), např. app.example.cz
+NC_NGINX_SHARED=0                # 1 = nginx sdílený s NovuServerem: bez default_server, cizí vhosty beze změny (T5.3)
 NC_GATEWAY_CORE_URL=""           # prázdné = podle varianty (edge: 10.50.0.1:8200, single: 127.0.0.1:8200)
 NC_REDIS_MAXMEMORY=512mb
 NC_SKIP_PIP=0                    # offline: venv připraví operátor
@@ -118,6 +119,7 @@ load_config() {
     [ "$key" != NC_OBJECT_STORAGE ] || storage_set=1
   done < "$CONFIG"
   case "$NC_VARIANT" in single|core|edge) ;; *) die "NC_VARIANT musí být single, core nebo edge" ;; esac
+  case "$NC_NGINX_SHARED" in 0|1) ;; *) die "NC_NGINX_SHARED musí být 0 nebo 1" ;; esac
   if [ "$NC_OBJECT_STORAGE_READY" = 1 ] && [ "$storage_set" -eq 0 ]; then
     NC_OBJECT_STORAGE=external
     warn "NC_OBJECT_STORAGE_READY je zastaralé: beru NC_OBJECT_STORAGE=external (nastav ho v $CONFIG výslovně)"
@@ -139,6 +141,22 @@ has_core() { [ "$NC_VARIANT" != edge ]; }
 has_edge() { [ "$NC_VARIANT" != core ]; }
 has_gateway() { has_edge && [ "$NC_ENABLE_GATEWAY" = 1 ]; }
 GW_APP() { echo "$NC_APP_DIR/src/gateway"; }
+
+# Cizí nginx konfigurace (T5.3): vše v sites-enabled kromě distribučního
+# `default` a v conf.d vše, co není soubor NovuConstructu (nc-*.conf, 00-nc-*.conf).
+foreign_nginx_confs() {
+  local f
+  for f in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+    [ -e "$f" ] || continue
+    case "$f" in
+      /etc/nginx/conf.d/nc-*.conf|/etc/nginx/conf.d/00-nc-*.conf) continue ;;
+      /etc/nginx/sites-enabled/default)
+        [ "$(readlink -f "$f")" = /etc/nginx/sites-available/default ] && continue ;;
+    esac
+    printf '%s\n' "$f"
+  done
+  return 0
+}
 
 # ── soubory ───────────────────────────────────────────────────────────────────
 
@@ -290,6 +308,18 @@ preflight() {
   local busy
   busy=$(ss -Hltnp 2>/dev/null | awk '$4 ~ /:(80|443)$/' | grep -v nginx || true)
   [ -z "$busy" ] && ok "porty 80/443 volné nebo patří nginx" || block "porty 80/443 drží jiný proces: $busy"
+  # Sdílený nginx (T5.3): cizí vhosty se nikdy nepřepisují ani nemažou, ale
+  # catch-all default_server a smazání sites-enabled/default patří jen na
+  # dedikovaný nginx. S cizími vhosty je proto nutné výslovné NC_NGINX_SHARED=1.
+  local foreign
+  foreign=$(foreign_nginx_confs | tr '\n' ' ')
+  if [ -z "$foreign" ]; then
+    ok "nginx bez cizích vhostů"
+  elif [ "$NC_NGINX_SHARED" = 1 ]; then
+    ok "sdílený nginx (NC_NGINX_SHARED=1): cizí vhosty zůstanou beze změny: $foreign"
+  else
+    block "nginx už má cizí vhosty ($foreign): nastav NC_NGINX_SHARED=1 (bez default_server NovuConstructu)"
+  fi
 
   # Firewall a SSH: jen informace – mění je samostatné příkazy s potvrzením.
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -877,8 +907,17 @@ install_units() {
       install_file "$DEPLOY_DIR/systemd/$u" "/etc/systemd/system/$u" 0644 root:root
     done
   fi
-  install_file "$DEPLOY_DIR/systemd/nginx.service.d/10-novuconstruct.conf" \
-    /etc/systemd/system/nginx.service.d/10-novuconstruct.conf 0644 root:root
+  if [ "$NC_NGINX_SHARED" = 1 ]; then
+    # Sdílený nginx (T5.3): bez Requires=nftables.service – zastavení nebo restart
+    # nftables nesmí shodit vhosty NovuServeru. Pořadí po firewallu a WG zůstává;
+    # že nftables běží, ověřuje `start` před načtením vhostů.
+    sed -e '/^Requires=nftables\.service$/d' -e 's/^Wants=/Wants=nftables.service /' \
+      "$DEPLOY_DIR/systemd/nginx.service.d/10-novuconstruct.conf" \
+      | write_managed /etc/systemd/system/nginx.service.d/10-novuconstruct.conf 0644 root:root
+  else
+    install_file "$DEPLOY_DIR/systemd/nginx.service.d/10-novuconstruct.conf" \
+      /etc/systemd/system/nginx.service.d/10-novuconstruct.conf 0644 root:root
+  fi
   if [ "$CHANGES" -gt "$units_before" ]; then run systemctl daemon-reload; fi
 }
 
@@ -888,9 +927,28 @@ install_nginx() {
   for f in "$DEPLOY_DIR"/nginx/snippets/*.conf; do
     install_file "$f" "/etc/nginx/snippets/$(basename "$f")" 0644 root:root
   done
+  # Každý vhost je samostatný soubor nc-*.conf v conf.d; install_file cizí soubor
+  # nikdy nepřepíše (jen <soubor>.nc-new). 00-nc-http-common.conf je bez direktiv:
+  # přepíše starou spravovanou kopii, která nastavovala server_tokens globálně (T5.3).
   install_file "$DEPLOY_DIR/nginx/nc-http-common.conf" /etc/nginx/conf.d/00-nc-http-common.conf 0644 root:root
   has_core && install_file "$DEPLOY_DIR/nginx/nc-core-private.conf" /etc/nginx/conf.d/nc-core-private.conf 0644 root:root
-  has_edge && install_file "$DEPLOY_DIR/nginx/nc-edge-public.conf" /etc/nginx/conf.d/nc-edge-public.conf 0644 root:root
+  if has_edge; then
+    if [ -n "$NC_DOMAIN" ]; then
+      [[ "$NC_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || die "NC_DOMAIN má neplatné znaky"
+      sed "s/server_name www\.example\.invalid example\.invalid;/server_name $NC_DOMAIN;/" "$DEPLOY_DIR/nginx/nc-edge-public.conf" \
+        | write_managed /etc/nginx/conf.d/nc-edge-public.conf 0644 root:root
+    else
+      install_file "$DEPLOY_DIR/nginx/nc-edge-public.conf" /etc/nginx/conf.d/nc-edge-public.conf 0644 root:root
+    fi
+    if [ "$NC_NGINX_SHARED" = 1 ]; then
+      # default_server patří vlastníkovi sdíleného nginx.
+      if [ -f /etc/nginx/conf.d/nc-edge-default.conf ] && is_managed /etc/nginx/conf.d/nc-edge-default.conf; then
+        warn "/etc/nginx/conf.d/nc-edge-default.conf (default_server) zůstal z dedikované instalace: při NC_NGINX_SHARED=1 ho odstraň ručně"
+      fi
+    else
+      install_file "$DEPLOY_DIR/nginx/nc-edge-default.conf" /etc/nginx/conf.d/nc-edge-default.conf 0644 root:root
+    fi
+  fi
   if has_core && [ "$NC_ENABLE_GATEWAY_ZONE" = 1 ]; then
     # Zóna gateway na core: varianta A na WG adrese, varianta B jen na loopbacku.
     if [ "$NC_VARIANT" = single ]; then f=nc-core-gateway-single.conf; else f=nc-core-gateway.conf; fi
@@ -908,7 +966,12 @@ install_nginx() {
   ensure_dir /etc/novuconstruct/tls 0750 root:www-data
   ensure_dir /var/www/novuconstruct/public 0755 root:root
   ensure_dir /var/www/letsencrypt 0755 root:root
-  if [ -L /etc/nginx/sites-enabled/default ]; then run rm -f /etc/nginx/sites-enabled/default; fi
+  # Distribuční `default` (listen 80 default_server) koliduje s nc-edge-default.conf;
+  # na sdíleném nginx ho nemažeme – patří vlastníkovi serveru.
+  if [ "$NC_NGINX_SHARED" != 1 ] && [ -L /etc/nginx/sites-enabled/default ] \
+     && [ "$(readlink -f /etc/nginx/sites-enabled/default)" = /etc/nginx/sites-available/default ]; then
+    run rm -f /etc/nginx/sites-enabled/default
+  fi
   if [ ! -f /etc/novuconstruct/tls/fullchain.pem ] && has_edge; then
     # Dočasný certifikát, aby nginx -t prošel; `nc-provision tls` ho nahradí.
     run openssl req -x509 -newkey rsa:2048 -nodes -days 7 -subj "/CN=${NC_DOMAIN:-novuconstruct.invalid}" \
@@ -985,6 +1048,11 @@ cmd_start() {
     run systemctl enable --now nc-core.target
   fi
   if ip -br addr 2>/dev/null | grep -q 'wg-nc' || ! has_core; then
+    # Sdílený nginx nemá Requires=nftables.service (T5.3): vhosty NovuConstructu
+    # se načtou jen za běžícího firewallu.
+    if [ "$NC_NGINX_SHARED" = 1 ] && [ "$DRY_RUN" -eq 0 ] && ! systemctl is-active --quiet nftables; then
+      die "nftables neběží: na sdíleném nginx se vhosty NovuConstructu bez firewallu nenačtou ('$0 firewall')"
+    fi
     run nginx -t -q
     run systemctl enable --now nginx
     run systemctl reload nginx

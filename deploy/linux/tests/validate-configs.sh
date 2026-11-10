@@ -3,7 +3,8 @@
 # disposable container – never on a production host):
 #   docker run --rm --cap-add NET_ADMIN -v "$PWD:/src:ro" ubuntu:24.04 \
 #       sh /src/deploy/linux/tests/validate-configs.sh
-# Checks: nginx -t (both gateway-zone variants), nft -c -f (all three rulesets),
+# Checks: nginx -t (both gateway-zone variants, dedicated and shared with foreign
+# NovuServer vhosts – T5.3), nft -c -f (all three rulesets),
 # systemd-analyze verify + security, shellcheck and shell syntax of the helpers,
 # that no template carries a real-looking secret, and for the Web Gateway (NC-007):
 # edge vhost behaviour against a stub gateway (404 for /api, /docs, …; CSP without
@@ -34,6 +35,8 @@ bad()  {
   [ "${GITHUB_ACTIONS:-}" = "true" ] && echo "::error title=validate-configs::FAIL $*"
   return 0
 }
+# body FUNC – source of a function in nc-provision (static checks of the installer).
+body() { awk -v f="$1() {" 'index($0, f) == 1 {on = 1} on {print} on && /^}/ {exit}' "$D/provision/nc-provision"; }
 
 # ── users/groups referenced by units and rulesets ─────────────────────────────
 getent group nc-api-sock >/dev/null || groupadd --system nc-api-sock
@@ -52,7 +55,8 @@ id nc-garage >/dev/null 2>&1 || useradd --system -g nc-garage -d /nonexistent -s
 mkdir -p /etc/nginx/snippets /etc/novuconstruct/tls /var/www/novuconstruct/public /var/www/novuconstruct/app/assets /var/www/letsencrypt
 cp "$D"/nginx/snippets/*.conf /etc/nginx/snippets/
 cp "$D/nginx/nc-http-common.conf" /etc/nginx/conf.d/00-nc-http-common.conf
-cp "$D/nginx/nc-core-private.conf" "$D/nginx/nc-edge-public.conf" "$D/nginx/nc-edge-webapp.conf" /etc/nginx/conf.d/
+# Dedicated nginx (NC_NGINX_SHARED=0): with the catch-all nc-edge-default.conf.
+cp "$D/nginx/nc-core-private.conf" "$D/nginx/nc-edge-public.conf" "$D/nginx/nc-edge-webapp.conf" "$D/nginx/nc-edge-default.conf" /etc/nginx/conf.d/
 rm -f /etc/nginx/sites-enabled/default
 # nginx -t binds listeners: give the container the WireGuard addresses on lo.
 ip addr add 10.50.0.1/32 dev lo 2>/dev/null || true
@@ -100,7 +104,20 @@ if awk '/^[[:space:]]*location/,/}/' "$D/nginx/nc-edge-webapp.conf" | grep -q 'a
   bad "edge app: add_header inside a location drops the inherited security headers"
 else ok "edge app: security headers only at server level (inherited everywhere)"; fi
 grep -q 'Strict-Transport-Security' "$D/nginx/nc-edge-webapp.conf" && ok "edge app sends HSTS" || bad "edge app without HSTS"
-grep -q '^server_tokens off;' "$D/nginx/nc-http-common.conf" && ok "server_tokens off" || bad "server_tokens not off"
+grep -q '^server_tokens off;' "$D/nginx/snippets/nc-security-headers.conf" && ok "server_tokens off (per server)" || bad "server_tokens not off"
+# Shared nginx (T5.3): no http-level directive that would change foreign vhosts,
+# default_server only in the dedicated-only catch-all, and every NovuConstruct
+# server block carries its own server_tokens/security headers.
+if grep -vE '^[[:space:]]*(#|$)' "$D/nginx/nc-http-common.conf" | grep -q .; then
+  bad "nc-http-common.conf sets http-level directives (shared nginx)"
+else ok "nc-http-common.conf without http-level directives"; fi
+ds=$(grep -lE '^[[:space:]]*listen[^;#]*default_server' "$D"/nginx/*.conf | grep -v '/nc-edge-default\.conf$' || true)
+[ -z "$ds" ] && ok "default_server only in nc-edge-default.conf" || bad "default_server outside nc-edge-default.conf: $ds"
+for f in "$D"/nginx/nc-*.conf; do
+  [ "$(grep -c '^server {' "$f")" -eq "$(grep -c 'include /etc/nginx/snippets/nc-security-headers.conf;' "$f")" ] \
+    || bad "$(basename "$f"): a server block without nc-security-headers.conf (server_tokens)"
+done
+ok "every server block includes nc-security-headers.conf"
 grep -q 'client_max_body_size 256k;' "$D/nginx/nc-edge-webapp.conf" && [ "$(grep -c 'client_max_body_size 25m;' "$D/nginx/nc-edge-webapp.conf")" -eq 1 ] \
   && ok "edge app: 256k default body, 25m only on the upload location" || bad "edge app body limits"
 grep -q 'X-Forwarded-For    \$remote_addr;' "$D/nginx/snippets/nc-proxy-bff.conf" && ok "BFF proxy overwrites X-Forwarded-For with the TCP peer" || bad "BFF proxy X-Forwarded-For"
@@ -188,6 +205,72 @@ up=$(c -X POST -H 'Content-Type: multipart/form-data; boundary=x' --data-binary 
   && ok "information website: /bff → 404" || bad "information website proxies /bff"
 nginx -s stop 2>/dev/null || true
 kill "$stub" 2>/dev/null || true
+
+# ── shared nginx with NovuServer (T5.3, NC_NGINX_SHARED=1) ───────────────────
+# Foreign configuration as NovuServer may have it: the distribution default site
+# (default_server on :80), its own vhost with default_server on :443 and an
+# http-level directive. NovuConstruct adds only its own nc-*.conf files exactly as
+# `nc-provision install` does with NC_NGINX_SHARED=1 (no nc-edge-default.conf).
+sleep 1
+rm -f /etc/nginx/conf.d/nc-edge-default.conf
+ln -sfn /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+mkdir -p /etc/novuserver-test
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=platform.novuserver.invalid" \
+  -keyout /etc/novuserver-test/key.pem -out /etc/novuserver-test/cert.pem >/dev/null 2>&1
+cat > /etc/nginx/sites-enabled/novuserver <<'NGX'
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name platform.novuserver.invalid;
+    ssl_certificate     /etc/novuserver-test/cert.pem;
+    ssl_certificate_key /etc/novuserver-test/key.pem;
+    location / { return 200 "novuserver\n"; }
+}
+NGX
+printf 'server_tokens on;\n' > /etc/nginx/conf.d/novuserver-http.conf
+foreign_sum=$(cat /etc/nginx/sites-enabled/novuserver /etc/nginx/conf.d/novuserver-http.conf /etc/nginx/sites-available/default | sha256sum)
+if nginx -t -q 2>/tmp/nginx-shared.txt; then ok "nginx -t (shared with foreign vhosts and default_server)"; else bad "nginx -t shared: $(cat /tmp/nginx-shared.txt)"; fi
+if grep -q '\[warn\]' /tmp/nginx-shared.txt; then bad "nginx -t shared warnings: $(grep '\[warn\]' /tmp/nginx-shared.txt | head -n 2)"; else ok "nginx -t shared without warnings"; fi
+found=$(bash -c "$(body foreign_nginx_confs); foreign_nginx_confs" | sort | tr '\n' ' ' || true)
+[ "$found" = "/etc/nginx/conf.d/novuserver-http.conf /etc/nginx/sites-enabled/novuserver " ] \
+  && ok "preflight detects exactly the foreign vhosts" || bad "foreign_nginx_confs: '$found'"
+mkdir -p /var/www/letsencrypt/.well-known/acme-challenge
+printf 'acme\n' > /var/www/letsencrypt/.well-known/acme-challenge/probe
+if nginx; then
+  sleep 1
+  [ "$(curl -sk --resolve platform.novuserver.invalid:443:127.0.0.1 https://platform.novuserver.invalid/)" = novuserver ] \
+    && ok "shared: foreign vhost still answers" || bad "shared: foreign vhost broken"
+  [ "$(curl -sk --resolve unknown.invalid:443:127.0.0.1 https://unknown.invalid/)" = novuserver ] \
+    && ok "shared: unknown host on 443 → foreign default_server" || bad "shared: NovuConstruct took the 443 default"
+  [ "$(curl -s -o /dev/null -w '%{http_code}' --resolve unknown.invalid:80:127.0.0.1 http://unknown.invalid/)" = 200 ] \
+    && ok "shared: unknown host on 80 → foreign default site" || bad "shared: NovuConstruct took the 80 default"
+  curl -skI --resolve platform.novuserver.invalid:443:127.0.0.1 https://platform.novuserver.invalid/ | grep -qiE '^server: nginx/[0-9]' \
+    && ok "shared: foreign server_tokens unchanged" || bad "shared: NovuConstruct changed the foreign server_tokens"
+  hdr=$(curl -skI --resolve "$APP:443:127.0.0.1" "https://$APP/" || true)
+  printf '%s' "$hdr" | head -n 1 | grep -q ' 200' && ok "shared: app vhost answers" || bad "shared: app vhost: $(printf '%s' "$hdr" | head -n 1)"
+  printf '%s' "$hdr" | grep -qiE '^server: nginx\s*$' && ok "shared: app vhost without nginx version" || bad "shared: app vhost leaks the version"
+  [ "$(curl -s -o /dev/null -w '%{http_code}' --resolve "$APP:80:127.0.0.1" "http://$APP/x")" = 301 ] \
+    && ok "shared: app host on 80 → redirect (own server_name)" || bad "shared: app host on 80 not redirected"
+  [ "$(curl -s --resolve "www.example.invalid:80:127.0.0.1" http://www.example.invalid/.well-known/acme-challenge/probe)" = acme ] \
+    && ok "shared: ACME challenge for the info site on 80" || bad "shared: ACME challenge on 80"
+  nginx -s stop 2>/dev/null || true
+else bad "shared: nginx does not start"; fi
+[ "$(cat /etc/nginx/sites-enabled/novuserver /etc/nginx/conf.d/novuserver-http.conf /etc/nginx/sites-available/default | sha256sum)" = "$foreign_sum" ] \
+  && ok "shared: foreign files unchanged" || bad "shared: foreign files changed"
+rm -f /etc/nginx/sites-enabled/novuserver /etc/nginx/conf.d/novuserver-http.conf /etc/nginx/sites-enabled/default
+rm -rf /etc/novuserver-test /var/www/letsencrypt/.well-known
+# Installer: own nc-*.conf files only, foreign files never overwritten, catch-all
+# and removal of the distribution default only on a dedicated nginx.
+inst=$(body install_nginx)
+other=$(printf '%s\n' "$inst" | grep -oE '/etc/nginx/conf\.d/[^ ]+' | grep -vE '^/etc/nginx/conf\.d/(00-)?nc-[a-z-]+\.conf$' || true)
+[ -z "$other" ] && ok "install_nginx writes only nc-*.conf in conf.d" || bad "install_nginx writes foreign names: $other"
+body install_file | grep -q 'nc-new' && ok "install_file never overwrites a foreign file (.nc-new)" || bad "install_file may overwrite foreign files"
+printf '%s\n' "$inst" | grep -B3 'install_file .*nc-edge-default.conf' | grep -q 'else' \
+  && printf '%s\n' "$inst" | grep -B2 'rm -f /etc/nginx/sites-enabled/default' | grep -q 'NC_NGINX_SHARED" != 1' \
+  && ok "default_server and removal of sites-enabled/default only with NC_NGINX_SHARED=0" || bad "install_nginx touches the default server on a shared nginx"
+grep -qx 'Requires=nftables.service' "$D/systemd/nginx.service.d/10-novuconstruct.conf" && grep -q '^Wants=' "$D/systemd/nginx.service.d/10-novuconstruct.conf" \
+  && body install_units | grep -qF "/^Requires=nftables\\.service\$/d" \
+  && ok "shared nginx drop-in: Requires=nftables.service removed" || bad "shared nginx drop-in still requires nftables"
 
 # ── nftables ─────────────────────────────────────────────────────────────────
 for ruleset in "$D"/nftables/*.nft; do
@@ -301,7 +384,6 @@ grep -q '^Wants=' "$D/systemd/nc-edge.target" && bad "nc-edge.target auto-starts
 grep -qx 'PrivateNetwork=yes' "$D/systemd/nc-gateway-redis.service" && grep -qx 'RestrictAddressFamilies=AF_UNIX' "$D/systemd/nc-gateway-redis.service" \
   && ok "gateway Redis: no network at all" || bad "gateway Redis network isolation"
 # nc-provision: install prepares, only `gateway` (with NC_CONFIRM_GATEWAY=1) enables/starts.
-body() { awk -v f="$1() {" 'index($0, f) == 1 {on = 1} on {print} on && /^}/ {exit}' "$D/provision/nc-provision"; }
 if body cmd_install | grep -q 'nc-gateway\|nc-edge' || body install_units | grep -q 'systemctl enable\|--now' || body install_gateway_app | grep -q 'systemctl'; then
   bad "nc-provision install enables/starts the gateway"
 else ok "nc-provision install never enables/starts the gateway"; fi

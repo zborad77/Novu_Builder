@@ -20,7 +20,7 @@ Bez T3 nelze zvolit větev akceptace T5.
 | Uložení firewallu | Vlastní tabulka (T5.1) | `nc-provision` `cmd_firewall`: záloha `nft list table inet <t>`, návrat = `delete table` + obnova jen vlastní tabulky; trvale `/etc/nftables.d/novuconstruct.nft` + `include` v `/etc/nftables.conf` | Cizí obsah `/etc/nftables.conf` zůstává; stará kopie tabulky z dřívější verze se jen hlásí varováním |
 | PostgreSQL | Jen dedikovaný | `nc-provision:423` `listen_addresses = ''`; `:431-444` celý `pg_hba.conf` vlastní, `local all all reject` | NovuServer ztratí TCP i lokální přístup |
 | Redis | Jen dedikovaný | `nc-provision:497-524` include do `/etc/redis/redis.conf`, `user default off`, ACL jen nc-api/nc-worker | Klienti NovuServeru bez ACL uživatele přestanou fungovat |
-| nginx | Jen dedikovaný | `deploy/linux/nginx/nc-edge-public.conf:10-20` `default_server`; `nc-provision:911` maže `sites-enabled/default`; `systemd/nginx.service.d/10-novuconstruct.conf:7` `Requires=nftables.service`; `nc-http-common.conf` globální http kontext | Konflikt default_server, změna globálního chování nginx NovuServeru |
+| nginx | Sdílení přes `NC_NGINX_SHARED=1` (T5.3) | `default_server` jen v `nginx/nc-edge-default.conf` (instaluje se jen při `NC_NGINX_SHARED=0`); `sites-enabled/default` se maže jen při `NC_NGINX_SHARED=0`; drop-in při `NC_NGINX_SHARED=1` bez `Requires=nftables.service`; `00-nc-http-common.conf` bez direktiv, `server_tokens off` po serverech; preflight blokuje cizí vhosty při `NC_NGINX_SHARED=0` | Cizí vhosty, default server a `server_tokens` NovuServeru zůstanou; reload nginx (po `nginx -t`) se týká i jeho vhostů |
 | Gateway Redis | Oddělený | `deploy/linux/redis/nc-gateway-redis.conf`, unix socket, `PrivateNetwork=yes` | bez kolize |
 | Garage | Oddělený | loopback 3900/3901/3903, preflight `nc-provision:251-253` | kolize jen při obsazených portech |
 
@@ -40,8 +40,8 @@ Pozn.: samotné přesunutí pravidel do vlastní tabulky nestačí – drop v li
 ### Varianta SDÍLENÝ
 - T5.1 nftables: bez `flush ruleset` (jen `table inet nc` delete/create) – **hotovo**; rollback a `/etc/nftables.conf` nepřepisují cizí pravidla (include místo náhrady) – **hotovo**; bez konečného drop pro provoz NovuServeru – **otevřené** (závisí na T3/T4).
 - T5.2 PostgreSQL/Redis: samostatný cluster PG (např. `postgresql@<ver>-nc`, vlastní socket/port) a samostatná instance Redis (`redis-server@nc`, vlastní socket); žádný zásah do `pg_hba.conf` ani `/etc/redis/redis.conf` NovuServeru; úprava preflightu.
-- T5.3 nginx: žádný `default_server`, nemazat `sites-enabled/default`, `nc-http-common.conf` jen neutrální direktivy, drop-in bez `Requires=nftables.service` pro cizí vhosty; podmíněná instalace.
-- `validate-configs.sh` rozšířit o scénář koexistence (cizí tabulka nft – **hotovo**, cizí vhost, cizí PG/Redis) a musí projít.
+- T5.3 nginx: žádný `default_server`, nemazat `sites-enabled/default`, `nc-http-common.conf` jen neutrální direktivy, drop-in bez `Requires=nftables.service` pro cizí vhosty; podmíněná instalace – **implementováno** (`NC_NGINX_SHARED=1`, ST-00003), ověření CI viz Implementační poznámky T5.3.
+- `validate-configs.sh` rozšířit o scénář koexistence (cizí tabulka nft – **hotovo**, cizí vhost – **implementováno**, cizí PG/Redis) a musí projít.
 - T5.4: uživatel ověří na VM s běžícím NovuServerem (`wg-platform`, `wg-admin`, jeho DB, Redis a vhosty fungují po `install` i `firewall`).
 
 ## Implementační poznámky – T5.1 nftables ve vlastní tabulce (ST-00001, 2026-11-10)
@@ -69,6 +69,31 @@ Autor: Pavel Dostál, Novusion
 - `policy drop` v `inet nc` dál blokuje provoz NovuServeru na sdíleném serveru (konečný verdikt drop v jakémkoli base chainu). Řešení podle T3/T4 v rámci T5.
 - Obnova zálohy tabulky se sadami s `timeout`/`expires` prvky závisí na tom, že `nft` přijme vlastní výpis (stejné riziko jako dřívější obnova celého rulesetu); ověřit na VM v T5.4.
 - Servery zprovozněné dřívější verzí mají v `/etc/nftables.conf` kopii tabulky i `flush ruleset`; při `systemctl reload nftables` se cizí pravidla z jiných souborů ztratí – odstranit ručně podle varování.
+
+## Implementační poznámky – T5.3 Sdílený nginx 80/443 (ST-00003, 2026-11-10)
+
+Autor: Pavel Dostál, Novusion
+
+### Změněné chování
+- Nový přepínač `NC_NGINX_SHARED` (`nc-provision`, `provision.conf.example`), výchozí `0` = dosavadní chování dedikovaného nginx.
+- `nginx/nc-edge-default.conf` (nový): jediné místo s `default_server` (80: ACME + přesměrování, 443: `return 444`). Instaluje se jen při `NC_NGINX_SHARED=0`. Při `1` zůstane případná dřívější spravovaná kopie a instalátor jen varuje (nic nemaže).
+- `nginx/nc-edge-public.conf`: bez `default_server`; port 80 jen pro vlastní `server_name`. `nc-provision` nově dosazuje `NC_DOMAIN` místo `example.invalid` (dřív se šablona instalovala beze změny).
+- `nginx/nc-edge-webapp.conf`: nový port-80 blok pro `NC_APP_DOMAIN` (ACME + přesměrování), protože na sdíleném nginx už nepomůže catch-all.
+- `nginx/nc-http-common.conf`: bez direktiv; `server_tokens off` přesunuto do `snippets/nc-security-headers.conf`, které includuje každý `server` blok NovuConstructu. Starší spravovaná kopie s globálním `server_tokens off` se při `install` přepíše neutrálním obsahem.
+- `install_nginx`: všechny vhosty jsou samostatné soubory `conf.d/nc-*.conf`; cizí soubory chrání `install_file` (`.nc-new`). `sites-enabled/default` se maže jen při `NC_NGINX_SHARED=0` a jen když míří na distribuční `sites-available/default`.
+- `install_units`: při `NC_NGINX_SHARED=1` se drop-in `10-novuconstruct.conf` instaluje bez `Requires=nftables.service` (nftables jen ve `Wants=`), `After=` zůstává.
+- `cmd_start`: při `NC_NGINX_SHARED=1` odmítne načíst vhosty, když `nftables` neběží (náhrada za `Requires=`).
+- Preflight: `foreign_nginx_confs` najde cizí soubory v `sites-enabled/` a `conf.d/`; při `NC_NGINX_SHARED=0` blokuje.
+
+### Validace
+- `bash -n deploy/linux/provision/nc-provision` a `sh -n deploy/linux/tests/validate-configs.sh`: exit 0 (lokálně).
+- `validate-configs.sh` nově: dedikovaný layout s `nc-edge-default.conf`; scénář sdíleného nginx vedle cizího `sites-enabled/default`, cizího vhostu s `default_server` na 443 a cizího `server_tokens on` v http kontextu – `nginx -t` bez chyb a varování, cizí vhost i default server odpovídají, cizí `server_tokens` beze změny, vhosty NovuConstructu odpovídají (bez verze v `Server`), ACME a přesměrování na 80, cizí soubory beze změny (SHA-256), detekce cizích vhostů v preflightu; statické kontroly `install_nginx`, `install_file` a drop-inu. Výsledek CI `deploy-linux-config` viz zpráva úlohy ST-00003.
+
+### Rizika a navazující práce
+- `systemctl reload nginx` (po `nginx -t`) načte znovu i vhosty NovuServeru – nevyhnutelné u sdíleného procesu.
+- Na sdíleném nginx bez cizího `default_server` se výchozím serverem pro neznámý host stane první načtený blok (obvykle `conf.d/nc-*`); NovuServer by měl mít vlastní `default_server`.
+- Bez `Requires=nftables.service` může nginx po restartu systému naběhnout dřív, než se nftables načte neúspěšně; kontrolu dělá jen `start`. Ověřit v T5.4 (N12).
+- Volby `listen` (`http2`, `ssl`) jsou na sdíleném soketu společné všem vhostům; cizí vhost s `reuseport`/`backlog` na 443 ověřit v T5.4.
 
 ## Otevřené
 - Rozhodnutí T3 a výpis T4.
