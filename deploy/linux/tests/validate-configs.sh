@@ -436,7 +436,7 @@ if bash -n "$D/provision/nc-provision"; then ok "bash -n nc-provision"; else bad
 for script in "$D"/bin/* "$D"/tests/*.sh "$D"/deploy.sh; do
   if sh -n "$script"; then ok "sh -n $(basename "$script")"; else bad "sh -n $(basename "$script")"; fi
 done
-# shellcheck_gate POPIS ARGS… – při nálezu vypíše i prvních 8 nálezů jako FAIL,
+# Pomocník shellcheck_gate POPIS ARGS… – při nálezu vypíše i prvních 8 nálezů jako FAIL,
 # aby byly vidět v anotacích GitHub Actions (log jobu bez přihlášení nejde číst).
 shellcheck_gate() {
   label=$1; shift

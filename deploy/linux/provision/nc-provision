@@ -1190,7 +1190,7 @@ cmd_firewall() {
       [ -f /etc/nftables.conf ] && run cp -p /etc/nftables.conf "/etc/nftables.conf.nc-bak.$TS"
       run tee -a /etc/nftables.conf >/dev/null <<<"$inc"
     fi
-    if grep -q "^[[:space:]]*table inet $table[[:space:]]*{" /etc/nftables.conf 2>/dev/null; then
+    if grep -q "^[[:space:]]*table inet ${table}[[:space:]]*{" /etc/nftables.conf 2>/dev/null; then
       warn "/etc/nftables.conf ještě obsahuje starou kopii tabulky inet $table (dřívější verze nc-provision); odstraň ji ručně, platí $saved"
     fi
     run systemctl enable --quiet nftables
