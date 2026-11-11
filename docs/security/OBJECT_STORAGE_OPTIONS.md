@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Datum** | 17. 10. 2026 |
-| **Stav** | **NÁVRH k rozhodnutí.** Nic není implementováno. Krok MinIO v provisioningu F6.2 je pozastavený. |
+| **Stav** | **NÁVRH k rozhodnutí.** Doporučená varianta Garage je od 10. 11. 2026 implementovaná v provisioningu (ST-00005, commit `8900cd1`: `nc-provision install`/`start`, `nc-garage.service`, `garage.toml`, `nc-gen-secrets --garage`, kontroly ve `validate-configs.sh`). Formální potvrzení S-1 a S-2 (§6) vlastníkem zatím v repozitáři zapsané není. Krok MinIO v provisioningu F6.2 je nahrazen. |
 | **Spouštěč** | `dl.min.io` vrací pro server i `mc` `410 Gone`. Repozitář MinIO CE je od 25. 4. 2026 archivovaný, bez bezpečnostních oprav a bez distribuovaných binárek. |
 | **Navazuje na** | [SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md) kap. 3.4, 5, 8.4 · [PHOTO_DELETION.md](PHOTO_DELETION.md) · IMPLEMENTATION_PLAN F4.6, F6.2, F6.7, F9.1 |
 
