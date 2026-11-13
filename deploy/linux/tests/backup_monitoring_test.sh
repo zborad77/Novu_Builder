@@ -26,7 +26,7 @@ bad() { echo "FAIL backup: $*"; fails=$((fails + 1)); }
 
 # ── stubs ────────────────────────────────────────────────────────────────────
 STUBS="$W/stubs"
-rm -rf "$STUBS" "$W/etc" "$W/data" "$W/state" "$W/metrics" "$W/uploaded"
+rm -rf "${STUBS:?}" "${W:?}/etc" "${W:?}/data" "${W:?}/state" "${W:?}/metrics" "${W:?}/uploaded" "${W:?}/sys"
 mkdir -p "$STUBS" "$W/etc/secrets" "$W/etc/wireguard" "$W/data/garage/data" "$W/uploaded"
 stub() { cat > "$STUBS/$1"; chmod +x "$STUBS/$1"; }
 
