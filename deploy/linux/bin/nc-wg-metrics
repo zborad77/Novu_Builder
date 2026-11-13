@@ -1,0 +1,96 @@
+#!/bin/sh
+# Copyright (c) 2026 Novusion
+# Website: https://novusion.com
+# Contact: info@novusion.com
+#
+# Author: Pavel Dostál
+# Project: NovuConstruct
+# Module: deploy/linux/bin
+# Description: WireGuard state as node_exporter textfile metrics (F9.3, SECURITY_ARCHITECTURE 8.5):
+#              interface up/down, latest handshake per interface and per peer, and the
+#              configured handshake age limit used by the WireGuardNoHandshake alert.
+# Created: 2026-11-13
+#
+#   NC_WG_INTERFACES="wg-nc wg-nc-admin"            interfaces that must exist and be up
+#   NC_WG_HANDSHAKE_MAX_AGE=900                     seconds an up interface may go without a
+#                                                   handshake with any peer (0 = no alert)
+#   NC_WG_HANDSHAKE_MAX_AGE_OVERRIDES="wg-nc-admin:86400"   per-interface limits
+#   NC_WG_REQUIRED_PEERS="wg-nc:<public key> ..."   peers that must keep a fresh handshake
+# Run from nc-wg-metrics.timer every minute. Configuration: /etc/novuconstruct/monitoring.env
+# (template deploy/linux/env/monitoring.env.example).
+set -eu
+umask 022
+
+NC_WG_INTERFACES=${NC_WG_INTERFACES:-wg-nc wg-nc-admin}
+NC_WG_HANDSHAKE_MAX_AGE=${NC_WG_HANDSHAKE_MAX_AGE:-900}
+NC_WG_HANDSHAKE_MAX_AGE_OVERRIDES=${NC_WG_HANDSHAKE_MAX_AGE_OVERRIDES:-}
+NC_WG_REQUIRED_PEERS=${NC_WG_REQUIRED_PEERS:-}
+NC_WG_SYSFS=${NC_WG_SYSFS:-/sys/class/net}
+NC_BACKUP_METRICS_DIR=${NC_BACKUP_METRICS_DIR:-/var/lib/prometheus/node-exporter}
+OUT="$NC_BACKUP_METRICS_DIR/nc_wg.prom"
+
+is_uint() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+
+# limit_for IFACE – handshake age limit in seconds for the interface.
+limit_for() {
+  lim=$NC_WG_HANDSHAKE_MAX_AGE
+  for o in $NC_WG_HANDSHAKE_MAX_AGE_OVERRIDES; do
+    [ "${o%%:*}" = "$1" ] && lim=${o#*:}
+  done
+  if ! is_uint "$lim"; then
+    echo "nc-wg-metrics: invalid handshake limit '$lim' for $1" >&2
+    exit 2
+  fi
+  echo "$lim"
+}
+
+# link_up IFACE – the interface exists and is administratively up (IFF_UP).
+link_up() {
+  f="$NC_WG_SYSFS/$1/flags"
+  [ -r "$f" ] || return 1
+  flags=$(cat "$f") || return 1
+  [ $((flags & 1)) -eq 1 ]
+}
+
+# Validate the configuration before writing anything.
+for i in $NC_WG_INTERFACES; do limit_for "$i" >/dev/null; done
+
+mkdir -p "$NC_BACKUP_METRICS_DIR"
+tmp="$OUT.$$"
+trap 'rm -f "$tmp"' EXIT
+{
+  echo "# HELP nc_wg_interface_up 1 if the WireGuard interface exists, is up and answers wg show."
+  echo "# TYPE nc_wg_interface_up gauge"
+  echo "# HELP nc_wg_interface_latest_handshake_timestamp_seconds Unix time of the newest handshake with any peer (0 = never)."
+  echo "# TYPE nc_wg_interface_latest_handshake_timestamp_seconds gauge"
+  echo "# HELP nc_wg_interface_peers Number of peers configured on the interface."
+  echo "# TYPE nc_wg_interface_peers gauge"
+  echo "# HELP nc_wg_handshake_max_age_seconds Configured limit for the newest handshake age (0 = alert disabled)."
+  echo "# TYPE nc_wg_handshake_max_age_seconds gauge"
+  echo "# HELP nc_wg_peer_latest_handshake_timestamp_seconds Unix time of the peer's latest handshake (0 = never)."
+  echo "# TYPE nc_wg_peer_latest_handshake_timestamp_seconds gauge"
+  echo "# HELP nc_wg_peer_required 1 for peers that must keep a fresh handshake (NC_WG_REQUIRED_PEERS)."
+  echo "# TYPE nc_wg_peer_required gauge"
+  for i in $NC_WG_INTERFACES; do
+    echo "nc_wg_handshake_max_age_seconds{interface=\"$i\"} $(limit_for "$i")"
+    if link_up "$i" && hs=$(wg show "$i" latest-handshakes 2>/dev/null); then
+      echo "nc_wg_interface_up{interface=\"$i\"} 1"
+      printf '%s\n' "$hs" | awk -v i="$i" '
+        NF == 2 {
+          printf "nc_wg_peer_latest_handshake_timestamp_seconds{interface=\"%s\",peer=\"%s\"} %s\n", i, $1, $2
+          n++; if ($2 + 0 > max) max = $2 + 0
+        }
+        END {
+          printf "nc_wg_interface_peers{interface=\"%s\"} %d\n", i, n
+          printf "nc_wg_interface_latest_handshake_timestamp_seconds{interface=\"%s\"} %d\n", i, max
+        }'
+    else
+      echo "nc_wg_interface_up{interface=\"$i\"} 0"
+    fi
+  done
+  for rp in $NC_WG_REQUIRED_PEERS; do
+    echo "nc_wg_peer_required{interface=\"${rp%%:*}\",peer=\"${rp#*:}\"} 1"
+  done
+} > "$tmp"
+mv -f "$tmp" "$OUT"
+trap - EXIT

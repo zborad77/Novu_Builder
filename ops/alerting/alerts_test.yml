@@ -1,0 +1,208 @@
+# Copyright (c) 2026 Novusion
+# Website: https://novusion.com
+# Contact: info@novusion.com
+#
+# Author: Pavel Dostál
+# Project: NovuConstruct
+# Module: ops/alerting
+# Description: promtool unit tests of the alerts for API and worker outage, stale worker
+#              heartbeat and WireGuard (T7.2, F9.3).
+# Created: 2026-11-13
+#
+#   promtool test rules ops/alerting/alerts_test.yml   (part of deploy/linux/tests/validate-configs.sh)
+#
+# promtool starts evaluation at Unix time 0, so time() equals the evaluation time in seconds.
+
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+
+  # ── API outage ────────────────────────────────────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'up{job="novu-backend",instance="api:8000"}'
+        values: '1 1 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: BackendDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: BackendDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: novu-backend
+              instance: api:8000
+            exp_annotations:
+              summary: "Novu backend is down"
+              description: "The Python backend has been unreachable for more than 1 minute."
+
+  # ── the only worker stops: WorkerDown ─────────────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'novu_worker_monitoring_available{job="novu-backend",instance="api:8000"}'
+        values: '1x10'
+      - series: 'novu_worker_alive{job="novu-backend",instance="api:8000"}'
+        values: '1 1 0x8'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: WorkerDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: WorkerDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: novu-backend
+              instance: api:8000
+            exp_annotations:
+              summary: "Novu worker process is not running"
+              description: "No worker heartbeat detected for 3+ minutes. Analysis jobs will queue up."
+
+  # ── one of two workers stops beating: WorkerHeartbeatStale, not WorkerDown ────
+  - interval: 1m
+    input_series:
+      - series: 'novu_worker_monitoring_available{job="novu-backend",instance="api:8000"}'
+        values: '1x20'
+      - series: 'novu_worker_alive{job="novu-backend",instance="api:8000"}'
+        values: '1x20'
+      - series: 'novu_worker_alive_instances{job="novu-backend",instance="api:8000"}'
+        values: '2x5 1x15'
+      - series: 'novu_worker_seen_instances{job="novu-backend",instance="api:8000"}'
+        values: '2x6 1x14'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: WorkerHeartbeatStale
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: WorkerHeartbeatStale
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: WorkerHeartbeatStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: novu-backend
+              instance: api:8000
+            exp_annotations:
+              summary: "Worker heartbeat is stale"
+              description: "A worker instance stopped refreshing its heartbeat (older than 90 s) while monitoring can read Redis. Check systemctl status nc-worker and journalctl -u nc-worker."
+      - eval_time: 9m
+        alertname: WorkerDown
+        exp_alerts: []
+
+  # ── steady workers: no heartbeat alert ────────────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'novu_worker_monitoring_available{job="novu-backend",instance="api:8000"}'
+        values: '1x30'
+      - series: 'novu_worker_alive{job="novu-backend",instance="api:8000"}'
+        values: '1x30'
+      - series: 'novu_worker_alive_instances{job="novu-backend",instance="api:8000"}'
+        values: '2x30'
+      - series: 'novu_worker_seen_instances{job="novu-backend",instance="api:8000"}'
+        values: '2x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: WorkerHeartbeatStale
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: WorkerDown
+        exp_alerts: []
+
+  # ── WireGuard: wg-nc fresh, wg-nc-admin up but never a handshake (limit 300 s) ─
+  - interval: 1m
+    input_series:
+      - series: 'nc_wg_interface_up{job="node",instance="core:9100",interface="wg-nc"}'
+        values: '1x30'
+      - series: 'nc_wg_interface_up{job="node",instance="core:9100",interface="wg-nc-admin"}'
+        values: '1x30'
+      - series: 'nc_wg_interface_latest_handshake_timestamp_seconds{job="node",instance="core:9100",interface="wg-nc"}'
+        values: '0+60x30'
+      - series: 'nc_wg_interface_latest_handshake_timestamp_seconds{job="node",instance="core:9100",interface="wg-nc-admin"}'
+        values: '0x30'
+      - series: 'nc_wg_handshake_max_age_seconds{job="node",instance="core:9100",interface="wg-nc"}'
+        values: '300x30'
+      - series: 'nc_wg_handshake_max_age_seconds{job="node",instance="core:9100",interface="wg-nc-admin"}'
+        values: '300x30'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: WireGuardNoHandshake
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: WireGuardNoHandshake
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: node
+              instance: core:9100
+              interface: wg-nc-admin
+            exp_annotations:
+              summary: "WireGuard interface wg-nc-admin has no recent handshake"
+              description: "wg-nc-admin is up, but no peer completed a handshake within the configured limit (nc_wg_handshake_max_age_seconds). Check the peers, UDP 51830/51831 and wg show wg-nc-admin."
+      - eval_time: 9m
+        alertname: WireGuardInterfaceDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: WireGuardInterfaceNotMonitored
+        exp_alerts: []
+
+  # ── WireGuard: limit 0 disables the handshake alert ───────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'nc_wg_interface_up{job="node",instance="core:9100",interface="wg-nc-admin"}'
+        values: '1x30'
+      - series: 'nc_wg_interface_latest_handshake_timestamp_seconds{job="node",instance="core:9100",interface="wg-nc-admin"}'
+        values: '0x30'
+      - series: 'nc_wg_handshake_max_age_seconds{job="node",instance="core:9100",interface="wg-nc-admin"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: WireGuardNoHandshake
+        exp_alerts: []
+
+  # ── WireGuard: interface goes down ────────────────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'nc_wg_interface_up{job="node",instance="core:9100",interface="wg-nc"}'
+        values: '1 1 0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: WireGuardInterfaceDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: WireGuardInterfaceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: node
+              instance: core:9100
+              interface: wg-nc
+            exp_annotations:
+              summary: "WireGuard interface wg-nc is down"
+              description: "wg-nc does not exist, is administratively down or wg show fails; desktop or admin access over WireGuard is lost."
+      - eval_time: 5m
+        alertname: WireGuardNoHandshake
+        exp_alerts: []
+
+  # ── WireGuard: wg-nc-admin is not reported at all ─────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'nc_wg_interface_up{job="node",instance="core:9100",interface="wg-nc"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: WireGuardInterfaceNotMonitored
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: WireGuardInterfaceNotMonitored
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              interface: wg-nc-admin
+            exp_annotations:
+              summary: "WireGuard interface wg-nc-admin is not monitored"
+              description: "No nc_wg_interface_up series for wg-nc-admin: check NC_WG_INTERFACES in /etc/novuconstruct/monitoring.env, nc-wg-metrics.timer and the node_exporter textfile collector."

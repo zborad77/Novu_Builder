@@ -157,6 +157,23 @@ Release se nasazuje jako adresář `/opt/novuconstruct-releases/<plné SHA>` (vl
 
 Automatický downgrade (`alembic downgrade`) se nikdy nespouští. Destruktivní (contract) migrace patří až do releasu po ověřeném expand kroku (SECURITY_ARCHITECTURE §8.3).
 
+## 4c. Monitoring a alerty (T7.2, F9.3)
+
+Pravidla jsou v `ops/alerting/alerts.yml`, jejich jednotkové testy v `ops/alerting/alerts_test.yml`. Prometheus čte `/metrics` API (job `novu-backend`) a node_exporter s textfile collectorem (`/var/lib/prometheus/node-exporter`), kam zapisují `bin/nc-backup` a `bin/nc-wg-metrics` (`nc-wg-metrics.timer`, každou minutu).
+
+| Alert | Kdy vystřelí | Zdroj |
+|---|---|---|
+| `BackendDown` / `BackendTargetMissing` | API neodpovídá 1 min / Prometheus API vůbec nesbírá 5 min | `up{job="novu-backend"}` |
+| `WorkerDown` | žádný worker nemá čerstvý heartbeat (< 90 s) 3 min | `novu_worker_alive` |
+| `WorkerHeartbeatStale` | některá instance workeru přestala obnovovat heartbeat, zatímco jiné běží (2 min) | `novu_worker_seen_instances`, `novu_worker_alive_instances` |
+| `WorkerHeartbeatUnknown` | API nemůže číst heartbeaty z Redisu 5 min | `novu_worker_monitoring_available` |
+| `WireGuardInterfaceDown` | `wg-nc` / `wg-nc-admin` chybí, je `down`, nebo `wg show` selže (2 min) | `nc_wg_interface_up` |
+| `WireGuardInterfaceNotMonitored` | pro `wg-nc` / `wg-nc-admin` nepřichází žádná metrika 10 min | `absent(nc_wg_interface_up)` |
+| `WireGuardNoHandshake` | rozhraní je nahoře, ale žádný peer neudělal handshake déle než nastavený limit (2 min); rozhraní bez peerů se počítá jako bez handshaku | `nc_wg_interface_latest_handshake_timestamp_seconds`, `nc_wg_handshake_max_age_seconds` |
+| `WireGuardMetricsStale` | `nc_wg.prom` je starší než 5 min | `node_textfile_mtime_seconds` |
+
+Limit handshaku se nastavuje v `/etc/novuconstruct/monitoring.env` (šablona `env/monitoring.env.example`): `NC_WG_HANDSHAKE_MAX_AGE` (výchozí 900 s, `0` alert vypne) a `NC_WG_HANDSHAKE_MAX_AGE_OVERRIDES="wg-nc-admin:0"` pro jednotlivá rozhraní. Neplatná hodnota → `nc-wg-metrics` skončí exit 2 a předchozí metriky ponechá; po 5 minutách hlásí `WireGuardMetricsStale`.
+
 ## 5. Testy
 
 | Co | Jak |
@@ -166,4 +183,5 @@ Automatický downgrade (`alembic downgrade`) se nikdy nespouští. Destruktivní
 | Proxy přes unix socket, podvržené `X-Forwarded-For` | `pytest tests/test_sa05_client_ip.py` |
 | `nginx -t` (dedikovaný i sdílený nginx vedle cizích vhostů NovuServeru, T5.3), `nft -c`, `systemd-analyze verify` + `security`, shellcheck, žádné klíče v šablonách; Web Gateway: edge vhost proti stub gateway (404, CSP, `X-Forwarded-For`, `X-NC-*`, limity těla), izolace jednotky od secrets core, práva `nc-gen-secrets`, ACL Redisu gateway | `tests/validate-configs.sh` (CI job `deploy-linux-config`) |
 | `deploy.sh`: úspěch s migrací i bez, neplatné SHA, selhání zálohy, selhání health a migrace s rollbackem, selhání po změně revize bez rollbacku, starý heartbeat | `tests/deploy_test.sh` (stuby, součást `validate-configs.sh`) |
+| Alerty: `promtool check rules` a `promtool test rules` (výpadek API a workeru, zastaralý heartbeat, WG rozhraní chybí / bez handshaku); `nc-wg-metrics` a `nc-backup` proti stubům | `tests/validate-configs.sh` → `ops/alerting/alerts_test.yml`, `tests/backup_monitoring_test.sh` |
 | Síťová izolace N1–N12 na stagingu | `tests/network_isolation.sh` |

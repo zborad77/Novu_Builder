@@ -362,6 +362,9 @@ install_packages() {
   local pkgs=(nftables wireguard-tools nginx openssl curl ca-certificates acl iproute2)
   if has_core; then
     pkgs+=("postgresql-$NC_PG_VERSION" "postgresql-client-$NC_PG_VERSION" redis-server python3-venv python3-dev build-essential)
+    # nc-backup (restic) a textfile adresář /var/lib/prometheus/node-exporter, který
+    # nc-backup.service a nc-wg-metrics.service potřebují v ReadWritePaths (F9.1, F9.3).
+    pkgs+=(restic prometheus-node-exporter)
   fi
   has_edge && pkgs+=(certbot)
   if has_gateway; then pkgs+=(redis-server python3-venv); fi
@@ -895,7 +898,8 @@ install_units() {
   info "systemd jednotky"
   local u units_before=$CHANGES
   if has_core; then
-    for u in nc-api@.service nc-worker.service nc-offer-worker.service nc-core.target nc-egress-refresh.service nc-egress-refresh.timer; do
+    for u in nc-api@.service nc-worker.service nc-offer-worker.service nc-core.target nc-egress-refresh.service nc-egress-refresh.timer \
+        nc-backup.service nc-backup.timer nc-wg-metrics.service nc-wg-metrics.timer; do
       install_file "$DEPLOY_DIR/systemd/$u" "/etc/systemd/system/$u" 0644 root:root
     done
     install_file "$DEPLOY_DIR/systemd/nc-api@gateway.service.d/10-gateway-hmac.conf" \
@@ -1040,6 +1044,9 @@ cmd_start() {
   if has_core; then
     start_object_storage
     run systemctl enable --now nc-egress-refresh.timer
+    # Zálohy a WG metriky (F9.1, F9.3): nc-backup.service se bez /etc/novuconstruct/backup.env
+    # přeskočí (ConditionPathExists) a chybějící metriky hlásí alert NcBackupMissing.
+    run systemctl enable --now nc-backup.timer nc-wg-metrics.timer
     if [ "$DRY_RUN" -eq 0 ] && ! sh "$DEPLOY_DIR/bin/nc-migrate" status | grep -q "up to date"; then
       die "databáze není na aktuální revizi: nejdřív '$0 migrate'"
     fi

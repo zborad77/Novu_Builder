@@ -1,0 +1,24 @@
+# Copyright (c) 2026 Novusion
+# Website: https://novusion.com
+# Contact: info@novusion.com
+#
+# Author: Pavel Dostál
+# Project: NovuConstruct
+# Module: deploy/linux/systemd
+# Description: WireGuard interface and handshake metrics for node_exporter (bin/nc-wg-metrics, F9.3).
+# Created: 2026-11-13
+[Unit]
+Description=NovuConstruct WireGuard metrics (textfile collector)
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/novuconstruct/monitoring.env
+ExecStart=/opt/novuconstruct/deploy/linux/bin/nc-wg-metrics
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+CapabilityBoundingSet=CAP_NET_ADMIN
+ReadWritePaths=/var/lib/prometheus/node-exporter

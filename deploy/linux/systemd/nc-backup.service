@@ -1,0 +1,41 @@
+# Copyright (c) 2026 Novusion
+# Website: https://novusion.com
+# Contact: info@novusion.com
+#
+# Author: Pavel Dostál
+# Project: NovuConstruct
+# Module: deploy/linux/systemd
+# Description: Nightly off-host encrypted backup of PostgreSQL, Garage and configuration (bin/nc-backup, F9.1).
+# Created: 2026-11-13
+#
+# Runs as root: it reads the Garage data (nc-garage) and dumps the DB as postgres.
+# A failure is visible as nc_backup_last_run_success 0 (alert NcBackupFailed).
+[Unit]
+Description=NovuConstruct off-host backup (restic over SFTP)
+After=network-online.target postgresql.service nc-garage.service
+Wants=network-online.target
+ConditionPathExists=/etc/novuconstruct/backup.env
+
+[Service]
+Type=oneshot
+Environment=NC_BACKUP_ENV=/etc/novuconstruct/backup.env
+Environment=RESTIC_CACHE_DIR=/var/cache/nc-backup
+StateDirectory=nc-backup
+StateDirectoryMode=0700
+CacheDirectory=nc-backup
+CacheDirectoryMode=0700
+UMask=0077
+ExecStart=/opt/novuconstruct/deploy/linux/bin/nc-backup
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/prometheus/node-exporter
+TimeoutStartSec=6h

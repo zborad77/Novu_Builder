@@ -18,12 +18,12 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 need=""
-for tool in nginx nft systemd-analyze shellcheck redis-server redis-cli curl python3 ss git; do
+for tool in nginx nft systemd-analyze shellcheck redis-server redis-cli curl python3 ss git promtool; do
   command -v "$tool" >/dev/null || need=1
 done
 if [ -n "$need" ]; then
   apt-get update -qq
-  apt-get install -y -qq nginx nftables systemd openssl shellcheck redis-server curl python3 iproute2 git >/dev/null
+  apt-get install -y -qq nginx nftables systemd openssl shellcheck redis-server curl python3 iproute2 git prometheus >/dev/null
 fi
 
 fail=0
@@ -348,6 +348,11 @@ for unit in nc-api@desktop.service nc-worker.service nc-offer-worker.service nc-
     bad "systemd-analyze security $unit: $(tail -n 1 /tmp/sec.txt)"
   fi
 done
+# F9.1/F9.3: backup and WireGuard metrics units with their timers.
+cp "$D"/systemd/nc-backup.timer "$D"/systemd/nc-wg-metrics.timer "$units/" && chmod 0644 "$units"/*.timer
+if SYSTEMD_LOG_LEVEL=warning systemd-analyze verify --man=no "$units/nc-backup.service" "$units/nc-backup.timer" "$units/nc-wg-metrics.service" "$units/nc-wg-metrics.timer" 2>&1 | grep -v -E "Failed to (connect|open|create).*bus|Unit.*not found|postgresql|nc-garage" | grep . ; then
+  bad "systemd-analyze verify reported problems (backup/monitoring units)"
+else ok "systemd-analyze verify (backup/monitoring units)"; fi
 # N2: offer worker exists but starts only after an explicit, backlog-reviewed enable.
 if grep -q 'python -m app.worker.offer_runner' "$D/systemd/nc-offer-worker.service"; then ok "offer worker unit present"; else bad "offer worker unit missing (N2)"; fi
 if grep -q '^Wants=.*nc-offer-worker' "$D/systemd/nc-core.target"; then bad "nc-core.target auto-starts the offer worker"; else ok "offer worker not auto-started by nc-core.target"; fi
@@ -533,6 +538,18 @@ shellcheck_gate "bin/* tests/*.sh deploy.sh" -S warning -s sh -f gcc $(ls "$D"/b
 
 # ── deploy.sh behaviour (F6.6, T8.1 rollback policy) against stubs ───────────
 if sh "$D/tests/deploy_test.sh"; then ok "deploy_test.sh"; else bad "deploy_test.sh"; fi
+# ── nc-backup and nc-wg-metrics behaviour (F9.1, F9.3) against stubs ─────────
+if sh "$D/tests/backup_monitoring_test.sh"; then ok "backup_monitoring_test.sh"; else bad "backup_monitoring_test.sh"; fi
+
+# ── alert rules (T7.2, F9.3): syntax and behaviour of ops/alerting ───────────
+# alerts_test.yml checks that the API, worker, stale heartbeat and WireGuard alerts
+# really fire on synthetic series, not only that the file parses.
+if promtool check rules "$SRC/ops/alerting/alerts.yml" >/tmp/promtool.txt 2>&1; then
+  ok "promtool check rules ops/alerting/alerts.yml"
+else bad "promtool check rules: $(grep -v '^ *$' /tmp/promtool.txt | head -n 8 | tr '\n' ' ')"; fi
+if promtool test rules "$SRC/ops/alerting/alerts_test.yml" >/tmp/promtool.txt 2>&1; then
+  ok "promtool test rules (API, worker, stale heartbeat, WireGuard)"
+else bad "promtool test rules: $(grep -v '^ *$' /tmp/promtool.txt | head -n 15 | tr '\n' ' ')"; fi
 
 # ── templates carry placeholders only ────────────────────────────────────────
 if grep -rEn '(PrivateKey|PresharedKey)\s*=\s*[A-Za-z0-9+/]{43}=' "$D/wireguard"; then

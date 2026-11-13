@@ -1,0 +1,167 @@
+#!/bin/sh
+# Copyright (c) 2026 Novusion
+# Website: https://novusion.com
+# Contact: info@novusion.com
+#
+# Author: Pavel Dostál
+# Project: NovuConstruct
+# Module: deploy/linux/bin
+# Description: Scheduled off-host backup (F9.1, SECURITY_ARCHITECTURE 8.4): pg_dump -Fc,
+#              Garage object storage and configuration into an encrypted restic
+#              repository over SFTP with a pinned host key; writes node_exporter
+#              textfile metrics consumed by the backup alerts in ops/alerting/alerts.yml.
+# Created: 2026-11-13
+#
+#   nc-backup            run one backup (systemd: nc-backup.service from nc-backup.timer)
+#   nc-backup init       create the restic repository once (operator, after the host key is pinned)
+#   nc-backup check      print the latest snapshots of every tag (kontrola posledního snapshotu)
+#
+# Configuration: $NC_BACKUP_ENV (default /etc/novuconstruct/backup.env, 0600 root):
+#   RESTIC_REPOSITORY=sftp://uXXXXX@uXXXXX.your-storagebox.de:23/./novuconstruct
+#   RESTIC_PASSWORD_FILE=/etc/novuconstruct/secrets/RESTIC_PASSWORD
+#   NC_BACKUP_SSH_KEY=/etc/novuconstruct/secrets/BACKUP_SSH_KEY
+#   NC_BACKUP_KNOWN_HOSTS=/etc/novuconstruct/backup_known_hosts   (pinned host key, SA-31)
+# The restic password is never stored in the repository and is kept offline by the operator.
+#
+# Exit: 0 ok, 1 backup failed (metrics say so), 2 configuration refused.
+set -eu
+umask 077
+
+NC_BACKUP_ENV=${NC_BACKUP_ENV:-/etc/novuconstruct/backup.env}
+if [ -f "$NC_BACKUP_ENV" ]; then
+  # shellcheck disable=SC1090
+  . "$NC_BACKUP_ENV"
+fi
+NC_BACKUP_STATE=${NC_BACKUP_STATE:-/var/lib/nc-backup}
+NC_BACKUP_METRICS_DIR=${NC_BACKUP_METRICS_DIR:-/var/lib/prometheus/node-exporter}
+NC_DATA_ROOT=${NC_DATA_ROOT:-/srv/novuconstruct}
+NC_BACKUP_DB=${NC_BACKUP_DB:-novuconstruct}
+NC_BACKUP_CONFIG_PATHS=${NC_BACKUP_CONFIG_PATHS:-/etc/novuconstruct /etc/nginx /etc/nftables.conf}
+NC_BACKUP_SECRETS_DIR=${NC_BACKUP_SECRETS_DIR:-/etc/novuconstruct/secrets}
+NC_WG_DIR=${NC_WG_DIR:-/etc/wireguard}
+RESTIC_REPOSITORY=${RESTIC_REPOSITORY:-}
+RESTIC_PASSWORD_FILE=${RESTIC_PASSWORD_FILE:-}
+NC_BACKUP_SSH_KEY=${NC_BACKUP_SSH_KEY:-}
+NC_BACKUP_KNOWN_HOSTS=${NC_BACKUP_KNOWN_HOSTS:-}
+export RESTIC_REPOSITORY RESTIC_PASSWORD_FILE
+
+say() { printf '==> %s\n' "$*"; }
+err() { printf 'ERROR %s\n' "$*" >&2; }
+refuse() { err "$*"; exit 2; }
+
+# ── configuration gate: off-host, encrypted, pinned host key ────────────────
+case "$RESTIC_REPOSITORY" in
+  sftp:*) ;;
+  "") refuse "RESTIC_REPOSITORY is not set ($NC_BACKUP_ENV)" ;;
+  *) refuse "RESTIC_REPOSITORY must be an sftp: repository off this server, got '$RESTIC_REPOSITORY'" ;;
+esac
+[ -n "$RESTIC_PASSWORD_FILE" ] && [ -s "$RESTIC_PASSWORD_FILE" ] \
+  || refuse "RESTIC_PASSWORD_FILE missing or empty – the repository must be encrypted"
+[ -n "$NC_BACKUP_SSH_KEY" ] && [ -f "$NC_BACKUP_SSH_KEY" ] || refuse "NC_BACKUP_SSH_KEY missing"
+[ -n "$NC_BACKUP_KNOWN_HOSTS" ] && [ -s "$NC_BACKUP_KNOWN_HOSTS" ] \
+  || refuse "NC_BACKUP_KNOWN_HOSTS missing – pin the storage host key first (ssh-keyscan, verified fingerprint)"
+for p in "$NC_BACKUP_SSH_KEY" "$NC_BACKUP_KNOWN_HOSTS"; do
+  case "$p" in *[[:space:]]*) refuse "path with whitespace is not supported: $p" ;; esac
+done
+SFTP_ARGS="-i $NC_BACKUP_SSH_KEY -o IdentitiesOnly=yes -o UserKnownHostsFile=$NC_BACKUP_KNOWN_HOSTS -o StrictHostKeyChecking=yes -o BatchMode=yes"
+
+rst() { restic -o "sftp.args=$SFTP_ARGS" "$@"; }
+
+case "${1:-run}" in
+  init)  rst init; exit $? ;;
+  check) for t in nc-db nc-storage nc-config; do rst snapshots --latest 1 --tag "$t"; done; exit 0 ;;
+  run) ;;
+  *) refuse "unknown command '$1' (run | init | check)" ;;
+esac
+
+# ── metrics (written on every exit, atomically) ──────────────────────────────
+METRICS="$NC_BACKUP_METRICS_DIR/nc_backup.prom"
+STARTED=$(date +%s)
+SUCCESS=0
+LAST_OK=0
+if [ -f "$METRICS" ]; then
+  LAST_OK=$(awk '$1 == "nc_backup_last_success_timestamp_seconds" { print $2 }' "$METRICS")
+  LAST_OK=${LAST_OK:-0}
+fi
+
+write_metrics() {
+  now=$(date +%s)
+  [ "$SUCCESS" -eq 1 ] && LAST_OK=$now
+  mkdir -p "$NC_BACKUP_METRICS_DIR"
+  tmp="$METRICS.$$"
+  {
+    echo "# HELP nc_backup_last_run_timestamp_seconds Unix time the last nc-backup run finished."
+    echo "# TYPE nc_backup_last_run_timestamp_seconds gauge"
+    echo "nc_backup_last_run_timestamp_seconds $now"
+    echo "# HELP nc_backup_last_run_success 1 if the last nc-backup run stored and verified every part off-host."
+    echo "# TYPE nc_backup_last_run_success gauge"
+    echo "nc_backup_last_run_success $SUCCESS"
+    echo "# HELP nc_backup_last_success_timestamp_seconds Unix time of the last fully successful nc-backup run."
+    echo "# TYPE nc_backup_last_success_timestamp_seconds gauge"
+    echo "nc_backup_last_success_timestamp_seconds $LAST_OK"
+    echo "# HELP nc_backup_last_duration_seconds Duration of the last nc-backup run."
+    echo "# TYPE nc_backup_last_duration_seconds gauge"
+    echo "nc_backup_last_duration_seconds $((now - STARTED))"
+  } > "$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$METRICS"
+}
+
+STAGING="$NC_BACKUP_STATE/staging"
+LOCK="$NC_BACKUP_STATE/lock"
+mkdir -p "$NC_BACKUP_STATE"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  err "another nc-backup run holds $LOCK"; exit 1
+fi
+finish() {
+  rc=$?
+  rm -rf "$STAGING"
+  rmdir "$LOCK" 2>/dev/null || true
+  write_metrics
+  if [ "$SUCCESS" -eq 1 ]; then say "backup ok"; else err "backup FAILED"; fi
+  exit "$rc"
+}
+trap finish EXIT
+trap 'exit 1' INT TERM HUP
+
+rm -rf "$STAGING"
+mkdir -p "$STAGING/db" "$STAGING/wireguard"
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+
+# ── 1. PostgreSQL ────────────────────────────────────────────────────────────
+DUMP="$STAGING/db/$NC_BACKUP_DB-$STAMP.dump"
+say "pg_dump -Fc $NC_BACKUP_DB"
+runuser -u postgres -- pg_dump -Fc -d "$NC_BACKUP_DB" > "$DUMP" || { err "pg_dump failed"; exit 1; }
+[ -s "$DUMP" ] && pg_restore --list "$DUMP" >/dev/null 2>&1 || { err "dump is not a readable pg_dump archive"; exit 1; }
+rst backup --quiet --tag nc-db --host nc-core "$STAGING/db" || { err "restic backup nc-db failed"; exit 1; }
+
+# ── 2. object storage (Garage data + metadata snapshots) ────────────────────
+[ -d "$NC_DATA_ROOT/garage" ] || { err "$NC_DATA_ROOT/garage not found"; exit 1; }
+say "restic backup $NC_DATA_ROOT/garage"
+rst backup --quiet --tag nc-storage --host nc-core "$NC_DATA_ROOT/garage" \
+  || { err "restic backup nc-storage failed"; exit 1; }
+
+# ── 3. configuration – never secrets or WireGuard private keys ──────────────
+if [ -d "$NC_WG_DIR" ]; then
+  for f in "$NC_WG_DIR"/*.conf; do
+    [ -f "$f" ] || continue
+    sed -E 's/^([[:space:]]*(PrivateKey|PresharedKey)[[:space:]]*=).*/\1 <redacted>/' "$f" \
+      > "$STAGING/wireguard/$(basename "$f")"
+  done
+fi
+cfg=""
+for p in $NC_BACKUP_CONFIG_PATHS; do [ -e "$p" ] && cfg="$cfg $p"; done
+say "restic backup configuration"
+# shellcheck disable=SC2086
+rst backup --quiet --tag nc-config --host nc-core --exclude "$NC_BACKUP_SECRETS_DIR" \
+  --exclude '*.key' $cfg "$STAGING/wireguard" || { err "restic backup nc-config failed"; exit 1; }
+
+# ── 4. verify the latest snapshots, then retention (8.4: 7 daily, 4 weekly, 6 monthly) ─
+for t in nc-db nc-storage nc-config; do
+  out=$(rst snapshots --latest 1 --tag "$t" --json) || { err "cannot list snapshots for $t"; exit 1; }
+  case "$out" in *'"id"'*) ;; *) err "no snapshot for $t after backup"; exit 1 ;; esac
+done
+rst forget --quiet --tag nc-db --tag nc-storage --tag nc-config --group-by host,tags \
+  --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune || { err "restic forget/prune failed"; exit 1; }
+
+SUCCESS=1

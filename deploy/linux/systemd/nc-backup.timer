@@ -1,0 +1,20 @@
+# Copyright (c) 2026 Novusion
+# Website: https://novusion.com
+# Contact: info@novusion.com
+#
+# Author: Pavel Dostál
+# Project: NovuConstruct
+# Module: deploy/linux/systemd
+# Description: Nightly schedule of nc-backup.service (F9.1).
+# Created: 2026-11-13
+[Unit]
+Description=Nightly NovuConstruct off-host backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=20min
+Persistent=true
+Unit=nc-backup.service
+
+[Install]
+WantedBy=timers.target

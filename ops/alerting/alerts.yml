@@ -163,3 +163,138 @@ groups:
         annotations:
           summary: "Disk space below 10%"
           description: "Less than 10% free disk space on the root filesystem."
+
+  # ── Backups, worker heartbeat and WireGuard (F9.1, F9.3) ──────────────────
+  # Backup and WG metrics come from node_exporter's textfile collector, written by
+  # deploy/linux/bin/nc-backup and deploy/linux/bin/nc-wg-metrics.
+  - name: novu_operations
+    rules:
+
+      - alert: BackendTargetMissing
+        expr: absent(up{job="novu-backend"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Novu backend is not scraped at all"
+          description: "Prometheus has no novu-backend target; BackendDown cannot fire without it."
+
+      - alert: WorkerHeartbeatUnknown
+        expr: novu_worker_monitoring_available == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker heartbeat cannot be read"
+          description: "The API cannot read worker heartbeats from Redis for 5+ minutes; the worker state is unknown and WorkerDown is blind."
+
+      # A worker writes its heartbeat every 30 s; older than 90 s counts as stale and
+      # the key expires after 120 s (app/platform/jobs/heartbeat.py). A worker that stops
+      # beating while others still run is invisible to WorkerDown: its heartbeat first
+      # turns stale (seen > alive), then disappears, so the fresh count drops below the
+      # recent maximum. A graceful stop deletes the key and does not count as stale.
+      - alert: WorkerHeartbeatStale
+        expr: |
+          novu_worker_monitoring_available == 1
+            and on(instance, job)
+          (
+            novu_worker_seen_instances > novu_worker_alive_instances
+              or
+            novu_worker_alive_instances < max_over_time(novu_worker_alive_instances[15m])
+          )
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker heartbeat is stale"
+          description: "A worker instance stopped refreshing its heartbeat (older than 90 s) while monitoring can read Redis. Check systemctl status nc-worker and journalctl -u nc-worker."
+
+      - alert: NcBackupFailed
+        expr: nc_backup_last_run_success == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Off-host backup failed"
+          description: "The last nc-backup run did not store and verify every part off-host. See journalctl -u nc-backup."
+
+      - alert: NcBackupStale
+        expr: time() - nc_backup_last_success_timestamp_seconds > 26 * 3600
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No successful off-host backup for more than 26 hours"
+          description: "The nightly nc-backup has not succeeded since {{ $value | humanizeDuration }}."
+
+      - alert: NcBackupMissing
+        expr: absent(nc_backup_last_run_timestamp_seconds)
+        for: 26h
+        labels:
+          severity: critical
+        annotations:
+          summary: "nc-backup has never reported"
+          description: "No nc_backup metrics: nc-backup.timer is not enabled, /etc/novuconstruct/backup.env is missing or node_exporter does not read the textfile directory."
+
+      - alert: WireGuardInterfaceDown
+        expr: nc_wg_interface_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "WireGuard interface {{ $labels.interface }} is down"
+          description: "{{ $labels.interface }} does not exist, is administratively down or wg show fails; desktop or admin access over WireGuard is lost."
+
+      # nc-wg-metrics reports every interface in NC_WG_INTERFACES; a missing series means
+      # the interface was dropped from the list or node_exporter does not read the file.
+      - alert: WireGuardInterfaceNotMonitored
+        expr: |
+          absent(nc_wg_interface_up{interface="wg-nc"})
+            or
+          absent(nc_wg_interface_up{interface="wg-nc-admin"})
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "WireGuard interface {{ $labels.interface }} is not monitored"
+          description: "No nc_wg_interface_up series for {{ $labels.interface }}: check NC_WG_INTERFACES in /etc/novuconstruct/monitoring.env, nc-wg-metrics.timer and the node_exporter textfile collector."
+
+      # Up, but no handshake with any peer for longer than the limit configured in
+      # NC_WG_HANDSHAKE_MAX_AGE / NC_WG_HANDSHAKE_MAX_AGE_OVERRIDES (0 disables it).
+      # An interface without peers reports handshake 0 and therefore fires as well.
+      - alert: WireGuardNoHandshake
+        expr: |
+          nc_wg_interface_up == 1
+            and on(instance, job, interface)
+          nc_wg_handshake_max_age_seconds > 0
+            and on(instance, job, interface)
+          (time() - nc_wg_interface_latest_handshake_timestamp_seconds)
+            > on(instance, job, interface)
+          nc_wg_handshake_max_age_seconds
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WireGuard interface {{ $labels.interface }} has no recent handshake"
+          description: "{{ $labels.interface }} is up, but no peer completed a handshake within the configured limit (nc_wg_handshake_max_age_seconds). Check the peers, UDP 51830/51831 and wg show {{ $labels.interface }}."
+
+      - alert: WireGuardRequiredPeerStale
+        expr: |
+          nc_wg_peer_required == 1
+            unless on(interface, peer)
+          (time() - nc_wg_peer_latest_handshake_timestamp_seconds) < 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Required WireGuard peer without a fresh handshake"
+          description: "Peer {{ $labels.peer }} on {{ $labels.interface }} has had no handshake for 5+ minutes."
+
+      - alert: WireGuardMetricsStale
+        expr: time() - node_textfile_mtime_seconds{file=~".*nc_wg\\.prom"} > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WireGuard metrics are not refreshed"
+          description: "nc_wg.prom is older than 5 minutes; nc-wg-metrics.timer is not running."
